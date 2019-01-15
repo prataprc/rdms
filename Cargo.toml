@@ -1,0 +1,18 @@
+[package]
+name = "bogn"
+version = "0.1.0"
+authors = ["prataprc <prataprc@gmail.com>"]
+description = "Key value data store"
+documentation = "https://docs.rs/bogn"
+homepage = "https://github.com/bnclabs/bogn"
+repository = "https://github.com/bnclabs/bogn"
+keywords = ["storage", "mvcc", "llrb", "btree", "lsm"]
+categories = ["storage"]
+license = "MIT"
+exclude = ["template/**"]
+readme = "README.md"
+edition = "2018"
+
+[badges]
+maintenance = { status = "actively-developed" }
+travis-ci = { repository = "bnclabs/bogn" }

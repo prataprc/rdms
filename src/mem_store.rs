@@ -196,46 +196,43 @@ pub(crate) enum ValueResult<V> {
 #[derive(Clone)]
 pub(crate) struct ValueNode<V>
 where
-    V: Default + Clone + Serialize,
+    V: ValueTrait,
 {
     data: V,                         // actual value
     seqno: u64,                      // when this version mutated
-    prev: Option<Box<ValueNode<V>>>, // point to previous version
     deleted: bool,                   // for lsm, mark this version deleted
+    prev: Option<Box<ValueNode<V>>>, // point to previous version
 }
 
 // Various operations on ValueNode, all are immutable operations.
 impl<V> ValueNode<V>
 where
-    V: Default + Clone + Serialize,
+    V: ValueTrait,
 {
     fn new(v: V, seqno: u64, prev: Option<Box<ValueNode<V>>>) -> ValueNode<V> {
         let mut vn: ValueNode<V> = Default::default();
         vn.data = v;
         vn.seqno = seqno;
-        vn.prev = match prev {
-            Some(prev) => Some(prev),
-            None => None,
-        };
+        vn.prev = prev;
         vn
     }
 
     fn delete(&mut self) {
+        // back-to-back deletes shall collapse
         self.deleted = true;
     }
 
     fn undo(&mut self) -> bool {
         if self.deleted {
+            // collapsed deletes can be undone only once
             self.deleted = false;
             true
+        } else if self.prev.is_none() {
+            false
         } else {
-            match &self.prev {
-                Some(prev) => {
-                    *self = *(prev.clone());
-                    true
-                }
-                None => false,
-            }
+            let source = self.prev.take().unwrap();
+            self.clone_from(&source);
+            true
         }
     }
 
@@ -260,22 +257,22 @@ where
 
     fn get_values(&self, acc: &mut Vec<ValueResult<V>>) {
         acc.push(self.get_value());
-        if let Some(v) = self.prev.clone() {
-            v.get_values(acc)
+        if self.prev.is_some() {
+            self.prev.as_ref().unwrap().get_values(acc)
         }
     }
 
     fn value_nodes(&self, acc: &mut Vec<ValueNode<V>>) {
         acc.push(self.clone());
-        if let Some(v) = self.prev.clone() {
-            v.value_nodes(acc)
+        if self.prev.is_some() {
+            self.prev.as_ref().unwrap().value_nodes(acc)
         }
     }
 }
 
 impl<V> Default for ValueNode<V>
 where
-    V: Default + Clone + Serialize,
+    V: ValueTrait,
 {
     fn default() -> ValueNode<V> {
         ValueNode {
@@ -309,12 +306,13 @@ where
     V: ValueTrait,
 {
     // CREATE operation
-    fn new(key: K, value: V, seqno: u64, access: u64) -> Node<K, V> {
+    fn new(key: K, value: V, seqno: u64, access: u64, black: bool) -> Node<K, V> {
         let mut node: Node<K, V> = Default::default();
         node.key = key;
         node.valn = ValueNode::new(value, seqno, None);
         node.seqno = seqno;
         node.access = access;
+        node.black = black;
         node
     }
 
@@ -345,16 +343,19 @@ where
     }
 
     // GET operation
+    #[inline]
     fn get_value(&self) -> ValueResult<V> {
         self.valn.get_value()
     }
 
     // GETLOG operation
+    #[inline]
     fn get_values(&self, acc: &mut Vec<ValueResult<V>>) {
         self.valn.get_values(acc)
     }
 
     // GETLOG operation
+    #[inline]
     fn value_nodes(&self, acc: &mut Vec<ValueNode<V>>) {
         self.valn.value_nodes(acc)
     }

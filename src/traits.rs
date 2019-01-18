@@ -1,16 +1,24 @@
-pub(crate) trait KeyTrait: Default + Clone + PartialEq + PartialOrd + Serialize {}
+pub(crate) trait AsKey: Default + Clone + Ord + Serialize {}
 
-pub(crate) trait ValueTrait: Default + Clone + Serialize {}
+pub(crate) trait AsValue<V> where V: Default + Clone + Serialize {
+    fn value(&self) -> V;
+    fn seqno(&self) -> u64;
+    fn is_deleted(&self) -> bool;
+}
 
-pub(crate) trait NodeTrait<K, V>
+pub(crate) trait AsNode<K, V>
 where
-    K: KeyTrait,
-    V: ValueTrait,
+    K: AsKey,
+    V: Default + Clone + Serialize,
 {
-    fn get_key() -> K;
-    fn get_value() -> V;
-    fn get_seqno() -> u64;
-    fn is_delete() -> bool;
+    type Value: AsValue<V>;
+
+    fn key(&self) -> K;
+    fn as_value(&self) -> Self::Value;
+    fn as_values(&self) -> Vec<Self::Value>;
+    fn seqno(&self) -> u64;
+    fn access(&self) -> u64;
+    fn is_delete(&self) -> bool;
 }
 
 pub trait Serialize {

@@ -1,6 +1,7 @@
-use std::cmp::{Ordering, PartialEq, PartialOrd};
+use std::cmp::{Ordering, Ord};
+use std::borrow::Borrow;
 
-use crate::traits::{KeyTrait, NodeTrait, Serialize, ValueTrait};
+use crate::traits::{AsKey, AsValue, AsNode, Serialize};
 
 /// Llrb to manage a single instance of in-memory sorted index using
 /// left-leaning-red-black tree.
@@ -8,22 +9,25 @@ use crate::traits::{KeyTrait, NodeTrait, Serialize, ValueTrait};
 /// IMPORTANT: This tree is not thread safe.
 struct Llrb<K, V>
 where
-    K: KeyTrait,
-    V: ValueTrait,
+    K: AsKey,
+    V: Default + Clone + Serialize,
 {
     name: String,
     root: Option<Node<K, V>>,
     seqno: u64, // seqno so far, starts from 0 and incr for every mutation
-                // TODO: llrb_depth_histogram, as a feature, to measure the depth of LLRB tree.
+    // TODO: llrb_depth_histogram, as a feature, to measure the depth of LLRB tree.
 }
+
+// TODO: should we implement Drop as part of cleanup
+// TODO: Clone trait ?
 
 impl<K, V> Llrb<K, V>
 where
-    K: KeyTrait,
-    V: ValueTrait,
+    K: AsKey,
+    V: Default + Clone + Serialize,
 {
     // create a new instance of Llrb
-    fn new(name: String, seqno: u64) -> Llrb<K, V> {
+    pub fn new(name: String, seqno: u64) -> Llrb<K, V> {
         let llrb = Llrb {
             name,
             seqno,
@@ -35,7 +39,7 @@ where
 
     //    fn load_from<N,K,V>(name: String, iter: Iterator<Item=N>)
     //    where
-    //        N: NodeTrait<K,V>
+    //        N: AsNode<K,V>
     //    {
     //        let mut llrb = Llrb::new(name, 0);
     //        for node in iter {
@@ -45,6 +49,38 @@ where
     //            }
     //        }
     //    }
+
+    pub fn set_seqno(&mut self, seqno: u64) {
+        self.seqno = seqno;
+    }
+
+    pub fn get_seqno(&self) -> u64 {
+        self.seqno
+    }
+
+    //pub fn get<Q>(&self, key: &Q) -> Option<V>
+    //where
+    //    K: Borrow<Q>,
+    //    Q: Ord + ?Sized,
+    //{
+    //}
+
+    fn get_key<Q>(mut node: &Option<Box<Node<K,V>>>, key: &Q) -> Option<Node<K,V>>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        while node.is_some() {
+            let nd = node.as_ref().unwrap();
+            node = match nd.key.borrow().cmp(key) {
+                Ordering::Less => &nd.right,
+                Ordering::Equal => return Some(nd.clone_detach()),
+                Ordering::Greater => &nd.left,
+            };
+        }
+        None
+    }
+
 
     //--------- rotation routines for 2-3 algorithm ----------------
 
@@ -164,8 +200,8 @@ where
 
 fn is_red<K, V>(node: &Option<Box<Node<K, V>>>) -> bool
 where
-    K: KeyTrait,
-    V: ValueTrait,
+    K: AsKey,
+    V: Default + Clone + Serialize,
 {
     if node.is_none() {
         false
@@ -176,8 +212,8 @@ where
 
 fn is_black<K, V>(node: &Option<Box<Node<K, V>>>) -> bool
 where
-    K: KeyTrait,
-    V: ValueTrait,
+    K: AsKey,
+    V: Default + Clone + Serialize,
 {
     if node.is_none() {
         true
@@ -188,15 +224,10 @@ where
 
 //----------------------------------------------------------------------------
 
-pub(crate) enum ValueResult<V> {
-    Valid(V),
-    Deleted(V),
-}
-
 #[derive(Clone)]
 pub(crate) struct ValueNode<V>
 where
-    V: ValueTrait,
+    V: Default + Clone + Serialize,
 {
     data: V,                         // actual value
     seqno: u64,                      // when this version mutated
@@ -207,14 +238,22 @@ where
 // Various operations on ValueNode, all are immutable operations.
 impl<V> ValueNode<V>
 where
-    V: ValueTrait,
+    V: Default + Clone + Serialize,
 {
-    fn new(v: V, seqno: u64, prev: Option<Box<ValueNode<V>>>) -> ValueNode<V> {
+    fn new(data: V, seqno: u64, deleted: bool, prev: Option<Box<ValueNode<V>>>)
+        -> ValueNode<V>
+    {
         let mut vn: ValueNode<V> = Default::default();
-        vn.data = v;
+        vn.data = data;
         vn.seqno = seqno;
+        vn.deleted = deleted;
         vn.prev = prev;
         vn
+    }
+
+    #[inline]
+    fn is_deleted(&self) -> bool {
+        self.deleted
     }
 
     fn delete(&mut self) {
@@ -236,32 +275,6 @@ where
         }
     }
 
-    #[inline]
-    fn is_deleted(&self) -> bool {
-        self.deleted
-    }
-
-    #[inline]
-    fn get_value(&self) -> ValueResult<V> {
-        if self.is_deleted() {
-            ValueResult::Deleted(self.data.clone())
-        } else {
-            ValueResult::Valid(self.data.clone())
-        }
-    }
-
-    #[inline]
-    fn get_seqno(&self) -> u64 {
-        self.seqno
-    }
-
-    fn get_values(&self, acc: &mut Vec<ValueResult<V>>) {
-        acc.push(self.get_value());
-        if self.prev.is_some() {
-            self.prev.as_ref().unwrap().get_values(acc)
-        }
-    }
-
     fn value_nodes(&self, acc: &mut Vec<ValueNode<V>>) {
         acc.push(self.clone());
         if self.prev.is_some() {
@@ -272,7 +285,7 @@ where
 
 impl<V> Default for ValueNode<V>
 where
-    V: ValueTrait,
+    V: Default + Clone + Serialize,
 {
     fn default() -> ValueNode<V> {
         ValueNode {
@@ -284,11 +297,28 @@ where
     }
 }
 
+impl<V> AsValue<V> for ValueNode<V>
+where
+    V: Default + Clone + Serialize,
+{
+    fn value(&self) -> V {
+        self.data.clone()
+    }
+
+    fn seqno(&self) -> u64 {
+        self.seqno
+    }
+
+    fn is_deleted(&self) -> bool {
+        self.deleted
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct Node<K, V>
 where
-    K: KeyTrait,
-    V: ValueTrait,
+    K: AsKey,
+    V: Default + Clone + Serialize,
 {
     key: K,
     valn: ValueNode<V>,
@@ -302,14 +332,14 @@ where
 // Primary operations on a single node.
 impl<K, V> Node<K, V>
 where
-    K: KeyTrait,
-    V: ValueTrait,
+    K: AsKey,
+    V: Default + Clone + Serialize,
 {
     // CREATE operation
     fn new(key: K, value: V, seqno: u64, access: u64, black: bool) -> Node<K, V> {
         let mut node: Node<K, V> = Default::default();
         node.key = key;
-        node.valn = ValueNode::new(value, seqno, None);
+        node.valn = ValueNode::new(value, seqno, false, None);
         node.seqno = seqno;
         node.access = access;
         node.black = black;
@@ -323,7 +353,7 @@ where
         } else {
             None
         };
-        self.valn = ValueNode::new(value, seqno, prev);
+        self.valn = ValueNode::new(value, seqno, false, prev);
         self.seqno = seqno;
         self.access = self.access;
     }
@@ -340,24 +370,6 @@ where
         } else {
             false
         }
-    }
-
-    // GET operation
-    #[inline]
-    fn get_value(&self) -> ValueResult<V> {
-        self.valn.get_value()
-    }
-
-    // GETLOG operation
-    #[inline]
-    fn get_values(&self, acc: &mut Vec<ValueResult<V>>) {
-        self.valn.get_values(acc)
-    }
-
-    // GETLOG operation
-    #[inline]
-    fn value_nodes(&self, acc: &mut Vec<ValueNode<V>>) {
-        self.valn.value_nodes(acc)
     }
 
     #[inline]
@@ -384,12 +396,26 @@ where
     fn is_deleted(&self) -> bool {
         self.valn.is_deleted()
     }
+
+    fn clone_detach(&self) -> Node<K,V> {
+        let mut node = Node::new(
+            self.key.clone(),
+            self.valn.data.clone(), // latest value.
+            self.seqno,
+            self.access,
+            self.black
+        );
+        if self.is_deleted() {
+            node.delete(false);
+        }
+        node
+    }
 }
 
 impl<K, V> Default for Node<K, V>
 where
-    K: KeyTrait,
-    V: ValueTrait,
+    K: AsKey,
+    V: Default + Clone + Serialize,
 {
     fn default() -> Node<K, V> {
         Node {
@@ -404,22 +430,37 @@ where
     }
 }
 
-impl<K, V> PartialEq for Node<K, V>
+impl<K,V> AsNode<K,V> for Node<K,V>
 where
-    K: KeyTrait,
-    V: ValueTrait,
+    K: AsKey,
+    V: Default + Clone + Serialize,
 {
-    fn eq(&self, other: &Self) -> bool {
-        self.key == other.key
+    type Value=ValueNode<V>;
+
+    fn key(&self) -> K {
+        self.key.clone()
+    }
+
+    fn as_value(&self) -> Self::Value {
+        self.valn.clone()
+    }
+
+    fn as_values(&self) -> Vec<Self::Value> {
+        let mut acc: Vec<Self::Value> = vec![];
+        self.valn.value_nodes(&mut acc);
+        acc
+    }
+
+    fn seqno(&self) -> u64 {
+        self.seqno
+    }
+
+    fn access(&self) -> u64 {
+        self.access
+    }
+
+    fn is_delete(&self) -> bool {
+        self.valn.is_deleted()
     }
 }
 
-impl<K, V> PartialOrd for Node<K, V>
-where
-    K: KeyTrait,
-    V: ValueTrait,
-{
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.key.partial_cmp(&other.key)
-    }
-}

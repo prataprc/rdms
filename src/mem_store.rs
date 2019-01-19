@@ -1,5 +1,6 @@
 use std::cmp::{Ordering, Ord};
 use std::borrow::Borrow;
+use std::ops::Bound;
 
 use crate::traits::{AsKey, AsValue, AsNode, Serialize};
 
@@ -13,9 +14,9 @@ where
     V: Default + Clone + Serialize,
 {
     name: String,
-    root: Option<Node<K, V>>,
+    root: Option<Box<Node<K, V>>>,
     seqno: u64, // seqno so far, starts from 0 and incr for every mutation
-    // TODO: llrb_depth_histogram, as a feature, to measure the depth of LLRB tree.
+    // TODO: llrb_depth_histogram, as feature, to measure the depth of LLRB tree.
 }
 
 // TODO: should we implement Drop as part of cleanup
@@ -50,6 +51,10 @@ where
     //        }
     //    }
 
+    pub fn id(&self) -> String {
+        self.name.clone()
+    }
+
     pub fn set_seqno(&mut self, seqno: u64) {
         self.seqno = seqno;
     }
@@ -58,14 +63,16 @@ where
         self.seqno
     }
 
-    //pub fn get<Q>(&self, key: &Q) -> Option<V>
-    //where
-    //    K: Borrow<Q>,
-    //    Q: Ord + ?Sized,
-    //{
-    //}
+    pub fn get<Q>(&self, key: &Q) -> Option<impl AsNode<K,V>>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        self.get_key(&self.root, key)
+    }
 
-    fn get_key<Q>(mut node: &Option<Box<Node<K,V>>>, key: &Q) -> Option<Node<K,V>>
+    fn get_key<Q>(&self, mut node: &Option<Box<Node<K,V>>>, key: &Q)
+        -> Option<Node<K,V>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -81,6 +88,19 @@ where
         None
     }
 
+    pub fn iter(&self) -> Iter<K,V> {
+        let mut acc: Vec<Node<K,V>> = vec![];
+        let root = &self.root;
+        scan(root, &Bound::Unbounded, 100, &mut acc); // TODO: no magic number
+        if acc.len() == 0 {
+            let after_key = Bound::Unbounded;
+            let node_iter = acc.into_iter().rev();
+            return Iter{root, empty: true, node_iter, after_key}
+        }
+        let after_key = Bound::Excluded(acc.last().unwrap().key());
+        let node_iter = acc.into_iter().rev();
+        return Iter{root, empty: false, node_iter, after_key}
+    }
 
     //--------- rotation routines for 2-3 algorithm ----------------
 
@@ -322,7 +342,6 @@ where
 {
     key: K,
     valn: ValueNode<V>,
-    seqno: u64,                     // most recent mutation on this key
     access: u64,                    // most recent access for this key
     black: bool,                    // llrb: black or red
     left: Option<Box<Node<K, V>>>,  // llrb: left child
@@ -340,7 +359,6 @@ where
         let mut node: Node<K, V> = Default::default();
         node.key = key;
         node.valn = ValueNode::new(value, seqno, false, None);
-        node.seqno = seqno;
         node.access = access;
         node.black = black;
         node
@@ -354,7 +372,6 @@ where
             None
         };
         self.valn = ValueNode::new(value, seqno, false, prev);
-        self.seqno = seqno;
         self.access = self.access;
     }
 
@@ -401,7 +418,7 @@ where
         let mut node = Node::new(
             self.key.clone(),
             self.valn.data.clone(), // latest value.
-            self.seqno,
+            self.seqno(),
             self.access,
             self.black
         );
@@ -421,7 +438,6 @@ where
         Node {
             key: Default::default(),
             valn: Default::default(),
-            seqno: 0,
             access: 0,
             black: false,
             left: None,
@@ -452,7 +468,7 @@ where
     }
 
     fn seqno(&self) -> u64 {
-        self.seqno
+        self.valn.seqno()
     }
 
     fn access(&self) -> u64 {
@@ -464,3 +480,78 @@ where
     }
 }
 
+struct Iter<'a, K, V>
+where
+    K: AsKey,
+    V: Default + Clone + Serialize,
+{
+    empty: bool,
+    root: &'a Option<Box<Node<K, V>>>,
+    node_iter: std::iter::Rev<std::vec::IntoIter<Node<K,V>>>,
+    after_key: Bound<K>,
+}
+
+impl<'a,K,V> Iterator for Iter<'a,K,V>
+where
+    K: AsKey,
+    V: Default + Clone + Serialize,
+{
+    type Item=Node<K,V>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.empty {
+            return None
+        }
+        match self.node_iter.next() {
+            Some(item) => Some(item),
+            None => {
+                let mut acc: Vec<Node<K,V>> = vec![];
+                scan(self.root, &self.after_key, 100, &mut acc);
+                if acc.len() == 0 {
+                    self.empty = true;
+                    None
+                } else {
+                    self.after_key = Bound::Excluded(acc.last().unwrap().key());
+                    self.node_iter = acc.into_iter().rev();
+                    self.node_iter.next()
+                }
+            }
+        }
+    }
+}
+
+fn scan<K,V>(
+    node: &Option<Box<Node<K,V>>>,
+    key: &Bound<K>,
+    limit: usize,
+    acc: &mut Vec<Node<K,V>>) -> bool
+where
+    K: AsKey,
+    V: Default + Clone + Serialize,
+{
+    if node.is_none() {
+        return true
+    }
+    let node = node.as_ref().unwrap();
+    match key {
+        Bound::Included(ky) => {
+            if node.key.borrow().le(&ky) {
+                return scan(&node.right, key, limit, acc)
+            }
+        },
+        Bound::Excluded(ky) => {
+            if node.key.borrow().le(&ky) {
+                return scan(&node.right, key, limit, acc)
+            }
+        },
+        _ => (),
+    }
+    if !scan(&node.left, key, limit, acc) {
+        return false
+    }
+    acc.push(node.clone_detach());
+    if acc.len() >= limit {
+        return false
+    }
+    return scan(&node.right, key, limit, acc)
+}

@@ -20,6 +20,12 @@ Release Checklist
 * Create a git-tag for the new version.
 * Cargo publish the new version.
 * Badges
-  * rust-doc
-  * gitpitch
-  * build-passing
+  * Build passing, Travis continuous integration.
+  * Code coverage, codecov and coveralls.
+  * Crates badge
+  * Downloads badge
+  * License badge
+  * Rust version badge.
+  * Maintenance-related badges based on isitmaintained.com
+  * Documentation
+  * Gitpitch

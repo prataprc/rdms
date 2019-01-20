@@ -43,14 +43,26 @@ where
     /// Create an empty instance of Memstore, identified by `name`.
     /// Applications can use unique names.
     pub fn new(name: String, lsm: bool) -> Memstore<K, V> {
-        let llrb = Memstore {
+        let store = Memstore {
             name,
             lsm,
             seqno: 0,
             root: None,
             n_count: 0,
         };
-        llrb
+        store
+    }
+
+    /// Clone the under-lying tree into a new Memstore instance.
+    pub fn clone_tree(&self) -> Memstore<K,V> {
+        let new_store = Memstore{
+            name: self.name.clone(),
+            lsm: self.lsm,
+            seqno: self.seqno,
+            n_count: self.n_count,
+            root: self.root.clone(),
+        };
+        new_store
     }
 
     /// Create a new instance of Memstore tree and load it with entries from
@@ -61,14 +73,14 @@ where
     where
         N: Into<Node<K,V>> + AsNode<K,V>
     {
-        let mut llrb = Memstore::new(name, lsm);
+        let mut store = Memstore::new(name, lsm);
         for n in iter {
-            let root = llrb.root.take();
-            let mut root = llrb.load_node(root, n.key(), Some(n));
+            let root = store.root.take();
+            let mut root = store.load_node(root, n.key(), Some(n));
             root.as_mut().unwrap().set_black();
-            llrb.root = root;
+            store.root = root;
         }
-        llrb
+        store
     }
 
     fn load_node<N>(
@@ -459,6 +471,58 @@ where
         [Some(Memstore::fixup(node)), res[1].take()]
     }
 
+    /// validate llrb rules:
+    /// a. No consecutive reds should be found in the tree.
+    /// b. number of blacks should be same on both sides.
+    pub fn validate(&self) {
+        if self.root.is_none() {
+            return
+        }
+
+        let (fromred, nblacks) = (is_red(&self.root), 0);
+        Memstore::validate_tree(&self.root, fromred, nblacks);
+    }
+
+    fn validate_tree(
+        node: &Option<Box<Node<K,V>>>,
+        fromred: bool,
+        mut nblacks: u64) -> u64
+    {
+        if node.is_none() {
+            return nblacks
+        }
+
+        let red = is_red(node);
+        if fromred && red {
+            panic!("llrb_store: consecutive red spotted");
+        }
+        if !red {
+            nblacks += 1;
+        }
+        let node = &node.as_ref().unwrap();
+        let left = node.left.as_ref().unwrap();
+        let right = node.right.as_ref().unwrap();
+        let lblacks = Memstore::validate_tree(&node.left, red, nblacks);
+        let rblacks = Memstore::validate_tree(&node.right, red, nblacks);
+        if lblacks != rblacks {
+            panic!(
+                "llrb_store: unbalanced blacks left: {} and right: {}",
+                lblacks, rblacks
+            );
+        }
+        if node.left.is_some() {
+            if left.key.ge(&node.key) {
+                panic!("left key {:?} >= parent {:?}", left.key, node.key);
+            }
+        }
+        if node.right.is_some() {
+            if right.key.le(&node.key) {
+                panic!("right key {:?} <= parent {:?}", right.key, node.key);
+            }
+        }
+        lblacks
+    }
+
     //--------- rotation routines for 2-3 algorithm ----------------
 
     fn walkdown_rot23(node: Box<Node<K, V>>) -> Box<Node<K, V>> {
@@ -717,9 +781,9 @@ where
     key: K,
     valn: ValueNode<V>,
     access: u64,                    // most recent access for this key
-    black: bool,                    // llrb: black or red
-    left: Option<Box<Node<K, V>>>,  // llrb: left child
-    right: Option<Box<Node<K, V>>>, // llrb: right child
+    black: bool,                    // store: black or red
+    left: Option<Box<Node<K, V>>>,  // store: left child
+    right: Option<Box<Node<K, V>>>, // store: right child
 }
 
 // Primary operations on a single node.

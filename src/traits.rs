@@ -1,5 +1,7 @@
+use std::fmt::Debug;
+
 /// AsKey is an aggregate trait.
-pub trait AsKey: Default + Clone + Ord {}
+pub trait AsKey: Default + Clone + Ord + Debug {}
 
 /// AsValue acts both as aggregate trait and provides necessary
 /// methods to handle multiple versions for the same key.

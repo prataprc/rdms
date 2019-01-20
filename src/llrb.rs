@@ -467,53 +467,59 @@ where
     /// validate llrb rules:
     /// a. No consecutive reds should be found in the tree.
     /// b. number of blacks should be same on both sides.
-    pub fn validate(&self) {
-        if self.root.is_none() {
-            return
+    pub fn validate(&self) -> Result<(), BognError> {
+        if self.root.is_some() {
+            let (fromred, nblacks) = (is_red(&self.root), 0);
+            Llrb::validate_tree(&self.root, fromred, nblacks)?;
         }
-
-        let (fromred, nblacks) = (is_red(&self.root), 0);
-        Llrb::validate_tree(&self.root, fromred, nblacks);
+        Ok(())
     }
 
     fn validate_tree(
         node: &Option<Box<Node<K,V>>>,
         fromred: bool,
-        mut nblacks: u64) -> u64
+        mut nblacks: u64) -> Result<u64, BognError>
     {
         if node.is_none() {
-            return nblacks
+            return Ok(nblacks)
         }
 
         let red = is_red(node);
         if fromred && red {
-            panic!("llrb_store: consecutive red spotted");
+            return Err(BognError::ConsecutiveReds);
         }
         if !red {
             nblacks += 1;
         }
         let node = &node.as_ref().unwrap();
-        let left = node.left.as_ref().unwrap();
-        let right = node.right.as_ref().unwrap();
-        let lblacks = Llrb::validate_tree(&node.left, red, nblacks);
-        let rblacks = Llrb::validate_tree(&node.right, red, nblacks);
+        let lblacks = Llrb::validate_tree(&node.left, red, nblacks)?;
+        let rblacks = Llrb::validate_tree(&node.right, red, nblacks)?;
         if lblacks != rblacks {
-            panic!(
+            let err = format!(
                 "llrb_store: unbalanced blacks left: {} and right: {}",
-                lblacks, rblacks
+                lblacks, rblacks,
             );
+            return Err(BognError::UnbalancedBlacks(err));
         }
         if node.left.is_some() {
+            let left = node.left.as_ref().unwrap();
             if left.key.ge(&node.key) {
-                panic!("left key {:?} >= parent {:?}", left.key, node.key);
+                let err = format!(
+                    "left key {:?} >= parent {:?}", left.key, node.key
+                );
+                return Err(BognError::SortError(err));
             }
         }
         if node.right.is_some() {
+            let right = node.right.as_ref().unwrap();
             if right.key.le(&node.key) {
-                panic!("right key {:?} <= parent {:?}", right.key, node.key);
+                let err = format!(
+                    "right {:?} <= parent {:?}", right.key, node.key
+                );
+                return Err(BognError::SortError(err));
             }
         }
-        lblacks
+        Ok(lblacks)
     }
 
     //--------- rotation routines for 2-3 algorithm ----------------

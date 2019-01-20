@@ -7,23 +7,23 @@ use crate::error::BognError;
 
 // TODO: search for red, black and dirty logic and double-check.
 // TODO: llrb_depth_histogram, as feature, to measure the depth of LLRB tree.
-// TODO: Memstore: should we implement Drop as part of cleanup.
-// TODO: Memstore: Clone trait ?
-// TODO: Memstore: Implement `pub undo`.
-// TODO: Memstore: Implement `pub purge`.
+// TODO: Llrb: should we implement Drop as part of cleanup.
+// TODO: Llrb: Clone trait ?
+// TODO: Llrb: Implement `pub undo`.
+// TODO: Llrb: Implement `pub purge`.
 
 
-/// Memstore to manage a single instance of in-memory sorted index using
+/// Llrb to manage a single instance of in-memory sorted index using
 /// left-leaning-red-black tree.
 ///
-/// lsm mode: Memstore instances support what is called as log-structured-merge
+/// lsm mode: Llrb instances support what is called as log-structured-merge
 /// while mutating the tree. In simple terms, this means that nothing shall be
 /// over-written in the tree and all the mutations for the same key shall be 
 /// preserved until they are purged. Although there is one exception to it,
 /// where back-to-back deletes will collapse.
 ///
 /// IMPORTANT: This tree is not thread safe.
-pub struct Memstore<K, V>
+pub struct Llrb<K, V>
 where
     K: AsKey,
     V: Default + Clone,
@@ -35,15 +35,15 @@ where
     n_count: u64, // number of entries in the tree.
 }
 
-impl<K, V> Memstore<K, V>
+impl<K, V> Llrb<K, V>
 where
     K: AsKey,
     V: Default + Clone,
 {
-    /// Create an empty instance of Memstore, identified by `name`.
+    /// Create an empty instance of Llrb, identified by `name`.
     /// Applications can use unique names.
-    pub fn new(name: String, lsm: bool) -> Memstore<K, V> {
-        let store = Memstore {
+    pub fn new(name: String, lsm: bool) -> Llrb<K, V> {
+        let store = Llrb {
             name,
             lsm,
             seqno: 0,
@@ -53,9 +53,9 @@ where
         store
     }
 
-    /// Clone the under-lying tree into a new Memstore instance.
-    pub fn clone_tree(&self) -> Memstore<K,V> {
-        let new_store = Memstore{
+    /// Clone the under-lying tree into a new Llrb instance.
+    pub fn clone_tree(&self) -> Llrb<K,V> {
+        let new_store = Llrb{
             name: self.name.clone(),
             lsm: self.lsm,
             seqno: self.seqno,
@@ -65,15 +65,15 @@ where
         new_store
     }
 
-    /// Create a new instance of Memstore tree and load it with entries from
+    /// Create a new instance of Llrb tree and load it with entries from
     /// `iter`. Note that iterator shall return items which can be converted
-    /// to Memstore node.
+    /// to Llrb node.
     pub fn load_from<N>(name: String, iter: impl Iterator<Item=N>, lsm: bool)
-        -> Memstore<K,V>
+        -> Llrb<K,V>
     where
         N: Into<Node<K,V>> + AsNode<K,V>
     {
-        let mut store = Memstore::new(name, lsm);
+        let mut store = Llrb::new(name, lsm);
         for n in iter {
             let root = store.root.take();
             let mut root = store.load_node(root, n.key(), Some(n));
@@ -99,14 +99,14 @@ where
 
         } else {
             let mut node = node.unwrap();
-            node = Memstore::walkdown_rot23(node);
+            node = Llrb::walkdown_rot23(node);
             if node.key.gt(&key) {
                 node.left = self.load_node(node.left, key, n);
-                Some(Memstore::walkuprot_23(node))
+                Some(Llrb::walkuprot_23(node))
 
             } else if node.key.lt(&key) {
                 node.right = self.load_node(node.right, key, n);
-                Some(Memstore::walkuprot_23(node))
+                Some(Llrb::walkuprot_23(node))
 
             } else {
                 panic!("load_node: duplicate keys not allowed");
@@ -115,7 +115,7 @@ where
     }
 
     /// Identify this instance. Applications can use unique names while
-    /// creating Memstore instances.
+    /// creating Llrb instances.
     pub fn id(&self) -> String {
         self.name.clone()
     }
@@ -188,7 +188,7 @@ where
         let seqno = self.seqno + 1;
 
         let root = self.root.take();
-        let mut res = Memstore::upsert(root, key, value, seqno, self.lsm);
+        let mut res = Llrb::upsert(root, key, value, seqno, self.lsm);
         let mut root = res[0].take().unwrap();
         root.set_black();
 
@@ -213,23 +213,23 @@ where
 
         } else {
             let mut node = node.unwrap();
-            node = Memstore::walkdown_rot23(node);
+            node = Llrb::walkdown_rot23(node);
             if node.key.gt(&key) {
-                let mut res = Memstore::upsert(node.left, key, value, seqno, lsm);
+                let mut res = Llrb::upsert(node.left, key, value, seqno, lsm);
                 node.left = res[0].take();
-                node = Memstore::walkuprot_23(node);
+                node = Llrb::walkuprot_23(node);
                 [Some(node), res[1].take()]
 
             } else if node.key.lt(&key) {
-                let mut res = Memstore::upsert(node.right, key, value, seqno, lsm);
+                let mut res = Llrb::upsert(node.right, key, value, seqno, lsm);
                 node.right = res[0].take();
-                node = Memstore::walkuprot_23(node);
+                node = Llrb::walkuprot_23(node);
                 [Some(node), res[1].take()]
 
             } else {
                 let old_node = node.clone_detach();
                 node.prepend_value(value, seqno, 0, /*access*/ lsm);
-                node = Memstore::walkuprot_23(node);
+                node = Llrb::walkuprot_23(node);
                 [Some(node), Some(Box::new(old_node))]
             }
         }
@@ -246,7 +246,7 @@ where
         let lsm = self.lsm;
 
         let root = self.root.take();
-        let mut res = Memstore::upsert_cas(root, key, value, cas, seqno, lsm)?;
+        let mut res = Llrb::upsert_cas(root, key, value, cas, seqno, lsm)?;
         let mut root = res[0].take().unwrap();
         root.set_black();
 
@@ -277,21 +277,21 @@ where
 
         } else {
             let mut node = node.unwrap();
-            node = Memstore::walkdown_rot23(node);
+            node = Llrb::walkdown_rot23(node);
             if node.key.gt(&key) {
                 let n = node.left;
-                let mut res = Memstore::upsert_cas(
+                let mut res = Llrb::upsert_cas(
                     n, key, value, cas, seqno, lsm)?;
                 node.left = res[0].take();
-                node = Memstore::walkuprot_23(node);
+                node = Llrb::walkuprot_23(node);
                 Ok([Some(node), res[1].take()])
 
             } else if node.key.lt(&key) {
                 let n = node.right;
-                let mut res = Memstore::upsert_cas(
+                let mut res = Llrb::upsert_cas(
                     n, key, value, cas, seqno, lsm)?;
                 node.right = res[0].take();
-                node = Memstore::walkuprot_23(node);
+                node = Llrb::walkuprot_23(node);
                 Ok([Some(node), res[1].take()])
 
             } else if node.is_deleted() && cas != 0 && cas != node.seqno() {
@@ -303,7 +303,7 @@ where
             } else {
                 let old_node = node.clone_detach();
                 node.prepend_value(value, seqno, 0, /*access*/ lsm);
-                node = Memstore::walkuprot_23(node);
+                node = Llrb::walkuprot_23(node);
                 Ok([Some(node), Some(Box::new(old_node))])
             }
         }
@@ -323,7 +323,7 @@ where
             match self.delete_lsm(key, seqno) {
                 res @ Some(_) => res,
                 None => {
-                    let mut root = Memstore::delete_insert(
+                    let mut root = Llrb::delete_insert(
                         self.root.take(), key, seqno, self.lsm).unwrap();
                     root.set_black();
                     self.root = Some(root);
@@ -333,7 +333,7 @@ where
             }
 
         } else {
-            let mut res = Memstore::do_delete(self.root.take(), key);
+            let mut res = Llrb::do_delete(self.root.take(), key);
             self.root = res[0].take();
             if self.root.is_some() {
                 self.root.as_mut().unwrap().set_black();
@@ -384,14 +384,14 @@ where
 
         } else {
             let mut node = node.unwrap();
-            node = Memstore::walkdown_rot23(node);
+            node = Llrb::walkdown_rot23(node);
             if node.key.borrow().gt(&key) {
-                node.left = Memstore::delete_insert(node.left, key, seqno, lsm);
-                Some(Memstore::walkuprot_23(node))
+                node.left = Llrb::delete_insert(node.left, key, seqno, lsm);
+                Some(Llrb::walkuprot_23(node))
 
             } else if node.key.borrow().lt(&key) {
-                node.right = Memstore::delete_insert(node.right, key, seqno, lsm);
-                Some(Memstore::walkuprot_23(node))
+                node.right = Llrb::delete_insert(node.right, key, seqno, lsm);
+                Some(Llrb::walkuprot_23(node))
 
             } else {
                 panic!("delete_insert(): key already exist")
@@ -415,15 +415,15 @@ where
                 return [Some(node), None];
             }
             if !is_red(&node.left) && !is_red(&node.left.as_ref().unwrap().left) {
-                node = Memstore::move_red_left(node);
+                node = Llrb::move_red_left(node);
             }
-            let mut res = Memstore::do_delete(node.left, key);
+            let mut res = Llrb::do_delete(node.left, key);
             node.left = res[0].take();
-            [Some(Memstore::fixup(node)), res[1].take()]
+            [Some(Llrb::fixup(node)), res[1].take()]
 
         } else {
             if is_red(&node.left) {
-                node = Memstore::rotate_right(node);
+                node = Llrb::rotate_right(node);
             }
 
             if !node.key.borrow().lt(key) && node.right.is_none() {
@@ -431,11 +431,11 @@ where
             }
             let ok = node.right.is_some() && !is_red(&node.right);
             if ok && !is_red(&node.right.as_ref().unwrap().left) {
-                node = Memstore::move_red_right(node);
+                node = Llrb::move_red_right(node);
             }
 
             if !node.key.borrow().lt(key) { // node == key
-                let mut res = Memstore::delete_min(node.right);
+                let mut res = Llrb::delete_min(node.right);
                 node.right = res[0].take();
                 if res[1].is_none() {
                     panic!("do_delete(): fatal logic, call the programmer");
@@ -446,11 +446,11 @@ where
                 newnode.black = node.black;
                 let subdel = res[1].take();
                 newnode.valn = subdel.unwrap().valn;
-                [Some(Memstore::fixup(newnode)), Some(node)]
+                [Some(Llrb::fixup(newnode)), Some(node)]
             } else {
-                let mut res = Memstore::do_delete(node.right, key);
+                let mut res = Llrb::do_delete(node.right, key);
                 node.right = res[0].take();
-                [Some(Memstore::fixup(node)), res[1].take()]
+                [Some(Llrb::fixup(node)), res[1].take()]
             }
         }
     }
@@ -464,11 +464,11 @@ where
             return [None, Some(node)]
         }
         if !is_red(&node.left) && !is_red(&node.left.as_ref().unwrap().left) {
-            node = Memstore::move_red_left(node);
+            node = Llrb::move_red_left(node);
         }
-        let mut res = Memstore::delete_min(node.left);
+        let mut res = Llrb::delete_min(node.left);
         node.left = res[0].take();
-        [Some(Memstore::fixup(node)), res[1].take()]
+        [Some(Llrb::fixup(node)), res[1].take()]
     }
 
     /// validate llrb rules:
@@ -480,7 +480,7 @@ where
         }
 
         let (fromred, nblacks) = (is_red(&self.root), 0);
-        Memstore::validate_tree(&self.root, fromred, nblacks);
+        Llrb::validate_tree(&self.root, fromred, nblacks);
     }
 
     fn validate_tree(
@@ -502,8 +502,8 @@ where
         let node = &node.as_ref().unwrap();
         let left = node.left.as_ref().unwrap();
         let right = node.right.as_ref().unwrap();
-        let lblacks = Memstore::validate_tree(&node.left, red, nblacks);
-        let rblacks = Memstore::validate_tree(&node.right, red, nblacks);
+        let lblacks = Llrb::validate_tree(&node.left, red, nblacks);
+        let rblacks = Llrb::validate_tree(&node.right, red, nblacks);
         if lblacks != rblacks {
             panic!(
                 "llrb_store: unbalanced blacks left: {} and right: {}",
@@ -531,13 +531,13 @@ where
 
     fn walkuprot_23(mut node: Box<Node<K, V>>) -> Box<Node<K, V>> {
         if is_red(&node.right) && is_black(&node.left) {
-            node = Memstore::rotate_left(node);
+            node = Llrb::rotate_left(node);
         }
         if is_red(&node.left) && is_red(&node.left.as_ref().unwrap().left) {
-            node = Memstore::rotate_right(node);
+            node = Llrb::rotate_right(node);
         }
         if is_red(&node.left) && is_red(&node.right) {
-            node = Memstore::flip(node)
+            node = Llrb::flip(node)
         }
         node
     }
@@ -604,34 +604,34 @@ where
 
     fn fixup(mut node: Box<Node<K, V>>) -> Box<Node<K, V>> {
         if is_red(&node.right) {
-            node = Memstore::rotate_left(node);
+            node = Llrb::rotate_left(node);
         }
         if is_red(&node.left) && is_red(&node.left.as_ref().unwrap().left) {
-            node = Memstore::rotate_right(node);
+            node = Llrb::rotate_right(node);
         }
         if is_red(&node.left) && is_red(&node.right) {
-            node = Memstore::flip(node);
+            node = Llrb::flip(node);
         }
         node
     }
 
     // REQUIRE: Left and Right children must be present
     fn move_red_left(mut node: Box<Node<K, V>>) -> Box<Node<K, V>> {
-        node = Memstore::flip(node);
+        node = Llrb::flip(node);
         if is_red(&node.right.as_ref().unwrap().left) {
-            node.right = Some(Memstore::rotate_right(node.right.take().unwrap()));
-            node = Memstore::rotate_left(node);
-            node = Memstore::flip(node);
+            node.right = Some(Llrb::rotate_right(node.right.take().unwrap()));
+            node = Llrb::rotate_left(node);
+            node = Llrb::flip(node);
         }
         node
     }
 
     // REQUIRE: Left and Right children must be present
     fn move_red_right(mut node: Box<Node<K, V>>) -> Box<Node<K, V>> {
-        node = Memstore::flip(node);
+        node = Llrb::flip(node);
         if is_red(&node.left.as_ref().unwrap().left) {
-            node = Memstore::rotate_right(node);
-            node = Memstore::flip(node);
+            node = Llrb::rotate_right(node);
+            node = Llrb::flip(node);
         }
         node
     }
@@ -663,7 +663,7 @@ where
 
 //----------------------------------------------------------------------------
 
-/// A single entry in Memstore can have mutiple version of values, ValueNode
+/// A single entry in Llrb can have mutiple version of values, ValueNode
 /// represent each version.
 #[derive(Clone)]
 pub struct ValueNode<V>
@@ -771,7 +771,7 @@ where
     }
 }
 
-/// Node corresponds to a single entry in Memstore instance.
+/// Node corresponds to a single entry in Llrb instance.
 #[derive(Clone)]
 pub struct Node<K, V>
 where

@@ -29,8 +29,8 @@ where
     fn versions(&self) -> Vec<Self::Value>;
     /// Return last modified seqno.
     fn seqno(&self) -> u64;
-    /// Return last mutation timestamp.
-    fn access(&self) -> u64;
     /// Return whether this mutation involves deleting the key.
     fn is_deleted(&self) -> bool;
 }
+
+impl AsKey for i32 {}

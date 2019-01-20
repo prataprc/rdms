@@ -11,6 +11,8 @@ use crate::error::BognError;
 // TODO: Llrb: Clone trait ?
 // TODO: Llrb: Implement `pub undo`.
 // TODO: Llrb: Implement `pub purge`.
+// TODO: measure allocations, Box::new(), clone(), clone_detach() are sources
+// of allocations.
 
 
 /// Llrb manage a single instance of in-memory sorted index using
@@ -44,9 +46,12 @@ where
 {
     /// Create an empty instance of Llrb, identified by `name`.
     /// Applications can use unique names.
-    pub fn new(name: String, lsm: bool) -> Llrb<K, V> {
+    pub fn new<S>(name: S, lsm: bool) -> Llrb<K, V>
+    where
+        S: AsRef<str>
+    {
         let store = Llrb {
-            name,
+            name: name.as_ref().to_string(),
             lsm,
             seqno: 0,
             root: None,
@@ -151,37 +156,14 @@ where
         None
     }
 
-    /// Get all the versions for key.
-    pub fn get_versions<Q>(&self, key: &Q) -> Option<impl AsNode<K,V>>
-    where
-        K: Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
-        let mut node = &self.root;
-        while node.is_some() {
-            let nref = node.as_ref().unwrap();
-            node = match nref.key.borrow().cmp(key) {
-                Ordering::Less => &nref.right,
-                Ordering::Equal => return Some(*nref.clone()),
-                Ordering::Greater => &nref.left,
-            };
-        }
-        None
-    }
-
     /// Return an iterator over all entries in this instance.
     pub fn iter(&self) -> Iter<K,V> {
-        let mut acc: Vec<Node<K,V>> = vec![];
-        let root = &self.root;
-        scan(root, &Bound::Unbounded, 100, &mut acc); // TODO: no magic number
-        if acc.len() == 0 {
-            let after_key = Bound::Unbounded;
-            let node_iter = acc.into_iter().rev();
-            return Iter{root, empty: true, node_iter, after_key}
+        return Iter{
+            root: Some(self.root.as_ref().unwrap()),
+            node_iter: vec![].into_iter().rev(),
+            after_key: Bound::Unbounded,
+            limit: 100, // TODO: no magic number.
         }
-        let after_key = Bound::Excluded(acc.last().unwrap().key());
-        let node_iter = acc.into_iter().rev();
-        return Iter{root, empty: false, node_iter, after_key}
     }
 
     /// Set a new entry into this instance. If key is already present, return
@@ -199,7 +181,10 @@ where
         self.seqno = seqno;
         match res[1].take() {
             Some(old_node) => Some(*old_node),
-            None => { self.n_count += 1; None },
+            None => {
+                self.n_count += 1;
+                None
+            },
         }
     }
 
@@ -211,8 +196,8 @@ where
         lsm: bool) -> [Option<Box<Node<K,V>>>; 2]
     {
         if node.is_none() {
-            let (access, black) = (0, false);
-            [Some(Box::new(Node::new(key, value, seqno, access, black))), None]
+            let black = false;
+            [Some(Box::new(Node::new(key, value, seqno, black))), None]
 
         } else {
             let mut node = node.unwrap();
@@ -231,7 +216,7 @@ where
 
             } else {
                 let old_node = node.clone_detach();
-                node.prepend_value(value, seqno, 0, /*access*/ lsm);
+                node.prepend_version(value, seqno, lsm);
                 node = Llrb::walkuprot_23(node);
                 [Some(node), Some(Box::new(old_node))]
             }
@@ -246,10 +231,9 @@ where
         -> Result<Option<impl AsNode<K,V>>, BognError>
     {
         let seqno = self.seqno + 1;
-        let lsm = self.lsm;
 
         let root = self.root.take();
-        let mut res = Llrb::upsert_cas(root, key, value, cas, seqno, lsm)?;
+        let mut res = Llrb::upsert_cas(root, key, value, cas, seqno, self.lsm)?;
         let mut root = res[0].take().unwrap();
         root.set_black();
 
@@ -257,7 +241,10 @@ where
         self.seqno = seqno;
         match res[1].take() {
             Some(old_node) => Ok(Some(*old_node)),
-            None => { self.n_count += 1; Ok(None) },
+            None => {
+                self.n_count += 1;
+                Ok(None)
+            },
         }
     }
 
@@ -274,25 +261,23 @@ where
             Err(BognError::InvalidCAS)
 
         } else if node.is_none() {
-            let (access, black) = (0, false);
-            let node = Box::new(Node::new(key, value, seqno, access, black));
+            let black = false;
+            let node = Box::new(Node::new(key, value, seqno, black));
             Ok([Some(node), None])
 
         } else {
             let mut node = node.unwrap();
             node = Llrb::walkdown_rot23(node);
             if node.key.gt(&key) {
-                let n = node.left;
                 let mut res = Llrb::upsert_cas(
-                    n, key, value, cas, seqno, lsm)?;
+                    node.left, key, value, cas, seqno, lsm)?;
                 node.left = res[0].take();
                 node = Llrb::walkuprot_23(node);
                 Ok([Some(node), res[1].take()])
 
             } else if node.key.lt(&key) {
-                let n = node.right;
                 let mut res = Llrb::upsert_cas(
-                    n, key, value, cas, seqno, lsm)?;
+                    node.right, key, value, cas, seqno, lsm)?;
                 node.right = res[0].take();
                 node = Llrb::walkuprot_23(node);
                 Ok([Some(node), res[1].take()])
@@ -305,7 +290,7 @@ where
 
             } else {
                 let old_node = node.clone_detach();
-                node.prepend_value(value, seqno, 0, /*access*/ lsm);
+                node.prepend_version(value, seqno, lsm);
                 node = Llrb::walkuprot_23(node);
                 Ok([Some(node), Some(Box::new(old_node))])
             }
@@ -326,8 +311,9 @@ where
             match self.delete_lsm(key, seqno) {
                 res @ Some(_) => res,
                 None => {
-                    let mut root = Llrb::delete_insert(
-                        self.root.take(), key, seqno, self.lsm).unwrap();
+                    let root = self.root.take();
+                    let root = Llrb::delete_insert(root, key, seqno, self.lsm);
+                    let mut root = root.unwrap();
                     root.set_black();
                     self.root = Some(root);
                     self.n_count += 1;
@@ -359,7 +345,7 @@ where
             node = match nref.key.borrow().cmp(key) {
                 Ordering::Less => &mut nref.right,
                 Ordering::Equal => {
-                    nref.delete(del_seqno, true /*true*/);
+                    nref.delete(del_seqno, true /*lsm*/);
                     return Some(nref.clone_detach());
                 },
                 Ordering::Greater => &mut nref.left,
@@ -378,10 +364,10 @@ where
         Q: Clone + Ord + ?Sized,
     {
         if node.is_none() {
-            let (access, black) = (0, false);
+            let black = false;
             let key = key.clone().into();
             let value = Default::default();
-            let mut node = Node::new(key, value, seqno, access, black);
+            let mut node = Node::new(key, value, seqno, black);
             node.delete(seqno, lsm);
             Some(Box::new(node))
 
@@ -402,6 +388,7 @@ where
         }
     }
 
+    // this is the non-lsm path.
     fn do_delete<Q>(node: Option<Box<Node<K,V>>>, key: &Q)
         -> [Option<Box<Node<K,V>>>; 2]
     where
@@ -415,14 +402,17 @@ where
         // TODO: optimize comparision let cmp = node.key.borrow().cmp(key).
         if node.key.borrow().gt(key) {
             if node.left.is_none() {
-                return [Some(node), None];
+                [Some(node), None]
+
+            } else {
+                let ok = !is_red(&node.left);
+                if ok && !is_red(&node.left.as_ref().unwrap().left) {
+                    node = Llrb::move_red_left(node);
+                }
+                let mut res = Llrb::do_delete(node.left, key);
+                node.left = res[0].take();
+                [Some(Llrb::fixup(node)), res[1].take()]
             }
-            if !is_red(&node.left) && !is_red(&node.left.as_ref().unwrap().left) {
-                node = Llrb::move_red_left(node);
-            }
-            let mut res = Llrb::do_delete(node.left, key);
-            node.left = res[0].take();
-            [Some(Llrb::fixup(node)), res[1].take()]
 
         } else {
             if is_red(&node.left) {
@@ -443,12 +433,12 @@ where
                 if res[1].is_none() {
                     panic!("do_delete(): fatal logic, call the programmer");
                 }
-                let mut newnode = node.clone();
+                let subdel = res[1].take().unwrap();
+                // TODO: measure the Box::new() allocation here.
+                let mut newnode = Box::new(subdel.clone_detach());
                 newnode.left = node.left.take();
-                node.right = node.right;
+                newnode.right = node.right.take();
                 newnode.black = node.black;
-                let subdel = res[1].take();
-                newnode.valn = subdel.unwrap().valn;
                 [Some(Llrb::fixup(newnode)), Some(node)]
             } else {
                 let mut res = Llrb::do_delete(node.right, key);
@@ -533,7 +523,7 @@ where
     }
 
     fn walkuprot_23(mut node: Box<Node<K, V>>) -> Box<Node<K, V>> {
-        if is_red(&node.right) && is_black(&node.left) {
+        if is_red(&node.right) && !is_red(&node.left) {
             node = Llrb::rotate_left(node);
         }
         if is_red(&node.left) && is_red(&node.left.as_ref().unwrap().left) {
@@ -681,7 +671,94 @@ where
     }
 }
 
-//----------------------------------------------------------------------------
+
+pub struct Iter<'a, K, V>
+where
+    K: AsKey,
+    V: Default + Clone,
+{
+    root: Option<&'a Box<Node<K, V>>>,
+    node_iter: std::iter::Rev<std::vec::IntoIter<Node<K,V>>>,
+    after_key: Bound<K>,
+    limit: usize,
+}
+
+impl<'a,K,V> Iterator for Iter<'a,K,V>
+where
+    K: AsKey,
+    V: Default + Clone,
+{
+    type Item=Node<K,V>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.root.is_none() {
+            return None
+        }
+        let item = match self.node_iter.next() {
+            Some(item) => Some(item),
+            None => {
+                let mut acc: Vec<Node<K,V>> = vec![];
+                scan(self.root, &self.after_key, self.limit, &mut acc);
+                if acc.len() == 0 {
+                    self.root = None;
+                    None
+                } else {
+                    self.after_key = Bound::Excluded(acc.last().unwrap().key());
+                    self.node_iter = acc.into_iter().rev();
+                    self.node_iter.next()
+                }
+            }
+        };
+        match item {
+            Some(item) => Some(item),
+            None => {
+                self.root = None;
+                None
+            },
+        }
+    }
+}
+
+fn scan<K,V>(
+    node: Option<&Box<Node<K,V>>>,
+    key: &Bound<K>,
+    limit: usize,
+    acc: &mut Vec<Node<K,V>>) -> bool
+where
+    K: AsKey,
+    V: Default + Clone,
+{
+    match node {
+        None => true,
+        Some(node) => {
+            let (left, right) = (node.left.as_ref(), node.right.as_ref());
+            match key {
+                Bound::Included(ky) => {
+                    if node.key.borrow().le(&ky) {
+                        return scan(right, key, limit, acc)
+                    }
+                },
+                Bound::Excluded(ky) => {
+                    if node.key.borrow().le(&ky) {
+                        return scan(right, key, limit, acc)
+                    }
+                },
+                _ => (),
+            }
+            if !scan(left, key, limit, acc) {
+                return false
+            }
+            acc.push(node.clone_detach());
+            if acc.len() >= limit {
+                return false
+            }
+            return scan(right, key, limit, acc)
+        },
+    }
+
+}
+
+//----------------------------------------------------------------------
 
 /// A single entry in Llrb can have mutiple version of values, ValueNode
 /// represent each version.
@@ -692,7 +769,7 @@ where
 {
     data: V,                         // actual value
     seqno: u64,                      // when this version mutated
-    deleted: Option<u64>,            // for lsm, deleted > 0
+    deleted: Option<u64>,            // for lsm, deleted can be > 0
     prev: Option<Box<ValueNode<V>>>, // point to previous version
 }
 
@@ -707,14 +784,10 @@ where
         deleted: Option<u64>,
         prev: Option<Box<ValueNode<V>>>) -> ValueNode<V>
     {
-        let mut vn: ValueNode<V> = Default::default();
-        vn.data = data;
-        vn.seqno = seqno;
-        vn.deleted = deleted;
-        vn.prev = prev;
-        vn
+        ValueNode{ data, seqno, deleted, prev }
     }
 
+    // clone this version alone, detach it from previous versions.
     fn clone_detach(&self) -> ValueNode<V> {
         ValueNode {
             data: self.data.clone(),
@@ -724,16 +797,21 @@ where
         }
     }
 
-    #[inline]
-    fn is_deleted(&self) -> bool {
-        self.deleted.is_some()
+    // detach individual versions and collect them in a vector.
+    fn value_nodes(&self, acc: &mut Vec<ValueNode<V>>) {
+        acc.push(self.clone_detach());
+        if self.prev.is_some() {
+            self.prev.as_ref().unwrap().value_nodes(acc)
+        }
     }
 
+    // mark this version as deleted, along with its seqno.
     fn delete(&mut self, seqno: u64) {
         // back-to-back deletes shall collapse
         self.deleted = Some(seqno);
     }
 
+    #[allow(dead_code)] // TODO: remove this after implementing undo.
     fn undo(&mut self) -> bool {
         if self.deleted.is_some() {
             // collapsed deletes can be undone only once
@@ -745,13 +823,6 @@ where
             let source = self.prev.take().unwrap();
             self.clone_from(&source);
             true
-        }
-    }
-
-    fn value_nodes(&self, acc: &mut Vec<ValueNode<V>>) {
-        acc.push(self.clone());
-        if self.prev.is_some() {
-            self.prev.as_ref().unwrap().value_nodes(acc)
         }
     }
 }
@@ -779,10 +850,9 @@ where
     }
 
     fn seqno(&self) -> u64 {
-        if self.deleted.is_some() {
-            self.deleted.unwrap()
-        } else {
-            self.seqno
+        match self.deleted {
+            Some(seqno) => seqno,
+            None => self.seqno,
         }
     }
 
@@ -800,7 +870,6 @@ where
 {
     key: K,
     valn: ValueNode<V>,
-    access: u64,                    // most recent access for this key
     black: bool,                    // store: black or red
     left: Option<Box<Node<K, V>>>,  // store: left child
     right: Option<Box<Node<K, V>>>, // store: right child
@@ -813,20 +882,16 @@ where
     V: Default + Clone,
 {
     // CREATE operation
-    fn new(key: K, value: V, seqno: u64, access: u64, black: bool) -> Node<K, V> {
-        let mut node: Node<K, V> = Default::default();
-        node.key = key;
-        node.valn = ValueNode::new(value, seqno, None, None);
-        node.access = access;
-        node.black = black;
-        node
+    fn new(key: K, value: V, seqno: u64, black: bool) -> Node<K, V> {
+        let valn = ValueNode::new(value, seqno, None, None);
+        Node{ key, valn, black, left: None, right: None }
     }
 
+    // clone and detach this node from the tree.
     fn clone_detach(&self) -> Node<K,V> {
         Node {
             key: self.key.clone(),
-            valn: self.valn.clone_detach(),
-            access: self.access,
+            valn: self.valn.clone(),
             black: false,
             left: None,
             right: None,
@@ -834,14 +899,13 @@ where
     }
 
     // prepend operation, equivalent to SET / INSERT / UPDATE
-    fn prepend_value(&mut self, value: V, seqno: u64, access: u64, lsm: bool) {
+    fn prepend_version(&mut self, value: V, seqno: u64, lsm: bool) {
         let prev = if lsm {
-            Some(Box::new(self.valn.clone()))
+            Some(Box::new(self.valn.clone())) // TODO: measure the alloc.
         } else {
             None
         };
         self.valn = ValueNode::new(value, seqno, None, prev);
-        self.access = access;
     }
 
     // DELETE operation
@@ -850,6 +914,7 @@ where
     }
 
     // UNDO operation
+    #[allow(dead_code)] // TODO: remove this after implementing undo.
     fn undo(&mut self, lsm: bool) -> bool {
         if lsm {
             self.valn.undo()
@@ -888,7 +953,6 @@ where
         Node {
             key: Default::default(),
             valn: Default::default(),
-            access: 0,
             black: false,
             left: None,
             right: None,
@@ -908,7 +972,7 @@ where
     }
 
     fn value(&self) -> Self::Value {
-        self.valn.clone()
+        self.valn.clone_detach()
     }
 
     fn versions(&self) -> Vec<Self::Value> {
@@ -921,87 +985,7 @@ where
         self.valn.seqno()
     }
 
-    fn access(&self) -> u64 {
-        self.access
-    }
-
     fn is_deleted(&self) -> bool {
         self.valn.is_deleted()
     }
-}
-
-pub struct Iter<'a, K, V>
-where
-    K: AsKey,
-    V: Default + Clone,
-{
-    empty: bool,
-    root: &'a Option<Box<Node<K, V>>>,
-    node_iter: std::iter::Rev<std::vec::IntoIter<Node<K,V>>>,
-    after_key: Bound<K>,
-}
-
-impl<'a,K,V> Iterator for Iter<'a,K,V>
-where
-    K: AsKey,
-    V: Default + Clone,
-{
-    type Item=Node<K,V>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.empty {
-            return None
-        }
-        match self.node_iter.next() {
-            Some(item) => Some(item),
-            None => {
-                let mut acc: Vec<Node<K,V>> = vec![];
-                scan(self.root, &self.after_key, 100, &mut acc);
-                if acc.len() == 0 {
-                    self.empty = true;
-                    None
-                } else {
-                    self.after_key = Bound::Excluded(acc.last().unwrap().key());
-                    self.node_iter = acc.into_iter().rev();
-                    self.node_iter.next()
-                }
-            }
-        }
-    }
-}
-
-fn scan<K,V>(
-    node: &Option<Box<Node<K,V>>>,
-    key: &Bound<K>,
-    limit: usize,
-    acc: &mut Vec<Node<K,V>>) -> bool
-where
-    K: AsKey,
-    V: Default + Clone,
-{
-    if node.is_none() {
-        return true
-    }
-    let node = node.as_ref().unwrap();
-    match key {
-        Bound::Included(ky) => {
-            if node.key.borrow().le(&ky) {
-                return scan(&node.right, key, limit, acc)
-            }
-        },
-        Bound::Excluded(ky) => {
-            if node.key.borrow().le(&ky) {
-                return scan(&node.right, key, limit, acc)
-            }
-        },
-        _ => (),
-    }
-    if !scan(&node.left, key, limit, acc) {
-        return false
-    }
-    acc.push(node.clone_detach());
-    if acc.len() >= limit {
-        return false
-    }
-    return scan(&node.right, key, limit, acc)
 }

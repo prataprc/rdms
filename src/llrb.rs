@@ -13,14 +13,15 @@ use crate::error::BognError;
 // TODO: Llrb: Implement `pub purge`.
 
 
-/// Llrb to manage a single instance of in-memory sorted index using
+/// Llrb manage a single instance of in-memory sorted index using
 /// left-leaning-red-black tree.
 ///
-/// lsm mode: Llrb instances support what is called as log-structured-merge
-/// while mutating the tree. In simple terms, this means that nothing shall be
-/// over-written in the tree and all the mutations for the same key shall be 
-/// preserved until they are purged. Although there is one exception to it,
-/// where back-to-back deletes will collapse.
+/// **lsm mode**: Llrb instance support what is called as
+/// log-structured-merge while mutating the tree. In simple terms, this
+/// means that nothing shall be over-written in the tree and all the
+/// mutations for the same key shall be preserved until they are purged.
+/// Although there is one exception to it, where back-to-back deletes
+/// will collapse.
 ///
 /// IMPORTANT: This tree is not thread safe.
 pub struct Llrb<K, V>
@@ -35,6 +36,7 @@ where
     n_count: u64, // number of entries in the tree.
 }
 
+/// Different ways to construct a new Llrb instance.
 impl<K, V> Llrb<K, V>
 where
     K: AsKey,
@@ -51,18 +53,6 @@ where
             n_count: 0,
         };
         store
-    }
-
-    /// Clone the under-lying tree into a new Llrb instance.
-    pub fn clone_tree(&self) -> Llrb<K,V> {
-        let new_store = Llrb{
-            name: self.name.clone(),
-            lsm: self.lsm,
-            seqno: self.seqno,
-            n_count: self.n_count,
-            root: self.root.clone(),
-        };
-        new_store
     }
 
     /// Create a new instance of Llrb tree and load it with entries from
@@ -113,7 +103,15 @@ where
             }
         }
     }
+}
 
+
+/// CRUD operations on Llrb instance.
+impl<K, V> Llrb<K, V>
+where
+    K: AsKey,
+    V: Default + Clone,
+{
     /// Identify this instance. Applications can use unique names while
     /// creating Llrb instances.
     pub fn id(&self) -> String {
@@ -128,6 +126,11 @@ where
     /// Return current seqno.
     pub fn get_seqno(&self) -> u64 {
         self.seqno
+    }
+
+    /// Return number of entries in this instance.
+    pub fn count(&self) -> u64 {
+        self.n_count
     }
 
     /// Get the latest version for key.
@@ -658,6 +661,23 @@ where
         true
     } else {
         node.as_ref().unwrap().is_black()
+    }
+}
+
+impl<K,V> Clone for Llrb<K,V>
+where
+    K: AsKey,
+    V: Default + Clone,
+{
+    fn clone(&self) -> Llrb<K,V> {
+        let new_store = Llrb{
+            name: self.name.clone(),
+            lsm: self.lsm,
+            seqno: self.seqno,
+            n_count: self.n_count,
+            root: self.root.clone(),
+        };
+        new_store
     }
 }
 

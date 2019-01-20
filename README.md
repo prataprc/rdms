@@ -1,6 +1,8 @@
 Key Value store
 ===============
 
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+
 * [ ] In memory storage.
 * [ ] Multi-version Concurrency Control for in memory storage.
 * [ ] Fully packed immutable disk store.

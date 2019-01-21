@@ -14,7 +14,7 @@ pub trait AsValue<V> where V: Default + Clone {
     fn is_deleted(&self) -> bool;
 }
 
-pub trait AsNode<K, V>
+pub trait AsEntry<K, V>
 where
     K: AsKey,
     V: Default + Clone,

@@ -16,3 +16,6 @@ edition = "2018"
 [badges]
 maintenance = { status = "actively-developed" }
 travis-ci = { repository = "bnclabs/bogn" }
+
+[dev-dependencies]
+rand = "0.6.4"

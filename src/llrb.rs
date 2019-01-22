@@ -15,16 +15,18 @@ use crate::error::BognError;
 
 
 /// Llrb manage a single instance of in-memory sorted index using
-/// left-leaning-red-black tree.
+/// [left-leaning-red-black] tree.
 ///
 /// **lsm mode**: Llrb instance support what is called as
 /// log-structured-merge while mutating the tree. In simple terms, this
 /// means that nothing shall be over-written in the tree and all the
-/// mutations for the same key shall be preserved until they are purged.
-/// Although there is one exception to it, where back-to-back deletes
+/// mutations for the same key shall be preserved until they are undone or
+/// purged. Although there is one exception to it, back-to-back deletes
 /// will collapse.
 ///
 /// IMPORTANT: This tree is not thread safe.
+///
+/// [left-leaning-red-black]: https://en.wikipedia.org/wiki/Left-leaning_red-black_tree
 pub struct Llrb<K, V>
 where
     K: AsKey,
@@ -44,7 +46,9 @@ where
     V: Default + Clone,
 {
     /// Create an empty instance of Llrb, identified by `name`.
-    /// Applications can use unique names.
+    /// Applications can choose unique names. When `lsm` is true, mutations
+    /// are added as log for each key, instead of over-writing previous
+    /// mutation.
     pub fn new<S>(name: S, lsm: bool) -> Llrb<K, V>
     where
         S: AsRef<str>
@@ -60,17 +64,17 @@ where
     }
 
     /// Create a new instance of Llrb tree and load it with entries from
-    /// `iter`. Note that iterator shall return items which can be converted
-    /// to Llrb node.
-    pub fn load_from<N>(name: String, iter: impl Iterator<Item=N>, lsm: bool)
+    /// `iter`. Note that iterator shall return items that implement [`AsEntry`].
+    pub fn load_from<E>(name: String, iter: impl Iterator<Item=E>, lsm: bool)
         -> Result<Llrb<K,V>, BognError>
     where
-        N: Into<Node<K,V>> + AsEntry<K,V>
+        E: AsEntry<K,V>,
+        <E as AsEntry<K, V>>::Value: Default + Clone,
     {
         let mut store = Llrb::new(name, lsm);
-        for n in iter {
+        for entry in iter {
             let root = store.root.take();
-            match store.load_node(root, n.key(), n)? {
+            match store.load_entry(root, entry.key(), entry)? {
                 Some(mut root) => {
                     root.set_black();
                     store.root = Some(root);
@@ -81,16 +85,17 @@ where
         Ok(store)
     }
 
-    fn load_node<N>(
+    fn load_entry<E>(
         &mut self,
         node: Option<Box<Node<K,V>>>,
         key: K,
-        n: N) -> Result<Option<Box<Node<K,V>>>, BognError>
+        entry: E) -> Result<Option<Box<Node<K,V>>>, BognError>
     where
-        N: Into<Node<K,V>> + AsEntry<K,V>
+        E: AsEntry<K,V>,
+        <E as AsEntry<K, V>>::Value: Default + Clone,
     {
         if node.is_none() {
-            let node: Node<K,V> = n.into();
+            let node: Node<K,V> = Node::from_entry(entry);
             self.seqno = node.seqno();
             self.n_count += if node.is_deleted() { 0 } else { 1 };
             Ok(Some(Box::new(node)))
@@ -99,15 +104,15 @@ where
             let mut node = node.unwrap();
             node = Llrb::walkdown_rot23(node);
             if node.key.gt(&key) {
-                node.left = self.load_node(node.left, key, n)?;
+                node.left = self.load_entry(node.left, key, entry)?;
                 Ok(Some(Llrb::walkuprot_23(node)))
 
             } else if node.key.lt(&key) {
-                node.right = self.load_node(node.right, key, n)?;
+                node.right = self.load_entry(node.right, key, entry)?;
                 Ok(Some(Llrb::walkuprot_23(node)))
 
             } else {
-                Err(BognError::DuplicateKey(format!("load_node: {:?}", key)))
+                Err(BognError::DuplicateKey(format!("load_entry: {:?}", key)))
             }
         }
     }
@@ -120,7 +125,7 @@ where
     K: AsKey,
     V: Default + Clone,
 {
-    /// Identify this instance. Applications can use unique names while
+    /// Identify this instance. Applications can choose unique names while
     /// creating Llrb instances.
     pub fn id(&self) -> String {
         self.name.clone()
@@ -982,6 +987,16 @@ where
     fn new(key: K, value: V, seqno: u64, black: bool) -> Node<K, V> {
         let valn = ValueNode::new(value, seqno, None, None);
         Node{ key, valn, black, left: None, right: None }
+    }
+
+    fn from_entry<E>(entry: E) -> Node<K,V>
+    where
+        E: AsEntry<K,V>,
+        <E as AsEntry<K, V>>::Value: Default + Clone,
+    {
+        let asvalue = entry.value();
+        let valn = ValueNode::new(asvalue.value(), asvalue.seqno(), None, None);
+        Node{ key: entry.key(), valn, black: false, left: None, right: None }
     }
 
     // clone and detach this node from the tree.

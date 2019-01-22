@@ -1,11 +1,9 @@
-use std::fmt::Debug;
-
 use rand::prelude::random;
 
 use crate::llrb::{Llrb};
 use crate::empty::Empty;
 use crate::error::BognError;
-use crate::traits::{AsKey, AsEntry, AsValue};
+use crate::traits::{AsEntry, AsValue};
 
 #[test]
 fn test_id() {
@@ -29,154 +27,85 @@ fn test_count() {
 
 #[test]
 fn test_set() {
-    let mut llrb: Llrb<i32,Empty> = Llrb::new("test-llrb", false /*lsm*/);
-    assert!(llrb.set(2, Empty).is_none());
-    assert!(llrb.set(1, Empty).is_none());
-    assert!(llrb.set(3, Empty).is_none());
-    assert!(llrb.set(6, Empty).is_none());
-    assert!(llrb.set(5, Empty).is_none());
-    assert!(llrb.set(4, Empty).is_none());
-    assert!(llrb.set(8, Empty).is_none());
-    assert!(llrb.set(0, Empty).is_none());
-    assert!(llrb.set(9, Empty).is_none());
-    assert!(llrb.set(7, Empty).is_none());
+    let mut llrb: Llrb<i64,i64> = Llrb::new("test-llrb", false /*lsm*/);
+    let mut refns = RefNodes::new(false /*lsm*/, 10);
+
+    assert!(llrb.set(2, 10).is_none()); refns.set(2, 10);
+    assert!(llrb.set(1, 10).is_none()); refns.set(1, 10);
+    assert!(llrb.set(3, 10).is_none()); refns.set(3, 10);
+    assert!(llrb.set(6, 10).is_none()); refns.set(6, 10);
+    assert!(llrb.set(5, 10).is_none()); refns.set(5, 10);
+    assert!(llrb.set(4, 10).is_none()); refns.set(4, 10);
+    assert!(llrb.set(8, 10).is_none()); refns.set(8, 10);
+    assert!(llrb.set(0, 10).is_none()); refns.set(0, 10);
+    assert!(llrb.set(9, 10).is_none()); refns.set(9, 10);
+    assert!(llrb.set(7, 10).is_none()); refns.set(7, 10);
 
     assert_eq!(llrb.count(), 10);
     assert!(llrb.validate().is_ok());
 
-    let refns = [
-        RefNode{
-            key: 0, value: Empty, seqno: 8, deleted: false, num_versions: 1,
-            versions: vec![RefValue{value: Empty, seqno: 8, deleted: false}]
-        },
-        RefNode{
-            key: 1, value: Empty, seqno: 2, deleted: false, num_versions: 1,
-            versions: vec![RefValue{value: Empty, seqno: 2, deleted: false}]
-        },
-        RefNode{
-            key: 2, value: Empty, seqno: 1, deleted: false, num_versions: 1,
-            versions: vec![RefValue{value: Empty, seqno: 1, deleted: false}]
-        },
-        RefNode{
-            key: 3, value: Empty, seqno: 3, deleted: false, num_versions: 1,
-            versions: vec![RefValue{value: Empty, seqno: 3, deleted: false}]
-        },
-        RefNode{
-            key: 4, value: Empty, seqno: 6, deleted: false, num_versions: 1,
-            versions: vec![RefValue{value: Empty, seqno: 6, deleted: false}]
-        },
-        RefNode{
-            key: 5, value: Empty, seqno: 5, deleted: false, num_versions: 1,
-            versions: vec![RefValue{value: Empty, seqno: 5, deleted: false}]
-        },
-        RefNode{
-            key: 6, value: Empty, seqno: 4, deleted: false, num_versions: 1,
-            versions: vec![RefValue{value: Empty, seqno: 4, deleted: false}]
-        },
-        RefNode{
-            key: 7, value: Empty, seqno: 10, deleted: false, num_versions: 1,
-            versions: vec![RefValue{value: Empty, seqno: 10, deleted: false}]
-        },
-        RefNode{
-            key: 8, value: Empty, seqno: 7, deleted: false, num_versions: 1,
-            versions: vec![RefValue{value: Empty, seqno: 7, deleted: false}]
-        },
-        RefNode{
-            key: 9, value: Empty, seqno: 9, deleted: false, num_versions: 1,
-            versions: vec![RefValue{value: Empty, seqno: 9, deleted: false}]
-        },
-    ];
-
     // test get
     for i in 0..10 {
         let node = llrb.get(&i);
-        check_node(node, &refns[i as usize], true);
+        let refn = refns.get(i);
+        check_node(node, refn);
     }
     // test iter
-    for (i, node) in llrb.iter().enumerate() {
-        check_node(Some(node), &refns[i], false)
+    for (_, node) in llrb.iter().enumerate() {
+        let refn = refns.get(node.key());
+        check_node(Some(node), refn);
     }
 }
 
 #[test]
 fn test_cas_lsm() {
-    let mut llrb: Llrb<i32,i32> = Llrb::new("test-llrb", true /*lsm*/);
-    assert!(llrb.set(2, 100).is_none());
-    assert!(llrb.set(1, 100).is_none());
-    assert!(llrb.set(3, 100).is_none());
-    assert!(llrb.set(6, 100).is_none());
-    assert!(llrb.set(5, 100).is_none());
-    assert!(llrb.set(4, 100).is_none());
-    assert!(llrb.set(8, 100).is_none());
-    assert!(llrb.set(0, 100).is_none());
-    assert!(llrb.set(9, 100).is_none());
-    assert!(llrb.set(7, 100).is_none());
+    let mut llrb: Llrb<i64,i64> = Llrb::new("test-llrb", true /*lsm*/);
+    let mut refns = RefNodes::new(true /*lsm*/, 11);
+
+    assert!(llrb.set(2, 100).is_none()); refns.set(2, 100);
+    assert!(llrb.set(1, 100).is_none()); refns.set(1, 100);
+    assert!(llrb.set(3, 100).is_none()); refns.set(3, 100);
+    assert!(llrb.set(6, 100).is_none()); refns.set(6, 100);
+    assert!(llrb.set(5, 100).is_none()); refns.set(5, 100);
+    assert!(llrb.set(4, 100).is_none()); refns.set(4, 100);
+    assert!(llrb.set(8, 100).is_none()); refns.set(8, 100);
+    assert!(llrb.set(0, 100).is_none()); refns.set(0, 100);
+    assert!(llrb.set(9, 100).is_none()); refns.set(9, 100);
+    assert!(llrb.set(7, 100).is_none()); refns.set(7, 100);
+
     // repeated mutations on same key
+
     let node = llrb.set_cas(0, 200, 8).unwrap();
-    check_node(
-        node,
-        &RefNode{
-            key: 0, value: 100, seqno: 8, deleted: false, num_versions: 1,
-            versions: vec![RefValue{value: 100, seqno: 8, deleted: false}]
-        },
-        true,
-    );
+    let refn = refns.set_cas(0, 200, 8);
+    check_node(node, refn);
+
     let node = llrb.set_cas(5, 200, 5).unwrap();
-    check_node(
-        node,
-        &RefNode{
-            key: 5, value: 100, seqno: 5, deleted: false, num_versions: 1,
-            versions: vec![RefValue{value: 100, seqno: 5, deleted: false}]
-        },
-        true
-    );
+    let refn = refns.set_cas(5, 200, 5);
+    check_node(node, refn);
+
     let node = llrb.set_cas(6, 200, 4).unwrap();
-    check_node(
-        node,
-        &RefNode{
-            key: 6, value: 100, seqno: 4, deleted: false, num_versions: 1,
-            versions: vec![RefValue{value: 100, seqno: 4, deleted: false}]
-        },
-        true
-    );
+    let refn = refns.set_cas(6, 200, 4);
+    check_node(node, refn);
+
     let node = llrb.set_cas(9, 200, 9).unwrap();
-    check_node(
-        node,
-        &RefNode{
-            key: 9, value: 100, seqno: 9, deleted: false, num_versions: 1,
-            versions: vec![RefValue{value: 100, seqno: 9, deleted: false}]
-        },
-        true
-    );
+    let refn = refns.set_cas(9, 200, 9);
+    check_node(node, refn);
+
     let node = llrb.set_cas(0, 300, 11).unwrap();
-    check_node(
-        node,
-        &RefNode{
-            key: 0, value: 200, seqno: 11, deleted: false, num_versions: 1,
-            versions: vec![RefValue{value: 200, seqno: 11, deleted: false}]
-        },
-        true
-    );
+    let refn = refns.set_cas(0, 300, 11);
+    check_node(node, refn);
+
     let node = llrb.set_cas(5, 300, 12).unwrap();
-    check_node(
-        node,
-        &RefNode{
-            key: 5, value: 200, seqno: 12, deleted: false, num_versions: 1,
-            versions: vec![RefValue{value: 200, seqno: 12, deleted: false}]
-        },
-        true
-    );
+    let refn = refns.set_cas(5, 300, 12);
+    check_node(node, refn);
+
     let node = llrb.set_cas(9, 300, 14).unwrap();
-    check_node(
-        node,
-        &RefNode{
-            key: 9, value: 200, seqno: 14, deleted: false, num_versions: 1,
-            versions: vec![RefValue{value: 200, seqno: 14, deleted: false}]
-        },
-        true
-    );
+    let refn = refns.set_cas(9, 300, 14);
+    check_node(node, refn);
+
     // create
     assert!(llrb.set_cas(10, 100, 0).unwrap().is_none());
+    assert!(refns.set_cas(10, 100, 0).is_none());
     // error create
     assert_eq!(llrb.set_cas(10, 100, 0).err().unwrap(), BognError::InvalidCAS);
     // error insert
@@ -185,132 +114,52 @@ fn test_cas_lsm() {
     assert_eq!(llrb.count(), 11);
     assert!(llrb.validate().is_ok());
 
-    let refns = [
-        RefNode{
-            key: 0, value: 300, seqno: 15, deleted: false, num_versions: 3,
-            versions: vec![
-                RefValue{value: 300, seqno: 15, deleted: false},
-                RefValue{value: 200, seqno: 11, deleted: false},
-                RefValue{value: 100, seqno: 8, deleted: false},
-            ]
-        },
-        RefNode{key: 1, value: 100, seqno: 2, deleted: false, num_versions: 1,
-            versions: vec![RefValue{value: 100, seqno: 2, deleted: false}]},
-        RefNode{key: 2, value: 100, seqno: 1, deleted: false, num_versions: 1,
-            versions: vec![RefValue{value: 100, seqno: 1, deleted: false}]},
-        RefNode{key: 3, value: 100, seqno: 3, deleted: false, num_versions: 1,
-            versions: vec![RefValue{value: 100, seqno: 3, deleted: false}]},
-        RefNode{key: 4, value: 100, seqno: 6, deleted: false, num_versions: 1,
-            versions: vec![RefValue{value: 100, seqno: 6, deleted: false}]},
-        RefNode{
-            key: 5, value: 300, seqno: 16, deleted: false, num_versions: 3,
-            versions: vec![
-                RefValue{value: 300, seqno: 16, deleted: false},
-                RefValue{value: 200, seqno: 12, deleted: false},
-                RefValue{value: 100, seqno: 5, deleted: false},
-            ]
-        },
-        RefNode{
-            key: 6, value: 200, seqno: 13, deleted: false, num_versions: 2,
-            versions: vec![
-                RefValue{value: 200, seqno: 13, deleted: false},
-                RefValue{value: 100, seqno: 4, deleted: false},
-            ]
-        },
-        RefNode{key: 7, value: 100, seqno: 10, deleted: false, num_versions: 1,
-            versions: vec![RefValue{value: 100, seqno: 10, deleted: false}]},
-        RefNode{key: 8, value: 100, seqno: 7, deleted: false, num_versions: 1,
-            versions: vec![RefValue{value: 100, seqno: 7, deleted: false}]},
-        RefNode{
-            key: 9, value: 300, seqno: 17, deleted: false, num_versions: 3,
-            versions: vec![
-                RefValue{value: 300, seqno: 17, deleted: false},
-                RefValue{value: 200, seqno: 14, deleted: false},
-                RefValue{value: 100, seqno: 9, deleted: false},
-            ]
-        },
-        RefNode{key:10, value: 100, seqno: 18, deleted: false, num_versions: 1,
-            versions: vec![RefValue{value: 100, seqno: 18, deleted: false}]},
-    ];
     // test get
     for i in 0..11 {
         let node = llrb.get(&i);
-        check_node(node, &refns[i as usize], false);
+        let refn = refns.get(i);
+        check_node(node, refn);
     }
     // test iter
-    for (i, node) in llrb.iter().enumerate() {
-        check_node(Some(node), &refns[i], false)
+    for (_, node) in llrb.iter().enumerate() {
+        let refn = refns.get(node.key());
+        check_node(Some(node), refn);
     }
 }
 
 #[test]
 fn test_delete() {
-    let mut llrb: Llrb<i32,i32> = Llrb::new("test-llrb", false);
-    assert!(llrb.set(2, 100).is_none());
-    assert!(llrb.set(1, 100).is_none());
-    assert!(llrb.set(3, 100).is_none());
-    assert!(llrb.set(6, 100).is_none());
-    assert!(llrb.set(5, 100).is_none());
-    assert!(llrb.set(4, 100).is_none());
-    assert!(llrb.set(8, 100).is_none());
-    assert!(llrb.set(0, 100).is_none());
-    assert!(llrb.set(9, 100).is_none());
-    assert!(llrb.set(7, 100).is_none());
+    let mut llrb: Llrb<i64,i64> = Llrb::new("test-llrb", false);
+    let mut refns = RefNodes::new(false /*lsm*/, 11);
+
+    assert!(llrb.set(2, 100).is_none());  refns.set(2, 100);
+    assert!(llrb.set(1, 100).is_none());  refns.set(1, 100);
+    assert!(llrb.set(3, 100).is_none());  refns.set(3, 100);
+    assert!(llrb.set(6, 100).is_none());  refns.set(6, 100);
+    assert!(llrb.set(5, 100).is_none());  refns.set(5, 100);
+    assert!(llrb.set(4, 100).is_none());  refns.set(4, 100);
+    assert!(llrb.set(8, 100).is_none());  refns.set(8, 100);
+    assert!(llrb.set(0, 100).is_none());  refns.set(0, 100);
+    assert!(llrb.set(9, 100).is_none());  refns.set(9, 100);
+    assert!(llrb.set(7, 100).is_none());  refns.set(7, 100);
 
     // delete a missing node.
     assert!(llrb.delete(&10).is_none());
-    let refns = [
-        RefNode{
-            key: 0, value: 100, seqno: 8, deleted: false, num_versions: 1,
-            versions: vec![RefValue{value: 100, seqno: 8, deleted: false}]
-        },
-        RefNode{
-            key: 1, value: 100, seqno: 2, deleted: false, num_versions: 1,
-            versions: vec![RefValue{value: 100, seqno: 2, deleted: false}]
-        },
-        RefNode{
-            key: 2, value: 100, seqno: 1, deleted: false, num_versions: 1,
-            versions: vec![RefValue{value: 100, seqno: 1, deleted: false}]
-        },
-        RefNode{
-            key: 3, value: 100, seqno: 3, deleted: false, num_versions: 1,
-            versions: vec![RefValue{value: 100, seqno: 3, deleted: false}]
-        },
-        RefNode{
-            key: 4, value: 100, seqno: 6, deleted: false, num_versions: 1,
-            versions: vec![RefValue{value: 100, seqno: 6, deleted: false}]
-        },
-        RefNode{
-            key: 5, value: 100, seqno: 5, deleted: false, num_versions: 1,
-            versions: vec![RefValue{value: 100, seqno: 5, deleted: false}]
-        },
-        RefNode{
-            key: 6, value: 100, seqno: 4, deleted: false, num_versions: 1,
-            versions: vec![RefValue{value: 100, seqno: 4, deleted: false}]
-        },
-        RefNode{
-            key: 7, value: 100, seqno: 10, deleted: false, num_versions: 1,
-            versions: vec![RefValue{value: 100, seqno: 10, deleted: false}]
-        },
-        RefNode{
-            key: 8, value: 100, seqno: 7, deleted: false, num_versions: 1,
-            versions: vec![RefValue{value: 100, seqno: 7, deleted: false}]
-        },
-        RefNode{
-            key: 9, value: 100, seqno: 9, deleted: false, num_versions: 1,
-            versions: vec![RefValue{value: 100, seqno: 9, deleted: false}]
-        },
-    ];
+    assert!(refns.delete(10).is_none());
+
     assert_eq!(llrb.count(), 10);
     assert!(llrb.validate().is_ok());
+
     for (i, node) in llrb.iter().enumerate() {
-        check_node(Some(node), &refns[i], false);
+        let refn = refns.get(i as i64);
+        check_node(Some(node), refn);
     }
 
     // delete all entry. and set new entries
     for i in 0..10 {
         let node = llrb.delete(&i);
-        check_node(node, &refns[i as usize], true);
+        let refn = refns.delete(i);
+        check_node(node, refn);
     }
     assert_eq!(llrb.count(), 0);
     assert!(llrb.validate().is_ok());
@@ -320,171 +169,269 @@ fn test_delete() {
 
 #[test]
 fn test_crud() {
-    let mut llrb: Llrb<i32,i32> = Llrb::new("test-llrb", false /*lsm*/);
-
-    let mut refns: Vec<RefNode<i32,i32>> = vec![];
     let size = 1000;
-    for i in 0..1000 {
-        let mut refn: RefNode<i32,i32> = Default::default();
-        refn.key = i;
-        refn.versions = vec![Default::default()];
-        refns.push(refn);
-    }
+    let mut llrb: Llrb<i64,i64> = Llrb::new("test-llrb", false /*lsm*/);
+    let mut refns = RefNodes::new(false /*lsm*/, size);
 
-    for i in 0..100000 {
-        let key: i32 = (random::<i32>() % size).abs();
-        let value: i32 = random();
-        let op: i32 = (random::<i32>() % 3).abs();
-        let deleted: bool = match op {
+    for _ in 0..100000 {
+        let key: i64 = (random::<i64>() % (size as i64)).abs();
+        let value: i64 = random();
+        let op: i64 = (random::<i64>() % 3).abs();
+        //println!("key {} value {} op {}", key, value, op);
+        match op {
             0 => {
                 let node = llrb.set(key, value);
-                check_node(node, &refns[key as usize], true);
+                let refn = refns.set(key, value);
+                check_node(node, refn);
                 false
             },
             1 => {
-                let seqno = refns[key as usize].seqno;
-                let node = llrb.set_cas(key, value, seqno).ok().unwrap();
-                check_node(node, &refns[key as usize], true);
+                let refn = &refns.entries[key as usize];
+                let cas = if refn.versions.len() > 0 {refn.get_seqno()} else {0};
+
+                let node = llrb.set_cas(key, value, cas).ok().unwrap();
+                let refn = refns.set_cas(key, value, cas);
+                check_node(node, refn);
                 false
             },
             2 => {
                 let node = llrb.delete(&key);
-                check_node(node, &refns[key as usize], true);
+                let refn = refns.delete(key);
+                check_node(node, refn);
                 true
             },
             op => panic!("unreachable {}", op),
         };
 
-        // update reference
-        let refn = &mut refns[key as usize];
-        if deleted {
-            *refn = Default::default();
-            refn.key = key;
-            refn.versions = vec![Default::default()];
-
-        } else {
-            refn.value = value;
-            refn.seqno = i+1;
-            refn.deleted = deleted;
-            refn.num_versions = 1;
-            refn.versions[0] = RefValue{value, seqno: i+1, deleted};
-        }
         assert!(llrb.validate().is_ok(), "validate failed");
     }
 
     let mut llrb_iter = llrb.iter();
     for i in 0..size {
-        let refn = &refns[i as usize];
-        if refn.seqno == 0 { continue }
-
-        let node = llrb_iter.next();
-        check_node(node, refn, false);
+        let refn = refns.get(i as i64);
+        if refn.is_some() {
+            let node = llrb_iter.next();
+            check_node(node, refn);
+        }
     }
 }
 
 #[test]
 fn test_crud_lsm() {
-    let mut llrb: Llrb<i32,i32> = Llrb::new("test-llrb", true /*lsm*/);
-
-    let mut refns: Vec<RefNode<i32,i32>> = vec![];
     let size = 1000;
-    for i in 0..1000 {
-        let mut refn: RefNode<i32,i32> = Default::default();
-        refn.key = i;
-        refns.push(refn);
-    }
+    let mut llrb: Llrb<i64,i64> = Llrb::new("test-llrb", true /*lsm*/);
+    let mut refns = RefNodes::new(true /*lsm*/, size as usize);
 
-    for i in 0..100000 {
-        let key: i32 = (random::<i32>() % size).abs();
-        let value: i32 = random();
-        let op: i32 = (random::<i32>() % 2).abs();
+    for _i in 0..100000 {
+        let key: i64 = (random::<i64>() % size).abs();
+        let value: i64 = random();
+        let op: i64 = (random::<i64>() % 2).abs();
         //println!("op {} on {}", op, key);
-        let deleted: bool = match op {
+        match op {
             0 => {
                 let node = llrb.set(key, value);
-                check_node(node, &refns[key as usize], true);
+                let refn = refns.set(key, value);
+                check_node(node, refn);
                 false
             },
             1 => {
-                let seqno = refns[key as usize].seqno;
+                let refn = &refns.entries[key as usize];
+                let cas = if refn.versions.len() > 0 {refn.get_seqno()} else {0};
+
                 //println!("set_cas {} {}", key, seqno);
-                let node = llrb.set_cas(key, value, seqno).ok().unwrap();
-                check_node(node, &refns[key as usize], true);
+                let node = llrb.set_cas(key, value, cas).ok().unwrap();
+                let refn = refns.set_cas(key, value, cas);
+                check_node(node, refn);
                 false
             },
             2 => {
                 let node = llrb.delete(&key);
-                check_node(node, &refns[key as usize], true);
+                let refn = refns.delete(key);
+                check_node(node, refn);
                 true
             },
             op => panic!("unreachable {}", op),
         };
 
-        // update reference
-        let refn = &mut refns[key as usize];
-        refn.value = value;
-        refn.seqno = i+1;
-        refn.deleted = deleted;
-        refn.num_versions += 1;
-        refn.versions.insert(0, RefValue{value, seqno: i+1, deleted});
         assert!(llrb.validate().is_ok(), "validate failed");
     }
 
     let mut llrb_iter = llrb.iter();
     for i in 0..size {
-        let refn = &refns[i as usize];
-        if refn.seqno == 0 { continue }
-
-        let node = llrb_iter.next();
-        check_node(node, refn, false);
+        let refn = refns.get(i as i64);
+        if refn.is_some() {
+            let node = llrb_iter.next();
+            check_node(node, refn);
+        }
     }
 }
 
 
-#[derive(Default)]
-struct RefValue<V>{
-    value: V,
+#[derive(Clone, Default)]
+struct RefValue {
+    value: i64,
     seqno: u64,
-    deleted: bool,
+    deleted: Option<u64>
 }
 
-#[derive(Default)]
-struct RefNode<K,V>{
-    key: K,
-    value: V,
-    seqno: u64,
-    deleted: bool,
-    num_versions: usize,
-    versions: Vec<RefValue<V>>,
+impl RefValue {
+    fn get_seqno(&self) -> u64 {
+        match self.deleted {
+            None => self.seqno,
+            Some(seqno) => {
+                if seqno < self.seqno {
+                    panic!("{} < {}", seqno, self.seqno);
+                }
+                seqno
+            },
+        }
+    }
 }
 
-fn check_node<K,V>(
-    node: Option<impl AsEntry<K,V>>, refn: &RefNode<K,V>, ret: bool)
-where
-    K: AsKey,
-    V: Default + Clone + PartialEq + Debug,
-{
-    if node.is_none() {
-        assert_eq!(refn.seqno, 0);
+#[derive(Clone, Default)]
+struct RefNode {
+    key: i64,
+    versions: Vec<RefValue>,
+}
+
+impl RefNode {
+    fn get_seqno(&self) -> u64 {
+        self.versions[0].get_seqno()
+    }
+
+    fn is_deleted(&self) -> bool {
+        self.versions[0].deleted.is_some()
+    }
+
+    fn is_present(&self) -> bool {
+        self.versions.len() > 0
+    }
+}
+
+struct RefNodes{
+    lsm: bool,
+    seqno: u64,
+    entries: Vec<RefNode>,
+}
+
+impl RefNodes {
+    fn new(lsm: bool, capacity: usize) -> RefNodes {
+        let mut entries: Vec<RefNode> = Vec::with_capacity(capacity);
+        (0..capacity).for_each(|_| entries.push(Default::default()));
+        RefNodes{lsm, seqno: 0, entries}
+    }
+
+    fn get(&self, key: i64) -> Option<RefNode> {
+        let entry = self.entries[key as usize].clone();
+        if entry.versions.len() == 0 { None } else { Some(entry) }
+    }
+
+    fn set(&mut self, key: i64, value: i64) -> Option<RefNode> {
+        let refval = RefValue{value, seqno: self.seqno+1, deleted: None};
+        let entry = &mut self.entries[key as usize];
+        let refn = if entry.versions.len() > 0 {Some(entry.clone())} else {None};
+        entry.key = key;
+        if self.lsm || entry.versions.len() == 0 {
+            entry.versions.insert(0, refval);
+        } else {
+            entry.versions[0] = refval;
+        };
+        self.seqno += 1;
+        refn
+    }
+
+    fn set_cas(&mut self, key: i64, value: i64, cas: u64) -> Option<RefNode> {
+        let refval = RefValue{value, seqno: self.seqno+1, deleted: None};
+        let entry = &mut self.entries[key as usize];
+        let ok = entry.versions.len() == 0 && cas == 0;
+        if ok || (cas == entry.versions[0].seqno) {
+            let refn = if entry.versions.len() > 0 {
+                Some(entry.clone())
+            } else {
+                None
+            };
+            entry.key = key;
+            if self.lsm || entry.versions.len() == 0 {
+                entry.versions.insert(0, refval);
+            } else {
+                entry.versions[0] = refval;
+            };
+            self.seqno += 1;
+            refn
+        } else {
+            None
+        }
+    }
+
+    fn delete(&mut self, key: i64) -> Option<RefNode> {
+        let entry = &mut self.entries[key as usize];
+
+        if entry.is_present() {
+            if self.lsm && entry.versions[0].deleted.is_none() {
+                let refn = entry.clone();
+                entry.versions[0].deleted = Some(self.seqno+1);
+                self.seqno += 1;
+                Some(refn)
+            } else if self.lsm { // noop
+                Some(entry.clone())
+            } else {
+                let refn = entry.clone();
+                entry.versions = vec![];
+                self.seqno += 1;
+                Some(refn)
+            }
+
+        } else {
+            if self.lsm {
+                let refval = RefValue{
+                    value: 0, seqno: 0, deleted: Some(self.seqno+1)
+                };
+                entry.versions.insert(0, refval);
+                entry.key = key;
+                self.seqno += 1;
+            }
+            None
+        }
+    }
+}
+
+fn check_node(node: Option<impl AsEntry<i64,i64>>, refn: Option<RefNode>) {
+    if node.is_none() && refn.is_none() {
         return
+    } else if node.is_none() {
+        panic!("node is none but not refn {:?}", refn.unwrap().key);
+    } else if refn.is_none() {
+        panic!("refn is none but not node {:?}", node.unwrap().key());
     }
 
     let node = node.unwrap();
+    let refn = refn.unwrap();
     assert_eq!(node.key(), refn.key, "key");
 
-    if refn.seqno == 0 { return }
+    assert_eq!(
+        node.value().value(), refn.versions[0].value, "key {}", refn.key
+    );
+    assert_eq!(
+        node.value().seqno(), refn.versions[0].seqno, "key {}", refn.key
+    );
+    assert_eq!(
+        node.value().is_deleted(), refn.versions[0].deleted.is_some(),
+        "key {}", refn.key
+    );
 
-    assert_eq!(node.value().value(), refn.versions[0].value, "val_value");
-    assert_eq!(node.value().seqno(), refn.versions[0].seqno, "val_seqno");
-    assert_eq!(node.value().is_deleted(), refn.versions[0].deleted, "val_del");
-    assert_eq!(node.seqno(), refn.seqno, "node_seqno");
-    assert_eq!(node.is_deleted(), refn.deleted, "node_del");
-    let num_versions = if ret { 1 } else { refn.num_versions };
+    assert_eq!(node.seqno(), refn.get_seqno(), "key {}", refn.key);
+    assert_eq!(node.is_deleted(), refn.is_deleted(), "key {}", refn.key);
+    assert_eq!(node.versions().len(), refn.versions.len(), "key {}", refn.key);
     for (i, value) in node.versions().iter().enumerate() {
-        assert_eq!(value.value(), refn.versions[i].value, "version.value {}", i);
-        assert_eq!(value.seqno(), refn.versions[i].seqno, "version.seqno {}", i);
-        assert_eq!(value.is_deleted(), refn.versions[i].deleted, "version {}", i);
-        if ret { break }
+        assert_eq!(
+            value.value(), refn.versions[i].value, "key {} i {}", refn.key, i,
+        );
+        assert_eq!(
+            value.seqno(), refn.versions[i].seqno, "key {} i {}", refn.key, i
+        );
+        assert_eq!(
+            value.is_deleted(), refn.versions[i].deleted.is_some(),
+            "key {} i {}", refn.key, i
+        );
     }
-    assert_eq!(node.versions().len(), num_versions, "num_versions");
 }

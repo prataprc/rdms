@@ -12,6 +12,8 @@ use crate::error::BognError;
 // TODO: llrb_depth_histogram, as feature, to measure the depth of LLRB tree.
 // TODO: Sizing.
 // TODO: optimize comparison
+// TODO: Implement and document primitive types, std-types that can be used
+// as key (K) / value (V) for Llrb.
 
 
 /// Llrb manage a single instance of in-memory sorted index using
@@ -237,10 +239,9 @@ where
             [Some(node), res[1].take()]
 
         } else {
-            let mut old_node = node.clone_detach();
+            let old_node = node.clone_detach();
             node.prepend_version(value, seqno, self.lsm);
             node = Llrb::walkuprot_23(node);
-            old_node.valn.prev = None; // just take one version before
             [Some(node), Some(Box::new(old_node))]
         }
     }
@@ -310,9 +311,8 @@ where
             (None, Some(BognError::InvalidCAS))
 
         } else {
-            let mut old_node = node.clone_detach();
+            let old_node = node.clone_detach();
             node.prepend_version(value, seqno, self.lsm);
-            old_node.valn.prev = None; // just take one version before.
             (Some(Box::new(old_node)), None)
         };
 
@@ -330,10 +330,10 @@ where
     {
         let seqno = self.seqno + 1;
 
-        let deleted_node = if self.lsm {
-            match self.delete_lsm(key, seqno) {
+        if self.lsm {
+            let old_node = match self.delete_lsm(key, seqno) {
                 // mark the node as deleted, and return the entry.
-                res @ Some(_) => res,
+                Some(old_node) => Some(*old_node),
                 // entry is not present, then insert a new
                 // entry and mark the entry as deleted.
                 None => {
@@ -341,32 +341,31 @@ where
                     let mut root = self.delete_insert(root, key, seqno).unwrap();
                     root.set_black();
                     self.root = Some(root);
+                    self.n_count += 1;
                     None
                 }
-            }
-
-        } else {
-            // in non-lsm mode remove the entry from the tree.
-            let root = self.root.take();
-            let (root, old_node) = match self.do_delete(root, key) {
-                [Some(mut root), old_node] => {
-                    root.set_black();
-                    (Some(root), old_node)
-                },
-                [None, old_node] => {
-                    (None, old_node)
-                }
             };
-            self.root = root;
-            old_node
-        };
-
-        if deleted_node.is_some() {
-            self.n_count -= 1;
+            if old_node.is_some() {
+                self.seqno = seqno;
+            }
+            return old_node
         }
-        self.seqno = seqno;
 
-        deleted_node.map(|item| *item)
+        // in non-lsm mode remove the entry from the tree.
+        let root = self.root.take();
+        let (root, old_node) = match self.do_delete(root, key) {
+            [None, old_node] => (None, old_node),
+            [Some(mut root), old_node] => {
+                root.set_black();
+                (Some(root), old_node)
+            },
+        };
+        self.root = root;
+        if old_node.is_some() {
+            self.n_count -= 1;
+            self.seqno = seqno
+        }
+        old_node.map(|item| *item)
     }
 
     fn delete_lsm<Q>(&mut self, key: &Q, del_seqno: u64)
@@ -381,10 +380,13 @@ where
             node = match nref.key.borrow().cmp(key) {
                 Ordering::Less => &mut nref.right,
                 Ordering::Equal => {
-                    let mut old_node = nref.clone_detach();
-                    nref.delete(del_seqno, true /*lsm*/);
-                    old_node.valn.prev = None; // just take one version before
-                    return Some(Box::new(old_node))
+                    return if !nref.is_deleted() {
+                        let old_node = nref.clone_detach();
+                        nref.delete(del_seqno, true /*lsm*/);
+                        Some(Box::new(old_node))
+                    } else {
+                        None
+                    }
                 },
                 Ordering::Greater => &mut nref.left,
             };
@@ -405,7 +407,6 @@ where
             let (key, black) = (key.clone().into(), false);
             let mut node = Node::new(key, Default::default(), seqno, black);
             node.delete(seqno, self.lsm);
-            self.n_count += 1;
             return Some(Box::new(node))
 
         }

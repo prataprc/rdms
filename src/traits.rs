@@ -34,3 +34,5 @@ where
 }
 
 impl AsKey for i32 {}
+impl AsKey for i64 {}
+impl AsKey for u64 {}

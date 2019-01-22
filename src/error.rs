@@ -4,4 +4,5 @@ pub enum BognError {
     ConsecutiveReds,
     UnbalancedBlacks(String),
     SortError(String),
+    DuplicateKey(String),
 }

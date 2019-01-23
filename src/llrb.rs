@@ -14,7 +14,7 @@ use crate::error::BognError;
 
 
 /// Llrb manage a single instance of in-memory sorted index using
-/// [left-leaning-red-black] tree.
+/// [left-leaning-red-black][llrb] tree.
 ///
 /// **lsm mode**: Llrb instance support what is called as
 /// log-structured-merge while mutating the tree. In simple terms, this
@@ -25,7 +25,7 @@ use crate::error::BognError;
 ///
 /// IMPORTANT: This tree is not thread safe.
 ///
-/// [left-leaning-red-black]: https://en.wikipedia.org/wiki/Left-leaning_red-black_tree
+/// [llrb]: https://en.wikipedia.org/wiki/Left-leaning_red-black_tree
 pub struct Llrb<K, V>
 where
     K: AsKey,
@@ -907,22 +907,21 @@ where
         }
 
         let node = self.node_iter.next();
-        if node.is_some() {
-            return node
-        }
+        let node = if node.is_none() {
+            let mut acc: Vec<Node<K,V>> = Vec::with_capacity(self.limit);
+            self.range_iter(self.root, &mut acc);
+            if acc.len() > 0 {
+                //println!("iter-next {}", acc.len());
+                self.low = Bound::Excluded(acc.last().unwrap().key());
+                self.node_iter = acc.into_iter();
+                self.node_iter.next()
+            } else {
+                None
+            }
+        } else {
+            node
+        };
 
-        let mut acc: Vec<Node<K,V>> = Vec::with_capacity(self.limit);
-        self.range_iter(self.root, &mut acc);
-
-        if acc.len() == 0 {
-            self.root = None;
-            return None
-
-        }
-        //println!("iter-next {}", acc.len());
-        self.low = Bound::Excluded(acc.last().unwrap().key());
-        self.node_iter = acc.into_iter();
-        let node = self.node_iter.next();
         if node.is_none() {
             self.root = None;
             return None
@@ -930,6 +929,7 @@ where
 
         // handle upper limit
         let node = node.unwrap();
+        //println!("llrb next {:?}", node.key);
         match &self.high {
             Bound::Unbounded => Some(node),
             Bound::Included(qigh) if node.key.le(qigh) => Some(node),
@@ -1029,22 +1029,21 @@ where
         }
 
         let node = self.node_iter.next();
-        if node.is_some() {
-            return node
-        }
+        let node = if node.is_none() {
+            let mut acc: Vec<Node<K,V>> = Vec::with_capacity(self.limit);
+            self.reverse_iter(self.root, &mut acc);
+            if acc.len() > 0 {
+                //println!("iter-next {}", acc.len());
+                self.high = Bound::Excluded(acc.last().unwrap().key());
+                self.node_iter = acc.into_iter();
+                self.node_iter.next()
+            } else {
+                None
+            }
+        } else {
+            node
+        };
 
-        let mut acc: Vec<Node<K,V>> = Vec::with_capacity(self.limit);
-        self.reverse_iter(self.root, &mut acc);
-
-        if acc.len() == 0 {
-            self.root = None;
-            return None
-
-        }
-        //println!("iter-next {}", acc.len());
-        self.high = Bound::Excluded(acc.last().unwrap().key());
-        self.node_iter = acc.into_iter();
-        let node = self.node_iter.next();
         if node.is_none() {
             self.root = None;
             return None
@@ -1052,11 +1051,13 @@ where
 
         // handle lower limit
         let node = node.unwrap();
+        //println!("llrb next {:?}", node.key);
         match &self.low {
             Bound::Unbounded => Some(node),
             Bound::Included(qow) if node.key.ge(qow) => Some(node),
             Bound::Excluded(qow) if node.key.gt(qow) => Some(node),
             _ => {
+                //println!("llrb reverse over {:?}", &self.low);
                 self.root = None;
                 None
             }

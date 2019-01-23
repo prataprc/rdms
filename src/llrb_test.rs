@@ -1,9 +1,13 @@
+use std::ops::Bound;
+
 use rand::prelude::random;
 
 use crate::llrb::{Llrb};
 use crate::empty::Empty;
 use crate::error::BognError;
 use crate::traits::{AsEntry, AsValue};
+
+// TODO: repeatable randoms.
 
 #[test]
 fn test_id() {
@@ -51,9 +55,9 @@ fn test_set() {
         check_node(node, refn);
     }
     // test iter
-    for (_, node) in llrb.iter().enumerate() {
-        let refn = refns.get(node.key());
-        check_node(Some(node), refn);
+    let (mut iter, mut iter_ref) = (llrb.iter(), refns.iter());
+    loop {
+        if check_node(iter.next(), iter_ref.next().cloned()) == false { break }
     }
 }
 
@@ -121,9 +125,9 @@ fn test_cas_lsm() {
         check_node(node, refn);
     }
     // test iter
-    for (_, node) in llrb.iter().enumerate() {
-        let refn = refns.get(node.key());
-        check_node(Some(node), refn);
+    let (mut iter, mut iter_ref) = (llrb.iter(), refns.iter());
+    loop {
+        if check_node(iter.next(), iter_ref.next().cloned()) == false { break }
     }
 }
 
@@ -150,9 +154,12 @@ fn test_delete() {
     assert_eq!(llrb.count(), 10);
     assert!(llrb.validate().is_ok());
 
-    for (i, node) in llrb.iter().enumerate() {
-        let refn = refns.get(i as i64);
-        check_node(Some(node), refn);
+    // test iter
+    {
+        let (mut iter, mut iter_ref) = (llrb.iter(), refns.iter());
+        loop {
+            if check_node(iter.next(), iter_ref.next().cloned()) == false { break }
+        }
     }
 
     // delete all entry. and set new entries
@@ -206,12 +213,33 @@ fn test_crud() {
         assert!(llrb.validate().is_ok(), "validate failed");
     }
 
-    let mut llrb_iter = llrb.iter();
-    for i in 0..size {
-        let refn = refns.get(i as i64);
-        if refn.is_some() {
-            let node = llrb_iter.next();
-            check_node(node, refn);
+    //println!("count {}", llrb.count());
+
+    // test iter
+    let (mut iter, mut iter_ref) = (llrb.iter(), refns.iter());
+    loop {
+        if check_node(iter.next(), iter_ref.next().cloned()) == false { break }
+    }
+
+    // ranges and reverses
+    for _ in 0..10000 {
+        let (low, high) = random_low_high(size);
+        //println!("test loop {:?} {:?}", low, high);
+
+        let mut iter = llrb.range(low, high);
+        let mut iter_ref = refns.range(low, high);
+        loop {
+            if check_node(iter.next(), iter_ref.next().cloned()) == false {
+                break
+            }
+        }
+
+        let mut iter = llrb.range(low, high).rev();
+        let mut iter_ref = refns.reverse(low, high);
+        loop {
+            if check_node(iter.next(), iter_ref.next().cloned()) == false {
+                break
+            }
         }
     }
 }
@@ -222,7 +250,7 @@ fn test_crud_lsm() {
     let mut llrb: Llrb<i64,i64> = Llrb::new("test-llrb", true /*lsm*/);
     let mut refns = RefNodes::new(true /*lsm*/, size as usize);
 
-    for _i in 0..100000 {
+    for _i in 0..20000 {
         let key: i64 = (random::<i64>() % size).abs();
         let value: i64 = random();
         let op: i64 = (random::<i64>() % 2).abs();
@@ -256,12 +284,33 @@ fn test_crud_lsm() {
         assert!(llrb.validate().is_ok(), "validate failed");
     }
 
-    let mut llrb_iter = llrb.iter();
-    for i in 0..size {
-        let refn = refns.get(i as i64);
-        if refn.is_some() {
-            let node = llrb_iter.next();
-            check_node(node, refn);
+    //println!("count {}", llrb.count());
+
+    // test iter
+    let (mut iter, mut iter_ref) = (llrb.iter(), refns.iter());
+    loop {
+        if check_node(iter.next(), iter_ref.next().cloned()) == false { break }
+    }
+
+    // ranges and reverses
+    for _ in 0..3000 {
+        let (low, high) = random_low_high(size as usize);
+        //println!("test loop {:?} {:?}", low, high);
+
+        let mut iter = llrb.range(low, high);
+        let mut iter_ref = refns.range(low, high);
+        loop {
+            if check_node(iter.next(), iter_ref.next().cloned()) == false {
+                break
+            }
+        }
+
+        let mut iter = llrb.range(low, high).rev();
+        let mut iter_ref = refns.reverse(low, high);
+        loop {
+            if check_node(iter.next(), iter_ref.next().cloned()) == false {
+                break
+            }
         }
     }
 }
@@ -324,6 +373,64 @@ impl RefNodes {
     fn get(&self, key: i64) -> Option<RefNode> {
         let entry = self.entries[key as usize].clone();
         if entry.versions.len() == 0 { None } else { Some(entry) }
+    }
+
+    fn iter<'a>(&'a self) -> impl Iterator<Item=&RefNode> {
+        self.entries.iter().filter(|item| item.versions.len() > 0)
+    }
+
+    fn range<'a>(&'a self, low: Bound<i64>, high: Bound<i64>)
+        -> Box<dyn Iterator<Item=&'a RefNode> + 'a>
+    {
+        let low = match low {
+            Bound::Included(low) => low as usize,
+            Bound::Excluded(low) => (low+1) as usize,
+            Bound::Unbounded => 0,
+        };
+        let high = match high {
+            Bound::Included(high) => (high+1) as usize,
+            Bound::Excluded(high) => high as usize,
+            Bound::Unbounded => self.entries.len(),
+        };
+        //println!("range ref compute low high {} {}", low, high);
+        let ok = low < self.entries.len();
+        let ok = ok && (high >= low && high <= self.entries.len());
+        let entries = if ok {
+            &self.entries[low..high]
+        } else {
+            &self.entries[..0]
+        };
+
+        //println!("range len {}", entries.len());
+        let iter = entries.iter().filter(|item| item.versions.len() > 0);
+        Box::new(iter)
+    }
+
+    fn reverse<'a>(&'a self, low: Bound<i64>, high: Bound<i64>)
+        -> Box<dyn Iterator<Item=&'a RefNode> + 'a>
+    {
+        let low = match low {
+            Bound::Included(low) => low as usize,
+            Bound::Excluded(low) => (low+1) as usize,
+            Bound::Unbounded => 0,
+        };
+        let high = match high {
+            Bound::Included(high) => (high+1) as usize,
+            Bound::Excluded(high) => high as usize,
+            Bound::Unbounded => self.entries.len(),
+        };
+        //println!("reverse ref compute low high {} {}", low, high);
+        let ok = low < self.entries.len();
+        let ok = ok && (high >= low && high <= self.entries.len());
+        let entries = if ok {
+            &self.entries[low..high]
+        } else {
+            &self.entries[..0]
+        };
+
+        //println!("reverse len {}", entries.len());
+        let iter = entries.iter().rev().filter(|item| item.versions.len() > 0);
+        Box::new(iter)
     }
 
     fn set(&mut self, key: i64, value: i64) -> Option<RefNode> {
@@ -395,18 +502,24 @@ impl RefNodes {
     }
 }
 
-fn check_node(node: Option<impl AsEntry<i64,i64>>, refn: Option<RefNode>) {
+fn check_node(node: Option<impl AsEntry<i64,i64>>, refn: Option<RefNode>)
+    -> bool
+{
     if node.is_none() && refn.is_none() {
-        return
+        return false
     } else if node.is_none() {
         panic!("node is none but not refn {:?}", refn.unwrap().key);
     } else if refn.is_none() {
-        panic!("refn is none but not node {:?}", node.unwrap().key());
+        let node = node.as_ref().unwrap();
+        println!("node num_versions {}", node.versions().len());
+        panic!("refn is none but not node {:?}", node.key());
     }
 
     let node = node.unwrap();
     let refn = refn.unwrap();
+    //println!("check_node {} {}", node.key(), refn.key);
     assert_eq!(node.key(), refn.key, "key");
+
 
     assert_eq!(
         node.value().value(), refn.versions[0].value, "key {}", refn.key
@@ -434,4 +547,26 @@ fn check_node(node: Option<impl AsEntry<i64,i64>>, refn: Option<RefNode>) {
             "key {} i {}", refn.key, i
         );
     }
+
+    return true
+}
+
+fn random_low_high(size: usize) -> (Bound<i64>, Bound<i64>) {
+    let size = size as u64;
+    let low = (random::<u64>()%size) as i64;
+    let high = (random::<u64>()%size) as i64;
+    let low = match random::<u8>() % 3 {
+        0 => Bound::Included(low),
+        1 => Bound::Excluded(low),
+        2 => Bound::Unbounded,
+        _ => unreachable!(),
+    };
+    let high = match random::<u8>() % 3 {
+        0 => Bound::Included(high),
+        1 => Bound::Excluded(high),
+        2 => Bound::Unbounded,
+        _ => unreachable!(),
+    };
+    //println!("low_high {:?} {:?}", low, high);
+    (low, high)
 }

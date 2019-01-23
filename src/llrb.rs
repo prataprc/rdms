@@ -5,10 +5,7 @@ use std::ops::Bound;
 use crate::traits::{AsKey, AsValue, AsEntry};
 use crate::error::BognError;
 
-// TODO: Llrb: Implement `pub undo`.
-// TODO: Llrb: Implement `pub purge`.
-// TODO: Llrb: Range API.
-// TODO: Llrb: Reverse Range API.
+// TODO: Test Range and Revese API.
 // TODO: llrb_depth_histogram, as feature, to measure the depth of LLRB tree.
 // TODO: Sizing.
 // TODO: optimize comparison
@@ -176,6 +173,11 @@ where
     /// Return an iterator over all entries in this instance.
     pub fn iter(&self) -> Iter<K,V> {
         Iter::new(&self.root)
+    }
+
+    /// Range over all entries from low to high.
+    pub fn range(&self, low: Bound<K>, high: Bound<K>) -> Range<K,V> {
+        Range::new(&self.root, low, high)
     }
 
     /// Set a new entry into this instance. If key is already present, return
@@ -555,55 +557,6 @@ where
         Ok(lblacks)
     }
 
-    //pub fn undo<Q>(&mut self, key: &Q) -> Option<impl AsEntry<K,V>
-    //where
-    //    K: Borrow<Q>,
-    //    Q: Clone + Ord + ?Sized,
-    //{
-    //    match Llrb::do_undo(self.root.take(), key, self.lsm) {
-    //        [Some(root), old_node] => {
-    //            self.root = some(root);
-    //            old_node
-    //        },
-    //        [None, old_node] => {
-    //            self.root = some(root);
-    //            old_node
-    //        },
-    //    }
-    //}
-
-    //fn do_undo<Q>(node: Option<Box<Node<K,V>>>, key: &Q, lsm: bool)
-    //    -> [Option<Box<Node<K,V>>>; 2]
-    //where
-    //    K: Borrow<Q>,
-    //    Q: Ord + ?Sized,
-    //{
-    //    if node.is_none() {
-    //        [None, None]
-
-    //    } else {
-    //        match nref.key.borrow().cmp(key) {
-    //            Ordering::Less => {
-    //                let right = node.as_mut().unwrap().right.take();
-    //                let mut res = Llrb::do_undo(right, key);
-    //                node.right = res[0].take();
-    //                [node, res[1].take()]
-    //            },
-    //            Ordering::Greater => {
-    //                let left = node.as_mut().unwrap().left.take();
-    //                let mut res = Llrb::do_undo(left, key);
-    //                node.left = res[0].take();
-    //                [node, res[1].take()]
-    //            },
-    //            Ordering::Equal => {
-    //                old_node = node.clone_detach();
-    //                [ if node.undo(lsm) { node } else { None }, old_node ]
-    //            }
-    //        }
-    //    }
-    //}
-
-
     //--------- rotation routines for 2-3 algorithm ----------------
 
     fn walkdown_rot23(node: Box<Node<K, V>>) -> Box<Node<K, V>> {
@@ -808,7 +761,7 @@ where
                     return self.scan_iter(right, acc);
                 }
             },
-            _ => (),
+            Bound::Unbounded => (),
         }
 
         //println!("left {:?} {:?}", node.key, self.after_key);
@@ -863,15 +816,253 @@ where
     }
 }
 
-//pub struct Range<'a, K, V, Q>
-//where
-//    K: Borrow<Q>,
-//    V: Default + Clone,
-//{
-//    root: Option<&'a Box<Node<K, V>>>,
-//    node_iter: std::vec::IntoIter<Node<K,V>>,
-//    low: Bound<&Q>
-//}
+pub struct Range<'a, K, V>
+where
+    K: AsKey,
+    V: Default + Clone,
+{
+    root: Option<&'a Box<Node<K, V>>>,
+    node_iter: std::vec::IntoIter<Node<K,V>>,
+    low: Bound<K>,
+    high: Bound<K>,
+    limit: usize,
+}
+
+
+impl<'a,K,V> Range<'a,K,V>
+where
+    K: AsKey,
+    V: Default + Clone,
+{
+    fn new(
+        root: &'a Option<Box<Node<K,V>>>,
+        low: Bound<K>,
+        high: Bound<K>) -> Range<'a,K,V>
+    {
+        let mut range = Range{
+            root: None,
+            node_iter: vec![].into_iter(),
+            low,
+            high,
+            limit: 100, // TODO: no magic number.
+        };
+        if root.is_some() {
+            range.root = Some(root.as_ref().unwrap())
+        }
+        range
+    }
+
+    pub fn rev(self) -> Reverse<'a,K,V> {
+        Reverse::new(self.root, self.low, self.high)
+    }
+
+    fn range_iter(
+        &mut self,
+        node: Option<&Box<Node<K,V>>>,
+        acc: &mut Vec<Node<K,V>>) -> bool
+    {
+        if node.is_none() {
+            return true
+        }
+
+        let node = node.unwrap();
+        //println!("range_iter {:?} {:?}", node.key, self.low);
+        let (left, right) = (node.left.as_ref(), node.right.as_ref());
+        match &self.low {
+            Bound::Included(qow) if node.key.lt(qow) => {
+                return self.range_iter(right, acc);
+            },
+            Bound::Excluded(qow) if node.key.le(qow) => {
+                return self.range_iter(right, acc);
+            },
+            _ => (),
+        }
+
+        //println!("left {:?} {:?}", node.key, self.low);
+        if !self.range_iter(left, acc) {
+            return false
+        }
+
+        acc.push(node.clone_detach());
+        //println!("push {:?} {}", self.low, acc.len());
+        if acc.len() >= self.limit {
+            return false
+        }
+
+        return self.range_iter(right, acc)
+    }
+}
+
+impl<'a,K,V> Iterator for Range<'a,K,V>
+where
+    K: AsKey,
+    V: Default + Clone,
+{
+    type Item=Node<K,V>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        //println!("yyy");
+        if self.root.is_none() {
+            return None
+        }
+
+        let node = self.node_iter.next();
+        if node.is_some() {
+            return node
+        }
+
+        let mut acc: Vec<Node<K,V>> = Vec::with_capacity(self.limit);
+        self.range_iter(self.root, &mut acc);
+
+        if acc.len() == 0 {
+            self.root = None;
+            return None
+
+        }
+        //println!("iter-next {}", acc.len());
+        self.low = Bound::Excluded(acc.last().unwrap().key());
+        self.node_iter = acc.into_iter();
+        let node = self.node_iter.next();
+        if node.is_none() {
+            self.root = None;
+            return None
+        }
+
+        // handle upper limit
+        let node = node.unwrap();
+        match &self.high {
+            Bound::Unbounded => Some(node),
+            Bound::Included(qigh) if node.key.le(qigh) => Some(node),
+            Bound::Excluded(qigh) if node.key.lt(qigh) => Some(node),
+            _ => {
+                self.root = None;
+                None
+            }
+        }
+    }
+}
+
+pub struct Reverse<'a, K, V>
+where
+    K: AsKey,
+    V: Default + Clone,
+{
+    root: Option<&'a Box<Node<K, V>>>,
+    node_iter: std::vec::IntoIter<Node<K,V>>,
+    high: Bound<K>,
+    low: Bound<K>,
+    limit: usize,
+}
+
+
+impl<'a,K,V> Reverse<'a,K,V>
+where
+    K: AsKey,
+    V: Default + Clone,
+{
+    fn new(
+        root: Option<&'a Box<Node<K,V>>>,
+        low: Bound<K>,
+        high: Bound<K>) -> Reverse<'a,K,V>
+    {
+        let mut reverse = Reverse{
+            root: None,
+            node_iter: vec![].into_iter(),
+            low,
+            high,
+            limit: 100, // TODO: no magic number.
+        };
+        if root.is_some() {
+            reverse.root = Some(root.as_ref().unwrap())
+        }
+        reverse
+    }
+
+    fn reverse_iter(
+        &mut self,
+        node: Option<&Box<Node<K,V>>>,
+        acc: &mut Vec<Node<K,V>>) -> bool
+    {
+        if node.is_none() {
+            return true
+        }
+
+        let node = node.unwrap();
+        //println!("reverse_iter {:?} {:?}", node.key, self.high);
+        let (left, right) = (node.left.as_ref(), node.right.as_ref());
+        match &self.high {
+            Bound::Included(qigh) if node.key.gt(qigh) => {
+                return self.reverse_iter(left, acc);
+            },
+            Bound::Excluded(qigh) if node.key.ge(qigh) => {
+                return self.reverse_iter(left, acc);
+            },
+            _ => (),
+        }
+
+        //println!("left {:?} {:?}", node.key, self.high);
+        if !self.reverse_iter(right, acc) {
+            return false
+        }
+
+        acc.push(node.clone_detach());
+        //println!("push {:?} {}", self.high, acc.len());
+        if acc.len() >= self.limit {
+            return false
+        }
+
+        return self.reverse_iter(left, acc)
+    }
+}
+
+impl<'a,K,V> Iterator for Reverse<'a,K,V>
+where
+    K: AsKey,
+    V: Default + Clone,
+{
+    type Item=Node<K,V>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        //println!("yyy");
+        if self.root.is_none() {
+            return None
+        }
+
+        let node = self.node_iter.next();
+        if node.is_some() {
+            return node
+        }
+
+        let mut acc: Vec<Node<K,V>> = Vec::with_capacity(self.limit);
+        self.reverse_iter(self.root, &mut acc);
+
+        if acc.len() == 0 {
+            self.root = None;
+            return None
+
+        }
+        //println!("iter-next {}", acc.len());
+        self.high = Bound::Excluded(acc.last().unwrap().key());
+        self.node_iter = acc.into_iter();
+        let node = self.node_iter.next();
+        if node.is_none() {
+            self.root = None;
+            return None
+        }
+
+        // handle lower limit
+        let node = node.unwrap();
+        match &self.low {
+            Bound::Unbounded => Some(node),
+            Bound::Included(qow) if node.key.ge(qow) => Some(node),
+            Bound::Excluded(qow) if node.key.gt(qow) => Some(node),
+            _ => {
+                self.root = None;
+                None
+            }
+        }
+    }
+}
 
 
 //----------------------------------------------------------------------

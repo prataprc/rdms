@@ -175,16 +175,7 @@ where
 
     /// Return an iterator over all entries in this instance.
     pub fn iter(&self) -> Iter<K,V> {
-        let mut iter =  Iter{
-            root: None,
-            node_iter: vec![].into_iter(),
-            after_key: Bound::Unbounded,
-            limit: 100, // TODO: no magic number.
-        };
-        if self.root.is_some() {
-            iter.root = Some(self.root.as_ref().unwrap())
-        }
-        iter
+        Iter::new(&self.root)
     }
 
     /// Set a new entry into this instance. If key is already present, return
@@ -371,8 +362,8 @@ where
     fn delete_lsm<Q>(&mut self, key: &Q, del_seqno: u64)
         -> Option<Box<Node<K,V>>>
     where
-        K: Borrow<Q> + From<Q>,
-        Q: Clone + Ord + ?Sized,
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
     {
         let mut node = &mut self.root;
         while node.is_some() {
@@ -431,8 +422,8 @@ where
     fn do_delete<Q>(&mut self, node: Option<Box<Node<K,V>>>, key: &Q)
         -> [Option<Box<Node<K,V>>>; 2]
     where
-        K: Borrow<Q> + From<Q>,
-        Q: Clone + Ord + ?Sized,
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
     {
         if node.is_none() {
             return [None, None];
@@ -768,6 +759,7 @@ where
     }
 }
 
+//----------------------------------------------------------------------------
 
 pub struct Iter<'a, K, V>
 where
@@ -778,6 +770,60 @@ where
     node_iter: std::vec::IntoIter<Node<K,V>>,
     after_key: Bound<K>,
     limit: usize,
+}
+
+impl<'a,K,V> Iter<'a,K,V>
+where
+    K: AsKey,
+    V: Default + Clone,
+{
+    fn new(root: &'a Option<Box<Node<K,V>>>) -> Iter<'a,K,V> {
+        let mut iter = Iter{
+            root: None,
+            node_iter: vec![].into_iter(),
+            after_key: Bound::Unbounded,
+            limit: 100, // TODO: no magic number.
+        };
+        if root.is_some() {
+            iter.root = Some(root.as_ref().unwrap())
+        }
+        iter
+    }
+
+    fn scan_iter(
+        &mut self,
+        node: Option<&Box<Node<K,V>>>,
+        acc: &mut Vec<Node<K,V>>) -> bool
+    {
+        if node.is_none() {
+            return true
+        }
+
+        let node = node.unwrap();
+        //println!("scan_iter {:?} {:?}", node.key, self.after_key);
+        let (left, right) = (node.left.as_ref(), node.right.as_ref());
+        match &self.after_key {
+            Bound::Included(akey) | Bound::Excluded(akey) => {
+                if node.key.borrow().le(akey) {
+                    return self.scan_iter(right, acc);
+                }
+            },
+            _ => (),
+        }
+
+        //println!("left {:?} {:?}", node.key, self.after_key);
+        if !self.scan_iter(left, acc) {
+            return false
+        }
+
+        acc.push(node.clone_detach());
+        //println!("push {:?} {}", self.after_key, acc.len());
+        if acc.len() >= self.limit {
+            return false
+        }
+
+        return self.scan_iter(right, acc)
+    }
 }
 
 impl<'a,K,V> Iterator for Iter<'a,K,V>
@@ -792,74 +838,41 @@ where
         if self.root.is_none() {
             return None
         }
-        let item = match self.node_iter.next() {
-            Some(item) => Some(item),
-            None => {
-                let mut acc: Vec<Node<K,V>> = vec![];
-                scan(self.root, &self.after_key, self.limit, &mut acc);
-                if acc.len() == 0 {
-                    self.root = None;
-                    None
-                } else {
-                    //println!("iter-next {}", acc.len());
-                    self.after_key = Bound::Excluded(acc.last().unwrap().key());
-                    self.node_iter = acc.into_iter();
-                    self.node_iter.next()
-                }
+
+        let node = self.node_iter.next();
+        if node.is_some() {
+            return node
+        }
+
+        let mut acc: Vec<Node<K,V>> = Vec::with_capacity(self.limit);
+        self.scan_iter(self.root, &mut acc);
+
+        if acc.len() == 0 {
+            self.root = None;
+            None
+        } else {
+            //println!("iter-next {}", acc.len());
+            self.after_key = Bound::Excluded(acc.last().unwrap().key());
+            self.node_iter = acc.into_iter();
+            let node = self.node_iter.next();
+            if node.is_none() {
+                self.root = None
             }
-        };
-        //println!("xxx {:?}", item.as_ref().unwrap().key);
-        match item {
-            Some(item) => Some(item),
-            None => {
-                self.root = None;
-                None
-            },
+            node
         }
     }
 }
 
-fn scan<K,V>(
-    node: Option<&Box<Node<K,V>>>,
-    key: &Bound<K>,
-    limit: usize,
-    acc: &mut Vec<Node<K,V>>) -> bool
-where
-    K: AsKey,
-    V: Default + Clone,
-{
-    match node {
-        None => true,
-        Some(node) => {
-            //println!("scan {:?} {:?}", node.key, key);
-            let (left, right) = (node.left.as_ref(), node.right.as_ref());
-            match key {
-                Bound::Included(ky) => {
-                    if node.key.borrow().le(&ky) {
-                        return scan(right, key, limit, acc)
-                    }
-                },
-                Bound::Excluded(ky) => {
-                    if node.key.borrow().le(&ky) {
-                        return scan(right, key, limit, acc)
-                    }
-                },
-                _ => (),
-            }
-            //println!("left {:?} {:?}", node.key, key);
-            if !scan(left, key, limit, acc) {
-                return false
-            }
-            acc.push(node.clone_detach());
-            //println!("push {:?} {:?} {}", node.key, key, acc.len());
-            if acc.len() >= limit {
-                return false
-            }
-            return scan(right, key, limit, acc)
-        },
-    }
+//pub struct Range<'a, K, V, Q>
+//where
+//    K: Borrow<Q>,
+//    V: Default + Clone,
+//{
+//    root: Option<&'a Box<Node<K, V>>>,
+//    node_iter: std::vec::IntoIter<Node<K,V>>,
+//    low: Bound<&Q>
+//}
 
-}
 
 //----------------------------------------------------------------------
 

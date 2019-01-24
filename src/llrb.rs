@@ -5,12 +5,13 @@ use std::ops::Bound;
 use crate::traits::{AsKey, AsValue, AsEntry};
 use crate::error::BognError;
 
-// TODO: Test Range and Revese API.
-// TODO: llrb_depth_histogram, as feature, to measure the depth of LLRB tree.
+// TODO: Fuzzy testing
+// TODO: Performance testing
 // TODO: Sizing.
-// TODO: optimize comparison
 // TODO: Implement and document primitive types, std-types that can be used
 // as key (K) / value (V) for Llrb.
+// TODO: optimize comparison
+// TODO: llrb_depth_histogram, as feature, to measure the depth of LLRB tree.
 
 
 /// Llrb manage a single instance of in-memory sorted index using

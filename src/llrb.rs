@@ -17,16 +17,17 @@ use crate::error::BognError;
 /// Llrb manage a single instance of in-memory sorted index using
 /// [left-leaning-red-black][llrb] tree.
 ///
-/// **lsm mode**: Llrb instance support what is called as
+/// **[LSM mode]**: Llrb instance can support what is called as
 /// log-structured-merge while mutating the tree. In simple terms, this
 /// means that nothing shall be over-written in the tree and all the
 /// mutations for the same key shall be preserved until they are undone or
 /// purged. Although there is one exception to it, back-to-back deletes
-/// will collapse.
+/// will collapse into a no-op, only the first delete shall be ingested.
 ///
 /// IMPORTANT: This tree is not thread safe.
 ///
 /// [llrb]: https://en.wikipedia.org/wiki/Left-leaning_red-black_tree
+/// [LSM mode]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
 pub struct Llrb<K, V>
 where
     K: AsKey,
@@ -65,8 +66,11 @@ where
 
     /// Create a new instance of Llrb tree and load it with entries from
     /// `iter`. Note that iterator shall return items that implement [`AsEntry`].
-    pub fn load_from<E>(name: String, iter: impl Iterator<Item=E>, lsm: bool)
-        -> Result<Llrb<K,V>, BognError>
+    pub fn load_from<E>(
+        name: String,
+        iter: impl Iterator<Item=E>,
+        lsm: bool
+    ) -> Result<Llrb<K,V>, BognError>
     where
         E: AsEntry<K,V>,
         <E as AsEntry<K, V>>::Value: Default + Clone,
@@ -89,7 +93,8 @@ where
         &mut self,
         node: Option<Box<Node<K,V>>>,
         key: K,
-        entry: E) -> Result<Option<Box<Node<K,V>>>, BognError>
+        entry: E
+    ) -> Result<Option<Box<Node<K,V>>>, BognError>
     where
         E: AsEntry<K,V>,
         <E as AsEntry<K, V>>::Value: Default + Clone,
@@ -209,7 +214,8 @@ where
         node: Option<Box<Node<K,V>>>,
         key: K,
         value: V,
-        seqno: u64) -> [Option<Box<Node<K,V>>>; 2]
+        seqno: u64
+    ) -> [Option<Box<Node<K,V>>>; 2]
     {
         if node.is_none() {
             let black = false;
@@ -272,7 +278,8 @@ where
         key: K,
         value: V,
         cas: u64,
-        seqno: u64) -> ([Option<Box<Node<K,V>>>; 2], Option<BognError>)
+        seqno: u64
+    ) -> ([Option<Box<Node<K,V>>>; 2], Option<BognError>)
     {
         if node.is_none() && cas > 0 {
             return ([None, None], Some(BognError::InvalidCAS))
@@ -392,7 +399,8 @@ where
         &mut self,
         node: Option<Box<Node<K,V>>>,
         key: &Q,
-        seqno: u64) -> Option<Box<Node<K,V>>>
+        seqno: u64
+    ) -> Option<Box<Node<K,V>>>
     where
         K: Borrow<Q> + From<Q>,
         Q: Clone + Ord + ?Sized,
@@ -514,7 +522,8 @@ where
     fn validate_tree(
         node: &Option<Box<Node<K,V>>>,
         fromred: bool,
-        mut nblacks: u64) -> Result<u64, BognError>
+        mut nblacks: u64
+    ) -> Result<u64, BognError>
     {
         if node.is_none() {
             return Ok(nblacks)
@@ -747,7 +756,8 @@ where
     fn scan_iter(
         &mut self,
         node: Option<&Box<Node<K,V>>>,
-        acc: &mut Vec<Node<K,V>>) -> bool
+        acc: &mut Vec<Node<K,V>>
+    ) -> bool
     {
         if node.is_none() {
             return true
@@ -838,7 +848,8 @@ where
     fn new(
         root: &'a Option<Box<Node<K,V>>>,
         low: Bound<K>,
-        high: Bound<K>) -> Range<'a,K,V>
+        high: Bound<K>
+    ) -> Range<'a,K,V>
     {
         let mut range = Range{
             root: None,
@@ -860,7 +871,8 @@ where
     fn range_iter(
         &mut self,
         node: Option<&Box<Node<K,V>>>,
-        acc: &mut Vec<Node<K,V>>) -> bool
+        acc: &mut Vec<Node<K,V>>
+    ) -> bool
     {
         if node.is_none() {
             return true
@@ -964,7 +976,8 @@ where
     fn new(
         root: Option<&'a Box<Node<K,V>>>,
         low: Bound<K>,
-        high: Bound<K>) -> Reverse<'a,K,V>
+        high: Bound<K>
+    ) -> Reverse<'a,K,V>
     {
         let mut reverse = Reverse{
             root: None,
@@ -982,7 +995,8 @@ where
     fn reverse_iter(
         &mut self,
         node: Option<&Box<Node<K,V>>>,
-        acc: &mut Vec<Node<K,V>>) -> bool
+        acc: &mut Vec<Node<K,V>>
+    ) -> bool
     {
         if node.is_none() {
             return true

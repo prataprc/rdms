@@ -1,16 +1,24 @@
 //! Bogn provide a collection of algorithms for indexing data either
 //! in memory or in disk or in both. Bogn indexes are defined for
-//! document databases and Bigdata. This means:
+//! document databases and bigdata. This means:
 //!
-//! Each index will carry a sequence-number, starting from ZERO, as
-//! a count of mutations ingested by the index. For every successful
-//! mutation, the sequence-number will be incremented and the entry,
-//! on which the mutation was applied, will have that sequence-number
+//! Each index will carry a sequence-number as the count of mutations
+//! ingested by the index. For every successful mutation, the
+//! sequence-number will be incremented and the entry, on which the
+//! mutation was applied, shall be tagged with that sequence-number
 //! attached.
 //!
-//! [`Log-Structured-Merge`] is
+//! Log-Structured-Merge, [LSM], is a common technique used in managing
+//! heterogenous data-structures that are transparent to the index. In
+//! case of Bogn, in-memory structures are different from on-disk
+//! structures, and LSM technique is used to maintain consistency between
+//! them.
 //!
-/// [lsm]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
+//! CAS, similar to compare-and-set, can be specified by applications
+//! that need consistency gaurantees for a single index-entry. In the
+//! APIs context CAS == sequence-number.
+//!
+//! [LSM]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
 mod empty;
 mod error;
 mod llrb;

@@ -4,26 +4,27 @@ use std::fmt::Debug;
 pub trait AsKey: Default + Clone + Ord + Debug {}
 
 /// AsValue act both as aggregate trait and define behaviour for
-/// each version of index-entry.
+/// each version of an index-entry.
 ///
-/// Note that in [LSM][lsm] mode, all mutations that happen over an
+/// Note that in [LSM] mode, all mutations that happen over an
 /// entry will be managed as a log list. In such cases, each mutation
 /// shall create a new version for the entry.
 ///
-/// [lsm]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
+/// [LSM]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
 pub trait AsValue<V>
 where
     V: Default + Clone,
 {
-    /// Return value for this version.
+    /// Return a copy of the value for this version.
     fn value(&self) -> V;
-    /// Return seqno at which the mutation happened.
+    /// Return sequence-number at which the mutation happened.
     fn seqno(&self) -> u64;
-    /// Return whether this mutation involves deleting the key.
+    /// Valid only in LSM mode. Return whether this version is marked as
+    /// deleted.
     fn is_deleted(&self) -> bool;
 }
 
-/// AsEntry define behaviour for index-entry contructed over
+/// AsEntry define behaviour for a single index-entry parametrised over
 /// Key-Value <K,V> types.
 pub trait AsEntry<K, V>
 where
@@ -32,8 +33,8 @@ where
 {
     type Value: AsValue<V>;
 
-    /// Return a copy of entry's key. In bogn-index an entry is
-    /// identified by a unique-key.
+    /// Return a copy of entry's key. In bogn-index each entry is
+    /// identified by unique-key.
     fn key(&self) -> K;
 
     /// Return a copy of entry's latest value.
@@ -41,19 +42,21 @@ where
 
     /// Return a copy of entry's versions.
     ///
-    /// In [lsm][lsm] mode, mutations on the same key shall be preserved
-    /// as a log list, where each mutation is called as the key's version.
+    /// In [LSM] mode, mutations on the same key shall be preserved
+    /// as a log list. And versions() shall return a [`Vec`] of all mutations
+    /// for this node, latest first and oldest last.
     ///
-    /// In non-lsm mode, entries shall have only one version, because all
-    /// new muations on the same key will over-write its previous mutation.
+    /// In non-lsm mode, entries shall have only one version, because
+    /// newer muations on the same key will over-write its previous mutation.
+    /// And versions() shall return a [`Vec`] with arity one.
     ///
     /// [lsm]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
     fn versions(&self) -> Vec<Self::Value>;
 
-    /// Return last modified seqno.
+    /// Return the sequence-number of most recent mutation for this entry.
     fn seqno(&self) -> u64;
 
-    /// Return whether this mutation involves deleting the key.
+    /// Valid only in LSM mode. Return whether this entry is marked as deleted.
     fn is_deleted(&self) -> bool;
 }
 

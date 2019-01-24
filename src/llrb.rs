@@ -1,9 +1,9 @@
-use std::cmp::{Ordering, Ord};
 use std::borrow::Borrow;
+use std::cmp::{Ord, Ordering};
 use std::ops::Bound;
 
-use crate::traits::{AsKey, AsValue, AsEntry};
 use crate::error::BognError;
+use crate::traits::{AsEntry, AsKey, AsValue};
 
 // TODO: Fuzzy testing
 // TODO: Performance testing
@@ -12,7 +12,6 @@ use crate::error::BognError;
 // as key (K) / value (V) for Llrb.
 // TODO: optimize comparison
 // TODO: llrb_depth_histogram, as feature, to measure the depth of LLRB tree.
-
 
 /// Llrb manage a single instance of in-memory sorted index using
 /// [left-leaning-red-black][llrb] tree.
@@ -52,7 +51,7 @@ where
     /// mutation.
     pub fn new<S>(name: S, lsm: bool) -> Llrb<K, V>
     where
-        S: AsRef<str>
+        S: AsRef<str>,
     {
         let store = Llrb {
             name: name.as_ref().to_string(),
@@ -68,11 +67,11 @@ where
     /// `iter`. Note that iterator shall return items that implement [`AsEntry`].
     pub fn load_from<E>(
         name: String,
-        iter: impl Iterator<Item=E>,
-        lsm: bool
-    ) -> Result<Llrb<K,V>, BognError>
+        iter: impl Iterator<Item = E>,
+        lsm: bool,
+    ) -> Result<Llrb<K, V>, BognError>
     where
-        E: AsEntry<K,V>,
+        E: AsEntry<K, V>,
         <E as AsEntry<K, V>>::Value: Default + Clone,
     {
         let mut store = Llrb::new(name, lsm);
@@ -82,8 +81,8 @@ where
                 Some(mut root) => {
                     root.set_black();
                     store.root = Some(root);
-                },
-                None => ()
+                }
+                None => (),
             }
         }
         Ok(store)
@@ -91,38 +90,34 @@ where
 
     fn load_entry<E>(
         &mut self,
-        node: Option<Box<Node<K,V>>>,
+        node: Option<Box<Node<K, V>>>,
         key: K,
-        entry: E
-    ) -> Result<Option<Box<Node<K,V>>>, BognError>
+        entry: E,
+    ) -> Result<Option<Box<Node<K, V>>>, BognError>
     where
-        E: AsEntry<K,V>,
+        E: AsEntry<K, V>,
         <E as AsEntry<K, V>>::Value: Default + Clone,
     {
         if node.is_none() {
-            let node: Node<K,V> = Node::from_entry(entry);
+            let node: Node<K, V> = Node::from_entry(entry);
             self.seqno = node.seqno();
             self.n_count += if node.is_deleted() { 0 } else { 1 };
             Ok(Some(Box::new(node)))
-
         } else {
             let mut node = node.unwrap();
             node = Llrb::walkdown_rot23(node);
             if node.key.gt(&key) {
                 node.left = self.load_entry(node.left, key, entry)?;
                 Ok(Some(Llrb::walkuprot_23(node)))
-
             } else if node.key.lt(&key) {
                 node.right = self.load_entry(node.right, key, entry)?;
                 Ok(Some(Llrb::walkuprot_23(node)))
-
             } else {
                 Err(BognError::DuplicateKey(format!("load_entry: {:?}", key)))
             }
         }
     }
 }
-
 
 /// Maintanence API.
 impl<K, V> Llrb<K, V>
@@ -159,7 +154,7 @@ where
     V: Default + Clone,
 {
     /// Get the latest version for key.
-    pub fn get<Q>(&self, key: &Q) -> Option<impl AsEntry<K,V>>
+    pub fn get<Q>(&self, key: &Q) -> Option<impl AsEntry<K, V>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -177,12 +172,12 @@ where
     }
 
     /// Return an iterator over all entries in this instance.
-    pub fn iter(&self) -> Iter<K,V> {
+    pub fn iter(&self) -> Iter<K, V> {
         Iter::new(&self.root)
     }
 
     /// Range over all entries from low to high.
-    pub fn range(&self, low: Bound<K>, high: Bound<K>) -> Range<K,V> {
+    pub fn range(&self, low: Bound<K>, high: Bound<K>) -> Range<K, V> {
         Range::new(&self.root, low, high)
     }
 
@@ -192,7 +187,7 @@ where
     ///
     /// If an entry already exist for the, return the old-entry will all its
     /// versions.
-    pub fn set(&mut self, key: K, value: V) -> Option<impl AsEntry<K,V>> {
+    pub fn set(&mut self, key: K, value: V) -> Option<impl AsEntry<K, V>> {
         let seqno = self.seqno + 1;
         let root = self.root.take();
 
@@ -201,7 +196,7 @@ where
                 root.set_black();
                 self.root = Some(root);
                 old_node
-            },
+            }
             [None, old_node] => old_node,
         };
 
@@ -211,16 +206,15 @@ where
 
     fn upsert(
         &mut self,
-        node: Option<Box<Node<K,V>>>,
+        node: Option<Box<Node<K, V>>>,
         key: K,
         value: V,
-        seqno: u64
-    ) -> [Option<Box<Node<K,V>>>; 2]
-    {
+        seqno: u64,
+    ) -> [Option<Box<Node<K, V>>>; 2] {
         if node.is_none() {
             let black = false;
             self.n_count += 1;
-            return [Some(Box::new(Node::new(key, value, seqno, black))), None]
+            return [Some(Box::new(Node::new(key, value, seqno, black))), None];
         }
 
         let mut node = node.unwrap();
@@ -231,13 +225,11 @@ where
             node.left = res[0].take();
             node = Llrb::walkuprot_23(node);
             [Some(node), res[1].take()]
-
         } else if node.key.lt(&key) {
             let mut res = self.upsert(node.right, key, value, seqno);
             node.right = res[0].take();
             node = Llrb::walkuprot_23(node);
             [Some(node), res[1].take()]
-
         } else {
             let old_node = node.clone_detach();
             node.prepend_version(value, seqno, self.lsm);
@@ -250,9 +242,12 @@ where
     /// supplied CAS. Use CAS == 0 to enforce a create operation. If key is
     /// already present, return the previous entry. In LSM mode, this will add
     /// a new version for the key.
-    pub fn set_cas(&mut self, key: K, value: V, cas: u64)
-        -> Result<Option<impl AsEntry<K,V>>, BognError>
-    {
+    pub fn set_cas(
+        &mut self,
+        key: K,
+        value: V,
+        cas: u64,
+    ) -> Result<Option<impl AsEntry<K, V>>, BognError> {
         let seqno = self.seqno + 1;
         let root = self.root.take();
 
@@ -260,36 +255,33 @@ where
             ([root, _], Some(err)) => {
                 self.root = root;
                 Err(err)
-            },
+            }
             ([Some(mut root), old_node], None) => {
                 root.set_black();
                 self.seqno = seqno;
 
                 self.root = Some(root);
                 Ok(old_node.map(|old_node| *old_node))
-            },
+            }
             _ => panic!("set_cas: impossible case, call programmer"),
         }
     }
 
     fn upsert_cas(
         &mut self,
-        node: Option<Box<Node<K,V>>>,
+        node: Option<Box<Node<K, V>>>,
         key: K,
         value: V,
         cas: u64,
-        seqno: u64
-    ) -> ([Option<Box<Node<K,V>>>; 2], Option<BognError>)
-    {
+        seqno: u64,
+    ) -> ([Option<Box<Node<K, V>>>; 2], Option<BognError>) {
         if node.is_none() && cas > 0 {
-            return ([None, None], Some(BognError::InvalidCAS))
-
+            return ([None, None], Some(BognError::InvalidCAS));
         } else if node.is_none() {
             let black = false;
             self.n_count += 1;
             let node = Box::new(Node::new(key, value, seqno, black));
-            return ([Some(node), None], None)
-
+            return ([Some(node), None], None);
         }
 
         let mut node = node.unwrap();
@@ -299,18 +291,14 @@ where
             let mut res = self.upsert_cas(node.left, key, value, cas, seqno);
             node.left = res.0[0].take();
             (res.0[1].take(), res.1)
-
         } else if node.key.lt(&key) {
             let mut res = self.upsert_cas(node.right, key, value, cas, seqno);
             node.right = res.0[0].take();
             (res.0[1].take(), res.1)
-
         } else if node.is_deleted() && cas != 0 && cas != node.seqno() {
             (None, Some(BognError::InvalidCAS))
-
         } else if !node.is_deleted() && cas != node.seqno() {
             (None, Some(BognError::InvalidCAS))
-
         } else {
             let old_node = node.clone_detach();
             node.prepend_version(value, seqno, self.lsm);
@@ -318,13 +306,13 @@ where
         };
 
         node = Llrb::walkuprot_23(node);
-        return ([Some(node), old_node], err)
+        return ([Some(node), old_node], err);
     }
 
     /// Delete the given key from this intance, in LSM mode it simply marks
     /// the version as deleted. Note that back-to-back delete for the same
     /// key shall collapse into a single delete.
-    pub fn delete<Q>(&mut self, key: &Q) -> Option<impl AsEntry<K,V>>
+    pub fn delete<Q>(&mut self, key: &Q) -> Option<impl AsEntry<K, V>>
     where
         K: Borrow<Q> + From<Q>,
         Q: Clone + Ord + ?Sized,
@@ -349,7 +337,7 @@ where
             if old_node.is_some() {
                 self.seqno = seqno;
             }
-            return old_node
+            return old_node;
         }
 
         // in non-lsm mode remove the entry from the tree.
@@ -359,7 +347,7 @@ where
             [Some(mut root), old_node] => {
                 root.set_black();
                 (Some(root), old_node)
-            },
+            }
         };
         self.root = root;
         if old_node.is_some() {
@@ -369,8 +357,7 @@ where
         old_node.map(|item| *item)
     }
 
-    fn delete_lsm<Q>(&mut self, key: &Q, del_seqno: u64)
-        -> Option<Box<Node<K,V>>>
+    fn delete_lsm<Q>(&mut self, key: &Q, del_seqno: u64) -> Option<Box<Node<K, V>>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -387,8 +374,8 @@ where
                         Some(Box::new(old_node))
                     } else {
                         None
-                    }
-                },
+                    };
+                }
                 Ordering::Greater => &mut nref.left,
             };
         }
@@ -397,10 +384,10 @@ where
 
     fn delete_insert<Q>(
         &mut self,
-        node: Option<Box<Node<K,V>>>,
+        node: Option<Box<Node<K, V>>>,
         key: &Q,
-        seqno: u64
-    ) -> Option<Box<Node<K,V>>>
+        seqno: u64,
+    ) -> Option<Box<Node<K, V>>>
     where
         K: Borrow<Q> + From<Q>,
         Q: Clone + Ord + ?Sized,
@@ -409,8 +396,7 @@ where
             let (key, black) = (key.clone().into(), false);
             let mut node = Node::new(key, Default::default(), seqno, black);
             node.delete(seqno, self.lsm);
-            return Some(Box::new(node))
-
+            return Some(Box::new(node));
         }
 
         let mut node = node.unwrap();
@@ -418,10 +404,8 @@ where
 
         if node.key.borrow().gt(&key) {
             node.left = self.delete_insert(node.left, key, seqno);
-
         } else if node.key.borrow().lt(&key) {
             node.right = self.delete_insert(node.right, key, seqno);
-
         } else {
             panic!("delete_insert(): key already exist, call programmer")
         }
@@ -430,8 +414,11 @@ where
     }
 
     // this is the non-lsm path.
-    fn do_delete<Q>(&mut self, node: Option<Box<Node<K,V>>>, key: &Q)
-        -> [Option<Box<Node<K,V>>>; 2]
+    fn do_delete<Q>(
+        &mut self,
+        node: Option<Box<Node<K, V>>>,
+        key: &Q,
+    ) -> [Option<Box<Node<K, V>>>; 2]
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -445,7 +432,6 @@ where
         if node.key.borrow().gt(key) {
             if node.left.is_none() {
                 [Some(node), None]
-
             } else {
                 let ok = !is_red(&node.left);
                 if ok && !is_red(&node.left.as_ref().unwrap().left) {
@@ -455,7 +441,6 @@ where
                 node.left = res[0].take();
                 [Some(Llrb::fixup(node)), res[1].take()]
             }
-
         } else {
             if is_red(&node.left) {
                 node = Llrb::rotate_right(node);
@@ -470,7 +455,8 @@ where
                 node = Llrb::move_red_right(node);
             }
 
-            if !node.key.borrow().lt(key) { // node == key
+            if !node.key.borrow().lt(key) {
+                // node == key
                 let mut res = Llrb::delete_min(node.right);
                 node.right = res[0].take();
                 if res[1].is_none() {
@@ -483,7 +469,6 @@ where
                 newnode.black = node.black;
                 node.valn.prev = None; // just take one version before.
                 [Some(Llrb::fixup(newnode)), Some(node)]
-
             } else {
                 let mut res = self.do_delete(node.right, key);
                 node.right = res[0].take();
@@ -492,13 +477,13 @@ where
         }
     }
 
-    fn delete_min(node: Option<Box<Node<K,V>>>) -> [Option<Box<Node<K,V>>>; 2] {
+    fn delete_min(node: Option<Box<Node<K, V>>>) -> [Option<Box<Node<K, V>>>; 2] {
         if node.is_none() {
-            return [None, None]
+            return [None, None];
         }
         let mut node = node.unwrap();
         if node.left.is_none() {
-            return [None, Some(node)]
+            return [None, Some(node)];
         }
         if !is_red(&node.left) && !is_red(&node.left.as_ref().unwrap().left) {
             node = Llrb::move_red_left(node);
@@ -520,13 +505,12 @@ where
     }
 
     fn validate_tree(
-        node: &Option<Box<Node<K,V>>>,
+        node: &Option<Box<Node<K, V>>>,
         fromred: bool,
-        mut nblacks: u64
-    ) -> Result<u64, BognError>
-    {
+        mut nblacks: u64,
+    ) -> Result<u64, BognError> {
         if node.is_none() {
-            return Ok(nblacks)
+            return Ok(nblacks);
         }
 
         let red = is_red(node);
@@ -549,18 +533,14 @@ where
         if node.left.is_some() {
             let left = node.left.as_ref().unwrap();
             if left.key.ge(&node.key) {
-                let err = format!(
-                    "left key {:?} >= parent {:?}", left.key, node.key
-                );
+                let err = format!("left key {:?} >= parent {:?}", left.key, node.key);
                 return Err(BognError::SortError(err));
             }
         }
         if node.right.is_some() {
             let right = node.right.as_ref().unwrap();
             if right.key.le(&node.key) {
-                let err = format!(
-                    "right {:?} <= parent {:?}", right.key, node.key
-                );
+                let err = format!("right {:?} <= parent {:?}", right.key, node.key);
                 return Err(BognError::SortError(err));
             }
         }
@@ -705,13 +685,13 @@ where
     }
 }
 
-impl<K,V> Clone for Llrb<K,V>
+impl<K, V> Clone for Llrb<K, V>
 where
     K: AsKey,
     V: Default + Clone,
 {
-    fn clone(&self) -> Llrb<K,V> {
-        let new_store = Llrb{
+    fn clone(&self) -> Llrb<K, V> {
+        let new_store = Llrb {
             name: self.name.clone(),
             lsm: self.lsm,
             seqno: self.seqno,
@@ -730,18 +710,18 @@ where
     V: Default + Clone,
 {
     root: Option<&'a Box<Node<K, V>>>,
-    node_iter: std::vec::IntoIter<Node<K,V>>,
+    node_iter: std::vec::IntoIter<Node<K, V>>,
     after_key: Bound<K>,
     limit: usize,
 }
 
-impl<'a,K,V> Iter<'a,K,V>
+impl<'a, K, V> Iter<'a, K, V>
 where
     K: AsKey,
     V: Default + Clone,
 {
-    fn new(root: &'a Option<Box<Node<K,V>>>) -> Iter<'a,K,V> {
-        let mut iter = Iter{
+    fn new(root: &'a Option<Box<Node<K, V>>>) -> Iter<'a, K, V> {
+        let mut iter = Iter {
             root: None,
             node_iter: vec![].into_iter(),
             after_key: Bound::Unbounded,
@@ -753,14 +733,9 @@ where
         iter
     }
 
-    fn scan_iter(
-        &mut self,
-        node: Option<&Box<Node<K,V>>>,
-        acc: &mut Vec<Node<K,V>>
-    ) -> bool
-    {
+    fn scan_iter(&mut self, node: Option<&Box<Node<K, V>>>, acc: &mut Vec<Node<K, V>>) -> bool {
         if node.is_none() {
-            return true
+            return true;
         }
 
         let node = node.unwrap();
@@ -771,44 +746,44 @@ where
                 if node.key.borrow().le(akey) {
                     return self.scan_iter(right, acc);
                 }
-            },
+            }
             Bound::Unbounded => (),
         }
 
         //println!("left {:?} {:?}", node.key, self.after_key);
         if !self.scan_iter(left, acc) {
-            return false
+            return false;
         }
 
         acc.push(node.clone_detach());
         //println!("push {:?} {}", self.after_key, acc.len());
         if acc.len() >= self.limit {
-            return false
+            return false;
         }
 
-        return self.scan_iter(right, acc)
+        return self.scan_iter(right, acc);
     }
 }
 
-impl<'a,K,V> Iterator for Iter<'a,K,V>
+impl<'a, K, V> Iterator for Iter<'a, K, V>
 where
     K: AsKey,
     V: Default + Clone,
 {
-    type Item=Node<K,V>;
+    type Item = Node<K, V>;
 
     fn next(&mut self) -> Option<Self::Item> {
         //println!("yyy");
         if self.root.is_none() {
-            return None
+            return None;
         }
 
         let node = self.node_iter.next();
         if node.is_some() {
-            return node
+            return node;
         }
 
-        let mut acc: Vec<Node<K,V>> = Vec::with_capacity(self.limit);
+        let mut acc: Vec<Node<K, V>> = Vec::with_capacity(self.limit);
         self.scan_iter(self.root, &mut acc);
 
         if acc.len() == 0 {
@@ -833,25 +808,19 @@ where
     V: Default + Clone,
 {
     root: Option<&'a Box<Node<K, V>>>,
-    node_iter: std::vec::IntoIter<Node<K,V>>,
+    node_iter: std::vec::IntoIter<Node<K, V>>,
     low: Bound<K>,
     high: Bound<K>,
     limit: usize,
 }
 
-
-impl<'a,K,V> Range<'a,K,V>
+impl<'a, K, V> Range<'a, K, V>
 where
     K: AsKey,
     V: Default + Clone,
 {
-    fn new(
-        root: &'a Option<Box<Node<K,V>>>,
-        low: Bound<K>,
-        high: Bound<K>
-    ) -> Range<'a,K,V>
-    {
-        let mut range = Range{
+    fn new(root: &'a Option<Box<Node<K, V>>>, low: Bound<K>, high: Bound<K>) -> Range<'a, K, V> {
+        let mut range = Range {
             root: None,
             node_iter: vec![].into_iter(),
             low,
@@ -864,18 +833,13 @@ where
         range
     }
 
-    pub fn rev(self) -> Reverse<'a,K,V> {
+    pub fn rev(self) -> Reverse<'a, K, V> {
         Reverse::new(self.root, self.low, self.high)
     }
 
-    fn range_iter(
-        &mut self,
-        node: Option<&Box<Node<K,V>>>,
-        acc: &mut Vec<Node<K,V>>
-    ) -> bool
-    {
+    fn range_iter(&mut self, node: Option<&Box<Node<K, V>>>, acc: &mut Vec<Node<K, V>>) -> bool {
         if node.is_none() {
-            return true
+            return true;
         }
 
         let node = node.unwrap();
@@ -884,44 +848,44 @@ where
         match &self.low {
             Bound::Included(qow) if node.key.lt(qow) => {
                 return self.range_iter(right, acc);
-            },
+            }
             Bound::Excluded(qow) if node.key.le(qow) => {
                 return self.range_iter(right, acc);
-            },
+            }
             _ => (),
         }
 
         //println!("left {:?} {:?}", node.key, self.low);
         if !self.range_iter(left, acc) {
-            return false
+            return false;
         }
 
         acc.push(node.clone_detach());
         //println!("push {:?} {}", self.low, acc.len());
         if acc.len() >= self.limit {
-            return false
+            return false;
         }
 
-        return self.range_iter(right, acc)
+        return self.range_iter(right, acc);
     }
 }
 
-impl<'a,K,V> Iterator for Range<'a,K,V>
+impl<'a, K, V> Iterator for Range<'a, K, V>
 where
     K: AsKey,
     V: Default + Clone,
 {
-    type Item=Node<K,V>;
+    type Item = Node<K, V>;
 
     fn next(&mut self) -> Option<Self::Item> {
         //println!("yyy");
         if self.root.is_none() {
-            return None
+            return None;
         }
 
         let node = self.node_iter.next();
         let node = if node.is_none() {
-            let mut acc: Vec<Node<K,V>> = Vec::with_capacity(self.limit);
+            let mut acc: Vec<Node<K, V>> = Vec::with_capacity(self.limit);
             self.range_iter(self.root, &mut acc);
             if acc.len() > 0 {
                 //println!("iter-next {}", acc.len());
@@ -937,7 +901,7 @@ where
 
         if node.is_none() {
             self.root = None;
-            return None
+            return None;
         }
 
         // handle upper limit
@@ -961,25 +925,19 @@ where
     V: Default + Clone,
 {
     root: Option<&'a Box<Node<K, V>>>,
-    node_iter: std::vec::IntoIter<Node<K,V>>,
+    node_iter: std::vec::IntoIter<Node<K, V>>,
     high: Bound<K>,
     low: Bound<K>,
     limit: usize,
 }
 
-
-impl<'a,K,V> Reverse<'a,K,V>
+impl<'a, K, V> Reverse<'a, K, V>
 where
     K: AsKey,
     V: Default + Clone,
 {
-    fn new(
-        root: Option<&'a Box<Node<K,V>>>,
-        low: Bound<K>,
-        high: Bound<K>
-    ) -> Reverse<'a,K,V>
-    {
-        let mut reverse = Reverse{
+    fn new(root: Option<&'a Box<Node<K, V>>>, low: Bound<K>, high: Bound<K>) -> Reverse<'a, K, V> {
+        let mut reverse = Reverse {
             root: None,
             node_iter: vec![].into_iter(),
             low,
@@ -992,14 +950,9 @@ where
         reverse
     }
 
-    fn reverse_iter(
-        &mut self,
-        node: Option<&Box<Node<K,V>>>,
-        acc: &mut Vec<Node<K,V>>
-    ) -> bool
-    {
+    fn reverse_iter(&mut self, node: Option<&Box<Node<K, V>>>, acc: &mut Vec<Node<K, V>>) -> bool {
         if node.is_none() {
-            return true
+            return true;
         }
 
         let node = node.unwrap();
@@ -1008,44 +961,44 @@ where
         match &self.high {
             Bound::Included(qigh) if node.key.gt(qigh) => {
                 return self.reverse_iter(left, acc);
-            },
+            }
             Bound::Excluded(qigh) if node.key.ge(qigh) => {
                 return self.reverse_iter(left, acc);
-            },
+            }
             _ => (),
         }
 
         //println!("left {:?} {:?}", node.key, self.high);
         if !self.reverse_iter(right, acc) {
-            return false
+            return false;
         }
 
         acc.push(node.clone_detach());
         //println!("push {:?} {}", self.high, acc.len());
         if acc.len() >= self.limit {
-            return false
+            return false;
         }
 
-        return self.reverse_iter(left, acc)
+        return self.reverse_iter(left, acc);
     }
 }
 
-impl<'a,K,V> Iterator for Reverse<'a,K,V>
+impl<'a, K, V> Iterator for Reverse<'a, K, V>
 where
     K: AsKey,
     V: Default + Clone,
 {
-    type Item=Node<K,V>;
+    type Item = Node<K, V>;
 
     fn next(&mut self) -> Option<Self::Item> {
         //println!("yyy");
         if self.root.is_none() {
-            return None
+            return None;
         }
 
         let node = self.node_iter.next();
         let node = if node.is_none() {
-            let mut acc: Vec<Node<K,V>> = Vec::with_capacity(self.limit);
+            let mut acc: Vec<Node<K, V>> = Vec::with_capacity(self.limit);
             self.reverse_iter(self.root, &mut acc);
             if acc.len() > 0 {
                 //println!("iter-next {}", acc.len());
@@ -1061,7 +1014,7 @@ where
 
         if node.is_none() {
             self.root = None;
-            return None
+            return None;
         }
 
         // handle lower limit
@@ -1079,7 +1032,6 @@ where
         }
     }
 }
-
 
 //----------------------------------------------------------------------
 
@@ -1105,9 +1057,14 @@ where
         data: V,
         seqno: u64,
         deleted: Option<u64>,
-        prev: Option<Box<ValueNode<V>>>) -> ValueNode<V>
-    {
-        ValueNode{ data, seqno, deleted, prev }
+        prev: Option<Box<ValueNode<V>>>,
+    ) -> ValueNode<V> {
+        ValueNode {
+            data,
+            seqno,
+            deleted,
+            prev,
+        }
     }
 
     // clone this version alone, detach it from previous versions.
@@ -1116,7 +1073,7 @@ where
             data: self.data.clone(),
             seqno: self.seqno,
             deleted: self.deleted,
-            prev: None
+            prev: None,
         }
     }
 
@@ -1207,21 +1164,33 @@ where
     // CREATE operation
     fn new(key: K, value: V, seqno: u64, black: bool) -> Node<K, V> {
         let valn = ValueNode::new(value, seqno, None, None);
-        Node{ key, valn, black, left: None, right: None }
+        Node {
+            key,
+            valn,
+            black,
+            left: None,
+            right: None,
+        }
     }
 
-    fn from_entry<E>(entry: E) -> Node<K,V>
+    fn from_entry<E>(entry: E) -> Node<K, V>
     where
-        E: AsEntry<K,V>,
+        E: AsEntry<K, V>,
         <E as AsEntry<K, V>>::Value: Default + Clone,
     {
         let asvalue = entry.value();
         let valn = ValueNode::new(asvalue.value(), asvalue.seqno(), None, None);
-        Node{ key: entry.key(), valn, black: false, left: None, right: None }
+        Node {
+            key: entry.key(),
+            valn,
+            black: false,
+            left: None,
+            right: None,
+        }
     }
 
     // clone and detach this node from the tree.
-    fn clone_detach(&self) -> Node<K,V> {
+    fn clone_detach(&self) -> Node<K, V> {
         Node {
             key: self.key.clone(),
             valn: self.valn.clone(),
@@ -1293,12 +1262,12 @@ where
     }
 }
 
-impl<K,V> AsEntry<K,V> for Node<K,V>
+impl<K, V> AsEntry<K, V> for Node<K, V>
 where
     K: AsKey,
     V: Default + Clone,
 {
-    type Value=ValueNode<V>;
+    type Value = ValueNode<V>;
 
     fn key(&self) -> K {
         self.key.clone()

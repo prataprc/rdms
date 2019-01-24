@@ -2,22 +2,22 @@ use std::ops::Bound;
 
 use rand::prelude::random;
 
-use crate::llrb::{Llrb};
 use crate::empty::Empty;
 use crate::error::BognError;
+use crate::llrb::Llrb;
 use crate::traits::{AsEntry, AsValue};
 
 // TODO: repeatable randoms.
 
 #[test]
 fn test_id() {
-    let llrb: Llrb<i32,Empty> = Llrb::new("test-llrb", false);
+    let llrb: Llrb<i32, Empty> = Llrb::new("test-llrb", false);
     assert_eq!(llrb.id(), "test-llrb".to_string());
 }
 
 #[test]
 fn test_seqno() {
-    let mut llrb: Llrb<i32,Empty> = Llrb::new("test-llrb", false);
+    let mut llrb: Llrb<i32, Empty> = Llrb::new("test-llrb", false);
     assert_eq!(llrb.get_seqno(), 0);
     llrb.set_seqno(1234);
     assert_eq!(llrb.get_seqno(), 1234);
@@ -25,25 +25,35 @@ fn test_seqno() {
 
 #[test]
 fn test_count() {
-    let llrb: Llrb<i32,Empty> = Llrb::new("test-llrb", false);
+    let llrb: Llrb<i32, Empty> = Llrb::new("test-llrb", false);
     assert_eq!(llrb.count(), 0);
 }
 
 #[test]
 fn test_set() {
-    let mut llrb: Llrb<i64,i64> = Llrb::new("test-llrb", false /*lsm*/);
+    let mut llrb: Llrb<i64, i64> = Llrb::new("test-llrb", false /*lsm*/);
     let mut refns = RefNodes::new(false /*lsm*/, 10);
 
-    assert!(llrb.set(2, 10).is_none()); refns.set(2, 10);
-    assert!(llrb.set(1, 10).is_none()); refns.set(1, 10);
-    assert!(llrb.set(3, 10).is_none()); refns.set(3, 10);
-    assert!(llrb.set(6, 10).is_none()); refns.set(6, 10);
-    assert!(llrb.set(5, 10).is_none()); refns.set(5, 10);
-    assert!(llrb.set(4, 10).is_none()); refns.set(4, 10);
-    assert!(llrb.set(8, 10).is_none()); refns.set(8, 10);
-    assert!(llrb.set(0, 10).is_none()); refns.set(0, 10);
-    assert!(llrb.set(9, 10).is_none()); refns.set(9, 10);
-    assert!(llrb.set(7, 10).is_none()); refns.set(7, 10);
+    assert!(llrb.set(2, 10).is_none());
+    refns.set(2, 10);
+    assert!(llrb.set(1, 10).is_none());
+    refns.set(1, 10);
+    assert!(llrb.set(3, 10).is_none());
+    refns.set(3, 10);
+    assert!(llrb.set(6, 10).is_none());
+    refns.set(6, 10);
+    assert!(llrb.set(5, 10).is_none());
+    refns.set(5, 10);
+    assert!(llrb.set(4, 10).is_none());
+    refns.set(4, 10);
+    assert!(llrb.set(8, 10).is_none());
+    refns.set(8, 10);
+    assert!(llrb.set(0, 10).is_none());
+    refns.set(0, 10);
+    assert!(llrb.set(9, 10).is_none());
+    refns.set(9, 10);
+    assert!(llrb.set(7, 10).is_none());
+    refns.set(7, 10);
 
     assert_eq!(llrb.count(), 10);
     assert!(llrb.validate().is_ok());
@@ -57,25 +67,37 @@ fn test_set() {
     // test iter
     let (mut iter, mut iter_ref) = (llrb.iter(), refns.iter());
     loop {
-        if check_node(iter.next(), iter_ref.next().cloned()) == false { break }
+        if check_node(iter.next(), iter_ref.next().cloned()) == false {
+            break;
+        }
     }
 }
 
 #[test]
 fn test_cas_lsm() {
-    let mut llrb: Llrb<i64,i64> = Llrb::new("test-llrb", true /*lsm*/);
+    let mut llrb: Llrb<i64, i64> = Llrb::new("test-llrb", true /*lsm*/);
     let mut refns = RefNodes::new(true /*lsm*/, 11);
 
-    assert!(llrb.set(2, 100).is_none()); refns.set(2, 100);
-    assert!(llrb.set(1, 100).is_none()); refns.set(1, 100);
-    assert!(llrb.set(3, 100).is_none()); refns.set(3, 100);
-    assert!(llrb.set(6, 100).is_none()); refns.set(6, 100);
-    assert!(llrb.set(5, 100).is_none()); refns.set(5, 100);
-    assert!(llrb.set(4, 100).is_none()); refns.set(4, 100);
-    assert!(llrb.set(8, 100).is_none()); refns.set(8, 100);
-    assert!(llrb.set(0, 100).is_none()); refns.set(0, 100);
-    assert!(llrb.set(9, 100).is_none()); refns.set(9, 100);
-    assert!(llrb.set(7, 100).is_none()); refns.set(7, 100);
+    assert!(llrb.set(2, 100).is_none());
+    refns.set(2, 100);
+    assert!(llrb.set(1, 100).is_none());
+    refns.set(1, 100);
+    assert!(llrb.set(3, 100).is_none());
+    refns.set(3, 100);
+    assert!(llrb.set(6, 100).is_none());
+    refns.set(6, 100);
+    assert!(llrb.set(5, 100).is_none());
+    refns.set(5, 100);
+    assert!(llrb.set(4, 100).is_none());
+    refns.set(4, 100);
+    assert!(llrb.set(8, 100).is_none());
+    refns.set(8, 100);
+    assert!(llrb.set(0, 100).is_none());
+    refns.set(0, 100);
+    assert!(llrb.set(9, 100).is_none());
+    refns.set(9, 100);
+    assert!(llrb.set(7, 100).is_none());
+    refns.set(7, 100);
 
     // repeated mutations on same key
 
@@ -111,9 +133,15 @@ fn test_cas_lsm() {
     assert!(llrb.set_cas(10, 100, 0).unwrap().is_none());
     assert!(refns.set_cas(10, 100, 0).is_none());
     // error create
-    assert_eq!(llrb.set_cas(10, 100, 0).err().unwrap(), BognError::InvalidCAS);
+    assert_eq!(
+        llrb.set_cas(10, 100, 0).err().unwrap(),
+        BognError::InvalidCAS
+    );
     // error insert
-    assert_eq!(llrb.set_cas(9, 400, 14).err().unwrap(), BognError::InvalidCAS);
+    assert_eq!(
+        llrb.set_cas(9, 400, 14).err().unwrap(),
+        BognError::InvalidCAS
+    );
 
     assert_eq!(llrb.count(), 11);
     assert!(llrb.validate().is_ok());
@@ -127,25 +155,37 @@ fn test_cas_lsm() {
     // test iter
     let (mut iter, mut iter_ref) = (llrb.iter(), refns.iter());
     loop {
-        if check_node(iter.next(), iter_ref.next().cloned()) == false { break }
+        if check_node(iter.next(), iter_ref.next().cloned()) == false {
+            break;
+        }
     }
 }
 
 #[test]
 fn test_delete() {
-    let mut llrb: Llrb<i64,i64> = Llrb::new("test-llrb", false);
+    let mut llrb: Llrb<i64, i64> = Llrb::new("test-llrb", false);
     let mut refns = RefNodes::new(false /*lsm*/, 11);
 
-    assert!(llrb.set(2, 100).is_none());  refns.set(2, 100);
-    assert!(llrb.set(1, 100).is_none());  refns.set(1, 100);
-    assert!(llrb.set(3, 100).is_none());  refns.set(3, 100);
-    assert!(llrb.set(6, 100).is_none());  refns.set(6, 100);
-    assert!(llrb.set(5, 100).is_none());  refns.set(5, 100);
-    assert!(llrb.set(4, 100).is_none());  refns.set(4, 100);
-    assert!(llrb.set(8, 100).is_none());  refns.set(8, 100);
-    assert!(llrb.set(0, 100).is_none());  refns.set(0, 100);
-    assert!(llrb.set(9, 100).is_none());  refns.set(9, 100);
-    assert!(llrb.set(7, 100).is_none());  refns.set(7, 100);
+    assert!(llrb.set(2, 100).is_none());
+    refns.set(2, 100);
+    assert!(llrb.set(1, 100).is_none());
+    refns.set(1, 100);
+    assert!(llrb.set(3, 100).is_none());
+    refns.set(3, 100);
+    assert!(llrb.set(6, 100).is_none());
+    refns.set(6, 100);
+    assert!(llrb.set(5, 100).is_none());
+    refns.set(5, 100);
+    assert!(llrb.set(4, 100).is_none());
+    refns.set(4, 100);
+    assert!(llrb.set(8, 100).is_none());
+    refns.set(8, 100);
+    assert!(llrb.set(0, 100).is_none());
+    refns.set(0, 100);
+    assert!(llrb.set(9, 100).is_none());
+    refns.set(9, 100);
+    assert!(llrb.set(7, 100).is_none());
+    refns.set(7, 100);
 
     // delete a missing node.
     assert!(llrb.delete(&10).is_none());
@@ -158,7 +198,9 @@ fn test_delete() {
     {
         let (mut iter, mut iter_ref) = (llrb.iter(), refns.iter());
         loop {
-            if check_node(iter.next(), iter_ref.next().cloned()) == false { break }
+            if check_node(iter.next(), iter_ref.next().cloned()) == false {
+                break;
+            }
         }
     }
 
@@ -177,7 +219,7 @@ fn test_delete() {
 #[test]
 fn test_crud() {
     let size = 1000;
-    let mut llrb: Llrb<i64,i64> = Llrb::new("test-llrb", false /*lsm*/);
+    let mut llrb: Llrb<i64, i64> = Llrb::new("test-llrb", false /*lsm*/);
     let mut refns = RefNodes::new(false /*lsm*/, size);
 
     for _ in 0..100000 {
@@ -191,22 +233,26 @@ fn test_crud() {
                 let refn = refns.set(key, value);
                 check_node(node, refn);
                 false
-            },
+            }
             1 => {
                 let refn = &refns.entries[key as usize];
-                let cas = if refn.versions.len() > 0 {refn.get_seqno()} else {0};
+                let cas = if refn.versions.len() > 0 {
+                    refn.get_seqno()
+                } else {
+                    0
+                };
 
                 let node = llrb.set_cas(key, value, cas).ok().unwrap();
                 let refn = refns.set_cas(key, value, cas);
                 check_node(node, refn);
                 false
-            },
+            }
             2 => {
                 let node = llrb.delete(&key);
                 let refn = refns.delete(key);
                 check_node(node, refn);
                 true
-            },
+            }
             op => panic!("unreachable {}", op),
         };
 
@@ -218,7 +264,9 @@ fn test_crud() {
     // test iter
     let (mut iter, mut iter_ref) = (llrb.iter(), refns.iter());
     loop {
-        if check_node(iter.next(), iter_ref.next().cloned()) == false { break }
+        if check_node(iter.next(), iter_ref.next().cloned()) == false {
+            break;
+        }
     }
 
     // ranges and reverses
@@ -230,7 +278,7 @@ fn test_crud() {
         let mut iter_ref = refns.range(low, high);
         loop {
             if check_node(iter.next(), iter_ref.next().cloned()) == false {
-                break
+                break;
             }
         }
 
@@ -238,7 +286,7 @@ fn test_crud() {
         let mut iter_ref = refns.reverse(low, high);
         loop {
             if check_node(iter.next(), iter_ref.next().cloned()) == false {
-                break
+                break;
             }
         }
     }
@@ -247,7 +295,7 @@ fn test_crud() {
 #[test]
 fn test_crud_lsm() {
     let size = 1000;
-    let mut llrb: Llrb<i64,i64> = Llrb::new("test-llrb", true /*lsm*/);
+    let mut llrb: Llrb<i64, i64> = Llrb::new("test-llrb", true /*lsm*/);
     let mut refns = RefNodes::new(true /*lsm*/, size as usize);
 
     for _i in 0..20000 {
@@ -261,23 +309,27 @@ fn test_crud_lsm() {
                 let refn = refns.set(key, value);
                 check_node(node, refn);
                 false
-            },
+            }
             1 => {
                 let refn = &refns.entries[key as usize];
-                let cas = if refn.versions.len() > 0 {refn.get_seqno()} else {0};
+                let cas = if refn.versions.len() > 0 {
+                    refn.get_seqno()
+                } else {
+                    0
+                };
 
                 //println!("set_cas {} {}", key, seqno);
                 let node = llrb.set_cas(key, value, cas).ok().unwrap();
                 let refn = refns.set_cas(key, value, cas);
                 check_node(node, refn);
                 false
-            },
+            }
             2 => {
                 let node = llrb.delete(&key);
                 let refn = refns.delete(key);
                 check_node(node, refn);
                 true
-            },
+            }
             op => panic!("unreachable {}", op),
         };
 
@@ -289,7 +341,9 @@ fn test_crud_lsm() {
     // test iter
     let (mut iter, mut iter_ref) = (llrb.iter(), refns.iter());
     loop {
-        if check_node(iter.next(), iter_ref.next().cloned()) == false { break }
+        if check_node(iter.next(), iter_ref.next().cloned()) == false {
+            break;
+        }
     }
 
     // ranges and reverses
@@ -301,7 +355,7 @@ fn test_crud_lsm() {
         let mut iter_ref = refns.range(low, high);
         loop {
             if check_node(iter.next(), iter_ref.next().cloned()) == false {
-                break
+                break;
             }
         }
 
@@ -309,18 +363,17 @@ fn test_crud_lsm() {
         let mut iter_ref = refns.reverse(low, high);
         loop {
             if check_node(iter.next(), iter_ref.next().cloned()) == false {
-                break
+                break;
             }
         }
     }
 }
 
-
 #[derive(Clone, Default)]
 struct RefValue {
     value: i64,
     seqno: u64,
-    deleted: Option<u64>
+    deleted: Option<u64>,
 }
 
 impl RefValue {
@@ -332,7 +385,7 @@ impl RefValue {
                     panic!("{} < {}", seqno, self.seqno);
                 }
                 seqno
-            },
+            }
         }
     }
 }
@@ -357,7 +410,7 @@ impl RefNode {
     }
 }
 
-struct RefNodes{
+struct RefNodes {
     lsm: bool,
     seqno: u64,
     entries: Vec<RefNode>,
@@ -367,28 +420,38 @@ impl RefNodes {
     fn new(lsm: bool, capacity: usize) -> RefNodes {
         let mut entries: Vec<RefNode> = Vec::with_capacity(capacity);
         (0..capacity).for_each(|_| entries.push(Default::default()));
-        RefNodes{lsm, seqno: 0, entries}
+        RefNodes {
+            lsm,
+            seqno: 0,
+            entries,
+        }
     }
 
     fn get(&self, key: i64) -> Option<RefNode> {
         let entry = self.entries[key as usize].clone();
-        if entry.versions.len() == 0 { None } else { Some(entry) }
+        if entry.versions.len() == 0 {
+            None
+        } else {
+            Some(entry)
+        }
     }
 
-    fn iter<'a>(&'a self) -> impl Iterator<Item=&RefNode> {
+    fn iter<'a>(&'a self) -> impl Iterator<Item = &RefNode> {
         self.entries.iter().filter(|item| item.versions.len() > 0)
     }
 
-    fn range<'a>(&'a self, low: Bound<i64>, high: Bound<i64>)
-        -> Box<dyn Iterator<Item=&'a RefNode> + 'a>
-    {
+    fn range<'a>(
+        &'a self,
+        low: Bound<i64>,
+        high: Bound<i64>,
+    ) -> Box<dyn Iterator<Item = &'a RefNode> + 'a> {
         let low = match low {
             Bound::Included(low) => low as usize,
-            Bound::Excluded(low) => (low+1) as usize,
+            Bound::Excluded(low) => (low + 1) as usize,
             Bound::Unbounded => 0,
         };
         let high = match high {
-            Bound::Included(high) => (high+1) as usize,
+            Bound::Included(high) => (high + 1) as usize,
             Bound::Excluded(high) => high as usize,
             Bound::Unbounded => self.entries.len(),
         };
@@ -406,16 +469,18 @@ impl RefNodes {
         Box::new(iter)
     }
 
-    fn reverse<'a>(&'a self, low: Bound<i64>, high: Bound<i64>)
-        -> Box<dyn Iterator<Item=&'a RefNode> + 'a>
-    {
+    fn reverse<'a>(
+        &'a self,
+        low: Bound<i64>,
+        high: Bound<i64>,
+    ) -> Box<dyn Iterator<Item = &'a RefNode> + 'a> {
         let low = match low {
             Bound::Included(low) => low as usize,
-            Bound::Excluded(low) => (low+1) as usize,
+            Bound::Excluded(low) => (low + 1) as usize,
             Bound::Unbounded => 0,
         };
         let high = match high {
-            Bound::Included(high) => (high+1) as usize,
+            Bound::Included(high) => (high + 1) as usize,
             Bound::Excluded(high) => high as usize,
             Bound::Unbounded => self.entries.len(),
         };
@@ -434,9 +499,17 @@ impl RefNodes {
     }
 
     fn set(&mut self, key: i64, value: i64) -> Option<RefNode> {
-        let refval = RefValue{value, seqno: self.seqno+1, deleted: None};
+        let refval = RefValue {
+            value,
+            seqno: self.seqno + 1,
+            deleted: None,
+        };
         let entry = &mut self.entries[key as usize];
-        let refn = if entry.versions.len() > 0 {Some(entry.clone())} else {None};
+        let refn = if entry.versions.len() > 0 {
+            Some(entry.clone())
+        } else {
+            None
+        };
         entry.key = key;
         if self.lsm || entry.versions.len() == 0 {
             entry.versions.insert(0, refval);
@@ -448,7 +521,11 @@ impl RefNodes {
     }
 
     fn set_cas(&mut self, key: i64, value: i64, cas: u64) -> Option<RefNode> {
-        let refval = RefValue{value, seqno: self.seqno+1, deleted: None};
+        let refval = RefValue {
+            value,
+            seqno: self.seqno + 1,
+            deleted: None,
+        };
         let entry = &mut self.entries[key as usize];
         let ok = entry.versions.len() == 0 && cas == 0;
         if ok || (cas == entry.versions[0].seqno) {
@@ -476,10 +553,11 @@ impl RefNodes {
         if entry.is_present() {
             if self.lsm && entry.versions[0].deleted.is_none() {
                 let refn = entry.clone();
-                entry.versions[0].deleted = Some(self.seqno+1);
+                entry.versions[0].deleted = Some(self.seqno + 1);
                 self.seqno += 1;
                 Some(refn)
-            } else if self.lsm { // noop
+            } else if self.lsm {
+                // noop
                 Some(entry.clone())
             } else {
                 let refn = entry.clone();
@@ -487,11 +565,12 @@ impl RefNodes {
                 self.seqno += 1;
                 Some(refn)
             }
-
         } else {
             if self.lsm {
-                let refval = RefValue{
-                    value: 0, seqno: 0, deleted: Some(self.seqno+1)
+                let refval = RefValue {
+                    value: 0,
+                    seqno: 0,
+                    deleted: Some(self.seqno + 1),
                 };
                 entry.versions.insert(0, refval);
                 entry.key = key;
@@ -502,11 +581,9 @@ impl RefNodes {
     }
 }
 
-fn check_node(node: Option<impl AsEntry<i64,i64>>, refn: Option<RefNode>)
-    -> bool
-{
+fn check_node(node: Option<impl AsEntry<i64, i64>>, refn: Option<RefNode>) -> bool {
     if node.is_none() && refn.is_none() {
-        return false
+        return false;
     } else if node.is_none() {
         panic!("node is none but not refn {:?}", refn.unwrap().key);
     } else if refn.is_none() {
@@ -520,41 +597,64 @@ fn check_node(node: Option<impl AsEntry<i64,i64>>, refn: Option<RefNode>)
     //println!("check_node {} {}", node.key(), refn.key);
     assert_eq!(node.key(), refn.key, "key");
 
-
     assert_eq!(
-        node.value().value(), refn.versions[0].value, "key {}", refn.key
+        node.value().value(),
+        refn.versions[0].value,
+        "key {}",
+        refn.key
     );
     assert_eq!(
-        node.value().seqno(), refn.versions[0].seqno, "key {}", refn.key
+        node.value().seqno(),
+        refn.versions[0].seqno,
+        "key {}",
+        refn.key
     );
     assert_eq!(
-        node.value().is_deleted(), refn.versions[0].deleted.is_some(),
-        "key {}", refn.key
+        node.value().is_deleted(),
+        refn.versions[0].deleted.is_some(),
+        "key {}",
+        refn.key
     );
 
     assert_eq!(node.seqno(), refn.get_seqno(), "key {}", refn.key);
     assert_eq!(node.is_deleted(), refn.is_deleted(), "key {}", refn.key);
-    assert_eq!(node.versions().len(), refn.versions.len(), "key {}", refn.key);
+    assert_eq!(
+        node.versions().len(),
+        refn.versions.len(),
+        "key {}",
+        refn.key
+    );
     for (i, value) in node.versions().iter().enumerate() {
         assert_eq!(
-            value.value(), refn.versions[i].value, "key {} i {}", refn.key, i,
+            value.value(),
+            refn.versions[i].value,
+            "key {} i {}",
+            refn.key,
+            i,
         );
         assert_eq!(
-            value.seqno(), refn.versions[i].seqno, "key {} i {}", refn.key, i
+            value.seqno(),
+            refn.versions[i].seqno,
+            "key {} i {}",
+            refn.key,
+            i
         );
         assert_eq!(
-            value.is_deleted(), refn.versions[i].deleted.is_some(),
-            "key {} i {}", refn.key, i
+            value.is_deleted(),
+            refn.versions[i].deleted.is_some(),
+            "key {} i {}",
+            refn.key,
+            i
         );
     }
 
-    return true
+    return true;
 }
 
 fn random_low_high(size: usize) -> (Bound<i64>, Bound<i64>) {
     let size = size as u64;
-    let low = (random::<u64>()%size) as i64;
-    let high = (random::<u64>()%size) as i64;
+    let low = (random::<u64>() % size) as i64;
+    let high = (random::<u64>() % size) as i64;
     let low = match random::<u8>() % 3 {
         0 => Bound::Included(low),
         1 => Bound::Excluded(low),

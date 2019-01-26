@@ -5,7 +5,6 @@ use std::ops::Bound;
 use crate::error::BognError;
 use crate::traits::{AsEntry, AsKey, AsValue};
 
-// TODO: Performance testing
 // TODO: Sizing.
 // TODO: Implement and document primitive types, std-types that can be used
 // as key (K) / value (V) for Llrb.

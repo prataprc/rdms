@@ -33,6 +33,7 @@ where
 {
     name: String,
     lsm: bool,
+    mvcc: bool,
     root: Option<Box<Node<K, V>>>,
     seqno: u64,   // seqno so far, starts from 0 and incr for every mutation.
     n_count: u64, // number of entries in the tree.
@@ -65,11 +66,36 @@ where
         let store = Llrb {
             name: name.as_ref().to_string(),
             lsm,
+            mvcc: false,
             seqno: 0,
             root: None,
             n_count: 0,
         };
         store
+    }
+
+    /// Create an empty instance of Llrb in MVCC mode, identified by `name`.
+    /// Applications can choose unique names. When `lsm` is true, mutations
+    /// are added as log for each key, instead of over-writing previous
+    /// mutation.
+    pub fn new_mvcc<S>(name: S, lsm: bool) -> Llrb<K, V>
+    where
+        S: AsRef<str>,
+    {
+        let store = Llrb {
+            name: name.as_ref().to_string(),
+            lsm,
+            mvcc: true,
+            seqno: 0,
+            root: None,
+            n_count: 0,
+        };
+        store
+    }
+
+    /// After loading an Llrb instance, it can be set to MVCC mode.
+    pub fn set_mvcc(&mut self) {
+        self.mvcc = true
     }
 
     /// Create a new instance of Llrb tree and load it with entries from
@@ -270,10 +296,13 @@ where
                     root.set_black();
                     self.root = Some(root);
                     self.n_count += 1;
+                    self.seqno = seqno;
                     None
                 }
                 old_node @ Some(_) => {
-                    self.seqno = seqno;
+                    if !old_node.as_ref().unwrap().is_deleted() {
+                        self.seqno = seqno;
+                    }
                     old_node
                 }
             };
@@ -709,6 +738,7 @@ where
     }
 }
 
+// TODO: refactor this for mvcc.
 impl<K, V> Clone for Llrb<K, V>
 where
     K: AsKey,
@@ -718,6 +748,7 @@ where
         let new_store = Llrb {
             name: self.name.clone(),
             lsm: self.lsm,
+            mvcc: self.mvcc,
             root: self.root.clone(),
             seqno: self.seqno,
             n_count: self.n_count,

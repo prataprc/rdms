@@ -1,15 +1,9 @@
 use std::borrow::Borrow;
 use std::cmp::{Ord, Ordering};
-use std::ops::{Bound, Deref, DerefMut};
+use std::ops::{DerefMut, Bound};
 
 use crate::error::BognError;
 use crate::traits::{AsEntry, AsKey, AsValue};
-
-// TODO: Sizing.
-// TODO: Implement and document primitive types, std-types that can be used
-// as key (K) / value (V) for Llrb.
-// TODO: optimize comparison
-// TODO: llrb_depth_histogram, as feature, to measure the depth of LLRB tree.
 
 /// Llrb manage a single instance of in-memory sorted index using
 /// [left-leaning-red-black][llrb] tree.
@@ -171,14 +165,12 @@ where
 
     /// Return an iterator over all entries in this instance.
     pub fn iter(&self) -> Iter<K, V> {
-        let root = self.root.as_ref().map(|item| item.deref());
-        Iter::new(root)
+        Iter::new(&self.root)
     }
 
     /// Range over all entries from low to high.
     pub fn range(&self, low: Bound<K>, high: Bound<K>) -> Range<K, V> {
-        let root = self.root.as_ref().map(|item| item.deref());
-        Range::new(root, low, high)
+        Range::new(&self.root, low, high)
     }
 
     /// Set a new entry into this instance. If key is already present, return
@@ -618,6 +610,7 @@ where
     //     /      \              /      \
     //   left    right         left    right
     //
+    // REQUIRE: Left and Right children must be present
     fn flip(mut node: Box<Node<K, V>>) -> Box<Node<K, V>> {
         node.left.as_mut().unwrap().toggle_link();
         node.right.as_mut().unwrap().toggle_link();
@@ -648,13 +641,18 @@ where
         node
     }
 
-    fn move_red_right(mut node: Box<Node<K, V>>) -> Box<Node<K, V>> {
-        node = Llrb::flip(node);
-        if is_red(&node.left.as_ref().unwrap().left) {
-            node = Llrb::rotate_right(node);
-            node = Llrb::flip(node);
+    fn move_red_right(
+        mut node: &Box<Node<K, V>>,
+        reclaim: mut Vec<Box<Node>>
+        ) -> Box<Node<K, V>>
+    {
+        let new_node = node.mvcc_clone();
+        new_node = Llrb::flip(new_node);
+        if is_red(&new_node.left.as_ref().unwrap().left) {
+            new_node = Llrb::rotate_right(new_node);
+            new_node = Llrb::flip(new_node);
         }
-        node
+        new_node
     }
 }
 
@@ -691,9 +689,9 @@ where
         let new_store = Llrb {
             name: self.name.clone(),
             lsm: self.lsm,
-            root: self.root.clone(),
             seqno: self.seqno,
             n_count: self.n_count,
+            root: self.root.clone(),
         };
         new_store
     }
@@ -706,7 +704,7 @@ where
     K: AsKey,
     V: Default + Clone,
 {
-    root: Option<&'a Node<K, V>>,
+    root: Option<&'a Box<Node<K, V>>>,
     node_iter: std::vec::IntoIter<Node<K, V>>,
     after_key: Bound<K>,
     limit: usize,
@@ -717,24 +715,27 @@ where
     K: AsKey,
     V: Default + Clone,
 {
-    fn new(root: Option<&'a Node<K, V>>) -> Iter<'a, K, V> {
-        Iter {
-            root,
+    fn new(root: &'a Option<Box<Node<K, V>>>) -> Iter<'a, K, V> {
+        let mut iter = Iter {
+            root: None,
             node_iter: vec![].into_iter(),
             after_key: Bound::Unbounded,
             limit: 100, // TODO: no magic number.
+        };
+        if root.is_some() {
+            iter.root = Some(root.as_ref().unwrap())
         }
+        iter
     }
 
-    fn scan_iter(&mut self, node: Option<&Node<K, V>>, acc: &mut Vec<Node<K, V>>) -> bool {
+    fn scan_iter(&mut self, node: Option<&Box<Node<K, V>>>, acc: &mut Vec<Node<K, V>>) -> bool {
         if node.is_none() {
             return true;
         }
 
         let node = node.unwrap();
         //println!("scan_iter {:?} {:?}", node.key, self.after_key);
-        let left = node.left.as_ref().map(|item| item.deref());
-        let right = node.right.as_ref().map(|item| item.deref());
+        let (left, right) = (node.left.as_ref(), node.right.as_ref());
         match &self.after_key {
             Bound::Included(akey) | Bound::Excluded(akey) => {
                 if node.key.borrow().le(akey) {
@@ -801,7 +802,7 @@ where
     K: AsKey,
     V: Default + Clone,
 {
-    root: Option<&'a Node<K, V>>,
+    root: Option<&'a Box<Node<K, V>>>,
     node_iter: std::vec::IntoIter<Node<K, V>>,
     low: Bound<K>,
     high: Bound<K>,
@@ -813,29 +814,32 @@ where
     K: AsKey,
     V: Default + Clone,
 {
-    fn new(root: Option<&'a Node<K, V>>, low: Bound<K>, high: Bound<K>) -> Range<'a, K, V> {
-        Range {
-            root,
+    fn new(root: &'a Option<Box<Node<K, V>>>, low: Bound<K>, high: Bound<K>) -> Range<'a, K, V> {
+        let mut range = Range {
+            root: None,
             node_iter: vec![].into_iter(),
             low,
             high,
             limit: 100, // TODO: no magic number.
+        };
+        if root.is_some() {
+            range.root = Some(root.as_ref().unwrap())
         }
+        range
     }
 
     pub fn rev(self) -> Reverse<'a, K, V> {
         Reverse::new(self.root, self.low, self.high)
     }
 
-    fn range_iter(&mut self, node: Option<&Node<K, V>>, acc: &mut Vec<Node<K, V>>) -> bool {
+    fn range_iter(&mut self, node: Option<&Box<Node<K, V>>>, acc: &mut Vec<Node<K, V>>) -> bool {
         if node.is_none() {
             return true;
         }
 
         let node = node.unwrap();
         //println!("range_iter {:?} {:?}", node.key, self.low);
-        let left = node.left.as_ref().map(|item| item.deref());
-        let right = node.right.as_ref().map(|item| item.deref());
+        let (left, right) = (node.left.as_ref(), node.right.as_ref());
         match &self.low {
             Bound::Included(qow) if node.key.lt(qow) => {
                 return self.range_iter(right, acc);
@@ -915,7 +919,7 @@ where
     K: AsKey,
     V: Default + Clone,
 {
-    root: Option<&'a Node<K, V>>,
+    root: Option<&'a Box<Node<K, V>>>,
     node_iter: std::vec::IntoIter<Node<K, V>>,
     high: Bound<K>,
     low: Bound<K>,
@@ -927,25 +931,28 @@ where
     K: AsKey,
     V: Default + Clone,
 {
-    fn new(root: Option<&'a Node<K, V>>, low: Bound<K>, high: Bound<K>) -> Reverse<'a, K, V> {
-        Reverse {
-            root,
+    fn new(root: Option<&'a Box<Node<K, V>>>, low: Bound<K>, high: Bound<K>) -> Reverse<'a, K, V> {
+        let mut reverse = Reverse {
+            root: None,
             node_iter: vec![].into_iter(),
             low,
             high,
             limit: 100, // TODO: no magic number.
+        };
+        if root.is_some() {
+            reverse.root = Some(root.as_ref().unwrap())
         }
+        reverse
     }
 
-    fn reverse_iter(&mut self, node: Option<&Node<K, V>>, acc: &mut Vec<Node<K, V>>) -> bool {
+    fn reverse_iter(&mut self, node: Option<&Box<Node<K, V>>>, acc: &mut Vec<Node<K, V>>) -> bool {
         if node.is_none() {
             return true;
         }
 
         let node = node.unwrap();
         //println!("reverse_iter {:?} {:?}", node.key, self.high);
-        let left = node.left.as_ref().map(|item| item.deref());
-        let right = node.right.as_ref().map(|item| item.deref());
+        let (left, right) = (node.left.as_ref(), node.right.as_ref());
         match &self.high {
             Bound::Included(qigh) if node.key.gt(qigh) => {
                 return self.reverse_iter(left, acc);
@@ -1209,6 +1216,7 @@ where
         }
         new_node
     }
+
 
     // prepend operation, equivalent to SET / INSERT / UPDATE
     fn prepend_version(&mut self, value: V, seqno: u64, lsm: bool) {

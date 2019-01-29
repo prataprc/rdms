@@ -1,13 +1,4 @@
-use std::borrow::Borrow;
-use std::cmp::Ordering;
-use std::marker::PhantomData;
-use std::ops::DerefMut;
-
-use crate::error::BognError;
-use crate::llrb::{is_black, is_red, Node};
-use crate::traits::{AsEntry, AsKey};
-
-pub struct Mvcc<K, V> {
+struct Mvcc<K, V> {
     key: PhantomData<K>,
     value: PhantomData<V>,
 }
@@ -17,7 +8,7 @@ where
     K: AsKey,
     V: Default + Clone,
 {
-    //pub fn set(
+    //fn set(
     //    llrb: &mut Llrb<K, V>, /* main index */
     //    key: K,
     //    value: V,
@@ -41,7 +32,7 @@ where
     //    old_node
     //}
 
-    pub fn upsert(
+    fn upsert(
         node: Option<&mut Node<K, V>>,
         key: K,
         value: V,
@@ -76,7 +67,7 @@ where
         }
     }
 
-    pub fn upsert_cas(
+    fn upsert_cas(
         node: Option<&mut Node<K, V>>,
         key: K,
         val: V,
@@ -125,7 +116,7 @@ where
         return (Some(Mvcc::walkuprot_23(new_node, r)), old_node, err);
     }
 
-    pub fn delete_insert<Q>(
+    fn delete_insert<Q>(
         node: Option<&mut Node<K, V>>,
         key: &Q,
         seqno: u64,
@@ -166,7 +157,7 @@ where
     }
 
     // this is the non-lsm path.
-    pub fn do_delete<Q>(
+    fn do_delete<Q>(
         node: Option<&mut Node<K, V>>,
         key: &Q,
         reclaim: &mut Vec<Box<Node<K, V>>>,
@@ -236,7 +227,7 @@ where
     }
 
     // return [node, old_node]
-    pub fn delete_min(
+    fn delete_min(
         node: Option<&mut Node<K, V>>,
         reclaim: &mut Vec<Box<Node<K, V>>>, /* reclaim */
     ) -> (Option<Box<Node<K, V>>>, Option<Box<Node<K, V>>>) {
@@ -262,11 +253,11 @@ where
 
     ////--------- rotation routines for 2-3 algorithm ----------------
 
-    pub fn walkdown_rot23(node: Box<Node<K, V>>) -> Box<Node<K, V>> {
+    fn walkdown_rot23(node: Box<Node<K, V>>) -> Box<Node<K, V>> {
         node
     }
 
-    pub fn walkuprot_23(
+    fn walkuprot_23(
         mut node: Box<Node<K, V>>,
         reclaim: &mut Vec<Box<Node<K, V>>>, /* reclaim */
     ) -> Box<Node<K, V>> {

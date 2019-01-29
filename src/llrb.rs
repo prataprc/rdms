@@ -1,10 +1,10 @@
 use std::borrow::Borrow;
 use std::cmp::{Ord, Ordering};
+use std::marker::PhantomData;
 use std::ops::{Bound, Deref, DerefMut};
 use std::sync::Mutex;
 
 use crate::error::BognError;
-use crate::llrb_single::Single;
 use crate::traits::{AsEntry, AsKey, AsValue};
 
 // TODO: Sizing.
@@ -32,13 +32,13 @@ where
     K: AsKey,
     V: Default + Clone,
 {
-    pub(crate) name: String,
-    pub(crate) lsm: bool,
-    pub(crate) mvcc: bool,
-    pub(crate) root: Option<Box<Node<K, V>>>,
-    pub(crate) seqno: u64,   // starts from 0 and incr for every mutation.
-    pub(crate) n_count: u64, // number of entries in the tree.
-    pub(crate) mutex: Mutex<u64>,
+    name: String,
+    lsm: bool,
+    mvcc: bool,
+    root: Option<Box<Node<K, V>>>,
+    seqno: u64,   // starts from 0 and incr for every mutation.
+    n_count: u64, // number of entries in the tree.
+    mutex: Mutex<u64>,
 }
 
 /// Different ways to construct a new Llrb instance.
@@ -88,7 +88,7 @@ where
     }
 
     /// After loading an Llrb instance, it can be set to MVCC mode.
-    pub fn set_mvcc_mode(&mut self) {
+    pub fn move_to_mvcc_mode(&mut self) {
         self.mvcc = true
     }
 
@@ -135,14 +135,19 @@ where
         } else {
             let mut node = node.unwrap();
             node = Single::walkdown_rot23(node);
-            if node.key.gt(&key) {
-                node.left = self.load_entry(node.left, key, entry)?;
-                Ok(Some(Single::walkuprot_23(node)))
-            } else if node.key.lt(&key) {
-                node.right = self.load_entry(node.right, key, entry)?;
-                Ok(Some(Single::walkuprot_23(node)))
-            } else {
-                Err(BognError::DuplicateKey(format!("load_entry: {:?}", key)))
+            match node.key.cmp(&key) {
+                Ordering::Greater => {
+                    node.left = self.load_entry(node.left, key, entry)?;
+                    Ok(Some(Single::walkuprot_23(node)))
+                }
+                Ordering::Less => {
+                    node.right = self.load_entry(node.right, key, entry)?;
+                    Ok(Some(Single::walkuprot_23(node)))
+                }
+                Ordering::Equal => {
+                    let err = format!("load_entry: {:?}", key);
+                    Err(BognError::DuplicateKey(err))
+                }
             }
         }
     }
@@ -368,7 +373,11 @@ where
     }
 }
 
-pub fn is_red<K, V>(node: Option<&Node<K, V>>) -> bool
+include!("llrb_single.rs");
+
+include!("llrb_mvcc.rs");
+
+fn is_red<K, V>(node: Option<&Node<K, V>>) -> bool
 where
     K: AsKey,
     V: Default + Clone,
@@ -379,7 +388,7 @@ where
     }
 }
 
-pub fn is_black<K, V>(node: Option<&Node<K, V>>) -> bool
+fn is_black<K, V>(node: Option<&Node<K, V>>) -> bool
 where
     K: AsKey,
     V: Default + Clone,
@@ -438,7 +447,11 @@ where
         }
     }
 
-    fn scan_iter(&mut self, node: Option<&Node<K, V>>, acc: &mut Vec<Node<K, V>>) -> bool {
+    fn scan_iter(
+        &mut self,
+        node: Option<&Node<K, V>>,
+        acc: &mut Vec<Node<K, V>>, // accumulator for batch of nodes
+    ) -> bool {
         if node.is_none() {
             return true;
         }
@@ -525,7 +538,11 @@ where
     K: AsKey,
     V: Default + Clone,
 {
-    fn new(root: Option<&'a Node<K, V>>, low: Bound<K>, high: Bound<K>) -> Range<'a, K, V> {
+    fn new(
+        root: Option<&'a Node<K, V>>,
+        low: Bound<K>,  // lower bound
+        high: Bound<K>, // upper bound
+    ) -> Range<'a, K, V> {
         Range {
             root,
             node_iter: vec![].into_iter(),
@@ -539,7 +556,11 @@ where
         Reverse::new(self.root, self.low, self.high)
     }
 
-    fn range_iter(&mut self, node: Option<&Node<K, V>>, acc: &mut Vec<Node<K, V>>) -> bool {
+    fn range_iter(
+        &mut self,
+        node: Option<&Node<K, V>>,
+        acc: &mut Vec<Node<K, V>>, // accumulator for batch of nodes
+    ) -> bool {
         if node.is_none() {
             return true;
         }
@@ -639,7 +660,11 @@ where
     K: AsKey,
     V: Default + Clone,
 {
-    fn new(root: Option<&'a Node<K, V>>, low: Bound<K>, high: Bound<K>) -> Reverse<'a, K, V> {
+    fn new(
+        root: Option<&'a Node<K, V>>,
+        low: Bound<K>,  // lower bound
+        high: Bound<K>, // upper bound
+    ) -> Reverse<'a, K, V> {
         Reverse {
             root,
             node_iter: vec![].into_iter(),
@@ -649,7 +674,11 @@ where
         }
     }
 
-    fn reverse_iter(&mut self, node: Option<&Node<K, V>>, acc: &mut Vec<Node<K, V>>) -> bool {
+    fn reverse_iter(
+        &mut self,
+        node: Option<&Node<K, V>>,
+        acc: &mut Vec<Node<K, V>>, // accumulator for batch of nodes
+    ) -> bool {
         if node.is_none() {
             return true;
         }
@@ -848,11 +877,11 @@ where
     K: AsKey,
     V: Default + Clone,
 {
-    pub(crate) key: K,
-    pub(crate) valn: ValueNode<V>,
-    pub(crate) black: bool,                    // store: black or red
-    pub(crate) left: Option<Box<Node<K, V>>>,  // store: left child
-    pub(crate) right: Option<Box<Node<K, V>>>, // store: right child
+    key: K,
+    valn: ValueNode<V>,
+    black: bool,                    // store: black or red
+    left: Option<Box<Node<K, V>>>,  // store: left child
+    right: Option<Box<Node<K, V>>>, // store: right child
 }
 
 // Primary operations on a single node.
@@ -862,7 +891,7 @@ where
     V: Default + Clone,
 {
     // CREATE operation
-    pub(crate) fn new(key: K, value: V, seqno: u64, black: bool) -> Node<K, V> {
+    fn new(key: K, value: V, seqno: u64, black: bool) -> Node<K, V> {
         let valn = ValueNode::new(value, seqno, None, None);
         Node {
             key,
@@ -873,7 +902,7 @@ where
         }
     }
 
-    pub(crate) fn from_entry<E>(entry: E) -> Node<K, V>
+    fn from_entry<E>(entry: E) -> Node<K, V>
     where
         E: AsEntry<K, V>,
         <E as AsEntry<K, V>>::Value: Default + Clone,
@@ -890,7 +919,7 @@ where
     }
 
     // clone and detach this node from the tree.
-    pub(crate) fn clone_detach(&self) -> Node<K, V> {
+    fn clone_detach(&self) -> Node<K, V> {
         Node {
             key: self.key.clone(),
             valn: self.valn.clone(),
@@ -900,7 +929,7 @@ where
         }
     }
 
-    pub(crate) fn mvcc_detach(&mut self) {
+    fn mvcc_detach(&mut self) {
         match self.left.take() {
             Some(box_node) => {
                 Box::leak(box_node);
@@ -916,7 +945,7 @@ where
     }
 
     // unsafe clone for MVCC COW
-    pub(crate) fn mvcc_clone(
+    fn mvcc_clone(
         &mut self,
         reclaim: &mut Vec<Box<Node<K, V>>>, /* reclaim */
     ) -> Box<Node<K, V>> {
@@ -944,24 +973,24 @@ where
         Box::new(new_node)
     }
 
-    pub(crate) fn left_deref(&self) -> Option<&Node<K, V>> {
+    fn left_deref(&self) -> Option<&Node<K, V>> {
         self.left.as_ref().map(|item| item.deref())
     }
 
-    pub(crate) fn right_deref(&self) -> Option<&Node<K, V>> {
+    fn right_deref(&self) -> Option<&Node<K, V>> {
         self.right.as_ref().map(|item| item.deref())
     }
 
-    pub(crate) fn left_deref_mut(&mut self) -> Option<&mut Node<K, V>> {
+    fn left_deref_mut(&mut self) -> Option<&mut Node<K, V>> {
         self.left.as_mut().map(|item| item.deref_mut())
     }
 
-    pub(crate) fn right_deref_mut(&mut self) -> Option<&mut Node<K, V>> {
+    fn right_deref_mut(&mut self) -> Option<&mut Node<K, V>> {
         self.right.as_mut().map(|item| item.deref_mut())
     }
 
     // prepend operation, equivalent to SET / INSERT / UPDATE
-    pub(crate) fn prepend_version(&mut self, value: V, seqno: u64, lsm: bool) {
+    fn prepend_version(&mut self, value: V, seqno: u64, lsm: bool) {
         let prev = if lsm {
             Some(Box::new(self.valn.clone()))
         } else {
@@ -971,7 +1000,7 @@ where
     }
 
     // DELETE operation
-    pub(crate) fn delete(&mut self, seqno: u64, _lsm: bool) {
+    fn delete(&mut self, seqno: u64, _lsm: bool) {
         self.valn.delete(seqno)
     }
 
@@ -986,22 +1015,22 @@ where
     }
 
     #[inline]
-    pub(crate) fn set_red(&mut self) {
+    fn set_red(&mut self) {
         self.black = false
     }
 
     #[inline]
-    pub(crate) fn set_black(&mut self) {
+    fn set_black(&mut self) {
         self.black = true
     }
 
     #[inline]
-    pub(crate) fn toggle_link(&mut self) {
+    fn toggle_link(&mut self) {
         self.black = !self.black
     }
 
     #[inline]
-    pub(crate) fn is_black(&self) -> bool {
+    fn is_black(&self) -> bool {
         self.black
     }
 }

@@ -1,13 +1,4 @@
-use std::borrow::Borrow;
-use std::cmp::{Ord, Ordering};
-use std::marker::PhantomData;
-use std::ops::DerefMut;
-
-use crate::error::BognError;
-use crate::llrb::{is_black, is_red, Llrb, Node};
-use crate::traits::{AsEntry, AsKey};
-
-pub struct Single<K, V> {
+struct Single<K, V> {
     key: PhantomData<K>,
     value: PhantomData<V>,
 }
@@ -19,7 +10,7 @@ where
     K: AsKey,
     V: Default + Clone,
 {
-    pub fn set(
+    fn set(
         llrb: &mut Llrb<K, V>, /* main index */
         key: K,
         value: V,
@@ -43,7 +34,7 @@ where
         old_node
     }
 
-    pub fn upsert(
+    fn upsert(
         node: Option<Box<Node<K, V>>>,
         key: K,
         value: V,
@@ -57,23 +48,26 @@ where
 
         let mut node = node.unwrap();
         node = Single::walkdown_rot23(node);
-
-        if node.key.gt(&key) {
-            let (l, o) = Single::upsert(node.left, key, value, seqno, lsm);
-            node.left = l;
-            (Some(Single::walkuprot_23(node)), o)
-        } else if node.key.lt(&key) {
-            let (r, o) = Single::upsert(node.right, key, value, seqno, lsm);
-            node.right = r;
-            (Some(Single::walkuprot_23(node)), o)
-        } else {
-            let old_node = node.clone_detach();
-            node.prepend_version(value, seqno, lsm);
-            (Some(Single::walkuprot_23(node)), Some(old_node))
+        match node.key.cmp(&key) {
+            Ordering::Greater => {
+                let (l, o) = Single::upsert(node.left, key, value, seqno, lsm);
+                node.left = l;
+                (Some(Single::walkuprot_23(node)), o)
+            }
+            Ordering::Less => {
+                let (r, o) = Single::upsert(node.right, key, value, seqno, lsm);
+                node.right = r;
+                (Some(Single::walkuprot_23(node)), o)
+            }
+            Ordering::Equal => {
+                let old_node = node.clone_detach();
+                node.prepend_version(value, seqno, lsm);
+                (Some(Single::walkuprot_23(node)), Some(old_node))
+            }
         }
     }
 
-    pub fn set_cas(
+    fn set_cas(
         llrb: &mut Llrb<K, V>,
         key: K,
         value: V,
@@ -100,7 +94,7 @@ where
         }
     }
 
-    pub fn upsert_cas(
+    fn upsert_cas(
         node: Option<Box<Node<K, V>>>,
         key: K,
         val: V,
@@ -122,32 +116,37 @@ where
 
         let mut node = node.unwrap();
         node = Single::walkdown_rot23(node);
-
-        let (old_node, err) = if node.key.gt(&key) {
-            let (k, v) = (key, val);
-            let (l, o, e) = Single::upsert_cas(node.left, k, v, cas, seqno, lsm);
-            node.left = l;
-            (o, e)
-        } else if node.key.lt(&key) {
-            let (k, v) = (key, val);
-            let (r, o, e) = Single::upsert_cas(node.right, k, v, cas, seqno, lsm);
-            node.right = r;
-            (o, e)
-        } else if node.is_deleted() && cas != 0 && cas != node.seqno() {
-            (None, Some(BognError::InvalidCAS))
-        } else if !node.is_deleted() && cas != node.seqno() {
-            (None, Some(BognError::InvalidCAS))
-        } else {
-            let old_node = node.clone_detach();
-            node.prepend_version(val, seqno, lsm);
-            (Some(old_node), None)
+        let (old_node, err) = match node.key.cmp(&key) {
+            Ordering::Greater => {
+                let (k, v, left) = (key, val, node.left);
+                let (l, o, e) = Single::upsert_cas(left, k, v, cas, seqno, lsm);
+                node.left = l;
+                (o, e)
+            }
+            Ordering::Less => {
+                let (k, v, right) = (key, val, node.right);
+                let (r, o, e) = Single::upsert_cas(right, k, v, cas, seqno, lsm);
+                node.right = r;
+                (o, e)
+            }
+            Ordering::Equal => {
+                if node.is_deleted() && cas != 0 && cas != node.seqno() {
+                    (None, Some(BognError::InvalidCAS))
+                } else if !node.is_deleted() && cas != node.seqno() {
+                    (None, Some(BognError::InvalidCAS))
+                } else {
+                    let old_node = node.clone_detach();
+                    node.prepend_version(val, seqno, lsm);
+                    (Some(old_node), None)
+                }
+            }
         };
 
         node = Single::walkuprot_23(node);
         return (Some(node), old_node, err);
     }
 
-    pub fn delete<Q>(llrb: &mut Llrb<K, V>, key: &Q) -> Option<impl AsEntry<K, V>>
+    fn delete<Q>(llrb: &mut Llrb<K, V>, key: &Q) -> Option<impl AsEntry<K, V>>
     where
         K: Borrow<Q> + From<Q>,
         Q: Clone + Ord + ?Sized,
@@ -156,25 +155,19 @@ where
 
         let lsm = llrb.lsm;
         if lsm {
-            let root = llrb.root.as_mut().map(|item| item.deref_mut());
-            return match Single::delete_lsm(root, key, seqno) {
-                None => {
-                    let root = llrb.root.take();
-                    let root = Single::delete_insert(root, key, seqno);
-                    let mut root = root.unwrap();
-                    root.set_black();
-                    llrb.root = Some(root);
-                    llrb.n_count += 1;
-                    llrb.seqno = seqno;
-                    None
-                }
-                old_node @ Some(_) => {
-                    if !old_node.as_ref().unwrap().is_deleted() {
-                        llrb.seqno = seqno;
-                    }
-                    old_node
-                }
-            };
+            let root = llrb.root.take();
+            let (root, old_node) = Single::delete_lsm(root, key, seqno);
+            let mut root = root.unwrap();
+            root.set_black();
+            llrb.root = Some(root);
+
+            if old_node.is_none() {
+                llrb.n_count += 1;
+                llrb.seqno = seqno;
+            } else if !old_node.as_ref().unwrap().is_deleted() {
+                llrb.seqno = seqno;
+            }
+            return old_node;
         }
 
         // in non-lsm mode remove the entry from the tree.
@@ -193,65 +186,54 @@ where
         }
         old_node
     }
-    pub fn delete_lsm<Q>(
-        mut node: Option<&mut Node<K, V>>, /* root node */
-        key: &Q,
-        seqno: u64,
-    ) -> Option<Node<K, V>>
-    where
-        K: Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
-        while node.is_some() {
-            let nref = node.unwrap();
-            node = match nref.key.borrow().cmp(key) {
-                Ordering::Greater => nref.left_deref_mut(),
-                Ordering::Less => nref.right_deref_mut(),
-                Ordering::Equal if nref.is_deleted() => {
-                    return Some(nref.clone_detach());
-                }
-                Ordering::Equal => {
-                    let old_node = nref.clone_detach();
-                    nref.delete(seqno, true /*lsm*/);
-                    return Some(old_node);
-                }
-            };
-        }
-        None
-    }
 
-    pub fn delete_insert<Q>(
+    fn delete_lsm<Q>(
         node: Option<Box<Node<K, V>>>,
         key: &Q,
         seqno: u64,
-    ) -> Option<Box<Node<K, V>>>
+    ) -> (Option<Box<Node<K, V>>>, Option<Node<K, V>>)
     where
         K: Borrow<Q> + From<Q>,
         Q: Clone + Ord + ?Sized,
     {
         if node.is_none() {
+            // insert and mark as delete
             let (key, black) = (key.clone().into(), false);
             let mut node = Node::new(key, Default::default(), seqno, black);
             node.delete(seqno, true /*lsm*/);
-            return Some(Box::new(node));
+            return (Some(Box::new(node)), None);
         }
 
         let mut node = node.unwrap();
         node = Single::walkdown_rot23(node);
 
-        if node.key.borrow().gt(&key) {
-            node.left = Single::delete_insert(node.left, key, seqno);
-        } else if node.key.borrow().lt(&key) {
-            node.right = Single::delete_insert(node.right, key, seqno);
-        } else {
-            panic!("delete_insert(): key already exist, call programmer")
-        }
+        let (node, old_node) = match node.key.borrow().cmp(&key) {
+            Ordering::Greater => {
+                let (l, o) = Single::delete_lsm(node.left, key, seqno);
+                node.left = l;
+                (node, o)
+            }
+            Ordering::Less => {
+                let (r, o) = Single::delete_lsm(node.right, key, seqno);
+                node.right = r;
+                (node, o)
+            }
+            Ordering::Equal => {
+                let old_node = node.clone_detach();
+                if node.is_deleted() {
+                    (node, Some(old_node)) // noop
+                } else {
+                    node.delete(seqno, true /*lsm*/);
+                    (node, Some(old_node))
+                }
+            }
+        };
 
-        Some(Single::walkuprot_23(node))
+        (Some(Single::walkuprot_23(node)), old_node)
     }
 
     // this is the non-lsm path.
-    pub fn do_delete<Q>(
+    fn do_delete<Q>(
         node: Option<Box<Node<K, V>>>,
         key: &Q,
     ) -> (Option<Box<Node<K, V>>>, Option<Node<K, V>>)
@@ -312,7 +294,7 @@ where
     }
 
     // return [node, old_node]
-    pub fn delete_min(node: OBN<K, V>) -> (OBN<K, V>, Option<Node<K, V>>) {
+    fn delete_min(node: OBN<K, V>) -> (OBN<K, V>, Option<Node<K, V>>) {
         if node.is_none() {
             return (None, None);
         }
@@ -331,11 +313,11 @@ where
 
     //--------- rotation routines for 2-3 algorithm ----------------
 
-    pub fn walkdown_rot23(node: Box<Node<K, V>>) -> Box<Node<K, V>> {
+    fn walkdown_rot23(node: Box<Node<K, V>>) -> Box<Node<K, V>> {
         node
     }
 
-    pub fn walkuprot_23(mut node: Box<Node<K, V>>) -> Box<Node<K, V>> {
+    fn walkuprot_23(mut node: Box<Node<K, V>>) -> Box<Node<K, V>> {
         if is_red(node.right_deref()) && !is_red(node.left_deref()) {
             node = Single::rotate_left(node);
         }

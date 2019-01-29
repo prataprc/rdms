@@ -1,4 +1,53 @@
-struct Mvcc<K, V> {
+struct MvccRoot<K, V>
+where
+    K: AsKey,
+    V: Default + Clone,
+{
+    root: Option<Box<Node<K, V>>>,
+    reclaim: Vec<Box<Node<K, V>>>,
+    seqno: u64,   // starts from 0 and incr for every mutation.
+    n_count: u64, // number of entries in the tree.
+}
+
+impl<K, V> MvccRoot<K, V>
+where
+    K: AsKey,
+    V: Default + Clone,
+{
+    fn new(
+        seqno: u64,
+        n_count: u64,
+        root: Option<Box<Node<K, V>>>, // root
+    ) -> MvccRoot<K, V> {
+        MvccRoot {
+            seqno,
+            n_count,
+            root,
+            reclaim: Vec::with_capacity(128), // TODO: no magic number
+        }
+    }
+}
+
+impl<K, V> Clone for MvccRoot<K, V>
+where
+    K: AsKey,
+    V: Default + Clone,
+{
+    fn clone(&self) -> MvccRoot<K, V> {
+        MvccRoot {
+            root: self.root.clone(),
+            reclaim: Vec::with_capacity(128), // TODO: no magic number
+            seqno: self.seqno,
+            n_count: self.n_count,
+        }
+    }
+}
+
+struct Mvcc<K, V>
+where
+    K: AsKey,
+    V: Default + Clone,
+{
     key: PhantomData<K>,
     value: PhantomData<V>,
 }

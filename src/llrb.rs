@@ -2,7 +2,7 @@ use std::borrow::Borrow;
 use std::cmp::{Ord, Ordering};
 use std::marker::PhantomData;
 use std::ops::{Bound, Deref, DerefMut};
-use std::sync::Mutex;
+use std::sync::{atomic::AtomicPtr, Mutex};
 
 use crate::error::BognError;
 use crate::traits::{AsEntry, AsKey, AsValue};
@@ -34,11 +34,24 @@ where
 {
     name: String,
     lsm: bool,
-    mvcc: bool,
-    root: Option<Box<Node<K, V>>>,
-    seqno: u64,   // starts from 0 and incr for every mutation.
-    n_count: u64, // number of entries in the tree.
-    mutex: Mutex<u64>,
+    is_mvcc: bool,
+    single_root: SingleRoot<K, V>,
+    mvcc_root: AtomicPtr<MvccRoot<K, V>>,
+    mutex: Mutex<i32>,
+}
+
+// local accessor methods.
+impl<K, V> Drop for Llrb<K, V>
+where
+    K: AsKey,
+    V: Default + Clone,
+{
+    fn drop(&mut self) {
+        use std::sync::atomic::Ordering::Relaxed;
+
+        let ptr = self.mvcc_root.swap(std::ptr::null_mut(), Relaxed);
+        let _mvcc = unsafe { Box::from_raw(ptr) };
+    }
 }
 
 /// Different ways to construct a new Llrb instance.
@@ -55,15 +68,16 @@ where
     where
         S: AsRef<str>,
     {
+        let mut mvcc_root = Box::new(MvccRoot::new(0, 0, None));
         let store = Llrb {
             name: name.as_ref().to_string(),
             lsm,
-            mvcc: false,
-            seqno: 0,
-            root: None,
-            n_count: 0,
+            is_mvcc: false,
+            single_root: SingleRoot::new(),
+            mvcc_root: AtomicPtr::new(mvcc_root.deref_mut()),
             mutex: Mutex::new(0),
         };
+        std::mem::forget(mvcc_root);
         store
     }
 
@@ -75,21 +89,17 @@ where
     where
         S: AsRef<str>,
     {
+        let mut mvcc_root = Box::new(MvccRoot::new(0, 0, None));
         let store = Llrb {
             name: name.as_ref().to_string(),
             lsm,
-            mvcc: true,
-            seqno: 0,
-            root: None,
-            n_count: 0,
+            is_mvcc: true,
+            single_root: SingleRoot::new(),
+            mvcc_root: AtomicPtr::new(mvcc_root.deref_mut()),
             mutex: Mutex::new(0),
         };
+        std::mem::forget(mvcc_root);
         store
-    }
-
-    /// After loading an Llrb instance, it can be set to MVCC mode.
-    pub fn move_to_mvcc_mode(&mut self) {
-        self.mvcc = true
     }
 
     /// Create a new instance of Llrb tree and load it with entries from
@@ -98,27 +108,35 @@ where
         name: String,
         iter: impl Iterator<Item = E>,
         lsm: bool,
+        mvcc_root: bool,
     ) -> Result<Llrb<K, V>, BognError>
     where
         E: AsEntry<K, V>,
         <E as AsEntry<K, V>>::Value: Default + Clone,
     {
         let mut store = Llrb::new(name, lsm);
+        let (mut n_count, mut seqno) = (0_u64, 0_64);
         for entry in iter {
-            let root = store.root.take();
-            match store.load_entry(root, entry.key(), entry)? {
+            let (root, e_seqno) = (store.take_root(), entry.seqno());
+            match Llrb::load_entry(root, entry.key(), entry)? {
                 Some(mut root) => {
+                    if e_seqno > seqno {
+                        seqno = e_seqno;
+                    }
                     root.set_black();
-                    store.root = Some(root);
+                    store.set_root(Some(root));
                 }
                 None => (),
             }
+            n_count += 1;
         }
+        store.set_seqno(seqno);
+        store.set_count(n_count);
+        store.is_mvcc = mvcc_root;
         Ok(store)
     }
 
     fn load_entry<E>(
-        &mut self,
         node: Option<Box<Node<K, V>>>,
         key: K,
         entry: E,
@@ -129,19 +147,17 @@ where
     {
         if node.is_none() {
             let node: Node<K, V> = Node::from_entry(entry);
-            self.seqno = node.seqno();
-            self.n_count += if node.is_deleted() { 0 } else { 1 };
             Ok(Some(Box::new(node)))
         } else {
             let mut node = node.unwrap();
             node = Single::walkdown_rot23(node);
             match node.key.cmp(&key) {
                 Ordering::Greater => {
-                    node.left = self.load_entry(node.left, key, entry)?;
+                    node.left = Llrb::load_entry(node.left, key, entry)?;
                     Ok(Some(Single::walkuprot_23(node)))
                 }
                 Ordering::Less => {
-                    node.right = self.load_entry(node.right, key, entry)?;
+                    node.right = Llrb::load_entry(node.right, key, entry)?;
                     Ok(Some(Single::walkuprot_23(node)))
                 }
                 Ordering::Equal => {
@@ -165,19 +181,93 @@ where
         self.name.clone()
     }
 
+    /// Return number of entries in this instance.
+    pub fn count(&self) -> u64 {
+        self.get_count()
+    }
+
     /// Set current seqno.
     pub fn set_seqno(&mut self, seqno: u64) {
-        self.seqno = seqno;
+        if self.is_mvcc {
+        } else {
+            self.single_root.seqno = seqno
+        }
     }
 
     /// Return current seqno.
     pub fn get_seqno(&self) -> u64 {
-        self.seqno
+        if self.is_mvcc {
+            0 // TODO
+        } else {
+            self.single_root.seqno
+        }
     }
 
-    /// Return number of entries in this instance.
-    pub fn count(&self) -> u64 {
-        self.n_count
+    fn incr_seqno(&mut self) {
+        if self.is_mvcc {
+        } else {
+            self.single_root.seqno += 1;
+        }
+    }
+
+    fn get_count(&self) -> u64 {
+        if self.is_mvcc {
+            0 // TODO
+        } else {
+            self.single_root.n_count
+        }
+    }
+
+    fn set_count(&mut self, count: u64) {
+        if self.is_mvcc {
+        } else {
+            self.single_root.n_count = count
+        }
+    }
+
+    fn incr_count(&mut self) {
+        if self.is_mvcc {
+        } else {
+            self.single_root.n_count += 1;
+        }
+    }
+
+    fn decr_count(&mut self) {
+        if self.is_mvcc {
+        } else {
+            self.single_root.n_count -= 1;
+        }
+    }
+
+    fn take_root(&mut self) -> Option<Box<Node<K, V>>> {
+        if self.is_mvcc {
+            None // TODO
+        } else {
+            self.single_root.root.take()
+        }
+    }
+
+    fn ref_root(&self) -> Option<&Node<K, V>> {
+        if self.is_mvcc {
+            None // TODO
+        } else {
+            self.single_root.root.as_ref().map(|item| item.deref())
+        }
+    }
+
+    fn mut_root(&mut self) -> Option<&mut Node<K, V>> {
+        if self.is_mvcc {
+            None // TODO
+        } else {
+            self.single_root.root.as_mut().map(|item| item.deref_mut())
+        }
+    }
+
+    fn set_root(&mut self, root: Option<Box<Node<K, V>>>) {
+        if self.is_mvcc {
+        } else {
+            self.single_root.root = root
+        }
     }
 }
 
@@ -193,12 +283,12 @@ where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        let mut node = &self.root;
+        let mut node = self.ref_root();
         while node.is_some() {
-            let nref = node.as_ref().unwrap();
+            let nref = node.unwrap();
             node = match nref.key.borrow().cmp(key) {
-                Ordering::Less => &nref.right,
-                Ordering::Greater => &nref.left,
+                Ordering::Less => nref.right_deref(),
+                Ordering::Greater => nref.left_deref(),
                 Ordering::Equal => return Some(nref.clone_detach()),
             };
         }
@@ -207,13 +297,13 @@ where
 
     /// Return an iterator over all entries in this instance.
     pub fn iter(&self) -> Iter<K, V> {
-        let root = self.root.as_ref().map(|item| item.deref());
+        let root = self.ref_root();
         Iter::new(root)
     }
 
     /// Range over all entries from low to high.
     pub fn range(&self, low: Bound<K>, high: Bound<K>) -> Range<K, V> {
-        let root = self.root.as_ref().map(|item| item.deref());
+        let root = self.ref_root();
         Range::new(root, low, high)
     }
 
@@ -224,7 +314,7 @@ where
     /// If an entry already exist for the, return the old-entry will all its
     /// versions.
     pub fn set(&mut self, key: K, value: V) -> Option<impl AsEntry<K, V>> {
-        if self.mvcc {
+        if self.is_mvcc {
             panic!("use shared reference in mvcc mode !!");
         }
         Single::set(self, key, value)
@@ -237,11 +327,11 @@ where
     /// If an entry already exist for the, return the old-entry will all its
     /// versions.
     pub fn set_mvcc(&self, key: K, value: V) -> Option<impl AsEntry<K, V>> {
-        if !self.mvcc {
+        if !self.is_mvcc {
             panic!("use mutable reference in non-mvcc mode !!");
         }
 
-        let lock = self.mutex.lock();
+        let _lock = self.mutex.lock();
         //Mvcc::set(self, key, value)
         let res: Option<Node<K, V>> = None;
         res
@@ -257,7 +347,7 @@ where
         value: V,
         cas: u64,
     ) -> Result<Option<impl AsEntry<K, V>>, BognError> {
-        if self.mvcc {
+        if self.is_mvcc {
             panic!("use shared reference in mvcc mode !!");
         }
         Single::set_cas(self, key, value, cas)
@@ -273,11 +363,11 @@ where
         value: V,
         cas: u64,
     ) -> Result<Option<impl AsEntry<K, V>>, BognError> {
-        if !self.mvcc {
+        if !self.is_mvcc {
             panic!("use mutable reference in non-mvcc mode !!");
         }
 
-        let lock = self.mutex.lock();
+        let _lock = self.mutex.lock();
         //Mvcc::set_cas(self, key, value, cas)
         let res: Result<Option<Node<K, V>>, BognError> = Ok(None);
         res
@@ -291,7 +381,7 @@ where
         K: Borrow<Q> + From<Q>,
         Q: Clone + Ord + ?Sized,
     {
-        if self.mvcc {
+        if self.is_mvcc {
             panic!("use shared reference in mvcc mode !!");
         }
         Single::delete(self, key)
@@ -305,11 +395,11 @@ where
         K: Borrow<Q> + From<Q>,
         Q: Clone + Ord + ?Sized,
     {
-        if !self.mvcc {
+        if !self.is_mvcc {
             panic!("use mutable reference in non-mvcc mode !!");
         }
 
-        let lock = self.mutex.lock();
+        let _lock = self.mutex.lock();
         //Mvcc::delete(self, key)
         let res: Option<Node<K, V>> = None;
         res
@@ -319,7 +409,7 @@ where
     /// a. No consecutive reds should be found in the tree.
     /// b. number of blacks should be same on both sides.
     pub fn validate(&self) -> Result<(), BognError> {
-        let root = self.root.as_ref().map(|item| item.deref());
+        let root = self.ref_root();
         let (fromred, nblacks) = (is_red(root), 0);
         Llrb::validate_tree(root, fromred, nblacks)?;
         Ok(())
@@ -406,16 +496,19 @@ where
     V: Default + Clone,
 {
     fn clone(&self) -> Llrb<K, V> {
-        let lock = self.mutex.lock();
+        use std::sync::atomic::Ordering::Relaxed;
+
+        let _lock = self.mutex.lock();
+        let mut mr = unsafe { Box::from_raw(self.mvcc_root.load(Relaxed)) };
         let new_store = Llrb {
             name: self.name.clone(),
             lsm: self.lsm,
-            mvcc: self.mvcc,
-            root: self.root.clone(),
-            seqno: self.seqno,
-            n_count: self.n_count,
+            is_mvcc: self.is_mvcc,
+            single_root: self.single_root.clone(),
+            mvcc_root: AtomicPtr::new(mr.deref_mut()),
             mutex: Mutex::new(0),
         };
+        std::mem::forget(mr);
         new_store
     }
 }

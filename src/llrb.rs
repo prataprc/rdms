@@ -3,7 +3,7 @@ use std::cmp::{Ord, Ordering};
 use std::marker::PhantomData;
 use std::mem::ManuallyDrop;
 use std::ops::{Bound, Deref, DerefMut};
-use std::sync::{atomic::AtomicPtr, Arc, Mutex};
+use std::sync::{atomic::AtomicPtr, Arc, Mutex, RwLock};
 
 use crate::error::BognError;
 use crate::traits::{AsEntry, AsKey, AsValue};
@@ -40,6 +40,19 @@ where
     single_root: SingleRoot<K, V>,
     snapshot: Snapshot<K, V>,
     mutex: Mutex<i32>,
+    rw: RwLock<i32>,
+}
+
+impl<K, V> Drop for Llrb<K, V>
+where
+    K: AsKey,
+    V: Default + Clone,
+{
+    fn drop(&mut self) {
+        use std::sync::atomic::Ordering::Relaxed;
+
+        let arc = unsafe { Arc::from_raw(self.snapshot.value.load(Relaxed)) };
+    }
 }
 
 /// Different ways to construct a new Llrb instance.
@@ -63,6 +76,7 @@ where
             single_root: SingleRoot::new(),
             snapshot: Snapshot::new(),
             mutex: Mutex::new(0),
+            rw: RwLock::new(0),
         };
         store
     }
@@ -82,6 +96,7 @@ where
             single_root: SingleRoot::new(),
             snapshot: Snapshot::new(),
             mutex: Mutex::new(0),
+            rw: RwLock::new(0),
         };
         store
     }
@@ -129,7 +144,7 @@ where
             let reclaim = vec![];
             store
                 .snapshot
-                .move_next_snapshot(root, seqno, n_count, reclaim);
+                .move_next_snapshot(root, seqno, n_count, reclaim, &store.rw);
         }
 
         Ok(store)
@@ -183,7 +198,7 @@ where
     /// Return number of entries in this instance.
     pub fn count(&self) -> u64 {
         if self.is_mvcc {
-            self.snapshot.clone().n_count
+            self.snapshot.clone(&self.rw).n_count
         } else {
             self.single_root.n_count
         }
@@ -194,12 +209,12 @@ where
         let _lock = self.mutex.lock();
 
         if self.is_mvcc {
-            let mvcc_root: &MvccRoot<K, V> = self.snapshot.as_ref();
-            let root = self.snapshot.root_leak();
-            let seqno = mvcc_root.seqno;
-            let n_count = mvcc_root.n_count;
+            let mut arc = self.snapshot.clone(&self.rw);
+            let root = Arc::get_mut(&mut arc).unwrap().owned_root();
+            let seqno = arc.seqno;
+            let n_count = arc.n_count;
             self.snapshot
-                .move_next_snapshot(root, seqno, n_count, vec![]);
+                .move_next_snapshot(root, seqno, n_count, vec![], &self.rw);
         } else {
             self.single_root.seqno = seqno
         }
@@ -208,7 +223,7 @@ where
     /// Return current seqno.
     pub fn get_seqno(&self) -> u64 {
         if self.is_mvcc {
-            self.snapshot.clone().seqno
+            self.snapshot.clone(&self.rw).seqno
         } else {
             self.single_root.seqno
         }
@@ -228,7 +243,7 @@ where
         Q: Ord + ?Sized,
     {
         if self.is_mvcc {
-            let arc = self.snapshot.clone();
+            let arc = self.snapshot.clone(&self.rw);
             let mut node = arc.as_ref().as_ref();
             while node.is_some() {
                 let nref = node.unwrap();
@@ -256,7 +271,7 @@ where
     pub fn iter(&self) -> Iter<K, V> {
         if self.is_mvcc {
             Iter {
-                arc: self.snapshot.clone(),
+                arc: self.snapshot.clone(&self.rw),
                 llrb: self,
                 node_iter: vec![].into_iter(),
                 after_key: Bound::Unbounded,
@@ -279,7 +294,7 @@ where
     pub fn range(&self, low: Bound<K>, high: Bound<K>) -> Range<K, V> {
         if self.is_mvcc {
             Range {
-                arc: self.snapshot.clone(),
+                arc: self.snapshot.clone(&self.rw),
                 llrb: self,
                 node_iter: vec![].into_iter(),
                 low,
@@ -401,7 +416,7 @@ where
     /// b. number of blacks should be same on both sides.
     pub fn validate(&self) -> Result<(), BognError> {
         if self.is_mvcc {
-            let arc = self.snapshot.clone();
+            let arc = self.snapshot.clone(&self.rw);
             let root = arc.as_ref().as_ref();
             let (fromred, nblacks) = (is_red(root), 0);
             Llrb::validate_tree(root, fromred, nblacks)?
@@ -496,7 +511,7 @@ where
     fn clone(&self) -> Llrb<K, V> {
         let _lock = self.mutex.lock();
 
-        let mut arc = self.snapshot.clone();
+        let mut arc = self.snapshot.clone(&self.rw);
         Llrb {
             name: self.name.clone(),
             lsm: self.lsm,
@@ -506,6 +521,7 @@ where
                 value: AtomicPtr::new(&mut arc),
             },
             mutex: Mutex::new(0),
+            rw: RwLock::new(0),
         }
     }
 }

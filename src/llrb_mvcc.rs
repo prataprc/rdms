@@ -19,6 +19,27 @@ where
     fn as_ref(&self) -> Option<&Node<K, V>> {
         self.root.as_ref().map(|item| item.deref())
     }
+
+    fn as_mut(&mut self) -> Option<&mut Node<K, V>> {
+        self.root.as_mut().map(|item| item.deref_mut())
+    }
+
+    fn owned_root(&mut self) -> Option<Box<Node<K, V>>> {
+        match self.root.deref_mut() {
+            Some(root) => unsafe { Some(Box::from_raw(root.deref_mut())) },
+            None => None,
+        }
+    }
+}
+
+impl<K, V> Drop for MvccRoot<K, V>
+where
+    K: AsKey,
+    V: Default + Clone,
+{
+    fn drop(&mut self) {
+        unsafe { ManuallyDrop::drop(&mut self.root) };
+    }
 }
 
 impl<K, V> Clone for MvccRoot<K, V>
@@ -63,10 +84,10 @@ where
         value: V,
     ) -> Option<impl AsEntry<K, V>> {
         let lsm = llrb.lsm;
-        let mvcc_root = llrb.snapshot.as_mut();
-        let seqno = mvcc_root.seqno + 1;
-        let mut n_count = mvcc_root.n_count;
-        let root = mvcc_root.root.as_mut().map(|item| item.deref_mut());
+        let mut arc = llrb.snapshot.clone(&llrb.rw);
+        let seqno = arc.seqno + 1;
+        let mut n_count = arc.n_count;
+        let root = Arc::get_mut(&mut arc).unwrap().as_mut();
         // TODO: no magic number
         let mut reclaim: Vec<Box<Node<K, V>>> = Vec::with_capacity(128);
 
@@ -76,8 +97,9 @@ where
                 if old_node.is_none() {
                     n_count += 1;
                 }
+                let rw = &llrb.rw;
                 llrb.snapshot
-                    .move_next_snapshot(Some(root), seqno, n_count, reclaim);
+                    .move_next_snapshot(Some(root), seqno, n_count, reclaim, rw);
                 old_node
             }
             (None, _old_node) => unreachable!(),
@@ -126,10 +148,10 @@ where
         cas: u64,
     ) -> Result<Option<impl AsEntry<K, V>>, BognError> {
         let lsm = llrb.lsm;
-        let mvcc_root = llrb.snapshot.as_mut();
-        let seqno = mvcc_root.seqno + 1;
-        let mut n_count = mvcc_root.n_count;
-        let root = mvcc_root.root.as_mut().map(|item| item.deref_mut());
+        let mut arc = llrb.snapshot.clone(&llrb.rw);
+        let seqno = arc.seqno + 1;
+        let mut n_count = arc.n_count;
+        let root = Arc::get_mut(&mut arc).unwrap().as_mut();
         // TODO: no magic number
         let mut reclaim: Vec<Box<Node<K, V>>> = Vec::with_capacity(128);
 
@@ -140,8 +162,9 @@ where
                 if old_node.is_none() {
                     n_count += 1
                 }
+                let rw = &llrb.rw;
                 llrb.snapshot
-                    .move_next_snapshot(Some(root), seqno, n_count, reclaim);
+                    .move_next_snapshot(Some(root), seqno, n_count, reclaim, rw);
                 Ok(old_node)
             }
             _ => panic!("set_cas: impossible case, call programmer"),
@@ -202,10 +225,10 @@ where
         K: Borrow<Q> + From<Q>,
         Q: Clone + Ord + ?Sized,
     {
-        let mvcc_root = llrb.snapshot.as_mut();
-        let mut seqno = mvcc_root.seqno + 1;
-        let mut n_count = mvcc_root.n_count;
-        let root = mvcc_root.root.as_mut().map(|item| item.deref_mut());
+        let mut arc = llrb.snapshot.clone(&llrb.rw);
+        let mut seqno = arc.seqno + 1;
+        let mut n_count = arc.n_count;
+        let root = Arc::get_mut(&mut arc).unwrap().as_mut();
         // TODO: no magic number
         let mut reclaim: Vec<Box<Node<K, V>>> = Vec::with_capacity(128);
 
@@ -236,7 +259,7 @@ where
             (root, oldn.map(|item| *item))
         };
         llrb.snapshot
-            .move_next_snapshot(root, seqno, n_count, reclaim);
+            .move_next_snapshot(root, seqno, n_count, reclaim, &llrb.rw);
         old_node
     }
 
@@ -554,8 +577,11 @@ where
         seqno: u64,
         n_count: u64,
         reclaim: Vec<Box<Node<K, V>>>,
+        rw: &RwLock<i32>,
     ) {
         use std::sync::atomic::Ordering::Relaxed;
+
+        let _wlock = rw.write();
 
         let arc = unsafe {
             Arc::from_raw(self.value.load(Relaxed)) // gets arc-dropped
@@ -572,27 +598,11 @@ where
         std::mem::forget(arc);
     }
 
-    fn clone(&self) -> Arc<MvccRoot<K, V>> {
+    fn clone(&self, rw: &RwLock<i32>) -> Arc<MvccRoot<K, V>> {
         use std::sync::atomic::Ordering::Relaxed;
 
+        let _rlock = rw.read();
         Arc::clone(unsafe { self.value.load(Relaxed).as_ref().unwrap() })
-    }
-
-    fn root_leak(&self) -> Option<Box<Node<K, V>>> {
-        use std::sync::atomic::Ordering::Relaxed;
-
-        let arc = unsafe { self.value.load(Relaxed).as_mut().unwrap() };
-        match Arc::get_mut(arc).unwrap().root.deref_mut() {
-            Some(root) => unsafe { Some(Box::from_raw(root.deref_mut())) },
-            None => None,
-        }
-    }
-
-    fn as_mut(&self) -> &mut MvccRoot<K, V> {
-        use std::sync::atomic::Ordering::Relaxed;
-
-        let arc = unsafe { self.value.load(Relaxed).as_mut().unwrap() };
-        Arc::get_mut(arc).unwrap()
     }
 }
 

@@ -22,7 +22,7 @@ where
         }
     }
 
-    fn root_as_ref(&self) -> Option<&Node<K, V>> {
+    fn as_ref(&self) -> Option<&Node<K, V>> {
         self.root.as_ref().map(|item| item.deref())
     }
 }
@@ -51,20 +51,18 @@ where
         let seqno = llrb.single_root.seqno + 1;
         let root = llrb.single_root.root.take();
 
-        let old_node = match Single::upsert(root, key, value, seqno, llrb.lsm) {
+        match Single::upsert(root, key, value, seqno, llrb.lsm) {
             (Some(mut root), old_node) => {
                 root.set_black();
                 llrb.single_root.root = Some(root);
+                if old_node.is_none() {
+                    llrb.single_root.n_count += 1;
+                }
+                llrb.single_root.seqno = seqno;
                 old_node
             }
             (None, _old_node) => unreachable!(),
-        };
-
-        llrb.single_root.seqno = seqno;
-        if old_node.is_none() {
-            llrb.single_root.n_count += 1;
         }
-        old_node
     }
 
     fn upsert(
@@ -186,8 +184,7 @@ where
     {
         let seqno = llrb.single_root.seqno + 1;
 
-        let lsm = llrb.lsm;
-        if lsm {
+        if llrb.lsm {
             let root = llrb.single_root.root.take();
             let (root, old_node) = Single::delete_lsm(root, key, seqno);
             let mut root = root.unwrap();

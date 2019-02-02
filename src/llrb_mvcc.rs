@@ -16,7 +16,7 @@ where
     K: AsKey,
     V: Default + Clone,
 {
-    fn root_as_ref(&self) -> Option<&Node<K, V>> {
+    fn as_ref(&self) -> Option<&Node<K, V>> {
         self.root.as_ref().map(|item| item.deref())
     }
 }
@@ -57,6 +57,33 @@ where
     K: AsKey,
     V: Default + Clone,
 {
+    fn set(
+        llrb: &Llrb<K, V>, /* main index */
+        key: K,
+        value: V,
+    ) -> Option<impl AsEntry<K, V>> {
+        let lsm = llrb.lsm;
+        let mvcc_root = llrb.snapshot.as_mut();
+        let seqno = mvcc_root.seqno + 1;
+        let mut n_count = mvcc_root.n_count;
+        let root = mvcc_root.root.as_mut().map(|item| item.deref_mut());
+        // TODO: no magic number
+        let mut reclaim: Vec<Box<Node<K, V>>> = Vec::with_capacity(128);
+
+        match Mvcc::upsert(root, key, value, seqno, lsm, &mut reclaim) {
+            (Some(mut root), old_node) => {
+                root.set_black();
+                if old_node.is_none() {
+                    n_count += 1;
+                }
+                llrb.snapshot
+                    .move_next_snapshot(Some(root), seqno, n_count, reclaim);
+                old_node
+            }
+            (None, _old_node) => unreachable!(),
+        }
+    }
+
     fn upsert(
         node: Option<&mut Node<K, V>>,
         key: K,
@@ -89,6 +116,35 @@ where
             let old_node = node.clone_detach();
             new_node.prepend_version(value, seqno, lsm);
             (Some(Mvcc::walkuprot_23(new_node, reclaim)), Some(old_node))
+        }
+    }
+
+    fn set_cas(
+        llrb: &Llrb<K, V>,
+        key: K,
+        value: V,
+        cas: u64,
+    ) -> Result<Option<impl AsEntry<K, V>>, BognError> {
+        let lsm = llrb.lsm;
+        let mvcc_root = llrb.snapshot.as_mut();
+        let seqno = mvcc_root.seqno + 1;
+        let mut n_count = mvcc_root.n_count;
+        let root = mvcc_root.root.as_mut().map(|item| item.deref_mut());
+        // TODO: no magic number
+        let mut reclaim: Vec<Box<Node<K, V>>> = Vec::with_capacity(128);
+
+        match Mvcc::upsert_cas(root, key, value, cas, seqno, lsm, &mut reclaim) {
+            (_, _, Some(err)) => Err(err),
+            (Some(mut root), old_node, None) => {
+                root.set_black();
+                if old_node.is_none() {
+                    n_count += 1
+                }
+                llrb.snapshot
+                    .move_next_snapshot(Some(root), seqno, n_count, reclaim);
+                Ok(old_node)
+            }
+            _ => panic!("set_cas: impossible case, call programmer"),
         }
     }
 
@@ -141,6 +197,49 @@ where
         return (Some(Mvcc::walkuprot_23(new_node, r)), old_node, err);
     }
 
+    fn delete<Q>(llrb: &mut Llrb<K, V>, key: &Q) -> Option<impl AsEntry<K, V>>
+    where
+        K: Borrow<Q> + From<Q>,
+        Q: Clone + Ord + ?Sized,
+    {
+        let mvcc_root = llrb.snapshot.as_mut();
+        let mut seqno = mvcc_root.seqno + 1;
+        let mut n_count = mvcc_root.n_count;
+        let root = mvcc_root.root.as_mut().map(|item| item.deref_mut());
+        // TODO: no magic number
+        let mut reclaim: Vec<Box<Node<K, V>>> = Vec::with_capacity(128);
+
+        let (root, old_node) = if llrb.lsm {
+            let (root, oldn) = Mvcc::delete_lsm(root, key, seqno, &mut reclaim);
+            let mut root = root.unwrap();
+            root.set_black();
+            if oldn.is_none() {
+                n_count += 1
+            } else if oldn.as_ref().unwrap().is_deleted() {
+                seqno -= 1
+            }
+            (Some(root), oldn)
+        } else {
+            // in non-lsm mode remove the entry from the tree.
+            let (root, oldn) = match Mvcc::do_delete(root, key, &mut reclaim) {
+                (None, oldn) => (None, oldn),
+                (Some(mut root), oldn) => {
+                    root.set_black();
+                    (Some(root), oldn)
+                }
+            };
+            if oldn.is_some() {
+                n_count -= 1;
+            } else {
+                seqno -= 1
+            }
+            (root, oldn.map(|item| *item))
+        };
+        llrb.snapshot
+            .move_next_snapshot(root, seqno, n_count, reclaim);
+        old_node
+    }
+
     fn delete_lsm<Q>(
         node: Option<&mut Node<K, V>>,
         key: &Q,
@@ -162,20 +261,23 @@ where
         let mut new_node = node.mvcc_clone(reclaim);
         //let mut node = Mvcc::walkdown_rot23(node.unwrap());
 
-        let cmp = new_node.key.borrow().cmp(&key);
-        let old_node = if cmp == Ordering::Greater {
-            let left = new_node.left_deref_mut();
-            let (l, old_node) = Mvcc::delete_lsm(left, key, seqno, reclaim);
-            new_node.left = l;
-            old_node
-        } else if cmp == Ordering::Less {
-            let right = new_node.right_deref_mut();
-            let (r, old_node) = Mvcc::delete_lsm(right, key, seqno, reclaim);
-            new_node.right = r;
-            old_node
-        } else {
-            new_node.delete(seqno, true /*lsm*/);
-            Some(node.clone_detach())
+        let old_node = match new_node.key.borrow().cmp(&key) {
+            Ordering::Greater => {
+                let left = new_node.left_deref_mut();
+                let (l, old_node) = Mvcc::delete_lsm(left, key, seqno, reclaim);
+                new_node.left = l;
+                old_node
+            }
+            Ordering::Less => {
+                let right = new_node.right_deref_mut();
+                let (r, old_node) = Mvcc::delete_lsm(right, key, seqno, reclaim);
+                new_node.right = r;
+                old_node
+            }
+            Ordering::Equal => {
+                new_node.delete(seqno, true /*lsm*/);
+                Some(node.clone_detach())
+            }
         };
 
         (Some(Mvcc::walkuprot_23(new_node, reclaim)), old_node)
@@ -208,9 +310,9 @@ where
                     new_node = Mvcc::move_red_left(new_node, reclaim);
                 }
                 let left = new_node.left_deref_mut();
-                let res = Mvcc::do_delete(left, key, reclaim);
-                new_node.left = res.0;
-                (Some(Mvcc::fixup(new_node, reclaim)), res.1)
+                let (left, old_node) = Mvcc::do_delete(left, key, reclaim);
+                new_node.left = left;
+                (Some(Mvcc::fixup(new_node, reclaim)), old_node)
             }
         } else {
             if is_red(new_node.left_deref()) {
@@ -232,21 +334,21 @@ where
             if !new_node.key.borrow().lt(key) {
                 // node == key
                 let right = new_node.right_deref_mut();
-                let mut res = Mvcc::delete_min(right, reclaim);
-                new_node.right = res.0;
-                if res.1.is_none() {
+                let (right, mut res_node) = Mvcc::delete_min(right, reclaim);
+                new_node.right = right;
+                if res_node.is_none() {
                     panic!("do_delete(): fatal logic, call the programmer");
                 }
-                let mut newnode = res.1.take().unwrap();
+                let mut newnode = res_node.take().unwrap();
                 newnode.left = new_node.left.take();
                 newnode.right = new_node.right.take();
                 newnode.black = new_node.black;
                 (Some(Mvcc::fixup(newnode, reclaim)), Some(new_node))
             } else {
                 let right = new_node.right_deref_mut();
-                let res = Mvcc::do_delete(right, key, reclaim);
-                new_node.right = res.0;
-                (Some(Mvcc::fixup(new_node, reclaim)), res.1)
+                let (right, old_node) = Mvcc::do_delete(right, key, reclaim);
+                new_node.right = right;
+                (Some(Mvcc::fixup(new_node, reclaim)), old_node)
             }
         }
     }
@@ -434,11 +536,14 @@ where
 {
     fn new() -> Snapshot<K, V> {
         let mut mvcc_root: MvccRoot<K, V> = Default::default();
-        mvcc_root.next = Some(Arc::new(Default::default()));
+        let arc_next = Arc::new(Default::default());
+        mvcc_root.next = Some(arc_next);
+
         let mut arc = Arc::new(mvcc_root);
         let snapshot = Snapshot {
             value: AtomicPtr::new(&mut arc),
         };
+
         std::mem::forget(arc);
         snapshot
     }
@@ -473,6 +578,32 @@ where
         Arc::clone(unsafe { self.value.load(Relaxed).as_ref().unwrap() })
     }
 
-    //fn root_leak(&self) -> Option<Box<Node<K,V>>> {
-    //}
+    fn root_leak(&self) -> Option<Box<Node<K, V>>> {
+        use std::sync::atomic::Ordering::Relaxed;
+
+        let arc = unsafe { self.value.load(Relaxed).as_mut().unwrap() };
+        match Arc::get_mut(arc).unwrap().root.deref_mut() {
+            Some(root) => unsafe { Some(Box::from_raw(root.deref_mut())) },
+            None => None,
+        }
+    }
+
+    fn as_mut(&self) -> &mut MvccRoot<K, V> {
+        use std::sync::atomic::Ordering::Relaxed;
+
+        let arc = unsafe { self.value.load(Relaxed).as_mut().unwrap() };
+        Arc::get_mut(arc).unwrap()
+    }
+}
+
+impl<K, V> AsRef<MvccRoot<K, V>> for Snapshot<K, V>
+where
+    K: AsKey,
+    V: Default + Clone,
+{
+    fn as_ref(&self) -> &MvccRoot<K, V> {
+        use std::sync::atomic::Ordering::Relaxed;
+
+        unsafe { self.value.load(Relaxed).as_ref().unwrap() }
+    }
 }

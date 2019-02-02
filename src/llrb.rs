@@ -182,17 +182,26 @@ where
 
     /// Return number of entries in this instance.
     pub fn count(&self) -> u64 {
-        if !self.is_mvcc {
-            return self.single_root.n_count;
+        if self.is_mvcc {
+            self.snapshot.clone().n_count
+        } else {
+            self.single_root.n_count
         }
-        return self.snapshot.clone().n_count;
     }
 
     /// Set current seqno.
     pub fn set_seqno(&mut self, seqno: u64) {
-        if !self.is_mvcc {
-            self.single_root.seqno = seqno;
-            return;
+        let _lock = self.mutex.lock();
+
+        if self.is_mvcc {
+            let mvcc_root: &MvccRoot<K, V> = self.snapshot.as_ref();
+            let root = self.snapshot.root_leak();
+            let seqno = mvcc_root.seqno;
+            let n_count = mvcc_root.n_count;
+            self.snapshot
+                .move_next_snapshot(root, seqno, n_count, vec![]);
+        } else {
+            self.single_root.seqno = seqno
         }
     }
 
@@ -218,46 +227,76 @@ where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        let arc = self.snapshot.clone();
-        let mut node = if self.is_mvcc {
-            arc.root_as_ref()
+        if self.is_mvcc {
+            let arc = self.snapshot.clone();
+            let mut node = arc.as_ref().as_ref();
+            while node.is_some() {
+                let nref = node.unwrap();
+                node = match nref.key.borrow().cmp(key) {
+                    Ordering::Less => nref.right_deref(),
+                    Ordering::Greater => nref.left_deref(),
+                    Ordering::Equal => return Some(nref.clone_detach()),
+                };
+            }
         } else {
-            self.single_root.root_as_ref()
+            let mut node = self.single_root.as_ref();
+            while node.is_some() {
+                let nref = node.unwrap();
+                node = match nref.key.borrow().cmp(key) {
+                    Ordering::Less => nref.right_deref(),
+                    Ordering::Greater => nref.left_deref(),
+                    Ordering::Equal => return Some(nref.clone_detach()),
+                };
+            }
         };
-
-        while node.is_some() {
-            let nref = node.unwrap();
-            node = match nref.key.borrow().cmp(key) {
-                Ordering::Less => nref.right_deref(),
-                Ordering::Greater => nref.left_deref(),
-                Ordering::Equal => return Some(nref.clone_detach()),
-            };
-        }
         None
     }
 
     /// Return an iterator over all entries in this instance.
     pub fn iter(&self) -> Iter<K, V> {
-        Iter {
-            arc: self.snapshot.clone(),
-            llrb: self,
-            node_iter: vec![].into_iter(),
-            after_key: Bound::Unbounded,
-            limit: 100,
-            fin: false,
+        if self.is_mvcc {
+            Iter {
+                arc: self.snapshot.clone(),
+                llrb: self,
+                node_iter: vec![].into_iter(),
+                after_key: Bound::Unbounded,
+                limit: 100,
+                fin: false,
+            }
+        } else {
+            Iter {
+                arc: Default::default(),
+                llrb: self,
+                node_iter: vec![].into_iter(),
+                after_key: Bound::Unbounded,
+                limit: 100,
+                fin: false,
+            }
         }
     }
 
     /// Range over all entries from low to high.
     pub fn range(&self, low: Bound<K>, high: Bound<K>) -> Range<K, V> {
-        Range {
-            arc: self.snapshot.clone(),
-            llrb: self,
-            node_iter: vec![].into_iter(),
-            low,
-            high,
-            limit: 100, // TODO: no magic number.
-            fin: false,
+        if self.is_mvcc {
+            Range {
+                arc: self.snapshot.clone(),
+                llrb: self,
+                node_iter: vec![].into_iter(),
+                low,
+                high,
+                limit: 100, // TODO: no magic number.
+                fin: false,
+            }
+        } else {
+            Range {
+                arc: Default::default(),
+                llrb: self,
+                node_iter: vec![].into_iter(),
+                low,
+                high,
+                limit: 100, // TODO: no magic number.
+                fin: false,
+            }
         }
     }
 
@@ -286,9 +325,7 @@ where
         }
 
         let _lock = self.mutex.lock();
-        //Mvcc::set(self, key, value)
-        let res: Option<Node<K, V>> = None;
-        res
+        Mvcc::set(self, key, value)
     }
 
     /// Set a new entry into a non-mvcc instance, only if entry's seqno matches
@@ -363,15 +400,16 @@ where
     /// a. No consecutive reds should be found in the tree.
     /// b. number of blacks should be same on both sides.
     pub fn validate(&self) -> Result<(), BognError> {
-        let arc = self.snapshot.clone();
-        let root = if self.is_mvcc {
-            arc.root_as_ref()
+        if self.is_mvcc {
+            let arc = self.snapshot.clone();
+            let root = arc.as_ref().as_ref();
+            let (fromred, nblacks) = (is_red(root), 0);
+            Llrb::validate_tree(root, fromred, nblacks)?
         } else {
-            self.single_root.root_as_ref()
+            let root = self.single_root.as_ref();
+            let (fromred, nblacks) = (is_red(root), 0);
+            Llrb::validate_tree(root, fromred, nblacks)?
         };
-
-        let (fromred, nblacks) = (is_red(root), 0);
-        Llrb::validate_tree(root, fromred, nblacks)?;
         Ok(())
     }
 
@@ -392,8 +430,8 @@ where
             nblacks += 1;
         }
         let node = &node.as_ref().unwrap();
-        let left = node.left.as_ref().map(|item| item.deref());
-        let right = node.right.as_ref().map(|item| item.deref());
+        let left = node.left_deref();
+        let right = node.right_deref();
         let lblacks = Llrb::validate_tree(left, red, nblacks)?;
         let rblacks = Llrb::validate_tree(right, red, nblacks)?;
         if lblacks != rblacks {
@@ -494,9 +532,9 @@ where
 {
     fn get_root(&self) -> Option<&Node<K, V>> {
         if self.llrb.is_mvcc {
-            self.arc.root_as_ref()
+            self.arc.as_ref().as_ref()
         } else {
-            self.llrb.single_root.root_as_ref()
+            self.llrb.single_root.as_ref()
         }
     }
 
@@ -511,8 +549,8 @@ where
 
         let node = node.unwrap();
         //println!("scan_iter {:?} {:?}", node.key, self.after_key);
-        let left = node.left.as_ref().map(|item| item.deref());
-        let right = node.right.as_ref().map(|item| item.deref());
+        let left = node.left_deref();
+        let right = node.right_deref();
         match &self.after_key {
             Bound::Included(akey) | Bound::Excluded(akey) => {
                 if node.key.borrow().le(akey) {
@@ -603,9 +641,9 @@ where
 
     fn get_root(&self) -> Option<&Node<K, V>> {
         if self.llrb.is_mvcc {
-            self.arc.root_as_ref()
+            self.arc.as_ref().as_ref()
         } else {
-            self.llrb.single_root.root_as_ref()
+            self.llrb.single_root.as_ref()
         }
     }
 
@@ -620,8 +658,8 @@ where
 
         let node = node.unwrap();
         //println!("range_iter {:?} {:?}", node.key, self.low);
-        let left = node.left.as_ref().map(|item| item.deref());
-        let right = node.right.as_ref().map(|item| item.deref());
+        let left = node.left_deref();
+        let right = node.right_deref();
         match &self.low {
             Bound::Included(qow) if node.key.lt(qow) => {
                 return self.range_iter(right, acc);
@@ -717,9 +755,9 @@ where
 {
     fn get_root(&self) -> Option<&Node<K, V>> {
         if self.llrb.is_mvcc {
-            self.arc.root_as_ref()
+            self.arc.as_ref().as_ref()
         } else {
-            self.llrb.single_root.root_as_ref()
+            self.llrb.single_root.as_ref()
         }
     }
 
@@ -734,8 +772,8 @@ where
 
         let node = node.unwrap();
         //println!("reverse_iter {:?} {:?}", node.key, self.high);
-        let left = node.left.as_ref().map(|item| item.deref());
-        let right = node.right.as_ref().map(|item| item.deref());
+        let left = node.left_deref();
+        let right = node.right_deref();
         match &self.high {
             Bound::Included(qigh) if node.key.gt(qigh) => {
                 return self.reverse_iter(left, acc);
@@ -1007,17 +1045,14 @@ where
         };
         if self.left.is_some() {
             let ref_node = self.left.as_mut().unwrap().deref_mut();
-            let ptr = ref_node as *mut Node<K, V>;
-            new_node.left = unsafe { Some(Box::from_raw(ptr)) };
+            new_node.left = unsafe { Some(Box::from_raw(ref_node)) };
         }
         if self.right.is_some() {
             let ref_node = self.right.as_mut().unwrap().deref_mut();
-            let ptr = ref_node as *mut Node<K, V>;
-            new_node.right = unsafe { Some(Box::from_raw(ptr)) };
+            new_node.right = unsafe { Some(Box::from_raw(ref_node)) };
         }
 
-        let ptr = self as *mut Node<K, V>;
-        reclaim.push(unsafe { Box::from_raw(ptr) });
+        reclaim.push(unsafe { Box::from_raw(self) });
 
         Box::new(new_node)
     }

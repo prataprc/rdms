@@ -1,5 +1,5 @@
 use std::fmt::{self, Display};
-use std::io::{stdin, Read};
+use std::io::stdin;
 use std::str::FromStr;
 use std::string::ToString;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -10,6 +10,7 @@ use structopt::StructOpt;
 use bogn::Llrb;
 
 #[derive(Debug)]
+#[allow(dead_code)]
 enum Error {
     TypeError(String),
 }
@@ -64,12 +65,12 @@ fn main() {
     let (rng, seed) = make_rng(&opt);
     let mut c = Context { opt, rng, seed };
 
-    println!("starting with seed = {}", seed);
+    println!("starting with seed = {}", c.seed);
 
     do_perf(&mut c);
 
     let mut s = String::new();
-    stdin().read_line(&mut s);
+    stdin().read_line(&mut s).unwrap();
 }
 
 fn do_perf(c: &mut Context) {
@@ -95,9 +96,6 @@ fn do_perf(c: &mut Context) {
         llrb.count(),
         start.elapsed().unwrap()
     );
-
-    //let mut s = String::new();
-    //stdin().read_line(&mut s);
 }
 
 fn make_rng(opt: &Opt) -> (SmallRng, u128) {

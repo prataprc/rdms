@@ -220,7 +220,7 @@ where
         return (Some(Mvcc::walkuprot_23(new_node, r)), old_node, err);
     }
 
-    fn delete<Q>(llrb: &mut Llrb<K, V>, key: &Q) -> Option<impl AsEntry<K, V>>
+    fn delete<Q>(llrb: &Llrb<K, V>, key: &Q) -> Option<impl AsEntry<K, V>>
     where
         K: Borrow<Q> + From<Q>,
         Q: Clone + Ord + ?Sized,
@@ -403,9 +403,9 @@ where
 
     ////--------- rotation routines for 2-3 algorithm ----------------
 
-    fn walkdown_rot23(node: Box<Node<K, V>>) -> Box<Node<K, V>> {
-        node
-    }
+    //fn walkdown_rot23(node: Box<Node<K, V>>) -> Box<Node<K, V>> {
+    //    node
+    //}
 
     fn walkuprot_23(
         mut node: Box<Node<K, V>>,
@@ -595,7 +595,7 @@ where
         mvcc_root.reclaim = reclaim;
         mvcc_root.next = Some(Arc::new(Default::default()));
         self.value.store(&mut next_arc, Relaxed);
-        std::mem::forget(arc);
+        std::mem::forget(next_arc);
     }
 
     fn clone(&self, rw: &RwLock<i32>) -> Arc<MvccRoot<K, V>> {

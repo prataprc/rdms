@@ -1,3 +1,4 @@
+#[derive(Clone)]
 struct SingleRoot<K, V>
 where
     K: AsKey,
@@ -20,19 +21,9 @@ where
             n_count: 0,
         }
     }
-}
 
-impl<K, V> Clone for SingleRoot<K, V>
-where
-    K: AsKey,
-    V: Default + Clone,
-{
-    fn clone(&self) -> SingleRoot<K, V> {
-        SingleRoot {
-            root: self.root.clone(),
-            seqno: self.seqno,
-            n_count: self.n_count,
-        }
+    fn root_as_ref(&self) -> Option<&Node<K, V>> {
+        self.root.as_ref().map(|item| item.deref())
     }
 }
 
@@ -57,21 +48,21 @@ where
         key: K,
         value: V,
     ) -> Option<impl AsEntry<K, V>> {
-        let seqno = llrb.get_seqno() + 1;
-        let root = llrb.take_root();
+        let seqno = llrb.single_root.seqno + 1;
+        let root = llrb.single_root.root.take();
 
         let old_node = match Single::upsert(root, key, value, seqno, llrb.lsm) {
             (Some(mut root), old_node) => {
                 root.set_black();
-                llrb.set_root(Some(root));
+                llrb.single_root.root = Some(root);
                 old_node
             }
-            (None, old_node) => old_node,
+            (None, _old_node) => unreachable!(),
         };
 
-        llrb.set_seqno(seqno);
+        llrb.single_root.seqno = seqno;
         if old_node.is_none() {
-            llrb.incr_count();
+            llrb.single_root.n_count += 1;
         }
         old_node
     }
@@ -115,20 +106,20 @@ where
         value: V,
         cas: u64,
     ) -> Result<Option<impl AsEntry<K, V>>, BognError> {
-        let seqno = llrb.get_seqno() + 1;
-        let root = llrb.take_root();
+        let seqno = llrb.single_root.seqno + 1;
+        let root = llrb.single_root.root.take();
 
         match Single::upsert_cas(root, key, value, cas, seqno, llrb.lsm) {
             (root, _, Some(err)) => {
-                llrb.set_root(root);
+                llrb.single_root.root = root;
                 Err(err)
             }
             (Some(mut root), old_node, None) => {
                 root.set_black();
-                llrb.set_seqno(seqno);
-                llrb.set_root(Some(root));
+                llrb.single_root.seqno = seqno;
+                llrb.single_root.root = Some(root);
                 if old_node.is_none() {
-                    llrb.incr_count();
+                    llrb.single_root.n_count += 1;
                 }
                 Ok(old_node)
             }
@@ -193,27 +184,27 @@ where
         K: Borrow<Q> + From<Q>,
         Q: Clone + Ord + ?Sized,
     {
-        let seqno = llrb.get_seqno() + 1;
+        let seqno = llrb.single_root.seqno + 1;
 
         let lsm = llrb.lsm;
         if lsm {
-            let root = llrb.take_root();
+            let root = llrb.single_root.root.take();
             let (root, old_node) = Single::delete_lsm(root, key, seqno);
             let mut root = root.unwrap();
             root.set_black();
-            llrb.set_root(Some(root));
+            llrb.single_root.root = Some(root);
 
             if old_node.is_none() {
-                llrb.incr_count();
-                llrb.set_seqno(seqno);
+                llrb.single_root.n_count += 1;
+                llrb.single_root.seqno = seqno;
             } else if !old_node.as_ref().unwrap().is_deleted() {
-                llrb.set_seqno(seqno);
+                llrb.single_root.seqno = seqno;
             }
             return old_node;
         }
 
         // in non-lsm mode remove the entry from the tree.
-        let root = llrb.take_root();
+        let root = llrb.single_root.root.take();
         let (root, old_node) = match Single::do_delete(root, key) {
             (None, old_node) => (None, old_node),
             (Some(mut root), old_node) => {
@@ -221,10 +212,10 @@ where
                 (Some(root), old_node)
             }
         };
-        llrb.set_root(root);
+        llrb.single_root.root = root;
         if old_node.is_some() {
-            llrb.decr_count();
-            llrb.set_seqno(seqno);
+            llrb.single_root.n_count -= 1;
+            llrb.single_root.seqno = seqno;
         }
         old_node
     }

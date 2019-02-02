@@ -1,4 +1,5 @@
 use std::fmt::{self, Display};
+use std::io::{stdin, Read};
 use std::str::FromStr;
 use std::string::ToString;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -66,6 +67,9 @@ fn main() {
     println!("starting with seed = {}", seed);
 
     do_perf(&mut c);
+
+    let mut s = String::new();
+    stdin().read_line(&mut s);
 }
 
 fn do_perf(c: &mut Context) {
@@ -91,6 +95,9 @@ fn do_perf(c: &mut Context) {
         llrb.count(),
         start.elapsed().unwrap()
     );
+
+    //let mut s = String::new();
+    //stdin().read_line(&mut s);
 }
 
 fn make_rng(opt: &Opt) -> (SmallRng, u128) {

@@ -1,8 +1,9 @@
 use std::borrow::Borrow;
 use std::cmp::{Ord, Ordering};
 use std::marker::PhantomData;
+use std::mem::ManuallyDrop;
 use std::ops::{Bound, Deref, DerefMut};
-use std::sync::{atomic::AtomicPtr, Mutex};
+use std::sync::{atomic::AtomicPtr, Arc, Mutex};
 
 use crate::error::BognError;
 use crate::traits::{AsEntry, AsKey, AsValue};
@@ -35,23 +36,10 @@ where
     name: String,
     lsm: bool,
     is_mvcc: bool,
+    // TODO: can we handle this as union single_root | mvcc_root ?
     single_root: SingleRoot<K, V>,
-    mvcc_root: AtomicPtr<MvccRoot<K, V>>,
+    snapshot: Snapshot<K, V>,
     mutex: Mutex<i32>,
-}
-
-// local accessor methods.
-impl<K, V> Drop for Llrb<K, V>
-where
-    K: AsKey,
-    V: Default + Clone,
-{
-    fn drop(&mut self) {
-        use std::sync::atomic::Ordering::Relaxed;
-
-        let ptr = self.mvcc_root.swap(std::ptr::null_mut(), Relaxed);
-        let _mvcc = unsafe { Box::from_raw(ptr) };
-    }
 }
 
 /// Different ways to construct a new Llrb instance.
@@ -68,16 +56,14 @@ where
     where
         S: AsRef<str>,
     {
-        let mut mvcc_root = Box::new(MvccRoot::new(0, 0, None));
         let store = Llrb {
             name: name.as_ref().to_string(),
             lsm,
             is_mvcc: false,
             single_root: SingleRoot::new(),
-            mvcc_root: AtomicPtr::new(mvcc_root.deref_mut()),
+            snapshot: Snapshot::new(),
             mutex: Mutex::new(0),
         };
-        std::mem::forget(mvcc_root);
         store
     }
 
@@ -89,16 +75,14 @@ where
     where
         S: AsRef<str>,
     {
-        let mut mvcc_root = Box::new(MvccRoot::new(0, 0, None));
         let store = Llrb {
             name: name.as_ref().to_string(),
             lsm,
             is_mvcc: true,
             single_root: SingleRoot::new(),
-            mvcc_root: AtomicPtr::new(mvcc_root.deref_mut()),
+            snapshot: Snapshot::new(),
             mutex: Mutex::new(0),
         };
-        std::mem::forget(mvcc_root);
         store
     }
 
@@ -108,31 +92,46 @@ where
         name: String,
         iter: impl Iterator<Item = E>,
         lsm: bool,
-        mvcc_root: bool,
+        mvcc: bool,
     ) -> Result<Llrb<K, V>, BognError>
     where
         E: AsEntry<K, V>,
         <E as AsEntry<K, V>>::Value: Default + Clone,
     {
         let mut store = Llrb::new(name, lsm);
+
         let (mut n_count, mut seqno) = (0_u64, 0_64);
+        let mut root = store.single_root.root.take();
         for entry in iter {
-            let (root, e_seqno) = (store.take_root(), entry.seqno());
-            match Llrb::load_entry(root, entry.key(), entry)? {
+            let e_seqno = entry.seqno();
+            root = match Llrb::load_entry(root, entry.key(), entry)? {
                 Some(mut root) => {
                     if e_seqno > seqno {
                         seqno = e_seqno;
                     }
                     root.set_black();
-                    store.set_root(Some(root));
+                    Some(root)
                 }
-                None => (),
-            }
+                None => unreachable!(),
+            };
             n_count += 1;
         }
-        store.set_seqno(seqno);
-        store.set_count(n_count);
-        store.is_mvcc = mvcc_root;
+        store.single_root.root = root;
+        store.single_root.n_count = n_count;
+        store.single_root.seqno = seqno;
+
+        if mvcc {
+            store.is_mvcc = true;
+
+            let root = store.single_root.root.take();
+            let seqno = store.single_root.seqno;
+            let n_count = store.single_root.n_count;
+            let reclaim = vec![];
+            store
+                .snapshot
+                .move_next_snapshot(root, seqno, n_count, reclaim);
+        }
+
         Ok(store)
     }
 
@@ -183,90 +182,26 @@ where
 
     /// Return number of entries in this instance.
     pub fn count(&self) -> u64 {
-        self.get_count()
+        if !self.is_mvcc {
+            return self.single_root.n_count;
+        }
+        return self.snapshot.clone().n_count;
     }
 
     /// Set current seqno.
     pub fn set_seqno(&mut self, seqno: u64) {
-        if self.is_mvcc {
-        } else {
-            self.single_root.seqno = seqno
+        if !self.is_mvcc {
+            self.single_root.seqno = seqno;
+            return;
         }
     }
 
     /// Return current seqno.
     pub fn get_seqno(&self) -> u64 {
         if self.is_mvcc {
-            0 // TODO
+            self.snapshot.clone().seqno
         } else {
             self.single_root.seqno
-        }
-    }
-
-    fn incr_seqno(&mut self) {
-        if self.is_mvcc {
-        } else {
-            self.single_root.seqno += 1;
-        }
-    }
-
-    fn get_count(&self) -> u64 {
-        if self.is_mvcc {
-            0 // TODO
-        } else {
-            self.single_root.n_count
-        }
-    }
-
-    fn set_count(&mut self, count: u64) {
-        if self.is_mvcc {
-        } else {
-            self.single_root.n_count = count
-        }
-    }
-
-    fn incr_count(&mut self) {
-        if self.is_mvcc {
-        } else {
-            self.single_root.n_count += 1;
-        }
-    }
-
-    fn decr_count(&mut self) {
-        if self.is_mvcc {
-        } else {
-            self.single_root.n_count -= 1;
-        }
-    }
-
-    fn take_root(&mut self) -> Option<Box<Node<K, V>>> {
-        if self.is_mvcc {
-            None // TODO
-        } else {
-            self.single_root.root.take()
-        }
-    }
-
-    fn ref_root(&self) -> Option<&Node<K, V>> {
-        if self.is_mvcc {
-            None // TODO
-        } else {
-            self.single_root.root.as_ref().map(|item| item.deref())
-        }
-    }
-
-    fn mut_root(&mut self) -> Option<&mut Node<K, V>> {
-        if self.is_mvcc {
-            None // TODO
-        } else {
-            self.single_root.root.as_mut().map(|item| item.deref_mut())
-        }
-    }
-
-    fn set_root(&mut self, root: Option<Box<Node<K, V>>>) {
-        if self.is_mvcc {
-        } else {
-            self.single_root.root = root
         }
     }
 }
@@ -283,7 +218,13 @@ where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        let mut node = self.ref_root();
+        let arc = self.snapshot.clone();
+        let mut node = if self.is_mvcc {
+            arc.root_as_ref()
+        } else {
+            self.single_root.root_as_ref()
+        };
+
         while node.is_some() {
             let nref = node.unwrap();
             node = match nref.key.borrow().cmp(key) {
@@ -297,14 +238,27 @@ where
 
     /// Return an iterator over all entries in this instance.
     pub fn iter(&self) -> Iter<K, V> {
-        let root = self.ref_root();
-        Iter::new(root)
+        Iter {
+            arc: self.snapshot.clone(),
+            llrb: self,
+            node_iter: vec![].into_iter(),
+            after_key: Bound::Unbounded,
+            limit: 100,
+            fin: false,
+        }
     }
 
     /// Range over all entries from low to high.
     pub fn range(&self, low: Bound<K>, high: Bound<K>) -> Range<K, V> {
-        let root = self.ref_root();
-        Range::new(root, low, high)
+        Range {
+            arc: self.snapshot.clone(),
+            llrb: self,
+            node_iter: vec![].into_iter(),
+            low,
+            high,
+            limit: 100, // TODO: no magic number.
+            fin: false,
+        }
     }
 
     /// Set operation for non-mvcc instance. If key is already
@@ -409,7 +363,13 @@ where
     /// a. No consecutive reds should be found in the tree.
     /// b. number of blacks should be same on both sides.
     pub fn validate(&self) -> Result<(), BognError> {
-        let root = self.ref_root();
+        let arc = self.snapshot.clone();
+        let root = if self.is_mvcc {
+            arc.root_as_ref()
+        } else {
+            self.single_root.root_as_ref()
+        };
+
         let (fromred, nblacks) = (is_red(root), 0);
         Llrb::validate_tree(root, fromred, nblacks)?;
         Ok(())
@@ -496,20 +456,19 @@ where
     V: Default + Clone,
 {
     fn clone(&self) -> Llrb<K, V> {
-        use std::sync::atomic::Ordering::Relaxed;
-
         let _lock = self.mutex.lock();
-        let mut mr = unsafe { Box::from_raw(self.mvcc_root.load(Relaxed)) };
-        let new_store = Llrb {
+
+        let mut arc = self.snapshot.clone();
+        Llrb {
             name: self.name.clone(),
             lsm: self.lsm,
             is_mvcc: self.is_mvcc,
             single_root: self.single_root.clone(),
-            mvcc_root: AtomicPtr::new(mr.deref_mut()),
+            snapshot: Snapshot {
+                value: AtomicPtr::new(&mut arc),
+            },
             mutex: Mutex::new(0),
-        };
-        std::mem::forget(mr);
-        new_store
+        }
     }
 }
 
@@ -520,10 +479,12 @@ where
     K: AsKey,
     V: Default + Clone,
 {
-    root: Option<&'a Node<K, V>>,
+    arc: Arc<MvccRoot<K, V>>,
+    llrb: &'a Llrb<K, V>,
     node_iter: std::vec::IntoIter<Node<K, V>>,
     after_key: Bound<K>,
     limit: usize,
+    fin: bool,
 }
 
 impl<'a, K, V> Iter<'a, K, V>
@@ -531,17 +492,16 @@ where
     K: AsKey,
     V: Default + Clone,
 {
-    fn new(root: Option<&'a Node<K, V>>) -> Iter<'a, K, V> {
-        Iter {
-            root,
-            node_iter: vec![].into_iter(),
-            after_key: Bound::Unbounded,
-            limit: 100, // TODO: no magic number.
+    fn get_root(&self) -> Option<&Node<K, V>> {
+        if self.llrb.is_mvcc {
+            self.arc.root_as_ref()
+        } else {
+            self.llrb.single_root.root_as_ref()
         }
     }
 
     fn scan_iter(
-        &mut self,
+        &self,
         node: Option<&Node<K, V>>,
         acc: &mut Vec<Node<K, V>>, // accumulator for batch of nodes
     ) -> bool {
@@ -586,7 +546,7 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         //println!("yyy");
-        if self.root.is_none() {
+        if self.fin {
             return None;
         }
 
@@ -596,20 +556,16 @@ where
         }
 
         let mut acc: Vec<Node<K, V>> = Vec::with_capacity(self.limit);
-        self.scan_iter(self.root, &mut acc);
+        self.scan_iter(self.get_root(), &mut acc);
 
         if acc.len() == 0 {
-            self.root = None;
+            self.fin = true;
             None
         } else {
             //println!("iter-next {}", acc.len());
             self.after_key = Bound::Excluded(acc.last().unwrap().key());
             self.node_iter = acc.into_iter();
-            let node = self.node_iter.next();
-            if node.is_none() {
-                self.root = None
-            }
-            node
+            self.node_iter.next()
         }
     }
 }
@@ -619,11 +575,13 @@ where
     K: AsKey,
     V: Default + Clone,
 {
-    root: Option<&'a Node<K, V>>,
+    arc: Arc<MvccRoot<K, V>>,
+    llrb: &'a Llrb<K, V>,
     node_iter: std::vec::IntoIter<Node<K, V>>,
     low: Bound<K>,
     high: Bound<K>,
     limit: usize,
+    fin: bool,
 }
 
 impl<'a, K, V> Range<'a, K, V>
@@ -631,26 +589,28 @@ where
     K: AsKey,
     V: Default + Clone,
 {
-    fn new(
-        root: Option<&'a Node<K, V>>,
-        low: Bound<K>,  // lower bound
-        high: Bound<K>, // upper bound
-    ) -> Range<'a, K, V> {
-        Range {
-            root,
+    pub fn rev(self) -> Reverse<'a, K, V> {
+        Reverse {
+            arc: self.arc,
+            llrb: self.llrb,
             node_iter: vec![].into_iter(),
-            low,
-            high,
-            limit: 100, // TODO: no magic number.
+            low: self.low,
+            high: self.high,
+            limit: self.limit,
+            fin: false,
         }
     }
 
-    pub fn rev(self) -> Reverse<'a, K, V> {
-        Reverse::new(self.root, self.low, self.high)
+    fn get_root(&self) -> Option<&Node<K, V>> {
+        if self.llrb.is_mvcc {
+            self.arc.root_as_ref()
+        } else {
+            self.llrb.single_root.root_as_ref()
+        }
     }
 
     fn range_iter(
-        &mut self,
+        &self,
         node: Option<&Node<K, V>>,
         acc: &mut Vec<Node<K, V>>, // accumulator for batch of nodes
     ) -> bool {
@@ -696,14 +656,14 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         //println!("yyy");
-        if self.root.is_none() {
+        if self.fin {
             return None;
         }
 
         let node = self.node_iter.next();
         let node = if node.is_none() {
             let mut acc: Vec<Node<K, V>> = Vec::with_capacity(self.limit);
-            self.range_iter(self.root, &mut acc);
+            self.range_iter(self.get_root(), &mut acc);
             if acc.len() > 0 {
                 //println!("iter-next {}", acc.len());
                 self.low = Bound::Excluded(acc.last().unwrap().key());
@@ -717,7 +677,7 @@ where
         };
 
         if node.is_none() {
-            self.root = None;
+            self.fin = true;
             return None;
         }
 
@@ -729,7 +689,7 @@ where
             Bound::Included(qigh) if node.key.le(qigh) => Some(node),
             Bound::Excluded(qigh) if node.key.lt(qigh) => Some(node),
             _ => {
-                self.root = None;
+                self.fin = true;
                 None
             }
         }
@@ -741,11 +701,13 @@ where
     K: AsKey,
     V: Default + Clone,
 {
-    root: Option<&'a Node<K, V>>,
+    arc: Arc<MvccRoot<K, V>>,
+    llrb: &'a Llrb<K, V>,
     node_iter: std::vec::IntoIter<Node<K, V>>,
     high: Bound<K>,
     low: Bound<K>,
     limit: usize,
+    fin: bool,
 }
 
 impl<'a, K, V> Reverse<'a, K, V>
@@ -753,22 +715,16 @@ where
     K: AsKey,
     V: Default + Clone,
 {
-    fn new(
-        root: Option<&'a Node<K, V>>,
-        low: Bound<K>,  // lower bound
-        high: Bound<K>, // upper bound
-    ) -> Reverse<'a, K, V> {
-        Reverse {
-            root,
-            node_iter: vec![].into_iter(),
-            low,
-            high,
-            limit: 100, // TODO: no magic number.
+    fn get_root(&self) -> Option<&Node<K, V>> {
+        if self.llrb.is_mvcc {
+            self.arc.root_as_ref()
+        } else {
+            self.llrb.single_root.root_as_ref()
         }
     }
 
     fn reverse_iter(
-        &mut self,
+        &self,
         node: Option<&Node<K, V>>,
         acc: &mut Vec<Node<K, V>>, // accumulator for batch of nodes
     ) -> bool {
@@ -814,14 +770,14 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         //println!("yyy");
-        if self.root.is_none() {
+        if self.fin {
             return None;
         }
 
         let node = self.node_iter.next();
         let node = if node.is_none() {
             let mut acc: Vec<Node<K, V>> = Vec::with_capacity(self.limit);
-            self.reverse_iter(self.root, &mut acc);
+            self.reverse_iter(self.get_root(), &mut acc);
             if acc.len() > 0 {
                 //println!("iter-next {}", acc.len());
                 self.high = Bound::Excluded(acc.last().unwrap().key());
@@ -835,7 +791,7 @@ where
         };
 
         if node.is_none() {
-            self.root = None;
+            self.fin = true;
             return None;
         }
 
@@ -848,7 +804,7 @@ where
             Bound::Excluded(qow) if node.key.gt(qow) => Some(node),
             _ => {
                 //println!("llrb reverse over {:?}", &self.low);
-                self.root = None;
+                self.fin = true;
                 None
             }
         }

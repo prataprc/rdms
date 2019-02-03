@@ -19,6 +19,7 @@ include!("llrb_node.rs");
 // TODO: llrb_depth_histogram, as feature, to measure the depth of LLRB tree.
 // TODO: Remove AtomicPtr and test/benchmark.
 // TODO: Remove RwLock and use AtomicPtr and latch mechanism, test/benchmark.
+// TODO: Remove Mutex and check write performance.
 
 /// Llrb manage a single instance of in-memory sorted index using
 /// [left-leaning-red-black][llrb] tree.

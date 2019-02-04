@@ -21,7 +21,7 @@ include!("llrb_node.rs");
 // TODO: Remove RwLock and use AtomicPtr and latch mechanism, test/benchmark.
 // TODO: Remove Mutex and check write performance.
 
-/// Llrb manage a single instance of in-memory sorted index using
+/// Llrb manage a single instance of in-memory index using
 /// [left-leaning-red-black][llrb] tree.
 ///
 /// **[LSM mode]**: Llrb instance can support what is called as
@@ -29,9 +29,7 @@ include!("llrb_node.rs");
 /// means that nothing shall be over-written in the tree and all the
 /// mutations for the same key shall be preserved until they are undone or
 /// purged. Although there is one exception to it, back-to-back deletes
-/// will collapse into a no-op, only the first delete shall be ingested.
-///
-/// IMPORTANT: This tree is not thread safe.
+/// will collapse into a no-op and only the first delete shall be ingested.
 ///
 /// [llrb]: https://en.wikipedia.org/wiki/Left-leaning_red-black_tree
 /// [LSM mode]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
@@ -109,7 +107,8 @@ where
     }
 
     /// Create a new instance of Llrb tree and load it with entries from
-    /// `iter`. Note that iterator shall return items that implement [`AsEntry`].
+    /// `iter`. Note that iterator shall return items that implement
+    /// [AsEntry].
     pub fn load_from<E>(
         name: String,
         iter: impl Iterator<Item = E>,

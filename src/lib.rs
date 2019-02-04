@@ -15,8 +15,8 @@
 //! them.
 //!
 //! CAS, similar to compare-and-set, can be specified by applications
-//! that need consistency gaurantees for a single index-entry. In the
-//! APIs context CAS == sequence-number.
+//! that need consistency gaurantees for a single index-entry. In API
+//! context CAS == sequence-number.
 //!
 //! [LSM]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
 mod empty;

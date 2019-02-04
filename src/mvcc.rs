@@ -1,76 +1,87 @@
-#[derive(Default)]
-struct MvccRoot<K, V>
+use std::borrow::Borrow;
+use std::cmp::{Ord, Ordering};
+use std::mem::ManuallyDrop;
+use std::ops::{Bound, Deref, DerefMut};
+use std::sync::{atomic::AtomicPtr, Arc, Mutex, RwLock};
+
+use crate::error::BognError;
+use crate::llrb::Llrb;
+use crate::llrb_common::{self, is_black, is_red, Iter, Range};
+use crate::llrb_node::Node;
+use crate::traits::{AsEntry, AsKey};
+
+// TODO: Remove AtomicPtr and test/benchmark.
+// TODO: Remove RwLock and use AtomicPtr and latch mechanism, test/benchmark.
+// TODO: Remove Mutex and check write performance.
+
+pub struct Mvcc<K, V>
 where
     K: AsKey,
     V: Default + Clone,
 {
-    root: ManuallyDrop<Option<Box<Node<K, V>>>>,
-    reclaim: Vec<Box<Node<K, V>>>,
-    seqno: u64,   // starts from 0 and incr for every mutation.
-    n_count: u64, // number of entries in the tree.
-    next: Option<Arc<MvccRoot<K, V>>>,
+    name: String,
+    lsm: bool,
+    snapshot: Snapshot<K, V>,
+    mutex: Mutex<i32>,
+    rw: RwLock<i32>,
 }
 
-impl<K, V> MvccRoot<K, V>
+impl<K, V> Clone for Mvcc<K, V>
 where
     K: AsKey,
     V: Default + Clone,
 {
-    fn as_ref(&self) -> Option<&Node<K, V>> {
-        self.root.as_ref().map(|item| item.deref())
-    }
+    fn clone(&self) -> Mvcc<K, V> {
+        let mut mvcc = Mvcc {
+            name: self.name.clone(),
+            lsm: self.lsm,
+            snapshot: Default::default(),
+            mutex: Mutex::new(0),
+            rw: RwLock::new(0),
+        };
 
-    fn as_mut(&mut self) -> Option<&mut Node<K, V>> {
-        self.root.as_mut().map(|item| item.deref_mut())
-    }
+        let mut mvcc_root: MvccRoot<K, V> = Default::default();
+        let arc_next = Arc::new(Default::default());
+        mvcc_root.next = Some(arc_next);
 
-    fn owned_root(&mut self) -> Option<Box<Node<K, V>>> {
-        match self.root.deref_mut() {
-            Some(root) => unsafe { Some(Box::from_raw(root.deref_mut())) },
-            None => None,
-        }
+        let mut arc = Arc::new(mvcc_root);
+        mvcc.snapshot = Snapshot {
+            value: AtomicPtr::new(&mut arc),
+        };
+        std::mem::forget(arc);
+
+        mvcc
     }
 }
 
-impl<K, V> Drop for MvccRoot<K, V>
+impl<K, V> Drop for Mvcc<K, V>
 where
     K: AsKey,
     V: Default + Clone,
 {
     fn drop(&mut self) {
-        unsafe { ManuallyDrop::drop(&mut self.root) };
+        use std::sync::atomic::Ordering::Relaxed;
+
+        let _arc = unsafe { Arc::from_raw(self.snapshot.value.load(Relaxed)) };
     }
 }
 
-impl<K, V> Clone for MvccRoot<K, V>
+impl<K, V> From<Llrb<K, V>> for Mvcc<K, V>
 where
     K: AsKey,
     V: Default + Clone,
 {
-    fn clone(&self) -> MvccRoot<K, V> {
-        let mut new = MvccRoot {
-            root: ManuallyDrop::new(None),
-            seqno: self.seqno,
-            n_count: self.n_count,
-            reclaim: Default::default(),
-            next: Some(Arc::new(Default::default())),
-        };
-
-        if self.root.is_some() {
-            new.root = self.root.clone()
-        }
-
-        new
+    fn from(mut llrb: Llrb<K, V>) -> Mvcc<K, V> {
+        let mvcc = Mvcc::new(llrb.name, llrb.lsm);
+        mvcc.snapshot.move_next_snapshot(
+            llrb.root.take(),
+            llrb.seqno,
+            llrb.n_count,
+            vec![], /*reclaim*/
+            &mvcc.rw,
+        );
+        mvcc
     }
-}
-
-struct Mvcc<K, V>
-where
-    K: AsKey,
-    V: Default + Clone,
-{
-    key: PhantomData<K>,
-    value: PhantomData<V>,
 }
 
 impl<K, V> Mvcc<K, V>
@@ -78,13 +89,98 @@ where
     K: AsKey,
     V: Default + Clone,
 {
-    fn set(
-        llrb: &Llrb<K, V>, /* main index */
-        key: K,
-        value: V,
-    ) -> Option<impl AsEntry<K, V>> {
-        let lsm = llrb.lsm;
-        let mut arc = llrb.snapshot.clone(&llrb.rw);
+    pub fn new<S>(name: S, lsm: bool) -> Mvcc<K, V>
+    where
+        S: AsRef<str>,
+    {
+        Mvcc {
+            name: name.as_ref().to_string(),
+            lsm,
+            snapshot: Snapshot::new(),
+            mutex: Mutex::new(0),
+            rw: RwLock::new(0),
+        }
+    }
+}
+
+/// Maintanence API.
+impl<K, V> Mvcc<K, V>
+where
+    K: AsKey,
+    V: Default + Clone,
+{
+    /// Identify this instance. Applications can choose unique names while
+    /// creating Mvcc instances.
+    pub fn id(&self) -> String {
+        self.name.clone()
+    }
+
+    /// Return number of entries in this instance.
+    pub fn count(&self) -> u64 {
+        self.snapshot.clone(&self.rw).n_count
+    }
+
+    /// Set current seqno.
+    pub fn set_seqno(&mut self, seqno: u64) {
+        let _lock = self.mutex.lock();
+
+        let mut arc = self.snapshot.clone(&self.rw);
+        let root = Arc::get_mut(&mut arc).unwrap().owned_root();
+        let n_count = arc.n_count;
+        self.snapshot
+            .move_next_snapshot(root, seqno, n_count, vec![], &self.rw);
+    }
+
+    /// Return current seqno.
+    pub fn get_seqno(&self) -> u64 {
+        self.snapshot.clone(&self.rw).seqno
+    }
+}
+
+impl<K, V> Mvcc<K, V>
+where
+    K: AsKey,
+    V: Default + Clone,
+{
+    /// Get the latest version for key.
+    pub fn get<Q>(&self, key: &Q) -> Option<impl AsEntry<K, V>>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        let arc = self.snapshot.clone(&self.rw);
+        let root = arc.root.as_ref().map(|item| item.deref());
+        llrb_common::get(root, key)
+    }
+
+    pub fn iter(&self) -> Iter<K, V> {
+        let arc = self.snapshot.clone(&self.rw);
+        Iter {
+            arc,
+            root: None,
+            node_iter: vec![].into_iter(),
+            after_key: Bound::Unbounded,
+            limit: 100,
+            fin: false,
+        }
+    }
+
+    pub fn range(&self, low: Bound<K>, high: Bound<K>) -> Range<K, V> {
+        let arc = self.snapshot.clone(&self.rw);
+        Range {
+            arc,
+            root: None,
+            node_iter: vec![].into_iter(),
+            low,
+            high,
+            limit: 100, // TODO: no magic number.
+            fin: false,
+        }
+    }
+
+    pub fn set(&self, key: K, value: V) -> Option<impl AsEntry<K, V>> {
+        let lsm = self.lsm;
+        let mut arc = self.snapshot.clone(&self.rw);
         let seqno = arc.seqno + 1;
         let mut n_count = arc.n_count;
         let root = Arc::get_mut(&mut arc).unwrap().as_mut();
@@ -97,8 +193,8 @@ where
                 if old_node.is_none() {
                     n_count += 1;
                 }
-                let rw = &llrb.rw;
-                llrb.snapshot
+                let rw = &self.rw;
+                self.snapshot
                     .move_next_snapshot(Some(root), seqno, n_count, reclaim, rw);
                 old_node
             }
@@ -106,6 +202,96 @@ where
         }
     }
 
+    pub fn set_cas(
+        &self,
+        key: K,
+        value: V,
+        cas: u64,
+    ) -> Result<Option<impl AsEntry<K, V>>, BognError> {
+        let lsm = self.lsm;
+        let mut arc = self.snapshot.clone(&self.rw);
+        let seqno = arc.seqno + 1;
+        let mut n_count = arc.n_count;
+        let root = Arc::get_mut(&mut arc).unwrap().as_mut();
+        // TODO: no magic number
+        let mut reclaim: Vec<Box<Node<K, V>>> = Vec::with_capacity(128);
+
+        match Mvcc::upsert_cas(root, key, value, cas, seqno, lsm, &mut reclaim) {
+            (_, _, Some(err)) => Err(err),
+            (Some(mut root), old_node, None) => {
+                root.set_black();
+                if old_node.is_none() {
+                    n_count += 1
+                }
+                let rw = &self.rw;
+                self.snapshot
+                    .move_next_snapshot(Some(root), seqno, n_count, reclaim, rw);
+                Ok(old_node)
+            }
+            _ => panic!("set_cas: impossible case, call programmer"),
+        }
+    }
+
+    pub fn delete<Q>(&self, key: &Q) -> Option<impl AsEntry<K, V>>
+    where
+        K: Borrow<Q> + From<Q>,
+        Q: Clone + Ord + ?Sized,
+    {
+        let mut arc = self.snapshot.clone(&self.rw);
+        let mut seqno = arc.seqno + 1;
+        let mut n_count = arc.n_count;
+        let root = Arc::get_mut(&mut arc).unwrap().as_mut();
+        // TODO: no magic number
+        let mut reclaim: Vec<Box<Node<K, V>>> = Vec::with_capacity(128);
+
+        let (root, old_node) = if self.lsm {
+            let (root, oldn) = Mvcc::delete_lsm(root, key, seqno, &mut reclaim);
+            let mut root = root.unwrap();
+            root.set_black();
+            if oldn.is_none() {
+                n_count += 1
+            } else if oldn.as_ref().unwrap().is_deleted() {
+                seqno -= 1
+            }
+            (Some(root), oldn)
+        } else {
+            // in non-lsm mode remove the entry from the tree.
+            let (root, oldn) = match Mvcc::do_delete(root, key, &mut reclaim) {
+                (None, oldn) => (None, oldn),
+                (Some(mut root), oldn) => {
+                    root.set_black();
+                    (Some(root), oldn)
+                }
+            };
+            if oldn.is_some() {
+                n_count -= 1;
+            } else {
+                seqno -= 1
+            }
+            (root, oldn.map(|item| *item))
+        };
+        self.snapshot
+            .move_next_snapshot(root, seqno, n_count, reclaim, &self.rw);
+        old_node
+    }
+
+    /// validate llrb rules:
+    /// a. No consecutive reds should be found in the tree.
+    /// b. number of blacks should be same on both sides.
+    pub fn validate(&self) -> Result<(), BognError> {
+        let arc = self.snapshot.clone(&self.rw);
+        let root = arc.as_ref().as_ref();
+        let (fromred, nblacks) = (is_red(root), 0);
+        llrb_common::validate_tree(root, fromred, nblacks)?;
+        Ok(())
+    }
+}
+
+impl<K, V> Mvcc<K, V>
+where
+    K: AsKey,
+    V: Default + Clone,
+{
     fn upsert(
         node: Option<&mut Node<K, V>>,
         key: K,
@@ -138,36 +324,6 @@ where
             let old_node = node.clone_detach();
             new_node.prepend_version(value, seqno, lsm);
             (Some(Mvcc::walkuprot_23(new_node, reclaim)), Some(old_node))
-        }
-    }
-
-    fn set_cas(
-        llrb: &Llrb<K, V>,
-        key: K,
-        value: V,
-        cas: u64,
-    ) -> Result<Option<impl AsEntry<K, V>>, BognError> {
-        let lsm = llrb.lsm;
-        let mut arc = llrb.snapshot.clone(&llrb.rw);
-        let seqno = arc.seqno + 1;
-        let mut n_count = arc.n_count;
-        let root = Arc::get_mut(&mut arc).unwrap().as_mut();
-        // TODO: no magic number
-        let mut reclaim: Vec<Box<Node<K, V>>> = Vec::with_capacity(128);
-
-        match Mvcc::upsert_cas(root, key, value, cas, seqno, lsm, &mut reclaim) {
-            (_, _, Some(err)) => Err(err),
-            (Some(mut root), old_node, None) => {
-                root.set_black();
-                if old_node.is_none() {
-                    n_count += 1
-                }
-                let rw = &llrb.rw;
-                llrb.snapshot
-                    .move_next_snapshot(Some(root), seqno, n_count, reclaim, rw);
-                Ok(old_node)
-            }
-            _ => panic!("set_cas: impossible case, call programmer"),
         }
     }
 
@@ -218,49 +374,6 @@ where
         };
 
         return (Some(Mvcc::walkuprot_23(new_node, r)), old_node, err);
-    }
-
-    fn delete<Q>(llrb: &Llrb<K, V>, key: &Q) -> Option<impl AsEntry<K, V>>
-    where
-        K: Borrow<Q> + From<Q>,
-        Q: Clone + Ord + ?Sized,
-    {
-        let mut arc = llrb.snapshot.clone(&llrb.rw);
-        let mut seqno = arc.seqno + 1;
-        let mut n_count = arc.n_count;
-        let root = Arc::get_mut(&mut arc).unwrap().as_mut();
-        // TODO: no magic number
-        let mut reclaim: Vec<Box<Node<K, V>>> = Vec::with_capacity(128);
-
-        let (root, old_node) = if llrb.lsm {
-            let (root, oldn) = Mvcc::delete_lsm(root, key, seqno, &mut reclaim);
-            let mut root = root.unwrap();
-            root.set_black();
-            if oldn.is_none() {
-                n_count += 1
-            } else if oldn.as_ref().unwrap().is_deleted() {
-                seqno -= 1
-            }
-            (Some(root), oldn)
-        } else {
-            // in non-lsm mode remove the entry from the tree.
-            let (root, oldn) = match Mvcc::do_delete(root, key, &mut reclaim) {
-                (None, oldn) => (None, oldn),
-                (Some(mut root), oldn) => {
-                    root.set_black();
-                    (Some(root), oldn)
-                }
-            };
-            if oldn.is_some() {
-                n_count -= 1;
-            } else {
-                seqno -= 1
-            }
-            (root, oldn.map(|item| *item))
-        };
-        llrb.snapshot
-            .move_next_snapshot(root, seqno, n_count, reclaim, &llrb.rw);
-        old_node
     }
 
     fn delete_lsm<Q>(
@@ -544,6 +657,7 @@ where
     }
 }
 
+#[derive(Default)]
 struct Snapshot<K, V>
 where
     K: AsKey,
@@ -615,5 +729,71 @@ where
         use std::sync::atomic::Ordering::Relaxed;
 
         unsafe { self.value.load(Relaxed).as_ref().unwrap() }
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct MvccRoot<K, V>
+where
+    K: AsKey,
+    V: Default + Clone,
+{
+    pub(crate) root: ManuallyDrop<Option<Box<Node<K, V>>>>,
+    pub(crate) reclaim: Vec<Box<Node<K, V>>>,
+    pub(crate) seqno: u64,   // starts from 0 and incr for every mutation.
+    pub(crate) n_count: u64, // number of entries in the tree.
+    pub(crate) next: Option<Arc<MvccRoot<K, V>>>,
+}
+
+impl<K, V> MvccRoot<K, V>
+where
+    K: AsKey,
+    V: Default + Clone,
+{
+    fn as_ref(&self) -> Option<&Node<K, V>> {
+        self.root.as_ref().map(|item| item.deref())
+    }
+
+    fn as_mut(&mut self) -> Option<&mut Node<K, V>> {
+        self.root.as_mut().map(|item| item.deref_mut())
+    }
+
+    fn owned_root(&mut self) -> Option<Box<Node<K, V>>> {
+        match self.root.deref_mut() {
+            Some(root) => unsafe { Some(Box::from_raw(root.deref_mut())) },
+            None => None,
+        }
+    }
+}
+
+impl<K, V> Drop for MvccRoot<K, V>
+where
+    K: AsKey,
+    V: Default + Clone,
+{
+    fn drop(&mut self) {
+        unsafe { ManuallyDrop::drop(&mut self.root) };
+    }
+}
+
+impl<K, V> Clone for MvccRoot<K, V>
+where
+    K: AsKey,
+    V: Default + Clone,
+{
+    fn clone(&self) -> MvccRoot<K, V> {
+        let mut new = MvccRoot {
+            root: ManuallyDrop::new(None),
+            seqno: self.seqno,
+            n_count: self.n_count,
+            reclaim: Default::default(),
+            next: Some(Arc::new(Default::default())),
+        };
+
+        if self.root.is_some() {
+            new.root = self.root.clone()
+        }
+
+        new
     }
 }

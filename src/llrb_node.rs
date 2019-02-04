@@ -1,3 +1,7 @@
+use std::ops::{Deref, DerefMut};
+
+use crate::traits::{AsEntry, AsKey, AsValue};
+
 /// A single entry in Llrb can have mutiple version of values, ValueNode
 /// represent each version.
 #[derive(Clone)]
@@ -111,11 +115,11 @@ where
     K: AsKey,
     V: Default + Clone,
 {
-    key: K,
-    valn: ValueNode<V>,
-    black: bool,                    // store: black or red
-    left: Option<Box<Node<K, V>>>,  // store: left child
-    right: Option<Box<Node<K, V>>>, // store: right child
+    pub(crate) key: K,
+    pub(crate) valn: ValueNode<V>,
+    pub(crate) black: bool,                    // store: black or red
+    pub(crate) left: Option<Box<Node<K, V>>>,  // store: left child
+    pub(crate) right: Option<Box<Node<K, V>>>, // store: right child
 }
 
 // Primary operations on a single node.
@@ -125,7 +129,7 @@ where
     V: Default + Clone,
 {
     // CREATE operation
-    fn new(key: K, value: V, seqno: u64, black: bool) -> Node<K, V> {
+    pub(crate) fn new(key: K, value: V, seqno: u64, black: bool) -> Node<K, V> {
         let valn = ValueNode::new(value, seqno, None, None);
         Node {
             key,
@@ -136,7 +140,7 @@ where
         }
     }
 
-    fn from_entry<E>(entry: E) -> Node<K, V>
+    pub(crate) fn from_entry<E>(entry: E) -> Node<K, V>
     where
         E: AsEntry<K, V>,
         <E as AsEntry<K, V>>::Value: Default + Clone,
@@ -153,7 +157,7 @@ where
     }
 
     // clone and detach this node from the tree.
-    fn clone_detach(&self) -> Node<K, V> {
+    pub(crate) fn clone_detach(&self) -> Node<K, V> {
         Node {
             key: self.key.clone(),
             valn: self.valn.clone(),
@@ -163,7 +167,7 @@ where
         }
     }
 
-    fn mvcc_detach(&mut self) {
+    pub(crate) fn mvcc_detach(&mut self) {
         match self.left.take() {
             Some(box_node) => {
                 Box::leak(box_node);
@@ -179,7 +183,7 @@ where
     }
 
     // unsafe clone for MVCC COW
-    fn mvcc_clone(
+    pub(crate) fn mvcc_clone(
         &mut self,
         reclaim: &mut Vec<Box<Node<K, V>>>, /* reclaim */
     ) -> Box<Node<K, V>> {
@@ -204,24 +208,24 @@ where
         Box::new(new_node)
     }
 
-    fn left_deref(&self) -> Option<&Node<K, V>> {
+    pub(crate) fn left_deref(&self) -> Option<&Node<K, V>> {
         self.left.as_ref().map(|item| item.deref())
     }
 
-    fn right_deref(&self) -> Option<&Node<K, V>> {
+    pub(crate) fn right_deref(&self) -> Option<&Node<K, V>> {
         self.right.as_ref().map(|item| item.deref())
     }
 
-    fn left_deref_mut(&mut self) -> Option<&mut Node<K, V>> {
+    pub(crate) fn left_deref_mut(&mut self) -> Option<&mut Node<K, V>> {
         self.left.as_mut().map(|item| item.deref_mut())
     }
 
-    fn right_deref_mut(&mut self) -> Option<&mut Node<K, V>> {
+    pub(crate) fn right_deref_mut(&mut self) -> Option<&mut Node<K, V>> {
         self.right.as_mut().map(|item| item.deref_mut())
     }
 
     // prepend operation, equivalent to SET / INSERT / UPDATE
-    fn prepend_version(&mut self, value: V, seqno: u64, lsm: bool) {
+    pub(crate) fn prepend_version(&mut self, value: V, seqno: u64, lsm: bool) {
         let prev = if lsm {
             Some(Box::new(self.valn.clone()))
         } else {
@@ -231,13 +235,13 @@ where
     }
 
     // DELETE operation
-    fn delete(&mut self, seqno: u64, _lsm: bool) {
+    pub(crate) fn delete(&mut self, seqno: u64, _lsm: bool) {
         self.valn.delete(seqno)
     }
 
     // UNDO operation
     #[allow(dead_code)]
-    fn undo(&mut self, lsm: bool) -> bool {
+    pub(crate) fn undo(&mut self, lsm: bool) -> bool {
         if lsm {
             self.valn.undo()
         } else {
@@ -246,22 +250,22 @@ where
     }
 
     #[inline]
-    fn set_red(&mut self) {
+    pub(crate) fn set_red(&mut self) {
         self.black = false
     }
 
     #[inline]
-    fn set_black(&mut self) {
+    pub(crate) fn set_black(&mut self) {
         self.black = true
     }
 
     #[inline]
-    fn toggle_link(&mut self) {
+    pub(crate) fn toggle_link(&mut self) {
         self.black = !self.black
     }
 
     #[inline]
-    fn is_black(&self) -> bool {
+    pub(crate) fn is_black(&self) -> bool {
         self.black
     }
 }

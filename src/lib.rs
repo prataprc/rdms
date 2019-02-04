@@ -22,11 +22,15 @@
 mod empty;
 mod error;
 mod llrb;
+mod llrb_common;
+mod llrb_node;
+mod mvcc;
 mod traits;
 
 pub use crate::empty::Empty;
 pub use crate::error::BognError;
 pub use crate::llrb::Llrb;
+pub use crate::mvcc::Mvcc;
 pub use crate::traits::{AsEntry, AsKey, AsValue};
 
 #[cfg(test)]

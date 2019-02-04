@@ -1,25 +1,17 @@
 use std::borrow::Borrow;
 use std::cmp::{Ord, Ordering};
-use std::marker::PhantomData;
-use std::mem::ManuallyDrop;
 use std::ops::{Bound, Deref, DerefMut};
-use std::sync::{atomic::AtomicPtr, Arc, Mutex, RwLock};
 
 use crate::error::BognError;
-use crate::traits::{AsEntry, AsKey, AsValue};
-
-include!("llrb_single.rs");
-include!("llrb_mvcc.rs");
-include!("llrb_node.rs");
+use crate::llrb_common::{self, is_black, is_red, Iter, Range};
+use crate::llrb_node::Node;
+use crate::traits::{AsEntry, AsKey};
 
 // TODO: Sizing.
 // TODO: Implement and document primitive types, std-types that can be used
 // as key (K) / value (V) for Llrb.
 // TODO: optimize comparison
 // TODO: llrb_depth_histogram, as feature, to measure the depth of LLRB tree.
-// TODO: Remove AtomicPtr and test/benchmark.
-// TODO: Remove RwLock and use AtomicPtr and latch mechanism, test/benchmark.
-// TODO: Remove Mutex and check write performance.
 
 /// Llrb manage a single instance of in-memory index using
 /// [left-leaning-red-black][llrb] tree.
@@ -38,25 +30,26 @@ where
     K: AsKey,
     V: Default + Clone,
 {
-    name: String,
-    lsm: bool,
-    is_mvcc: bool,
-    // TODO: can we handle this as union single_root | mvcc_root ?
-    single_root: SingleRoot<K, V>,
-    snapshot: Snapshot<K, V>,
-    mutex: Mutex<i32>,
-    rw: RwLock<i32>,
+    pub(crate) name: String,
+    pub(crate) lsm: bool,
+    pub(crate) root: Option<Box<Node<K, V>>>,
+    pub(crate) seqno: u64,   // starts from 0 and incr for every mutation.
+    pub(crate) n_count: u64, // number of entries in the tree.
 }
 
-impl<K, V> Drop for Llrb<K, V>
+impl<K, V> Clone for Llrb<K, V>
 where
     K: AsKey,
     V: Default + Clone,
 {
-    fn drop(&mut self) {
-        use std::sync::atomic::Ordering::Relaxed;
-
-        let _arc = unsafe { Arc::from_raw(self.snapshot.value.load(Relaxed)) };
+    fn clone(&self) -> Llrb<K, V> {
+        Llrb {
+            name: self.name.clone(),
+            lsm: self.lsm,
+            root: self.root.clone(),
+            seqno: self.seqno,
+            n_count: self.n_count,
+        }
     }
 }
 
@@ -74,36 +67,13 @@ where
     where
         S: AsRef<str>,
     {
-        let store = Llrb {
+        Llrb {
             name: name.as_ref().to_string(),
             lsm,
-            is_mvcc: false,
-            single_root: SingleRoot::new(),
-            snapshot: Snapshot::new(),
-            mutex: Mutex::new(0),
-            rw: RwLock::new(0),
-        };
-        store
-    }
-
-    /// Create an empty instance of Llrb in MVCC mode, identified by `name`.
-    /// Applications can choose unique names. When `lsm` is true, mutations
-    /// are added as log for each key, instead of over-writing previous
-    /// mutation.
-    pub fn new_mvcc<S>(name: S, lsm: bool) -> Llrb<K, V>
-    where
-        S: AsRef<str>,
-    {
-        let store = Llrb {
-            name: name.as_ref().to_string(),
-            lsm,
-            is_mvcc: true,
-            single_root: SingleRoot::new(),
-            snapshot: Snapshot::new(),
-            mutex: Mutex::new(0),
-            rw: RwLock::new(0),
-        };
-        store
+            root: None,
+            seqno: 0,
+            n_count: 0,
+        }
     }
 
     /// Create a new instance of Llrb tree and load it with entries from
@@ -113,47 +83,31 @@ where
         name: String,
         iter: impl Iterator<Item = E>,
         lsm: bool,
-        mvcc: bool,
     ) -> Result<Llrb<K, V>, BognError>
     where
         E: AsEntry<K, V>,
         <E as AsEntry<K, V>>::Value: Default + Clone,
     {
-        let mut store = Llrb::new(name, lsm);
+        let mut llrb = Llrb::new(name, lsm);
 
-        let (mut n_count, mut seqno) = (0_u64, 0_64);
-        let mut root = store.single_root.root.take();
+        let mut root = llrb.root.take();
         for entry in iter {
             let e_seqno = entry.seqno();
             root = match Llrb::load_entry(root, entry.key(), entry)? {
                 Some(mut root) => {
-                    if e_seqno > seqno {
-                        seqno = e_seqno;
+                    if e_seqno > llrb.seqno {
+                        llrb.seqno = e_seqno;
                     }
                     root.set_black();
                     Some(root)
                 }
                 None => unreachable!(),
             };
-            n_count += 1;
+            llrb.n_count += 1;
         }
-        store.single_root.root = root;
-        store.single_root.n_count = n_count;
-        store.single_root.seqno = seqno;
+        llrb.root = root;
 
-        if mvcc {
-            store.is_mvcc = true;
-
-            let root = store.single_root.root.take();
-            let seqno = store.single_root.seqno;
-            let n_count = store.single_root.n_count;
-            let reclaim = vec![];
-            store
-                .snapshot
-                .move_next_snapshot(root, seqno, n_count, reclaim, &store.rw);
-        }
-
-        Ok(store)
+        Ok(llrb)
     }
 
     fn load_entry<E>(
@@ -170,15 +124,15 @@ where
             Ok(Some(Box::new(node)))
         } else {
             let mut node = node.unwrap();
-            node = Single::walkdown_rot23(node);
+            node = Llrb::walkdown_rot23(node);
             match node.key.cmp(&key) {
                 Ordering::Greater => {
                     node.left = Llrb::load_entry(node.left, key, entry)?;
-                    Ok(Some(Single::walkuprot_23(node)))
+                    Ok(Some(Llrb::walkuprot_23(node)))
                 }
                 Ordering::Less => {
                     node.right = Llrb::load_entry(node.right, key, entry)?;
-                    Ok(Some(Single::walkuprot_23(node)))
+                    Ok(Some(Llrb::walkuprot_23(node)))
                 }
                 Ordering::Equal => {
                     let err = format!("load_entry: {:?}", key);
@@ -203,36 +157,17 @@ where
 
     /// Return number of entries in this instance.
     pub fn count(&self) -> u64 {
-        if self.is_mvcc {
-            self.snapshot.clone(&self.rw).n_count
-        } else {
-            self.single_root.n_count
-        }
+        self.n_count
     }
 
     /// Set current seqno.
     pub fn set_seqno(&mut self, seqno: u64) {
-        let _lock = self.mutex.lock();
-
-        if self.is_mvcc {
-            let mut arc = self.snapshot.clone(&self.rw);
-            let root = Arc::get_mut(&mut arc).unwrap().owned_root();
-            let seqno = arc.seqno;
-            let n_count = arc.n_count;
-            self.snapshot
-                .move_next_snapshot(root, seqno, n_count, vec![], &self.rw);
-        } else {
-            self.single_root.seqno = seqno
-        }
+        self.seqno = seqno
     }
 
     /// Return current seqno.
     pub fn get_seqno(&self) -> u64 {
-        if self.is_mvcc {
-            self.snapshot.clone(&self.rw).seqno
-        } else {
-            self.single_root.seqno
-        }
+        self.seqno
     }
 }
 
@@ -248,76 +183,32 @@ where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        if self.is_mvcc {
-            let arc = self.snapshot.clone(&self.rw);
-            let mut node = arc.as_ref().as_ref();
-            while node.is_some() {
-                let nref = node.unwrap();
-                node = match nref.key.borrow().cmp(key) {
-                    Ordering::Less => nref.right_deref(),
-                    Ordering::Greater => nref.left_deref(),
-                    Ordering::Equal => return Some(nref.clone_detach()),
-                };
-            }
-        } else {
-            let mut node = self.single_root.as_ref();
-            while node.is_some() {
-                let nref = node.unwrap();
-                node = match nref.key.borrow().cmp(key) {
-                    Ordering::Less => nref.right_deref(),
-                    Ordering::Greater => nref.left_deref(),
-                    Ordering::Equal => return Some(nref.clone_detach()),
-                };
-            }
-        };
-        None
+        let root = self.root.as_ref().map(|item| item.deref());
+        llrb_common::get(root, key)
     }
 
     /// Return an iterator over all entries in this instance.
     pub fn iter(&self) -> Iter<K, V> {
-        if self.is_mvcc {
-            Iter {
-                arc: self.snapshot.clone(&self.rw),
-                llrb: self,
-                node_iter: vec![].into_iter(),
-                after_key: Bound::Unbounded,
-                limit: 100,
-                fin: false,
-            }
-        } else {
-            Iter {
-                arc: Default::default(),
-                llrb: self,
-                node_iter: vec![].into_iter(),
-                after_key: Bound::Unbounded,
-                limit: 100,
-                fin: false,
-            }
+        Iter {
+            arc: Default::default(),
+            root: self.root.as_ref().map(|item| item.deref()),
+            node_iter: vec![].into_iter(),
+            after_key: Bound::Unbounded,
+            limit: 100,
+            fin: false,
         }
     }
 
     /// Range over all entries from low to high.
     pub fn range(&self, low: Bound<K>, high: Bound<K>) -> Range<K, V> {
-        if self.is_mvcc {
-            Range {
-                arc: self.snapshot.clone(&self.rw),
-                llrb: self,
-                node_iter: vec![].into_iter(),
-                low,
-                high,
-                limit: 100, // TODO: no magic number.
-                fin: false,
-            }
-        } else {
-            Range {
-                arc: Default::default(),
-                llrb: self,
-                node_iter: vec![].into_iter(),
-                low,
-                high,
-                limit: 100, // TODO: no magic number.
-                fin: false,
-            }
+        Range {
+            arc: Default::default(),
+            root: self.root.as_ref().map(|item| item.deref()),
+            node_iter: vec![].into_iter(),
+            low,
+            high,
+            limit: 100, // TODO: no magic number.
+            fin: false,
         }
     }
 
@@ -328,25 +219,21 @@ where
     /// If an entry already exist for the, return the old-entry will all its
     /// versions.
     pub fn set(&mut self, key: K, value: V) -> Option<impl AsEntry<K, V>> {
-        if self.is_mvcc {
-            panic!("use shared reference in mvcc mode !!");
-        }
-        Single::set(self, key, value)
-    }
+        let seqno = self.seqno + 1;
+        let root = self.root.take();
 
-    /// Set operation for mvcc instance. If key is already present, return
-    /// the previous entry. In LSM mode, this will add a new version for the
-    /// key.
-    ///
-    /// If an entry already exist for the, return the old-entry will all its
-    /// versions.
-    pub fn set_mvcc(&self, key: K, value: V) -> Option<impl AsEntry<K, V>> {
-        if !self.is_mvcc {
-            panic!("use mutable reference in non-mvcc mode !!");
+        match Llrb::upsert(root, key, value, seqno, self.lsm) {
+            (Some(mut root), old_node) => {
+                root.set_black();
+                self.root = Some(root);
+                if old_node.is_none() {
+                    self.n_count += 1;
+                }
+                self.seqno = seqno;
+                old_node
+            }
+            (None, _old_node) => unreachable!(),
         }
-
-        let _lock = self.mutex.lock();
-        Mvcc::set(self, key, value)
     }
 
     /// Set a new entry into a non-mvcc instance, only if entry's seqno matches
@@ -359,28 +246,25 @@ where
         value: V,
         cas: u64,
     ) -> Result<Option<impl AsEntry<K, V>>, BognError> {
-        if self.is_mvcc {
-            panic!("use shared reference in mvcc mode !!");
-        }
-        Single::set_cas(self, key, value, cas)
-    }
+        let seqno = self.seqno + 1;
+        let root = self.root.take();
 
-    /// Set a new entry into a mvcc instance, only if entry's seqno matches the
-    /// supplied CAS. Use CAS == 0 to enforce a create operation. If key is
-    /// already present, return the previous entry. In LSM mode, this will add
-    /// a new version for the key.
-    pub fn set_cas_mvcc(
-        &self,
-        key: K,
-        value: V,
-        cas: u64,
-    ) -> Result<Option<impl AsEntry<K, V>>, BognError> {
-        if !self.is_mvcc {
-            panic!("use mutable reference in non-mvcc mode !!");
+        match Llrb::upsert_cas(root, key, value, cas, seqno, self.lsm) {
+            (root, _, Some(err)) => {
+                self.root = root;
+                Err(err)
+            }
+            (Some(mut root), old_node, None) => {
+                root.set_black();
+                self.seqno = seqno;
+                self.root = Some(root);
+                if old_node.is_none() {
+                    self.n_count += 1;
+                }
+                Ok(old_node)
+            }
+            _ => panic!("set_cas: impossible case, call programmer"),
         }
-
-        let _lock = self.mutex.lock();
-        Mvcc::set_cas(self, key, value, cas)
     }
 
     /// Delete the given key from non-mvcc intance, in LSM mode it simply marks
@@ -391,474 +275,382 @@ where
         K: Borrow<Q> + From<Q>,
         Q: Clone + Ord + ?Sized,
     {
-        if self.is_mvcc {
-            panic!("use shared reference in mvcc mode !!");
-        }
-        Single::delete(self, key)
-    }
+        let seqno = self.seqno + 1;
 
-    /// Delete the given key from mvcc intance, in LSM mode it simply marks
-    /// the version as deleted. Note that back-to-back delete for the same
-    /// key shall collapse into a single delete.
-    pub fn delete_mvcc<Q>(&self, key: &Q) -> Option<impl AsEntry<K, V>>
-    where
-        K: Borrow<Q> + From<Q>,
-        Q: Clone + Ord + ?Sized,
-    {
-        if !self.is_mvcc {
-            panic!("use mutable reference in non-mvcc mode !!");
+        if self.lsm {
+            let root = self.root.take();
+            let (root, old_node) = Llrb::delete_lsm(root, key, seqno);
+            let mut root = root.unwrap();
+            root.set_black();
+            self.root = Some(root);
+
+            if old_node.is_none() {
+                self.n_count += 1;
+                self.seqno = seqno;
+            } else if !old_node.as_ref().unwrap().is_deleted() {
+                self.seqno = seqno;
+            }
+            return old_node;
         }
 
-        let _lock = self.mutex.lock();
-        Mvcc::delete(self, key)
+        // in non-lsm mode remove the entry from the tree.
+        let root = self.root.take();
+        let (root, old_node) = match Llrb::do_delete(root, key) {
+            (None, old_node) => (None, old_node),
+            (Some(mut root), old_node) => {
+                root.set_black();
+                (Some(root), old_node)
+            }
+        };
+        self.root = root;
+        if old_node.is_some() {
+            self.n_count -= 1;
+            self.seqno = seqno;
+        }
+        old_node
     }
 
     /// validate llrb rules:
     /// a. No consecutive reds should be found in the tree.
     /// b. number of blacks should be same on both sides.
     pub fn validate(&self) -> Result<(), BognError> {
-        if self.is_mvcc {
-            let arc = self.snapshot.clone(&self.rw);
-            let root = arc.as_ref().as_ref();
-            let (fromred, nblacks) = (is_red(root), 0);
-            Llrb::validate_tree(root, fromred, nblacks)?
-        } else {
-            let root = self.single_root.as_ref();
-            let (fromred, nblacks) = (is_red(root), 0);
-            Llrb::validate_tree(root, fromred, nblacks)?
-        };
+        let root = self.root.as_ref().map(|item| item.deref());
+        let (fromred, nblacks) = (is_red(root), 0);
+        llrb_common::validate_tree(root, fromred, nblacks)?;
         Ok(())
     }
+}
 
-    fn validate_tree(
-        node: Option<&Node<K, V>>,
-        fromred: bool,
-        mut nblacks: u64,
-    ) -> Result<u64, BognError> {
+impl<K, V> Llrb<K, V>
+where
+    K: AsKey,
+    V: Default + Clone,
+{
+    fn upsert(
+        node: Option<Box<Node<K, V>>>,
+        key: K,
+        value: V,
+        seqno: u64,
+        lsm: bool,
+    ) -> (Option<Box<Node<K, V>>>, Option<Node<K, V>>) {
         if node.is_none() {
-            return Ok(nblacks);
+            let black = false;
+            return (Some(Box::new(Node::new(key, value, seqno, black))), None);
         }
 
-        let red = is_red(node.as_ref().map(|item| item.deref()));
-        if fromred && red {
-            return Err(BognError::ConsecutiveReds);
-        }
-        if !red {
-            nblacks += 1;
-        }
-        let node = &node.as_ref().unwrap();
-        let left = node.left_deref();
-        let right = node.right_deref();
-        let lblacks = Llrb::validate_tree(left, red, nblacks)?;
-        let rblacks = Llrb::validate_tree(right, red, nblacks)?;
-        if lblacks != rblacks {
-            let err = format!(
-                "llrb_store: unbalanced blacks left: {} and right: {}",
-                lblacks, rblacks,
-            );
-            return Err(BognError::UnbalancedBlacks(err));
-        }
-        if node.left.is_some() {
-            let left = node.left.as_ref().unwrap();
-            if left.key.ge(&node.key) {
-                let [a, b] = [&left.key, &node.key];
-                let err = format!("left key {:?} >= parent {:?}", a, b);
-                return Err(BognError::SortError(err));
+        let mut node = node.unwrap();
+        node = Llrb::walkdown_rot23(node);
+        match node.key.cmp(&key) {
+            Ordering::Greater => {
+                let (l, o) = Llrb::upsert(node.left, key, value, seqno, lsm);
+                node.left = l;
+                (Some(Llrb::walkuprot_23(node)), o)
+            }
+            Ordering::Less => {
+                let (r, o) = Llrb::upsert(node.right, key, value, seqno, lsm);
+                node.right = r;
+                (Some(Llrb::walkuprot_23(node)), o)
+            }
+            Ordering::Equal => {
+                let old_node = node.clone_detach();
+                node.prepend_version(value, seqno, lsm);
+                (Some(Llrb::walkuprot_23(node)), Some(old_node))
             }
         }
-        if node.right.is_some() {
-            let right = node.right.as_ref().unwrap();
-            if right.key.le(&node.key) {
-                let [a, b] = [&right.key, &node.key];
-                let err = format!("right {:?} <= parent {:?}", a, b);
-                return Err(BognError::SortError(err));
+    }
+
+    fn upsert_cas(
+        node: Option<Box<Node<K, V>>>,
+        key: K,
+        val: V,
+        cas: u64,
+        seqno: u64,
+        lsm: bool,
+    ) -> (
+        Option<Box<Node<K, V>>>,
+        Option<Node<K, V>>,
+        Option<BognError>,
+    ) {
+        if node.is_none() && cas > 0 {
+            return (None, None, Some(BognError::InvalidCAS));
+        } else if node.is_none() {
+            let black = false;
+            let node = Box::new(Node::new(key, val, seqno, black));
+            return (Some(node), None, None);
+        }
+
+        let mut node = node.unwrap();
+        node = Llrb::walkdown_rot23(node);
+        let (old_node, err) = match node.key.cmp(&key) {
+            Ordering::Greater => {
+                let (k, v, left) = (key, val, node.left);
+                let (l, o, e) = Llrb::upsert_cas(left, k, v, cas, seqno, lsm);
+                node.left = l;
+                (o, e)
             }
-        }
-        Ok(lblacks)
-    }
-}
-
-fn is_red<K, V>(node: Option<&Node<K, V>>) -> bool
-where
-    K: AsKey,
-    V: Default + Clone,
-{
-    match node {
-        None => false,
-        node @ Some(_) => !is_black(node),
-    }
-}
-
-fn is_black<K, V>(node: Option<&Node<K, V>>) -> bool
-where
-    K: AsKey,
-    V: Default + Clone,
-{
-    match node {
-        None => true,
-        Some(node) => node.is_black(),
-    }
-}
-
-// TODO: refactor this for mvcc.
-impl<K, V> Clone for Llrb<K, V>
-where
-    K: AsKey,
-    V: Default + Clone,
-{
-    fn clone(&self) -> Llrb<K, V> {
-        let _lock = self.mutex.lock();
-
-        let mut arc = self.snapshot.clone(&self.rw);
-        Llrb {
-            name: self.name.clone(),
-            lsm: self.lsm,
-            is_mvcc: self.is_mvcc,
-            single_root: self.single_root.clone(),
-            snapshot: Snapshot {
-                value: AtomicPtr::new(&mut arc),
-            },
-            mutex: Mutex::new(0),
-            rw: RwLock::new(0),
-        }
-    }
-}
-
-//----------------------------------------------------------------------------
-
-pub struct Iter<'a, K, V>
-where
-    K: AsKey,
-    V: Default + Clone,
-{
-    arc: Arc<MvccRoot<K, V>>,
-    llrb: &'a Llrb<K, V>,
-    node_iter: std::vec::IntoIter<Node<K, V>>,
-    after_key: Bound<K>,
-    limit: usize,
-    fin: bool,
-}
-
-impl<'a, K, V> Iter<'a, K, V>
-where
-    K: AsKey,
-    V: Default + Clone,
-{
-    fn get_root(&self) -> Option<&Node<K, V>> {
-        if self.llrb.is_mvcc {
-            self.arc.as_ref().as_ref()
-        } else {
-            self.llrb.single_root.as_ref()
-        }
-    }
-
-    fn scan_iter(
-        &self,
-        node: Option<&Node<K, V>>,
-        acc: &mut Vec<Node<K, V>>, // accumulator for batch of nodes
-    ) -> bool {
-        if node.is_none() {
-            return true;
-        }
-
-        let node = node.unwrap();
-        //println!("scan_iter {:?} {:?}", node.key, self.after_key);
-        let left = node.left_deref();
-        let right = node.right_deref();
-        match &self.after_key {
-            Bound::Included(akey) | Bound::Excluded(akey) => {
-                if node.key.borrow().le(akey) {
-                    return self.scan_iter(right, acc);
+            Ordering::Less => {
+                let (k, v, right) = (key, val, node.right);
+                let (r, o, e) = Llrb::upsert_cas(right, k, v, cas, seqno, lsm);
+                node.right = r;
+                (o, e)
+            }
+            Ordering::Equal => {
+                if node.is_deleted() && cas != 0 && cas != node.seqno() {
+                    (None, Some(BognError::InvalidCAS))
+                } else if !node.is_deleted() && cas != node.seqno() {
+                    (None, Some(BognError::InvalidCAS))
+                } else {
+                    let old_node = node.clone_detach();
+                    node.prepend_version(val, seqno, lsm);
+                    (Some(old_node), None)
                 }
             }
-            Bound::Unbounded => (),
-        }
+        };
 
-        //println!("left {:?} {:?}", node.key, self.after_key);
-        if !self.scan_iter(left, acc) {
-            return false;
-        }
-
-        acc.push(node.clone_detach());
-        //println!("push {:?} {}", self.after_key, acc.len());
-        if acc.len() >= self.limit {
-            return false;
-        }
-
-        return self.scan_iter(right, acc);
-    }
-}
-
-impl<'a, K, V> Iterator for Iter<'a, K, V>
-where
-    K: AsKey,
-    V: Default + Clone,
-{
-    type Item = Node<K, V>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        //println!("yyy");
-        if self.fin {
-            return None;
-        }
-
-        let node = self.node_iter.next();
-        if node.is_some() {
-            return node;
-        }
-
-        let mut acc: Vec<Node<K, V>> = Vec::with_capacity(self.limit);
-        self.scan_iter(self.get_root(), &mut acc);
-
-        if acc.len() == 0 {
-            self.fin = true;
-            None
-        } else {
-            //println!("iter-next {}", acc.len());
-            self.after_key = Bound::Excluded(acc.last().unwrap().key());
-            self.node_iter = acc.into_iter();
-            self.node_iter.next()
-        }
-    }
-}
-
-pub struct Range<'a, K, V>
-where
-    K: AsKey,
-    V: Default + Clone,
-{
-    arc: Arc<MvccRoot<K, V>>,
-    llrb: &'a Llrb<K, V>,
-    node_iter: std::vec::IntoIter<Node<K, V>>,
-    low: Bound<K>,
-    high: Bound<K>,
-    limit: usize,
-    fin: bool,
-}
-
-impl<'a, K, V> Range<'a, K, V>
-where
-    K: AsKey,
-    V: Default + Clone,
-{
-    pub fn rev(self) -> Reverse<'a, K, V> {
-        Reverse {
-            arc: self.arc,
-            llrb: self.llrb,
-            node_iter: vec![].into_iter(),
-            low: self.low,
-            high: self.high,
-            limit: self.limit,
-            fin: false,
-        }
+        node = Llrb::walkuprot_23(node);
+        return (Some(node), old_node, err);
     }
 
-    fn get_root(&self) -> Option<&Node<K, V>> {
-        if self.llrb.is_mvcc {
-            self.arc.as_ref().as_ref()
-        } else {
-            self.llrb.single_root.as_ref()
-        }
-    }
-
-    fn range_iter(
-        &self,
-        node: Option<&Node<K, V>>,
-        acc: &mut Vec<Node<K, V>>, // accumulator for batch of nodes
-    ) -> bool {
+    fn delete_lsm<Q>(
+        node: Option<Box<Node<K, V>>>,
+        key: &Q,
+        seqno: u64,
+    ) -> (Option<Box<Node<K, V>>>, Option<Node<K, V>>)
+    where
+        K: Borrow<Q> + From<Q>,
+        Q: Clone + Ord + ?Sized,
+    {
         if node.is_none() {
-            return true;
+            // insert and mark as delete
+            let (key, black) = (key.clone().into(), false);
+            let mut node = Node::new(key, Default::default(), seqno, black);
+            node.delete(seqno, true /*lsm*/);
+            return (Some(Box::new(node)), None);
         }
 
-        let node = node.unwrap();
-        //println!("range_iter {:?} {:?}", node.key, self.low);
-        let left = node.left_deref();
-        let right = node.right_deref();
-        match &self.low {
-            Bound::Included(qow) if node.key.lt(qow) => {
-                return self.range_iter(right, acc);
+        let mut node = node.unwrap();
+        node = Llrb::walkdown_rot23(node);
+
+        let (node, old_node) = match node.key.borrow().cmp(&key) {
+            Ordering::Greater => {
+                let (l, o) = Llrb::delete_lsm(node.left, key, seqno);
+                node.left = l;
+                (node, o)
             }
-            Bound::Excluded(qow) if node.key.le(qow) => {
-                return self.range_iter(right, acc);
+            Ordering::Less => {
+                let (r, o) = Llrb::delete_lsm(node.right, key, seqno);
+                node.right = r;
+                (node, o)
             }
-            _ => (),
-        }
+            Ordering::Equal => {
+                let old_node = node.clone_detach();
+                if node.is_deleted() {
+                    (node, Some(old_node)) // noop
+                } else {
+                    node.delete(seqno, true /*lsm*/);
+                    (node, Some(old_node))
+                }
+            }
+        };
 
-        //println!("left {:?} {:?}", node.key, self.low);
-        if !self.range_iter(left, acc) {
-            return false;
-        }
-
-        acc.push(node.clone_detach());
-        //println!("push {:?} {}", self.low, acc.len());
-        if acc.len() >= self.limit {
-            return false;
-        }
-
-        return self.range_iter(right, acc);
+        (Some(Llrb::walkuprot_23(node)), old_node)
     }
-}
 
-impl<'a, K, V> Iterator for Range<'a, K, V>
-where
-    K: AsKey,
-    V: Default + Clone,
-{
-    type Item = Node<K, V>;
+    // this is the non-lsm path.
+    fn do_delete<Q>(
+        node: Option<Box<Node<K, V>>>,
+        key: &Q,
+    ) -> (Option<Box<Node<K, V>>>, Option<Node<K, V>>)
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        let mut node = match node {
+            None => return (None, None),
+            Some(node) => node,
+        };
 
-    fn next(&mut self) -> Option<Self::Item> {
-        //println!("yyy");
-        if self.fin {
-            return None;
-        }
-
-        let node = self.node_iter.next();
-        let node = if node.is_none() {
-            let mut acc: Vec<Node<K, V>> = Vec::with_capacity(self.limit);
-            self.range_iter(self.get_root(), &mut acc);
-            if acc.len() > 0 {
-                //println!("iter-next {}", acc.len());
-                self.low = Bound::Excluded(acc.last().unwrap().key());
-                self.node_iter = acc.into_iter();
-                self.node_iter.next()
+        if node.key.borrow().gt(key) {
+            if node.left.is_none() {
+                (Some(node), None)
             } else {
-                None
+                let ok = !is_red(node.left_deref());
+                if ok && !is_red(node.left.as_ref().unwrap().left_deref()) {
+                    node = Llrb::move_red_left(node);
+                }
+                let (left, old_node) = Llrb::do_delete(node.left, key);
+                node.left = left;
+                (Some(Llrb::fixup(node)), old_node)
             }
+        } else {
+            if is_red(node.left_deref()) {
+                node = Llrb::rotate_right(node);
+            }
+
+            if !node.key.borrow().lt(key) && node.right.is_none() {
+                return (None, Some(*node));
+            }
+
+            let ok = node.right.is_some() && !is_red(node.right_deref());
+            if ok && !is_red(node.right.as_ref().unwrap().left_deref()) {
+                node = Llrb::move_red_right(node);
+            }
+
+            if !node.key.borrow().lt(key) {
+                // node == key
+                let (right, mut res_node) = Llrb::delete_min(node.right);
+                node.right = right;
+                if res_node.is_none() {
+                    panic!("do_delete(): fatal logic, call the programmer");
+                }
+                let subdel = res_node.take().unwrap();
+                let mut newnode = Box::new(subdel.clone_detach());
+                newnode.left = node.left.take();
+                newnode.right = node.right.take();
+                newnode.black = node.black;
+                (Some(Llrb::fixup(newnode)), Some(*node))
+            } else {
+                let (right, old_node) = Llrb::do_delete(node.right, key);
+                node.right = right;
+                (Some(Llrb::fixup(node)), old_node)
+            }
+        }
+    }
+
+    // return [node, old_node]
+    fn delete_min(
+        node: Option<Box<Node<K, V>>> // root node
+    ) -> (Option<Box<Node<K, V>>>, Option<Node<K, V>>) {
+        if node.is_none() {
+            return (None, None);
+        }
+        let mut node = node.unwrap();
+        if node.left.is_none() {
+            return (None, Some(*node));
+        }
+        let left = node.left_deref();
+        if !is_red(left) && !is_red(left.unwrap().left_deref()) {
+            node = Llrb::move_red_left(node);
+        }
+        let (left, old_node) = Llrb::delete_min(node.left);
+        node.left = left;
+        (Some(Llrb::fixup(node)), old_node)
+    }
+
+    //--------- rotation routines for 2-3 algorithm ----------------
+
+    fn walkdown_rot23(node: Box<Node<K, V>>) -> Box<Node<K, V>> {
+        node
+    }
+
+    fn walkuprot_23(mut node: Box<Node<K, V>>) -> Box<Node<K, V>> {
+        if is_red(node.right_deref()) && !is_red(node.left_deref()) {
+            node = Llrb::rotate_left(node);
+        }
+        let left = node.left_deref();
+        if is_red(left) && is_red(left.unwrap().left_deref()) {
+            node = Llrb::rotate_right(node);
+        }
+        if is_red(node.left_deref()) && is_red(node.right_deref()) {
+            Llrb::flip(node.deref_mut())
+        }
+        node
+    }
+
+    //              (i)                       (i)
+    //               |                         |
+    //              node                       x
+    //              /  \                      / \
+    //             /    (r)                 (r)  \
+    //            /       \                 /     \
+    //          left       x             node      xr
+    //                    / \            /  \
+    //                  xl   xr       left   xl
+    //
+    fn rotate_left(mut node: Box<Node<K, V>>) -> Box<Node<K, V>> {
+        if is_black(node.right_deref()) {
+            panic!("rotateleft(): rotating a black link ? call the programmer");
+        }
+        let mut x = node.right.unwrap();
+        node.right = x.left;
+        x.black = node.black;
+        node.set_red();
+        x.left = Some(node);
+        x
+    }
+
+    //              (i)                       (i)
+    //               |                         |
+    //              node                       x
+    //              /  \                      / \
+    //            (r)   \                   (r)  \
+    //           /       \                 /      \
+    //          x       right             xl      node
+    //         / \                                / \
+    //       xl   xr                             xr  right
+    //
+    fn rotate_right(mut node: Box<Node<K, V>>) -> Box<Node<K, V>> {
+        if is_black(node.left_deref()) {
+            panic!("rotateright(): rotating a black link ? call the programmer")
+        }
+        let mut x = node.left.unwrap();
+        node.left = x.right;
+        x.black = node.black;
+        node.set_red();
+        x.right = Some(node);
+        x
+    }
+
+    //        (x)                   (!x)
+    //         |                     |
+    //        node                  node
+    //        / \                   / \
+    //      (y) (z)              (!y) (!z)
+    //     /      \              /      \
+    //   left    right         left    right
+    //
+    fn flip(node: &mut Node<K, V>) {
+        node.left.as_mut().unwrap().toggle_link();
+        node.right.as_mut().unwrap().toggle_link();
+        node.toggle_link();
+    }
+
+    fn fixup(mut node: Box<Node<K, V>>) -> Box<Node<K, V>> {
+        node = if is_red(node.right_deref()) {
+            Llrb::rotate_left(node)
         } else {
             node
         };
-
-        if node.is_none() {
-            self.fin = true;
-            return None;
-        }
-
-        // handle upper limit
-        let node = node.unwrap();
-        //println!("llrb next {:?}", node.key);
-        match &self.high {
-            Bound::Unbounded => Some(node),
-            Bound::Included(qigh) if node.key.le(qigh) => Some(node),
-            Bound::Excluded(qigh) if node.key.lt(qigh) => Some(node),
-            _ => {
-                self.fin = true;
-                None
-            }
-        }
-    }
-}
-
-pub struct Reverse<'a, K, V>
-where
-    K: AsKey,
-    V: Default + Clone,
-{
-    arc: Arc<MvccRoot<K, V>>,
-    llrb: &'a Llrb<K, V>,
-    node_iter: std::vec::IntoIter<Node<K, V>>,
-    high: Bound<K>,
-    low: Bound<K>,
-    limit: usize,
-    fin: bool,
-}
-
-impl<'a, K, V> Reverse<'a, K, V>
-where
-    K: AsKey,
-    V: Default + Clone,
-{
-    fn get_root(&self) -> Option<&Node<K, V>> {
-        if self.llrb.is_mvcc {
-            self.arc.as_ref().as_ref()
-        } else {
-            self.llrb.single_root.as_ref()
-        }
-    }
-
-    fn reverse_iter(
-        &self,
-        node: Option<&Node<K, V>>,
-        acc: &mut Vec<Node<K, V>>, // accumulator for batch of nodes
-    ) -> bool {
-        if node.is_none() {
-            return true;
-        }
-
-        let node = node.unwrap();
-        //println!("reverse_iter {:?} {:?}", node.key, self.high);
-        let left = node.left_deref();
-        let right = node.right_deref();
-        match &self.high {
-            Bound::Included(qigh) if node.key.gt(qigh) => {
-                return self.reverse_iter(left, acc);
-            }
-            Bound::Excluded(qigh) if node.key.ge(qigh) => {
-                return self.reverse_iter(left, acc);
-            }
-            _ => (),
-        }
-
-        //println!("left {:?} {:?}", node.key, self.high);
-        if !self.reverse_iter(right, acc) {
-            return false;
-        }
-
-        acc.push(node.clone_detach());
-        //println!("push {:?} {}", self.high, acc.len());
-        if acc.len() >= self.limit {
-            return false;
-        }
-
-        return self.reverse_iter(left, acc);
-    }
-}
-
-impl<'a, K, V> Iterator for Reverse<'a, K, V>
-where
-    K: AsKey,
-    V: Default + Clone,
-{
-    type Item = Node<K, V>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        //println!("yyy");
-        if self.fin {
-            return None;
-        }
-
-        let node = self.node_iter.next();
-        let node = if node.is_none() {
-            let mut acc: Vec<Node<K, V>> = Vec::with_capacity(self.limit);
-            self.reverse_iter(self.get_root(), &mut acc);
-            if acc.len() > 0 {
-                //println!("iter-next {}", acc.len());
-                self.high = Bound::Excluded(acc.last().unwrap().key());
-                self.node_iter = acc.into_iter();
-                self.node_iter.next()
+        node = {
+            let left = node.left_deref();
+            if is_red(left) && is_red(left.unwrap().left_deref()) {
+                Llrb::rotate_right(node)
             } else {
-                None
+                node
             }
-        } else {
-            node
         };
-
-        if node.is_none() {
-            self.fin = true;
-            return None;
+        if is_red(node.left_deref()) && is_red(node.right_deref()) {
+            Llrb::flip(node.deref_mut());
         }
+        node
+    }
 
-        // handle lower limit
-        let node = node.unwrap();
-        //println!("llrb next {:?}", node.key);
-        match &self.low {
-            Bound::Unbounded => Some(node),
-            Bound::Included(qow) if node.key.ge(qow) => Some(node),
-            Bound::Excluded(qow) if node.key.gt(qow) => Some(node),
-            _ => {
-                //println!("llrb reverse over {:?}", &self.low);
-                self.fin = true;
-                None
-            }
+    fn move_red_left(mut node: Box<Node<K, V>>) -> Box<Node<K, V>> {
+        Llrb::flip(node.deref_mut());
+        if is_red(node.right.as_ref().unwrap().left_deref()) {
+            node.right = Some(Llrb::rotate_right(node.right.take().unwrap()));
+            node = Llrb::rotate_left(node);
+            Llrb::flip(node.deref_mut());
         }
+        node
+    }
+
+    fn move_red_right(mut node: Box<Node<K, V>>) -> Box<Node<K, V>> {
+        Llrb::flip(node.deref_mut());
+        if is_red(node.left.as_ref().unwrap().left_deref()) {
+            node = Llrb::rotate_right(node);
+            Llrb::flip(node.deref_mut());
+        }
+        node
     }
 }

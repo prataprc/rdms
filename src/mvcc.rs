@@ -1,8 +1,10 @@
 use std::borrow::Borrow;
 use std::cmp::{Ord, Ordering};
-use std::mem::ManuallyDrop;
 use std::ops::{Bound, Deref, DerefMut};
-use std::sync::{atomic::AtomicPtr, Arc, Mutex, RwLock};
+use std::sync::{
+    atomic::{AtomicPtr, Ordering::Relaxed},
+    Arc, Mutex, RwLock,
+};
 
 use crate::error::BognError;
 use crate::llrb::Llrb;
@@ -13,6 +15,8 @@ use crate::traits::{AsEntry, AsKey};
 // TODO: Remove AtomicPtr and test/benchmark.
 // TODO: Remove RwLock and use AtomicPtr and latch mechanism, test/benchmark.
 // TODO: Remove Mutex and check write performance.
+
+const RECLAIM_CAP: usize = 128;
 
 pub struct Mvcc<K, V>
 where
@@ -32,24 +36,23 @@ where
     V: Default + Clone,
 {
     fn clone(&self) -> Mvcc<K, V> {
-        let mut mvcc = Mvcc {
+        let mvcc = Mvcc {
             name: self.name.clone(),
             lsm: self.lsm,
-            snapshot: Default::default(),
+            snapshot: Snapshot::new(),
             mutex: Mutex::new(0),
             rw: RwLock::new(0),
         };
 
-        let mut mvcc_root: MvccRoot<K, V> = Default::default();
-        let arc_next = Arc::new(Default::default());
-        mvcc_root.next = Some(arc_next);
+        let arc = self.snapshot.clone(&self.rw);
+        let seqno = arc.seqno + 1;
+        let n_count = arc.n_count;
+        let arc_ptr = Arc::into_raw(arc) as *mut Box<MvccRoot<K, V>>;
+        let root = unsafe { &arc_ptr.as_mut().unwrap().root };
+        let _arc = unsafe { Arc::from_raw(arc_ptr) };
 
-        let mut arc = Arc::new(mvcc_root);
-        mvcc.snapshot = Snapshot {
-            value: AtomicPtr::new(&mut arc),
-        };
-        std::mem::forget(arc);
-
+        mvcc.snapshot
+            .move_next_snapshot(root.clone(), seqno, n_count, vec![], &mvcc.rw);
         mvcc
     }
 }
@@ -60,8 +63,6 @@ where
     V: Default + Clone,
 {
     fn drop(&mut self) {
-        use std::sync::atomic::Ordering::Relaxed;
-
         let _arc = unsafe { Arc::from_raw(self.snapshot.value.load(Relaxed)) };
     }
 }
@@ -124,9 +125,12 @@ where
     pub fn set_seqno(&mut self, seqno: u64) {
         let _lock = self.mutex.lock();
 
-        let mut arc = self.snapshot.clone(&self.rw);
-        let root = Arc::get_mut(&mut arc).unwrap().owned_root();
+        let arc = self.snapshot.clone(&self.rw);
         let n_count = arc.n_count;
+        let arc_ptr = Arc::into_raw(arc) as *mut Box<MvccRoot<K, V>>;
+        let root = unsafe { arc_ptr.as_mut().unwrap().deref_mut().as_duplicate() };
+        let _arc = unsafe { Arc::from_raw(arc_ptr) };
+
         self.snapshot
             .move_next_snapshot(root, seqno, n_count, vec![], &self.rw);
     }
@@ -180,12 +184,13 @@ where
 
     pub fn set(&self, key: K, value: V) -> Option<impl AsEntry<K, V>> {
         let lsm = self.lsm;
-        let mut arc = self.snapshot.clone(&self.rw);
+        let arc = self.snapshot.clone(&self.rw);
         let seqno = arc.seqno + 1;
         let mut n_count = arc.n_count;
-        let root = Arc::get_mut(&mut arc).unwrap().as_mut();
-        // TODO: no magic number
-        let mut reclaim: Vec<Box<Node<K, V>>> = Vec::with_capacity(128);
+        let arc_ptr = Arc::into_raw(arc) as *mut Box<MvccRoot<K, V>>;
+        let root = unsafe { arc_ptr.as_mut().unwrap().deref_mut().as_mut() };
+        let mut reclaim: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
+        let _arc = unsafe { Arc::from_raw(arc_ptr) };
 
         match Mvcc::upsert(root, key, value, seqno, lsm, &mut reclaim) {
             (Some(mut root), old_node) => {
@@ -209,12 +214,13 @@ where
         cas: u64,
     ) -> Result<Option<impl AsEntry<K, V>>, BognError> {
         let lsm = self.lsm;
-        let mut arc = self.snapshot.clone(&self.rw);
+        let arc = self.snapshot.clone(&self.rw);
         let seqno = arc.seqno + 1;
         let mut n_count = arc.n_count;
-        let root = Arc::get_mut(&mut arc).unwrap().as_mut();
-        // TODO: no magic number
-        let mut reclaim: Vec<Box<Node<K, V>>> = Vec::with_capacity(128);
+        let arc_ptr = Arc::into_raw(arc) as *mut Box<MvccRoot<K, V>>;
+        let root = unsafe { arc_ptr.as_mut().unwrap().deref_mut().as_mut() };
+        let mut reclaim: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
+        let _arc = unsafe { Arc::from_raw(arc_ptr) };
 
         match Mvcc::upsert_cas(root, key, value, cas, seqno, lsm, &mut reclaim) {
             (_, _, Some(err)) => Err(err),
@@ -237,12 +243,13 @@ where
         K: Borrow<Q> + From<Q>,
         Q: Clone + Ord + ?Sized,
     {
-        let mut arc = self.snapshot.clone(&self.rw);
+        let arc = self.snapshot.clone(&self.rw);
         let mut seqno = arc.seqno + 1;
         let mut n_count = arc.n_count;
-        let root = Arc::get_mut(&mut arc).unwrap().as_mut();
-        // TODO: no magic number
-        let mut reclaim: Vec<Box<Node<K, V>>> = Vec::with_capacity(128);
+        let arc_ptr = Arc::into_raw(arc) as *mut Box<MvccRoot<K, V>>;
+        let root = unsafe { arc_ptr.as_mut().unwrap().deref_mut().as_mut() };
+        let mut reclaim: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
+        let _arc = unsafe { Arc::from_raw(arc_ptr) };
 
         let (root, old_node) = if self.lsm {
             let (root, oldn) = Mvcc::delete_lsm(root, key, seqno, &mut reclaim);
@@ -280,9 +287,13 @@ where
     /// b. number of blacks should be same on both sides.
     pub fn validate(&self) -> Result<(), BognError> {
         let arc = self.snapshot.clone(&self.rw);
-        let root = arc.as_ref().as_ref();
+        let arc_ptr = Arc::into_raw(arc) as *mut Box<MvccRoot<K, V>>;
+        let root = unsafe { arc_ptr.as_ref().unwrap().deref().as_ref() };
+        let _arc = unsafe { Arc::from_raw(arc_ptr) };
+
         let (fromred, nblacks) = (is_red(root), 0);
         llrb_common::validate_tree(root, fromred, nblacks)?;
+
         Ok(())
     }
 }
@@ -663,7 +674,7 @@ where
     K: AsKey,
     V: Default + Clone,
 {
-    value: AtomicPtr<Arc<MvccRoot<K, V>>>,
+    value: AtomicPtr<Arc<Box<MvccRoot<K, V>>>>,
 }
 
 impl<K, V> Snapshot<K, V>
@@ -672,16 +683,14 @@ where
     V: Default + Clone,
 {
     fn new() -> Snapshot<K, V> {
-        let mut mvcc_root: MvccRoot<K, V> = Default::default();
-        let arc_next = Arc::new(Default::default());
-        mvcc_root.next = Some(arc_next);
+        let mut mvcc_root = Box::new(MvccRoot::new());
+        mvcc_root.next = Some(Arc::new(Box::new(MvccRoot::new())));
 
-        let mut arc = Arc::new(mvcc_root);
+        let arc = Box::new(Arc::new(mvcc_root));
         let snapshot = Snapshot {
-            value: AtomicPtr::new(&mut arc),
+            value: AtomicPtr::new(Box::leak(arc)),
         };
 
-        std::mem::forget(arc);
         snapshot
     }
 
@@ -693,28 +702,26 @@ where
         reclaim: Vec<Box<Node<K, V>>>,
         rw: &RwLock<i32>,
     ) {
-        use std::sync::atomic::Ordering::Relaxed;
-
         let _wlock = rw.write();
 
         let arc = unsafe {
             Arc::from_raw(self.value.load(Relaxed)) // gets arc-dropped
         };
-        let mut next_arc = Arc::clone(arc.as_ref().next.as_ref().unwrap());
 
-        let mvcc_root = Arc::get_mut(&mut next_arc).unwrap();
-        mvcc_root.root = ManuallyDrop::new(root);
+        let next_arc = Arc::clone(arc.as_ref().next.as_ref().unwrap());
+        let next_arc_ptr = Arc::into_raw(next_arc) as *mut Box<MvccRoot<K, V>>;
+        let mvcc_root = unsafe { next_arc_ptr.as_mut().unwrap().deref_mut() };
+        let next_arc = unsafe { Box::new(Arc::from_raw(next_arc_ptr)) };
+
+        mvcc_root.root = root;
         mvcc_root.seqno = seqno;
         mvcc_root.n_count = n_count;
         mvcc_root.reclaim = reclaim;
-        mvcc_root.next = Some(Arc::new(Default::default()));
-        self.value.store(&mut next_arc, Relaxed);
-        std::mem::forget(next_arc);
+        mvcc_root.next = Some(Arc::new(Box::new(MvccRoot::new())));
+        self.value.store(Box::leak(next_arc), Relaxed);
     }
 
-    fn clone(&self, rw: &RwLock<i32>) -> Arc<MvccRoot<K, V>> {
-        use std::sync::atomic::Ordering::Relaxed;
-
+    fn clone(&self, rw: &RwLock<i32>) -> Arc<Box<MvccRoot<K, V>>> {
         let _rlock = rw.read();
         Arc::clone(unsafe { self.value.load(Relaxed).as_ref().unwrap() })
     }
@@ -726,8 +733,6 @@ where
     V: Default + Clone,
 {
     fn as_ref(&self) -> &MvccRoot<K, V> {
-        use std::sync::atomic::Ordering::Relaxed;
-
         unsafe { self.value.load(Relaxed).as_ref().unwrap() }
     }
 }
@@ -738,11 +743,11 @@ where
     K: AsKey,
     V: Default + Clone,
 {
-    pub(crate) root: ManuallyDrop<Option<Box<Node<K, V>>>>,
+    pub(crate) root: Option<Box<Node<K, V>>>,
     pub(crate) reclaim: Vec<Box<Node<K, V>>>,
     pub(crate) seqno: u64,   // starts from 0 and incr for every mutation.
     pub(crate) n_count: u64, // number of entries in the tree.
-    pub(crate) next: Option<Arc<MvccRoot<K, V>>>,
+    pub(crate) next: Option<Arc<Box<MvccRoot<K, V>>>>,
 }
 
 impl<K, V> MvccRoot<K, V>
@@ -750,6 +755,10 @@ where
     K: AsKey,
     V: Default + Clone,
 {
+    fn new() -> MvccRoot<K, V> {
+        Default::default()
+    }
+
     fn as_ref(&self) -> Option<&Node<K, V>> {
         self.root.as_ref().map(|item| item.deref())
     }
@@ -758,8 +767,8 @@ where
         self.root.as_mut().map(|item| item.deref_mut())
     }
 
-    fn owned_root(&mut self) -> Option<Box<Node<K, V>>> {
-        match self.root.deref_mut() {
+    fn as_duplicate(&mut self) -> Option<Box<Node<K, V>>> {
+        match self.root.as_mut() {
             Some(root) => unsafe { Some(Box::from_raw(root.deref_mut())) },
             None => None,
         }
@@ -772,28 +781,11 @@ where
     V: Default + Clone,
 {
     fn drop(&mut self) {
-        unsafe { ManuallyDrop::drop(&mut self.root) };
-    }
-}
-
-impl<K, V> Clone for MvccRoot<K, V>
-where
-    K: AsKey,
-    V: Default + Clone,
-{
-    fn clone(&self) -> MvccRoot<K, V> {
-        let mut new = MvccRoot {
-            root: ManuallyDrop::new(None),
-            seqno: self.seqno,
-            n_count: self.n_count,
-            reclaim: Default::default(),
-            next: Some(Arc::new(Default::default())),
+        match self.root.take() {
+            Some(root) => {
+                Box::leak(root);
+            }
+            None => (),
         };
-
-        if self.root.is_some() {
-            new.root = self.root.clone()
-        }
-
-        new
     }
 }

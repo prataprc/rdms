@@ -5,8 +5,7 @@
 //! Each index will carry a sequence-number as the count of mutations
 //! ingested by the index. For every successful mutation, the
 //! sequence-number will be incremented and the entry, on which the
-//! mutation was applied, shall be tagged with that sequence-number
-//! attached.
+//! mutation was applied, shall be tagged with that sequence-number.
 //!
 //! Log-Structured-Merge, [LSM], is a common technique used in managing
 //! heterogenous data-structures that are transparent to the index. In
@@ -19,6 +18,9 @@
 //! context CAS == sequence-number.
 //!
 //! [LSM]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
+
+#![feature(rc_into_raw_non_null)]
+
 mod empty;
 mod error;
 mod llrb;
@@ -35,3 +37,5 @@ pub use crate::traits::{AsEntry, AsKey, AsValue};
 
 #[cfg(test)]
 mod llrb_test;
+#[cfg(test)]
+mod mvcc_test;

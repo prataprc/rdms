@@ -84,7 +84,7 @@ where
     K: AsKey,
     V: Default + Clone,
 {
-    pub(crate) arc: Arc<MvccRoot<K, V>>,
+    pub(crate) arc: Arc<Box<MvccRoot<K, V>>>,
     pub(crate) root: Option<&'a Node<K, V>>,
     pub(crate) node_iter: std::vec::IntoIter<Node<K, V>>,
     pub(crate) after_key: Bound<K>,
@@ -179,7 +179,7 @@ where
     K: AsKey,
     V: Default + Clone,
 {
-    pub(crate) arc: Arc<MvccRoot<K, V>>,
+    pub(crate) arc: Arc<Box<MvccRoot<K, V>>>,
     pub(crate) root: Option<&'a Node<K, V>>,
     pub(crate) node_iter: std::vec::IntoIter<Node<K, V>>,
     pub(crate) low: Bound<K>,
@@ -304,7 +304,7 @@ where
     K: AsKey,
     V: Default + Clone,
 {
-    arc: Arc<MvccRoot<K, V>>,
+    arc: Arc<Box<MvccRoot<K, V>>>,
     root: Option<&'a Node<K, V>>,
     node_iter: std::vec::IntoIter<Node<K, V>>,
     high: Bound<K>,

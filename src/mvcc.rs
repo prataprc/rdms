@@ -23,11 +23,11 @@ where
     K: AsKey,
     V: Default + Clone,
 {
-    name: String,
-    lsm: bool,
-    snapshot: Snapshot<K, V>,
-    mutex: Mutex<i32>,
-    rw: RwLock<i32>,
+    pub(crate) name: String,
+    pub(crate) lsm: bool,
+    pub(crate) snapshot: Snapshot<K, V>,
+    pub(crate) mutex: Mutex<i32>,
+    pub(crate) rw: RwLock<i32>,
 }
 
 impl<K, V> Clone for Mvcc<K, V>
@@ -63,7 +63,14 @@ where
     V: Default + Clone,
 {
     fn drop(&mut self) {
-        let _arc = unsafe { Arc::from_raw(self.snapshot.value.load(Relaxed)) };
+        let arc = unsafe { self.snapshot.value.load(Relaxed).as_ref().unwrap() };
+        //println!("drop mvcc {:p} {:p} {}", self, arc, Arc::strong_count(&arc));
+
+        // drop arc.
+        let mut boxed_arc = unsafe { Box::from_raw(self.snapshot.value.load(Relaxed)) };
+        let mvcc_root = Arc::get_mut(boxed_arc.deref_mut()).unwrap();
+        // drop root.
+        let _root = mvcc_root.as_duplicate();
     }
 }
 
@@ -669,12 +676,12 @@ where
 }
 
 #[derive(Default)]
-struct Snapshot<K, V>
+pub(crate) struct Snapshot<K, V>
 where
     K: AsKey,
     V: Default + Clone,
 {
-    value: AtomicPtr<Arc<Box<MvccRoot<K, V>>>>,
+    pub(crate) value: AtomicPtr<Arc<Box<MvccRoot<K, V>>>>,
 }
 
 impl<K, V> Snapshot<K, V>
@@ -683,14 +690,13 @@ where
     V: Default + Clone,
 {
     fn new() -> Snapshot<K, V> {
-        let mut mvcc_root = Box::new(MvccRoot::new());
-        mvcc_root.next = Some(Arc::new(Box::new(MvccRoot::new())));
-
+        let mut mvcc_root: Box<MvccRoot<K, V>> = MvccRoot::new();
+        mvcc_root.next = Some(Box::new(Arc::new(MvccRoot::new())));
         let arc = Box::new(Arc::new(mvcc_root));
+        //println!("new snapshot {:p} {}", arc, Arc::strong_count(&arc));
         let snapshot = Snapshot {
             value: AtomicPtr::new(Box::leak(arc)),
         };
-
         snapshot
     }
 
@@ -705,19 +711,24 @@ where
         let _wlock = rw.write();
 
         let arc = unsafe {
-            Arc::from_raw(self.value.load(Relaxed)) // gets arc-dropped
+            Box::from_raw(self.value.load(Relaxed)) // gets arc-dropped
         };
 
-        let next_arc = Arc::clone(arc.as_ref().next.as_ref().unwrap());
-        let next_arc_ptr = Arc::into_raw(next_arc) as *mut Box<MvccRoot<K, V>>;
-        let mvcc_root = unsafe { next_arc_ptr.as_mut().unwrap().deref_mut() };
-        let next_arc = unsafe { Box::new(Arc::from_raw(next_arc_ptr)) };
+        let next_arc = Box::new(Arc::clone(arc.as_ref().next.as_ref().unwrap().deref()));
+        let next_arc_ptr = Box::into_raw(next_arc);
+        let mvcc_root = unsafe {
+            (next_arc_ptr.as_ref().unwrap().deref().deref() as *const MvccRoot<K, V>
+                as *mut MvccRoot<K, V>)
+                .as_mut()
+                .unwrap()
+        };
+        let next_arc = unsafe { Box::from_raw(next_arc_ptr) };
 
         mvcc_root.root = root;
         mvcc_root.seqno = seqno;
         mvcc_root.n_count = n_count;
         mvcc_root.reclaim = reclaim;
-        mvcc_root.next = Some(Arc::new(Box::new(MvccRoot::new())));
+        mvcc_root.next = Some(Box::new(Arc::new(MvccRoot::new())));
         self.value.store(Box::leak(next_arc), Relaxed);
     }
 
@@ -747,7 +758,7 @@ where
     pub(crate) reclaim: Vec<Box<Node<K, V>>>,
     pub(crate) seqno: u64,   // starts from 0 and incr for every mutation.
     pub(crate) n_count: u64, // number of entries in the tree.
-    pub(crate) next: Option<Arc<Box<MvccRoot<K, V>>>>,
+    pub(crate) next: Option<Box<Arc<Box<MvccRoot<K, V>>>>>,
 }
 
 impl<K, V> MvccRoot<K, V>
@@ -755,8 +766,10 @@ where
     K: AsKey,
     V: Default + Clone,
 {
-    fn new() -> MvccRoot<K, V> {
-        Default::default()
+    fn new() -> Box<MvccRoot<K, V>> {
+        let mvcc_root = Box::new(Default::default());
+        //println!("new mvcc-root {:p}", mvcc_root);
+        mvcc_root
     }
 
     fn as_ref(&self) -> Option<&Node<K, V>> {
@@ -787,5 +800,6 @@ where
             }
             None => (),
         };
+        //println!("drop mvcc-root {:p}", self);
     }
 }

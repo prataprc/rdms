@@ -14,6 +14,7 @@ use crate::traits::{AsEntry, AsValue};
 #[test]
 fn test_id() {
     let mvcc: Mvcc<i32, Empty> = Mvcc::new("test-mvcc", false);
+    let arc = unsafe { mvcc.snapshot.value.load(Relaxed).as_ref().unwrap() };
     assert_eq!(mvcc.id(), "test-mvcc".to_string());
 }
 

@@ -26,12 +26,12 @@ fn test_seqno() {
     assert_eq!(mvcc.get_seqno(), 1234);
 }
 
-//#[test]
-//fn test_count() {
-//    let llrb: Llrb<i32, Empty> = Llrb::new("test-llrb", false);
-//    assert_eq!(llrb.count(), 0);
-//}
-//
+#[test]
+fn test_count() {
+    let mvcc: Mvcc<i32, Empty> = Mvcc::new("test-mvcc", false);
+    assert_eq!(mvcc.count(), 0);
+}
+
 //#[test]
 //fn test_set() {
 //    let mut llrb: Llrb<i64, i64> = Llrb::new("test-llrb", false /*lsm*/);

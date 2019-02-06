@@ -44,15 +44,11 @@ where
             rw: RwLock::new(0),
         };
 
-        let arc = self.snapshot.clone(&self.rw);
-        let seqno = arc.seqno + 1;
-        let n_count = arc.n_count;
-        let arc_ptr = Arc::into_raw(arc) as *mut Box<MvccRoot<K, V>>;
-        let root = unsafe { &arc_ptr.as_mut().unwrap().root };
-        let _arc = unsafe { Arc::from_raw(arc_ptr) };
+        let arc: Arc<Box<MvccRoot<K, V>>> = self.snapshot.clone(&self.rw);
+        let root = self.snapshot.as_mut().as_duplicate().clone();
 
         mvcc.snapshot
-            .move_next_snapshot(root.clone(), seqno, n_count, vec![], &mvcc.rw);
+            .shift_shapshot(root, arc.seqno, arc.n_count, vec![], &mvcc.rw);
         mvcc
     }
 }
@@ -63,8 +59,15 @@ where
     V: Default + Clone,
 {
     fn drop(&mut self) {
-        let arc = unsafe { self.snapshot.value.load(Relaxed).as_ref().unwrap() };
-        //println!("drop mvcc {:p} {:p} {}", self, arc, Arc::strong_count(&arc));
+        // NOTE: Means all references to mvcc are gone and ownership is going out
+        // of scope. This also implies that there are only TWO Arc<> snapshots.
+        // One is held by self.snapshot and another is held by `next`.
+
+        // NOTE: AtomicPtr will fence the drop chain, so we have to get past the
+        // atomic fence and drop it here.
+
+        // NOTE: Likewise MvccRoot will fence the drop on its `root` field, so we
+        // have to get past that and drop it here.
 
         // drop arc.
         let mut boxed_arc = unsafe { Box::from_raw(self.snapshot.value.load(Relaxed)) };
@@ -81,7 +84,7 @@ where
 {
     fn from(mut llrb: Llrb<K, V>) -> Mvcc<K, V> {
         let mvcc = Mvcc::new(llrb.name, llrb.lsm);
-        mvcc.snapshot.move_next_snapshot(
+        mvcc.snapshot.shift_shapshot(
             llrb.root.take(),
             llrb.seqno,
             llrb.n_count,
@@ -132,14 +135,11 @@ where
     pub fn set_seqno(&mut self, seqno: u64) {
         let _lock = self.mutex.lock();
 
-        let arc = self.snapshot.clone(&self.rw);
-        let n_count = arc.n_count;
-        let arc_ptr = Arc::into_raw(arc) as *mut Box<MvccRoot<K, V>>;
-        let root = unsafe { arc_ptr.as_mut().unwrap().deref_mut().as_duplicate() };
-        let _arc = unsafe { Arc::from_raw(arc_ptr) };
+        let arc: Arc<Box<MvccRoot<K, V>>> = self.snapshot.clone(&self.rw);
+        let root = self.snapshot.as_mut().as_duplicate().clone();
 
         self.snapshot
-            .move_next_snapshot(root, seqno, n_count, vec![], &self.rw);
+            .shift_shapshot(root, seqno, arc.n_count, vec![], &self.rw);
     }
 
     /// Return current seqno.
@@ -207,7 +207,7 @@ where
                 }
                 let rw = &self.rw;
                 self.snapshot
-                    .move_next_snapshot(Some(root), seqno, n_count, reclaim, rw);
+                    .shift_shapshot(Some(root), seqno, n_count, reclaim, rw);
                 old_node
             }
             (None, _old_node) => unreachable!(),
@@ -238,7 +238,7 @@ where
                 }
                 let rw = &self.rw;
                 self.snapshot
-                    .move_next_snapshot(Some(root), seqno, n_count, reclaim, rw);
+                    .shift_shapshot(Some(root), seqno, n_count, reclaim, rw);
                 Ok(old_node)
             }
             _ => panic!("set_cas: impossible case, call programmer"),
@@ -285,7 +285,7 @@ where
             (root, oldn.map(|item| *item))
         };
         self.snapshot
-            .move_next_snapshot(root, seqno, n_count, reclaim, &self.rw);
+            .shift_shapshot(root, seqno, n_count, reclaim, &self.rw);
         old_node
     }
 
@@ -700,7 +700,7 @@ where
         snapshot
     }
 
-    fn move_next_snapshot(
+    fn shift_shapshot(
         &self,
         root: Option<Box<Node<K, V>>>,
         seqno: u64,
@@ -736,15 +736,21 @@ where
         let _rlock = rw.read();
         Arc::clone(unsafe { self.value.load(Relaxed).as_ref().unwrap() })
     }
-}
 
-impl<K, V> AsRef<MvccRoot<K, V>> for Snapshot<K, V>
-where
-    K: AsKey,
-    V: Default + Clone,
-{
     fn as_ref(&self) -> &MvccRoot<K, V> {
         unsafe { self.value.load(Relaxed).as_ref().unwrap() }
+    }
+
+    fn as_mut(&self) -> &mut MvccRoot<K, V> {
+        let arc_ptr: &mut Arc<Box<MvccRoot<K, V>>> =
+            unsafe { self.value.load(Relaxed).as_mut().unwrap() };
+
+        let ptr: &MvccRoot<K, V> = arc_ptr.deref().deref();
+        unsafe {
+            (ptr as *const MvccRoot<K, V> as *mut MvccRoot<K, V>)
+                .as_mut()
+                .unwrap()
+        }
     }
 }
 

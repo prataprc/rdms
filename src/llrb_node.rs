@@ -129,31 +129,26 @@ where
     V: Default + Clone,
 {
     // CREATE operation
-    pub(crate) fn new(key: K, value: V, seqno: u64, black: bool) -> Node<K, V> {
+    pub(crate) fn new(key: K, value: V, seqno: u64, black: bool) -> Box<Node<K, V>> {
         let valn = ValueNode::new(value, seqno, None, None);
-        Node {
+        let node = Box::new(Node {
             key,
             valn,
             black,
             left: None,
             right: None,
-        }
+        });
+        println!("new node {:p}", node);
+        node
     }
 
-    pub(crate) fn from_entry<E>(entry: E) -> Node<K, V>
+    pub(crate) fn from_entry<E>(entry: E) -> Box<Node<K, V>>
     where
         E: AsEntry<K, V>,
         <E as AsEntry<K, V>>::Value: Default + Clone,
     {
         let asvalue = entry.value();
-        let valn = ValueNode::new(asvalue.value(), asvalue.seqno(), None, None);
-        Node {
-            key: entry.key(),
-            valn,
-            black: false,
-            left: None,
-            right: None,
-        }
+        Node::new(entry.key(), asvalue.value(), asvalue.seqno(), false)
     }
 
     // clone and detach this node from the tree.
@@ -184,28 +179,37 @@ where
 
     // unsafe clone for MVCC COW
     pub(crate) fn mvcc_clone(
-        &mut self,
+        &self,
         reclaim: &mut Vec<Box<Node<K, V>>>, /* reclaim */
     ) -> Box<Node<K, V>> {
-        let mut new_node = Node {
+        let mut new_node = Box::new(Node {
             key: self.key.clone(),
             valn: self.valn.clone(),
             black: self.black,
             left: None,
             right: None,
-        };
+        });
+        println!("new node (mvcc) {:p} {:p}", self, new_node);
         if self.left.is_some() {
-            let ref_node = self.left.as_mut().unwrap().deref_mut();
-            new_node.left = unsafe { Some(Box::from_raw(ref_node)) };
+            let ref_node = self.left.as_ref().unwrap().deref();
+            new_node.left = unsafe {
+                Some(Box::from_raw(
+                    ref_node as *const Node<K, V> as *mut Node<K, V>,
+                ))
+            };
         }
         if self.right.is_some() {
-            let ref_node = self.right.as_mut().unwrap().deref_mut();
-            new_node.right = unsafe { Some(Box::from_raw(ref_node)) };
+            let ref_node = self.right.as_ref().unwrap().deref();
+            new_node.right = unsafe {
+                Some(Box::from_raw(
+                    ref_node as *const Node<K, V> as *mut Node<K, V>,
+                ))
+            };
         }
 
-        reclaim.push(unsafe { Box::from_raw(self) });
+        reclaim.push(unsafe { Box::from_raw(self as *const Node<K, V> as *mut Node<K, V>) });
 
-        Box::new(new_node)
+        new_node
     }
 
     pub(crate) fn left_deref(&self) -> Option<&Node<K, V>> {
@@ -313,5 +317,26 @@ where
 
     fn is_deleted(&self) -> bool {
         self.valn.is_deleted()
+    }
+}
+
+impl<K, V> Drop for Node<K, V>
+where
+    K: AsKey,
+    V: Default + Clone,
+{
+    fn drop(&mut self) {
+        println!(
+            "drop node {:p} {} {}",
+            self,
+            self.left.is_none(),
+            self.right.is_none(),
+        );
+        if let Some(left) = self.left.take() {
+            Box::leak(left);
+        }
+        if let Some(right) = self.right.take() {
+            Box::leak(right);
+        }
     }
 }

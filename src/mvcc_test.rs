@@ -32,50 +32,50 @@ fn test_count() {
     assert_eq!(mvcc.count(), 0);
 }
 
-//#[test]
-//fn test_set() {
-//    let mut llrb: Llrb<i64, i64> = Llrb::new("test-llrb", false /*lsm*/);
-//    let mut refns = RefNodes::new(false /*lsm*/, 10);
-//
-//    assert!(llrb.set(2, 10).is_none());
-//    refns.set(2, 10);
-//    assert!(llrb.set(1, 10).is_none());
-//    refns.set(1, 10);
-//    assert!(llrb.set(3, 10).is_none());
-//    refns.set(3, 10);
-//    assert!(llrb.set(6, 10).is_none());
-//    refns.set(6, 10);
-//    assert!(llrb.set(5, 10).is_none());
-//    refns.set(5, 10);
-//    assert!(llrb.set(4, 10).is_none());
-//    refns.set(4, 10);
-//    assert!(llrb.set(8, 10).is_none());
-//    refns.set(8, 10);
-//    assert!(llrb.set(0, 10).is_none());
-//    refns.set(0, 10);
-//    assert!(llrb.set(9, 10).is_none());
-//    refns.set(9, 10);
-//    assert!(llrb.set(7, 10).is_none());
-//    refns.set(7, 10);
-//
-//    assert_eq!(llrb.count(), 10);
-//    assert!(llrb.validate().is_ok());
-//
-//    // test get
-//    for i in 0..10 {
-//        let node = llrb.get(&i);
-//        let refn = refns.get(i);
-//        check_node(node, refn);
-//    }
-//    // test iter
-//    let (mut iter, mut iter_ref) = (llrb.iter(), refns.iter());
-//    loop {
-//        if check_node(iter.next(), iter_ref.next().cloned()) == false {
-//            break;
-//        }
-//    }
-//}
-//
+#[test]
+fn test_set() {
+    let mut mvcc: Mvcc<i64, i64> = Mvcc::new("test-mvcc", false /*lsm*/);
+    let mut refns = RefNodes::new(false /*lsm*/, 10);
+
+    assert!(mvcc.set(2, 10).is_none());
+    refns.set(2, 10);
+    assert!(mvcc.set(1, 10).is_none());
+    refns.set(1, 10);
+    assert!(mvcc.set(3, 10).is_none());
+    refns.set(3, 10);
+    //assert!(mvcc.set(6, 10).is_none());
+    //refns.set(6, 10);
+    //assert!(mvcc.set(5, 10).is_none());
+    //refns.set(5, 10);
+    //assert!(mvcc.set(4, 10).is_none());
+    //refns.set(4, 10);
+    //assert!(mvcc.set(8, 10).is_none());
+    //refns.set(8, 10);
+    //assert!(mvcc.set(0, 10).is_none());
+    //refns.set(0, 10);
+    //assert!(mvcc.set(9, 10).is_none());
+    //refns.set(9, 10);
+    //assert!(mvcc.set(7, 10).is_none());
+    //refns.set(7, 10);
+
+    assert_eq!(mvcc.count(), 3);
+    //assert!(mvcc.validate().is_ok());
+
+    //// test get
+    //for i in 0..10 {
+    //    let node = llrb.get(&i);
+    //    let refn = refns.get(i);
+    //    check_node(node, refn);
+    //}
+    //// test iter
+    //let (mut iter, mut iter_ref) = (llrb.iter(), refns.iter());
+    //loop {
+    //    if check_node(iter.next(), iter_ref.next().cloned()) == false {
+    //        break;
+    //    }
+    //}
+}
+
 //#[test]
 //fn test_cas_lsm() {
 //    let mut llrb: Llrb<i64, i64> = Llrb::new("test-llrb", true /*lsm*/);

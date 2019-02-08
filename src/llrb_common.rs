@@ -100,7 +100,7 @@ where
     fn get_root(&self) -> Option<&Node<K, V>> {
         match self.root {
             root @ Some(_) => root,
-            None => self.arc.root.as_ref().map(|item| item.deref()),
+            None => self.arc.as_ref().as_ref().as_ref(), // Arc<Box<<MvccRoot>>>
         }
     }
 
@@ -196,7 +196,7 @@ where
     fn get_root(&self) -> Option<&Node<K, V>> {
         match self.root {
             root @ Some(_) => root,
-            None => self.arc.root.as_ref().map(|item| item.deref()),
+            None => self.arc.as_ref().as_ref().as_ref(), // Arc<Box<<MvccRoot>>>
         }
     }
 
@@ -321,7 +321,7 @@ where
     fn get_root(&self) -> Option<&Node<K, V>> {
         match self.root {
             root @ Some(_) => root,
-            None => self.arc.root.as_ref().map(|item| item.deref()),
+            None => self.arc.as_ref().as_ref().as_ref(), // Arc<Box<<MvccRoot>>>
         }
     }
 
@@ -433,4 +433,20 @@ where
         None => true,
         Some(node) => node.is_black(),
     }
+}
+
+pub fn drop_tree<K, V>(mut node: Box<Node<K, V>>)
+where
+    K: AsKey,
+    V: Default + Clone,
+{
+    match node.left.take() {
+        Some(left) => drop_tree(left),
+        None => (),
+    }
+    match node.right.take() {
+        Some(left) => drop_tree(left),
+        None => (),
+    }
+    std::mem::drop(node)
 }

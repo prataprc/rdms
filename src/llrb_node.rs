@@ -118,6 +118,7 @@ where
     pub(crate) key: K,
     pub(crate) valn: ValueNode<V>,
     pub(crate) black: bool,                    // store: black or red
+    pub(crate) dirty: bool,                    // new node in mvcc path
     pub(crate) left: Option<Box<Node<K, V>>>,  // store: left child
     pub(crate) right: Option<Box<Node<K, V>>>, // store: right child
 }
@@ -135,6 +136,7 @@ where
             key,
             valn,
             black,
+            dirty: true,
             left: None,
             right: None,
         });
@@ -157,6 +159,7 @@ where
             key: self.key.clone(),
             valn: self.valn.clone(),
             black: self.black,
+            dirty: true,
             left: None,
             right: None,
         }
@@ -186,6 +189,7 @@ where
             key: self.key.clone(),
             valn: self.valn.clone(),
             black: self.black,
+            dirty: self.dirty,
             left: None,
             right: None,
         });
@@ -254,6 +258,11 @@ where
     }
 
     #[inline]
+    pub(crate) fn duplicate(&self) -> Box<Node<K, V>> {
+        unsafe { Box::from_raw(self as *const Node<K, V> as *mut Node<K, V>) }
+    }
+
+    #[inline]
     pub(crate) fn set_red(&mut self) {
         self.black = false
     }
@@ -284,6 +293,7 @@ where
             key: Default::default(),
             valn: Default::default(),
             black: false,
+            dirty: true,
             left: None,
             right: None,
         }
@@ -326,17 +336,17 @@ where
     V: Default + Clone,
 {
     fn drop(&mut self) {
-        println!(
-            "drop node {:p} {} {}",
-            self,
-            self.left.is_none(),
-            self.right.is_none(),
-        );
         if let Some(left) = self.left.take() {
             Box::leak(left);
         }
         if let Some(right) = self.right.take() {
             Box::leak(right);
         }
+        println!(
+            "drop node {:p} {} {}",
+            self,
+            self.left.is_none(),
+            self.right.is_none(),
+        );
     }
 }

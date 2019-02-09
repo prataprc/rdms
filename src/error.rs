@@ -22,4 +22,7 @@ pub enum BognError {
     /// Duplicated keys are not allowed in the index. Each and every
     /// Key must be unique.
     DuplicateKey(String),
+    /// MVCC algorithm uses dirty node marker for newly created nodes
+    /// in its mutation path.
+    DirtyNode,
 }

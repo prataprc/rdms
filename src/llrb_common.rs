@@ -39,6 +39,8 @@ where
 {
     if node.is_none() {
         return Ok(nblacks);
+    } else if node.as_ref().unwrap().dirty {
+        return Err(BognError::DirtyNode);
     }
 
     let red = is_red(node.as_ref().map(|item| item.deref()));
@@ -448,5 +450,6 @@ where
         Some(left) => drop_tree(left),
         None => (),
     }
+    println!("drop_tree - node {:p}", node);
     std::mem::drop(node)
 }

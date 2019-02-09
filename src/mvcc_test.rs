@@ -43,127 +43,127 @@ fn test_set() {
     refns.set(1, 10);
     assert!(mvcc.set(3, 10).is_none());
     refns.set(3, 10);
-    //assert!(mvcc.set(6, 10).is_none());
-    //refns.set(6, 10);
-    //assert!(mvcc.set(5, 10).is_none());
-    //refns.set(5, 10);
-    //assert!(mvcc.set(4, 10).is_none());
-    //refns.set(4, 10);
-    //assert!(mvcc.set(8, 10).is_none());
-    //refns.set(8, 10);
-    //assert!(mvcc.set(0, 10).is_none());
-    //refns.set(0, 10);
-    //assert!(mvcc.set(9, 10).is_none());
-    //refns.set(9, 10);
-    //assert!(mvcc.set(7, 10).is_none());
-    //refns.set(7, 10);
+    assert!(mvcc.set(6, 10).is_none());
+    refns.set(6, 10);
+    assert!(mvcc.set(5, 10).is_none());
+    refns.set(5, 10);
+    assert!(mvcc.set(4, 10).is_none());
+    refns.set(4, 10);
+    assert!(mvcc.set(8, 10).is_none());
+    refns.set(8, 10);
+    assert!(mvcc.set(0, 10).is_none());
+    refns.set(0, 10);
+    assert!(mvcc.set(9, 10).is_none());
+    refns.set(9, 10);
+    assert!(mvcc.set(7, 10).is_none());
+    refns.set(7, 10);
 
-    assert_eq!(mvcc.count(), 3);
-    //assert!(mvcc.validate().is_ok());
+    assert_eq!(mvcc.count(), 10);
+    assert!(mvcc.validate().is_ok());
 
-    //// test get
-    //for i in 0..10 {
-    //    let node = llrb.get(&i);
-    //    let refn = refns.get(i);
-    //    check_node(node, refn);
-    //}
-    //// test iter
-    //let (mut iter, mut iter_ref) = (llrb.iter(), refns.iter());
-    //loop {
-    //    if check_node(iter.next(), iter_ref.next().cloned()) == false {
-    //        break;
-    //    }
-    //}
+    // test get
+    for i in 0..10 {
+        let node = mvcc.get(&i);
+        let refn = refns.get(i);
+        check_node(node, refn);
+    }
+    // test iter
+    let (mut iter, mut iter_ref) = (mvcc.iter(), refns.iter());
+    loop {
+        if check_node(iter.next(), iter_ref.next().cloned()) == false {
+            break;
+        }
+    }
 }
 
-//#[test]
-//fn test_cas_lsm() {
-//    let mut llrb: Llrb<i64, i64> = Llrb::new("test-llrb", true /*lsm*/);
-//    let mut refns = RefNodes::new(true /*lsm*/, 11);
-//
-//    assert!(llrb.set(2, 100).is_none());
-//    refns.set(2, 100);
-//    assert!(llrb.set(1, 100).is_none());
-//    refns.set(1, 100);
-//    assert!(llrb.set(3, 100).is_none());
-//    refns.set(3, 100);
-//    assert!(llrb.set(6, 100).is_none());
-//    refns.set(6, 100);
-//    assert!(llrb.set(5, 100).is_none());
-//    refns.set(5, 100);
-//    assert!(llrb.set(4, 100).is_none());
-//    refns.set(4, 100);
-//    assert!(llrb.set(8, 100).is_none());
-//    refns.set(8, 100);
-//    assert!(llrb.set(0, 100).is_none());
-//    refns.set(0, 100);
-//    assert!(llrb.set(9, 100).is_none());
-//    refns.set(9, 100);
-//    assert!(llrb.set(7, 100).is_none());
-//    refns.set(7, 100);
-//
-//    // repeated mutations on same key
-//
-//    let node = llrb.set_cas(0, 200, 8).unwrap();
-//    let refn = refns.set_cas(0, 200, 8);
-//    check_node(node, refn);
-//
-//    let node = llrb.set_cas(5, 200, 5).unwrap();
-//    let refn = refns.set_cas(5, 200, 5);
-//    check_node(node, refn);
-//
-//    let node = llrb.set_cas(6, 200, 4).unwrap();
-//    let refn = refns.set_cas(6, 200, 4);
-//    check_node(node, refn);
-//
-//    let node = llrb.set_cas(9, 200, 9).unwrap();
-//    let refn = refns.set_cas(9, 200, 9);
-//    check_node(node, refn);
-//
-//    let node = llrb.set_cas(0, 300, 11).unwrap();
-//    let refn = refns.set_cas(0, 300, 11);
-//    check_node(node, refn);
-//
-//    let node = llrb.set_cas(5, 300, 12).unwrap();
-//    let refn = refns.set_cas(5, 300, 12);
-//    check_node(node, refn);
-//
-//    let node = llrb.set_cas(9, 300, 14).unwrap();
-//    let refn = refns.set_cas(9, 300, 14);
-//    check_node(node, refn);
-//
-//    // create
-//    assert!(llrb.set_cas(10, 100, 0).unwrap().is_none());
-//    assert!(refns.set_cas(10, 100, 0).is_none());
-//    // error create
-//    assert_eq!(
-//        llrb.set_cas(10, 100, 0).err().unwrap(),
-//        BognError::InvalidCAS
-//    );
-//    // error insert
-//    assert_eq!(
-//        llrb.set_cas(9, 400, 14).err().unwrap(),
-//        BognError::InvalidCAS
-//    );
-//
-//    assert_eq!(llrb.count(), 11);
-//    assert!(llrb.validate().is_ok());
-//
-//    // test get
-//    for i in 0..11 {
-//        let node = llrb.get(&i);
-//        let refn = refns.get(i);
-//        check_node(node, refn);
-//    }
-//    // test iter
-//    let (mut iter, mut iter_ref) = (llrb.iter(), refns.iter());
-//    loop {
-//        if check_node(iter.next(), iter_ref.next().cloned()) == false {
-//            break;
-//        }
-//    }
-//}
-//
+#[test]
+fn test_cas_lsm() {
+    let mut mvcc: Mvcc<i64, i64> = Mvcc::new("test-mvcc", true /*lsm*/);
+    let mut refns = RefNodes::new(true /*lsm*/, 11);
+
+    assert!(mvcc.set(2, 100).is_none());
+    refns.set(2, 100);
+    assert!(mvcc.set(1, 100).is_none());
+    refns.set(1, 100);
+    assert!(mvcc.set(3, 100).is_none());
+    refns.set(3, 100);
+    assert!(mvcc.set(6, 100).is_none());
+    refns.set(6, 100);
+    assert!(mvcc.set(5, 100).is_none());
+    refns.set(5, 100);
+    assert!(mvcc.set(4, 100).is_none());
+    refns.set(4, 100);
+    assert!(mvcc.set(8, 100).is_none());
+    refns.set(8, 100);
+    assert!(mvcc.set(0, 100).is_none());
+    refns.set(0, 100);
+    assert!(mvcc.set(9, 100).is_none());
+    refns.set(9, 100);
+    assert!(mvcc.set(7, 100).is_none());
+    refns.set(7, 100);
+
+    // repeated mutations on same key
+
+    let node = mvcc.set_cas(0, 200, 8).unwrap();
+    let refn = refns.set_cas(0, 200, 8);
+    check_node(node, refn);
+
+    let node = mvcc.set_cas(5, 200, 5).unwrap();
+    let refn = refns.set_cas(5, 200, 5);
+    check_node(node, refn);
+
+    let node = mvcc.set_cas(6, 200, 4).unwrap();
+    let refn = refns.set_cas(6, 200, 4);
+    check_node(node, refn);
+
+    let node = mvcc.set_cas(9, 200, 9).unwrap();
+    let refn = refns.set_cas(9, 200, 9);
+    check_node(node, refn);
+
+    let node = mvcc.set_cas(0, 300, 11).unwrap();
+    let refn = refns.set_cas(0, 300, 11);
+    check_node(node, refn);
+
+    let node = mvcc.set_cas(5, 300, 12).unwrap();
+    let refn = refns.set_cas(5, 300, 12);
+    check_node(node, refn);
+
+    let node = mvcc.set_cas(9, 300, 14).unwrap();
+    let refn = refns.set_cas(9, 300, 14);
+    check_node(node, refn);
+
+    // create
+    assert!(mvcc.set_cas(10, 100, 0).unwrap().is_none());
+    assert!(refns.set_cas(10, 100, 0).is_none());
+    // error create
+    assert_eq!(
+        mvcc.set_cas(10, 100, 0).err().unwrap(),
+        BognError::InvalidCAS
+    );
+    // error insert
+    assert_eq!(
+        mvcc.set_cas(9, 400, 14).err().unwrap(),
+        BognError::InvalidCAS
+    );
+
+    assert_eq!(mvcc.count(), 11);
+    assert!(mvcc.validate().is_ok());
+
+    // test get
+    for i in 0..11 {
+        let node = mvcc.get(&i);
+        let refn = refns.get(i);
+        check_node(node, refn);
+    }
+    // test iter
+    let (mut iter, mut iter_ref) = (mvcc.iter(), refns.iter());
+    loop {
+        if check_node(iter.next(), iter_ref.next().cloned()) == false {
+            break;
+        }
+    }
+}
+
 //#[test]
 //fn test_delete() {
 //    let mut llrb: Llrb<i64, i64> = Llrb::new("test-llrb", false);

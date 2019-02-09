@@ -450,6 +450,6 @@ where
         Some(left) => drop_tree(left),
         None => (),
     }
-    println!("drop_tree - node {:p}", node);
+    //println!("drop_tree - node {:p}", node);
     std::mem::drop(node)
 }

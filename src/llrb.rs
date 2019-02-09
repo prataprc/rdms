@@ -347,7 +347,9 @@ where
     ) -> (Option<Box<Node<K, V>>>, Option<Node<K, V>>) {
         if node.is_none() {
             let black = false;
-            return (Some(Node::new(key, value, seqno, black)), None);
+            let mut node = Node::new(key, value, seqno, black);
+            node.dirty = false;
+            return (Some(node), None);
         }
 
         let mut node = node.unwrap();
@@ -388,7 +390,9 @@ where
             return (None, None, Some(BognError::InvalidCAS));
         } else if node.is_none() {
             let black = false;
-            return (Some(Node::new(key, val, seqno, black)), None, None);
+            let mut node = Node::new(key, val, seqno, black);
+            node.dirty = false;
+            return (Some(node), None, None);
         }
 
         let mut node = node.unwrap();
@@ -436,6 +440,7 @@ where
             // insert and mark as delete
             let (key, black) = (key.clone().into(), false);
             let mut node = Node::new(key, Default::default(), seqno, black);
+            node.dirty = false;
             node.delete(seqno, true /*lsm*/);
             return (Some(node), None);
         }
@@ -520,6 +525,7 @@ where
                 newnode.left = node.left.take();
                 newnode.right = node.right.take();
                 newnode.black = node.black;
+                newnode.dirty = false;
                 (Some(Llrb::fixup(newnode)), Some(*node))
             } else {
                 let (right, old_node) = Llrb::do_delete(node.right.take(), key);

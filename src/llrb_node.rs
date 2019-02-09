@@ -140,7 +140,7 @@ where
             left: None,
             right: None,
         });
-        println!("new node {:p}", node);
+        //println!("new node {:p}", node);
         node
     }
 
@@ -193,7 +193,7 @@ where
             left: None,
             right: None,
         });
-        println!("new node (mvcc) {:p} {:p}", self, new_node);
+        //println!("new node (mvcc) {:p} {:p}", self, new_node);
         if self.left.is_some() {
             let ref_node = self.left.as_ref().unwrap().deref();
             new_node.left = unsafe {
@@ -224,10 +224,12 @@ where
         self.right.as_ref().map(|item| item.deref())
     }
 
+    #[allow(dead_code)]
     pub(crate) fn left_deref_mut(&mut self) -> Option<&mut Node<K, V>> {
         self.left.as_mut().map(|item| item.deref_mut())
     }
 
+    #[allow(dead_code)]
     pub(crate) fn right_deref_mut(&mut self) -> Option<&mut Node<K, V>> {
         self.right.as_mut().map(|item| item.deref_mut())
     }
@@ -342,11 +344,11 @@ where
         if let Some(right) = self.right.take() {
             Box::leak(right);
         }
-        println!(
-            "drop node {:p} {} {}",
-            self,
-            self.left.is_none(),
-            self.right.is_none(),
-        );
+        //println!(
+        //    "drop node {:p} {} {}",
+        //    self,
+        //    self.left.is_none(),
+        //    self.right.is_none(),
+        //);
     }
 }

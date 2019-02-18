@@ -263,6 +263,7 @@ where
 
     pub fn delete<Q>(&self, key: &Q) -> Option<impl AsEntry<K, V>>
     where
+        // TODO: From<Q> and Clone will fail if V=String and Q=str
         K: Borrow<Q> + From<Q>,
         Q: Clone + Ord + ?Sized,
     {

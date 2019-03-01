@@ -11,7 +11,12 @@ use crate::traits::{AsEntry, AsKey};
 // TODO: Implement and document primitive types, std-types that can be used
 // as key (K) / value (V) for Llrb.
 // TODO: optimize comparison
-// TODO: llrb_depth_histogram, as feature, to measure the depth of LLRB tree.
+// TODO: llrb_depth_histogram, as feature, to measure the depth of LLRB tree
+//       and statistics via stats().
+// TODO: validate() to return Stats{}.
+// TODO: Remove AtomicPtr and test/benchmark.
+// TODO: Remove RwLock and use AtomicPtr and latch mechanism, test/benchmark.
+// TODO: Remove Mutex and check write performance.
 
 /// Llrb manage a single instance of in-memory index using
 /// [left-leaning-red-black][llrb] tree.

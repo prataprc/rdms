@@ -56,7 +56,7 @@ fn test_set() {
     refns.set(7, 10);
 
     assert_eq!(llrb.count(), 10);
-    assert_eq!(llrb.validate(), Ok(()));
+    assert!(llrb.validate().is_ok());
 
     // test get
     for i in 0..10 {
@@ -144,7 +144,7 @@ fn test_cas_lsm() {
     );
 
     assert_eq!(llrb.count(), 11);
-    assert_eq!(llrb.validate(), Ok(()));
+    assert!(llrb.validate().is_ok());
 
     // test get
     for i in 0..11 {
@@ -192,7 +192,7 @@ fn test_delete() {
     assert!(refns.delete(10).is_none());
 
     assert_eq!(llrb.count(), 10);
-    assert_eq!(llrb.validate(), Ok(()));
+    assert!(llrb.validate().is_ok());
 
     // test iter
     {
@@ -211,7 +211,7 @@ fn test_delete() {
         check_node(node, refn);
     }
     assert_eq!(llrb.count(), 0);
-    assert_eq!(llrb.validate(), Ok(()));
+    assert!(llrb.validate().is_ok());
     // test iter
     assert!(llrb.iter().next().is_none());
 }
@@ -256,7 +256,7 @@ fn test_crud() {
             op => panic!("unreachable {}", op),
         };
 
-        assert_eq!(llrb.validate(), Ok(()));
+        assert!(llrb.validate().is_ok());
     }
 
     //println!("count {}", llrb.count());
@@ -333,7 +333,7 @@ fn test_crud_lsm() {
             op => panic!("unreachable {}", op),
         };
 
-        assert_eq!(llrb.validate(), Ok(()));
+        assert!(llrb.validate().is_ok());
     }
 
     //println!("count {}", llrb.count());

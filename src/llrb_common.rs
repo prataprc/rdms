@@ -4,6 +4,7 @@ use std::ops::{Bound, Deref};
 use std::sync::Arc;
 
 use crate::error::BognError;
+use crate::llrb_depth::Depth;
 use crate::llrb_node::Node;
 use crate::mvcc::MvccRoot;
 use crate::traits::{AsEntry, AsKey};
@@ -31,14 +32,17 @@ where
 pub(crate) fn validate_tree<K, V>(
     node: Option<&Node<K, V>>,
     fromred: bool,
-    mut nblacks: u64,
-) -> Result<u64, BognError>
+    mut nb: usize,
+    depth: usize,
+    stats: &mut Stats,
+) -> Result<usize, BognError>
 where
     K: AsKey,
     V: Default + Clone,
 {
     if node.is_none() {
-        return Ok(nblacks);
+        stats.depths.as_mut().unwrap().sample(depth);
+        return Ok(nb);
     } else if node.as_ref().unwrap().dirty {
         return Err(BognError::DirtyNode);
     }
@@ -47,14 +51,15 @@ where
     if fromred && red {
         return Err(BognError::ConsecutiveReds);
     }
+
     if !red {
-        nblacks += 1;
+        nb += 1;
     }
+
     let node = &node.as_ref().unwrap();
-    let left = node.left_deref();
-    let right = node.right_deref();
-    let lblacks = validate_tree(left, red, nblacks)?;
-    let rblacks = validate_tree(right, red, nblacks)?;
+    let (left, right) = (node.left_deref(), node.right_deref());
+    let lblacks = validate_tree(left, red, nb, depth + 1, stats)?;
+    let rblacks = validate_tree(right, red, nb, depth + 1, stats)?;
     if lblacks != rblacks {
         let err = format!(
             "llrb_store: unbalanced blacks left: {} and right: {}",
@@ -452,4 +457,52 @@ where
     }
     //println!("drop_tree - node {:p}", node);
     std::mem::drop(node)
+}
+
+/// Statistics on LLRB tree.
+#[derive(Default, Debug)]
+pub struct Stats {
+    entries: usize, // number of entries in the tree.
+    node_size: usize,
+    blacks: Option<usize>,
+    depths: Option<Depth>,
+}
+
+impl Stats {
+    pub(crate) fn new(entries: usize, node_size: usize) -> Stats {
+        Stats {
+            entries,
+            blacks: None,
+            depths: None,
+            node_size,
+        }
+    }
+
+    pub(crate) fn set_blacks(&mut self, blacks: usize) {
+        self.blacks = Some(blacks)
+    }
+
+    pub(crate) fn set_depths(&mut self, depths: Depth) {
+        self.depths = Some(depths)
+    }
+
+    pub fn entries(&self) -> usize {
+        self.entries
+    }
+
+    pub fn node_size(&self) -> usize {
+        self.node_size
+    }
+
+    pub fn blacks(&self) -> Option<usize> {
+        self.blacks
+    }
+
+    pub fn depths(&self) -> Option<Depth> {
+        if self.depths.as_ref().unwrap().samples() == 0 {
+            None
+        } else {
+            self.depths.clone()
+        }
+    }
 }

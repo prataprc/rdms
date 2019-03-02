@@ -3,17 +3,12 @@ use std::cmp::{Ord, Ordering};
 use std::ops::{Bound, Deref, DerefMut};
 
 use crate::error::BognError;
-use crate::llrb_common::{self, drop_tree, is_black, is_red, Iter, Range};
+use crate::llrb_common::{self, drop_tree, is_black, is_red, Iter, Range, Stats};
+use crate::llrb_depth::Depth;
 use crate::llrb_node::Node;
 use crate::traits::{AsEntry, AsKey};
 
-// TODO: Sizing.
-// TODO: Implement and document primitive types, std-types that can be used
-// as key (K) / value (V) for Llrb.
 // TODO: optimize comparison
-// TODO: llrb_depth_histogram, as feature, to measure the depth of LLRB tree
-//       and statistics via stats().
-// TODO: validate() to return Stats{}.
 // TODO: Remove AtomicPtr and test/benchmark.
 // TODO: Remove RwLock and use AtomicPtr and latch mechanism, test/benchmark.
 // TODO: Remove Mutex and check write performance.
@@ -38,8 +33,8 @@ where
     pub(crate) name: String,
     pub(crate) lsm: bool,
     pub(crate) root: Option<Box<Node<K, V>>>,
-    pub(crate) seqno: u64,   // starts from 0 and incr for every mutation.
-    pub(crate) n_count: u64, // number of entries in the tree.
+    pub(crate) seqno: u64,     // starts from 0 and incr for every mutation.
+    pub(crate) n_count: usize, // number of entries in the tree.
 }
 
 impl<K, V> Drop for Llrb<K, V>
@@ -173,7 +168,7 @@ where
     }
 
     /// Return number of entries in this instance.
-    pub fn count(&self) -> u64 {
+    pub fn count(&self) -> usize {
         self.n_count
     }
 
@@ -328,14 +323,24 @@ where
         old_node
     }
 
-    /// validate llrb rules:
-    /// a. No consecutive reds should be found in the tree.
-    /// b. number of blacks should be same on both sides.
-    pub fn validate(&self) -> Result<(), BognError> {
-        let root = self.root.as_ref().map(|item| item.deref());
-        let (fromred, nblacks) = (is_red(root), 0);
-        llrb_common::validate_tree(root, fromred, nblacks)?;
-        Ok(())
+    /// Validate LLRB tree with following rules:
+    ///
+    /// * From root to any leaf, no consecutive reds allowed in its path.
+    /// * Number of blacks should be same on under left child and right child.
+    /// * Make sure that keys are in sorted order.
+    ///
+    /// Additionally return full statistics on the tree. Refer to [`Stats`]
+    /// for more information.
+    pub fn validate(&self) -> Result<Stats, BognError> {
+        let node_size = std::mem::size_of::<Node<K, V>>();
+        let mut stats = Stats::new(self.n_count, node_size);
+        stats.set_depths(Depth::new());
+
+        let root = self.root.as_ref().map(std::ops::Deref::deref);
+        let (red, nb, d) = (is_red(root), 0, 0);
+        let blacks = llrb_common::validate_tree(root, red, nb, d, &mut stats)?;
+        stats.set_blacks(blacks);
+        Ok(stats)
     }
 }
 

@@ -447,15 +447,9 @@ where
     K: AsKey,
     V: Default + Clone,
 {
-    match node.left.take() {
-        Some(left) => drop_tree(left),
-        None => (),
-    }
-    match node.right.take() {
-        Some(left) => drop_tree(left),
-        None => (),
-    }
     //println!("drop_tree - node {:p}", node);
+    node.left.take().map(|left| drop_tree(left));
+    node.right.take().map(|right| drop_tree(right));
     std::mem::drop(node)
 }
 

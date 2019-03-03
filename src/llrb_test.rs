@@ -24,9 +24,9 @@ fn test_seqno() {
 }
 
 #[test]
-fn test_count() {
+fn test_len() {
     let llrb: Llrb<i32, Empty> = Llrb::new("test-llrb", false);
-    assert_eq!(llrb.count(), 0);
+    assert_eq!(llrb.len(), 0);
 }
 
 #[test]
@@ -55,7 +55,7 @@ fn test_set() {
     assert!(llrb.set(7, 10).is_none());
     refns.set(7, 10);
 
-    assert_eq!(llrb.count(), 10);
+    assert_eq!(llrb.len(), 10);
     assert!(llrb.validate().is_ok());
 
     // test get
@@ -143,7 +143,7 @@ fn test_cas_lsm() {
         BognError::InvalidCAS
     );
 
-    assert_eq!(llrb.count(), 11);
+    assert_eq!(llrb.len(), 11);
     assert!(llrb.validate().is_ok());
 
     // test get
@@ -191,7 +191,7 @@ fn test_delete() {
     assert!(llrb.delete(&10).is_none());
     assert!(refns.delete(10).is_none());
 
-    assert_eq!(llrb.count(), 10);
+    assert_eq!(llrb.len(), 10);
     assert!(llrb.validate().is_ok());
 
     // test iter
@@ -210,7 +210,7 @@ fn test_delete() {
         let refn = refns.delete(i);
         check_node(node, refn);
     }
-    assert_eq!(llrb.count(), 0);
+    assert_eq!(llrb.len(), 0);
     assert!(llrb.validate().is_ok());
     // test iter
     assert!(llrb.iter().next().is_none());
@@ -259,7 +259,7 @@ fn test_crud() {
         assert!(llrb.validate().is_ok());
     }
 
-    //println!("count {}", llrb.count());
+    //println!("len {}", llrb.len());
 
     // test iter
     let (mut iter, mut iter_ref) = (llrb.iter(), refns.iter());
@@ -336,7 +336,7 @@ fn test_crud_lsm() {
         assert!(llrb.validate().is_ok());
     }
 
-    //println!("count {}", llrb.count());
+    //println!("len {}", llrb.len());
 
     // test iter
     let (mut iter, mut iter_ref) = (llrb.iter(), refns.iter());

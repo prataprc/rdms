@@ -26,9 +26,9 @@ fn test_seqno() {
 }
 
 #[test]
-fn test_count() {
+fn test_len() {
     let mvcc: Mvcc<i32, Empty> = Mvcc::new("test-mvcc", false);
-    assert_eq!(mvcc.count(), 0);
+    assert_eq!(mvcc.len(), 0);
 }
 
 #[test]
@@ -57,7 +57,7 @@ fn test_set() {
     assert!(mvcc.set(7, 10).is_none());
     refns.set(7, 10);
 
-    assert_eq!(mvcc.count(), 10);
+    assert_eq!(mvcc.len(), 10);
     assert!(mvcc.validate().is_ok());
 
     // test get
@@ -145,7 +145,7 @@ fn test_cas_lsm() {
         BognError::InvalidCAS
     );
 
-    assert_eq!(mvcc.count(), 11);
+    assert_eq!(mvcc.len(), 11);
     assert!(mvcc.validate().is_ok());
 
     // test get
@@ -193,7 +193,7 @@ fn test_delete() {
     assert!(mvcc.delete(&10).is_none());
     assert!(refns.delete(10).is_none());
 
-    assert_eq!(mvcc.count(), 10);
+    assert_eq!(mvcc.len(), 10);
     assert!(mvcc.validate().is_ok());
 
     // test iter
@@ -212,10 +212,111 @@ fn test_delete() {
         let refn = refns.delete(i);
         check_node(node, refn);
     }
-    assert_eq!(mvcc.count(), 0);
+    assert_eq!(mvcc.len(), 0);
     assert!(mvcc.validate().is_ok());
     // test iter
     assert!(mvcc.iter().next().is_none());
+}
+
+#[test]
+fn test_iter() {
+    let mvcc: Mvcc<i64, i64> = Mvcc::new("test-mvcc", false /*lsm*/);
+    let mut refns = RefNodes::new(false /*lsm*/, 10);
+
+    assert!(mvcc.set(2, 10).is_none());
+    refns.set(2, 10);
+    assert!(mvcc.set(1, 10).is_none());
+    refns.set(1, 10);
+    assert!(mvcc.set(3, 10).is_none());
+    refns.set(3, 10);
+    assert!(mvcc.set(6, 10).is_none());
+    refns.set(6, 10);
+    assert!(mvcc.set(5, 10).is_none());
+    refns.set(5, 10);
+    assert!(mvcc.set(4, 10).is_none());
+    refns.set(4, 10);
+    assert!(mvcc.set(8, 10).is_none());
+    refns.set(8, 10);
+    assert!(mvcc.set(0, 10).is_none());
+    refns.set(0, 10);
+    assert!(mvcc.set(9, 10).is_none());
+    refns.set(9, 10);
+    assert!(mvcc.set(7, 10).is_none());
+    refns.set(7, 10);
+
+    assert_eq!(mvcc.len(), 10);
+    assert!(mvcc.validate().is_ok());
+
+    // test iter
+    let (mut iter, mut iter_ref) = (mvcc.iter(), refns.iter());
+    loop {
+        match (iter.next(), iter_ref.next()) {
+            (None, None) => break,
+            (node, Some(refn)) => check_node(node, Some(refn.clone())),
+            _ => panic!("invalid"),
+        };
+    }
+    assert!(iter.next().is_none());
+    assert!(iter.next().is_none());
+}
+
+#[test]
+fn test_range() {
+    let mvcc: Mvcc<i64, i64> = Mvcc::new("test-mvcc", false /*lsm*/);
+    let mut refns = RefNodes::new(false /*lsm*/, 10);
+
+    assert!(mvcc.set(2, 10).is_none());
+    refns.set(2, 10);
+    assert!(mvcc.set(1, 10).is_none());
+    refns.set(1, 10);
+    assert!(mvcc.set(3, 10).is_none());
+    refns.set(3, 10);
+    assert!(mvcc.set(6, 10).is_none());
+    refns.set(6, 10);
+    assert!(mvcc.set(5, 10).is_none());
+    refns.set(5, 10);
+    assert!(mvcc.set(4, 10).is_none());
+    refns.set(4, 10);
+    assert!(mvcc.set(8, 10).is_none());
+    refns.set(8, 10);
+    assert!(mvcc.set(0, 10).is_none());
+    refns.set(0, 10);
+    assert!(mvcc.set(9, 10).is_none());
+    refns.set(9, 10);
+    assert!(mvcc.set(7, 10).is_none());
+    refns.set(7, 10);
+
+    assert_eq!(mvcc.len(), 10);
+    assert!(mvcc.validate().is_ok());
+
+    // test range
+    for _ in 0..1_000 {
+        let (low, high) = random_low_high(mvcc.len());
+
+        let mut iter = mvcc.range(low, high);
+        let mut iter_ref = refns.range(low, high);
+        loop {
+            match (iter.next(), iter_ref.next()) {
+                (None, None) => break,
+                (node, Some(refn)) => check_node(node, Some(refn.clone())),
+                _ => panic!("invalid"),
+            };
+        }
+        assert!(iter.next().is_none());
+        assert!(iter.next().is_none());
+
+        let mut iter = mvcc.range(low, high).rev();
+        let mut iter_ref = refns.reverse(low, high);
+        loop {
+            match (iter.next(), iter_ref.next()) {
+                (None, None) => break,
+                (node, Some(refn)) => check_node(node, Some(refn.clone())),
+                _ => panic!("invalid"),
+            };
+        }
+        assert!(iter.next().is_none());
+        assert!(iter.next().is_none());
+    }
 }
 
 #[test]
@@ -261,7 +362,7 @@ fn test_crud() {
         assert!(mvcc.validate().is_ok(), "validate failed");
     }
 
-    //println!("count {}", mvcc.count());
+    //println!("len {}", mvcc.len());
 
     // test iter
     let (mut iter, mut iter_ref) = (mvcc.iter(), refns.iter());
@@ -338,7 +439,7 @@ fn test_crud_lsm() {
         assert!(mvcc.validate().is_ok(), "validate failed");
     }
 
-    //println!("count {}", mvcc.count());
+    //println!("len {}", mvcc.len());
 
     // test iter
     let (mut iter, mut iter_ref) = (mvcc.iter(), refns.iter());

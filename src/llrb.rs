@@ -168,7 +168,7 @@ where
     }
 
     /// Return number of entries in this instance.
-    pub fn count(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.n_count
     }
 

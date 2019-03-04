@@ -43,10 +43,7 @@ where
     V: Default + Clone,
 {
     fn drop(&mut self) {
-        match self.root.take() {
-            Some(root) => drop_tree(root),
-            None => (),
-        }
+        self.root.take().map(|node| drop_tree(node));
     }
 }
 

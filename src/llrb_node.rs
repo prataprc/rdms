@@ -338,17 +338,7 @@ where
     V: Default + Clone,
 {
     fn drop(&mut self) {
-        if let Some(left) = self.left.take() {
-            Box::leak(left);
-        }
-        if let Some(right) = self.right.take() {
-            Box::leak(right);
-        }
-        //println!(
-        //    "drop node {:p} {} {}",
-        //    self,
-        //    self.left.is_none(),
-        //    self.right.is_none(),
-        //);
+        self.left.take().map(|left| Box::leak(left));
+        self.right.take().map(|right| Box::leak(right));
     }
 }

@@ -447,10 +447,9 @@ where
     K: AsKey,
     V: Default + Clone,
 {
-    //println!("drop_tree - node {:p}", node);
+    println!("drop_tree - node {:p}", node);
     node.left.take().map(|left| drop_tree(left));
     node.right.take().map(|right| drop_tree(right));
-    std::mem::drop(node)
 }
 
 /// Statistics on LLRB tree.

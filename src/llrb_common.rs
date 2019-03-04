@@ -35,7 +35,7 @@ pub(crate) fn validate_tree<K, V>(
     mut nb: usize,
     depth: usize,
     stats: &mut Stats,
-) -> Result<usize, BognError>
+) -> Result<usize, BognError<K>>
 where
     K: AsKey,
     V: Default + Clone,
@@ -61,26 +61,20 @@ where
     let lblacks = validate_tree(left, red, nb, depth + 1, stats)?;
     let rblacks = validate_tree(right, red, nb, depth + 1, stats)?;
     if lblacks != rblacks {
-        let err = format!(
-            "llrb_store: unbalanced blacks left: {} and right: {}",
-            lblacks, rblacks,
-        );
-        return Err(BognError::UnbalancedBlacks(err));
+        return Err(BognError::UnbalancedBlacks(lblacks, rblacks));
     }
     if node.left.is_some() {
         let left = node.left.as_ref().unwrap();
         if left.key.ge(&node.key) {
-            let [a, b] = [&left.key, &node.key];
-            let err = format!("left key {:?} >= parent {:?}", a, b);
-            return Err(BognError::SortError(err));
+            let (left, parent) = (left.key.clone(), node.key.clone());
+            return Err(BognError::SortError(left, parent));
         }
     }
     if node.right.is_some() {
         let right = node.right.as_ref().unwrap();
         if right.key.le(&node.key) {
-            let [a, b] = [&right.key, &node.key];
-            let err = format!("right {:?} <= parent {:?}", a, b);
-            return Err(BognError::SortError(err));
+            let (parent, right) = (node.key.clone(), right.key.clone());
+            return Err(BognError::SortError(parent, right));
         }
     }
     Ok(lblacks)

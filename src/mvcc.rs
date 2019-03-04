@@ -226,7 +226,7 @@ where
         key: K,
         value: V,
         cas: u64,
-    ) -> Result<Option<impl AsEntry<K, V>>, BognError> {
+    ) -> Result<Option<impl AsEntry<K, V>>, BognError<K>> {
         let lsm = self.lsm;
         let arc = self.snapshot.clone(&self.rw);
 
@@ -323,7 +323,7 @@ where
     ///
     /// Additionally return full statistics on the tree. Refer to [`Stats`]
     /// for more information.
-    pub fn validate(&self) -> Result<Stats, BognError> {
+    pub fn validate(&self) -> Result<Stats, BognError<K>> {
         let n_count = self.snapshot.clone(&self.rw).n_count;
         let node_size = std::mem::size_of::<Node<K, V>>();
         let mut stats = Stats::new(n_count, node_size);
@@ -404,7 +404,7 @@ where
         Option<Box<Node<K, V>>>, // mvcc-path
         Option<Box<Node<K, V>>>, // new_node
         Option<Node<K, V>>,
-        Option<BognError>,
+        Option<BognError<K>>,
     ) {
         if node.is_none() && cas > 0 {
             return (None, None, None, Some(BognError::InvalidCAS));

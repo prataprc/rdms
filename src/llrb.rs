@@ -8,6 +8,7 @@ use crate::llrb_depth::Depth;
 use crate::llrb_node::Node;
 use crate::traits::{AsEntry, AsKey};
 
+// TODO: Empty value
 // TODO: optimize comparison
 // TODO: Remove AtomicPtr and test/benchmark.
 // TODO: Remove RwLock and use AtomicPtr and latch mechanism, test/benchmark.
@@ -93,7 +94,7 @@ where
         name: S,
         iter: impl Iterator<Item = E>,
         lsm: bool,
-    ) -> Result<Llrb<K, V>, BognError>
+    ) -> Result<Llrb<K, V>, BognError<K>>
     where
         S: AsRef<str>,
         E: AsEntry<K, V>,
@@ -110,7 +111,10 @@ where
         Ok(llrb)
     }
 
-    fn load_entry<E>(node: Option<Box<Node<K, V>>>, entry: E) -> Result<Box<Node<K, V>>, BognError>
+    fn load_entry<E>(
+        node: Option<Box<Node<K, V>>>,
+        entry: E,
+    ) -> Result<Box<Node<K, V>>, BognError<K>>
     where
         E: AsEntry<K, V>,
         <E as AsEntry<K, V>>::Value: Default + Clone,
@@ -130,10 +134,7 @@ where
                 node.right = Some(Llrb::load_entry(node.right.take(), entry)?);
                 Ok(Llrb::walkuprot_23(node))
             }
-            Ordering::Equal => {
-                let err = format!("load_entry: {:?}", key);
-                Err(BognError::DuplicateKey(err))
-            }
+            Ordering::Equal => Err(BognError::DuplicateKey(key.clone())),
         }
     }
 }
@@ -240,7 +241,7 @@ where
         key: K,
         value: V,
         cas: u64,
-    ) -> Result<Option<impl AsEntry<K, V>>, BognError> {
+    ) -> Result<Option<impl AsEntry<K, V>>, BognError<K>> {
         let seqno = self.seqno + 1;
         let root = self.root.take();
 
@@ -314,7 +315,7 @@ where
     ///
     /// Additionally return full statistics on the tree. Refer to [`Stats`]
     /// for more information.
-    pub fn validate(&self) -> Result<Stats, BognError> {
+    pub fn validate(&self) -> Result<Stats, BognError<K>> {
         let node_size = std::mem::size_of::<Node<K, V>>();
         let mut stats = Stats::new(self.n_count, node_size);
         stats.set_depths(Depth::new());
@@ -378,7 +379,7 @@ where
     ) -> (
         Option<Box<Node<K, V>>>,
         Option<Node<K, V>>,
-        Option<BognError>,
+        Option<BognError<K>>,
     ) {
         if node.is_none() && cas > 0 {
             return (None, None, Some(BognError::InvalidCAS));

@@ -103,47 +103,41 @@ fn test_cas_lsm() {
 
     // repeated mutations on same key
 
-    let node = mvcc.set_cas(0, 200, 8).unwrap();
+    let node = mvcc.set_cas(0, 200, 8).ok().unwrap();
     let refn = refns.set_cas(0, 200, 8);
     check_node(node, refn);
 
-    let node = mvcc.set_cas(5, 200, 5).unwrap();
+    let node = mvcc.set_cas(5, 200, 5).ok().unwrap();
     let refn = refns.set_cas(5, 200, 5);
     check_node(node, refn);
 
-    let node = mvcc.set_cas(6, 200, 4).unwrap();
+    let node = mvcc.set_cas(6, 200, 4).ok().unwrap();
     let refn = refns.set_cas(6, 200, 4);
     check_node(node, refn);
 
-    let node = mvcc.set_cas(9, 200, 9).unwrap();
+    let node = mvcc.set_cas(9, 200, 9).ok().unwrap();
     let refn = refns.set_cas(9, 200, 9);
     check_node(node, refn);
 
-    let node = mvcc.set_cas(0, 300, 11).unwrap();
+    let node = mvcc.set_cas(0, 300, 11).ok().unwrap();
     let refn = refns.set_cas(0, 300, 11);
     check_node(node, refn);
 
-    let node = mvcc.set_cas(5, 300, 12).unwrap();
+    let node = mvcc.set_cas(5, 300, 12).ok().unwrap();
     let refn = refns.set_cas(5, 300, 12);
     check_node(node, refn);
 
-    let node = mvcc.set_cas(9, 300, 14).unwrap();
+    let node = mvcc.set_cas(9, 300, 14).ok().unwrap();
     let refn = refns.set_cas(9, 300, 14);
     check_node(node, refn);
 
     // create
-    assert!(mvcc.set_cas(10, 100, 0).unwrap().is_none());
+    assert!(mvcc.set_cas(10, 100, 0).ok().unwrap().is_none());
     assert!(refns.set_cas(10, 100, 0).is_none());
     // error create
-    assert_eq!(
-        mvcc.set_cas(10, 100, 0).err().unwrap(),
-        BognError::InvalidCAS
-    );
+    assert!(mvcc.set_cas(10, 100, 0).err() == Some(BognError::InvalidCAS));
     // error insert
-    assert_eq!(
-        mvcc.set_cas(9, 400, 14).err().unwrap(),
-        BognError::InvalidCAS
-    );
+    assert!(mvcc.set_cas(9, 400, 14).err() == Some(BognError::InvalidCAS));
 
     assert_eq!(mvcc.len(), 11);
     assert!(mvcc.validate().is_ok());

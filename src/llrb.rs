@@ -8,7 +8,6 @@ use crate::llrb_depth::Depth;
 use crate::llrb_node::Node;
 use crate::traits::{AsEntry, AsKey};
 
-// TODO: Empty value
 // TODO: optimize comparison
 // TODO: Remove AtomicPtr and test/benchmark.
 // TODO: Remove RwLock and use AtomicPtr and latch mechanism, test/benchmark.

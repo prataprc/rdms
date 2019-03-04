@@ -149,8 +149,8 @@ where
         E: AsEntry<K, V>,
         <E as AsEntry<K, V>>::Value: Default + Clone,
     {
-        let asvalue = entry.value();
-        Node::new(entry.key(), asvalue.value(), asvalue.seqno(), false)
+        let black = false;
+        Node::new(entry.key(), entry.value().value(), entry.seqno(), black)
     }
 
     // clone and detach this node from the tree.
@@ -313,8 +313,12 @@ where
         self.key.clone()
     }
 
-    fn value(&self) -> Self::Value {
-        self.valn.clone_detach()
+    fn key_ref(&self) -> &K {
+        &self.key
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.valn
     }
 
     fn versions(&self) -> Vec<Self::Value> {

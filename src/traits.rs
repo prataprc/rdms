@@ -37,8 +37,18 @@ where
     /// identified by unique-key.
     fn key(&self) -> K;
 
-    /// Return a copy of entry's latest value.
-    fn value(&self) -> Self::Value;
+    /// Return a reference to entry's key.
+    fn key_ref(&self) -> &K;
+
+    /// Return reference to entry's latest value. Use [AsValue] methods
+    /// to get value fields.
+    fn value(&self) -> &Self::Value;
+
+    /// Return the sequence-number of most recent mutation for this entry.
+    fn seqno(&self) -> u64;
+
+    /// Valid only in LSM mode. Return whether this entry is marked as deleted.
+    fn is_deleted(&self) -> bool;
 
     /// Return a copy of entry's versions.
     ///
@@ -52,12 +62,6 @@ where
     ///
     /// [lsm]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
     fn versions(&self) -> Vec<Self::Value>;
-
-    /// Return the sequence-number of most recent mutation for this entry.
-    fn seqno(&self) -> u64;
-
-    /// Valid only in LSM mode. Return whether this entry is marked as deleted.
-    fn is_deleted(&self) -> bool;
 }
 
 impl AsKey for i64 {}

@@ -89,64 +89,50 @@ where
     /// Create a new instance of Llrb tree and load it with entries from
     /// `iter`. Note that iterator shall return items that implement
     /// [AsEntry].
-    pub fn load_from<E>(
-        name: String,
+    pub fn load_from<E, S>(
+        name: S,
         iter: impl Iterator<Item = E>,
         lsm: bool,
     ) -> Result<Llrb<K, V>, BognError>
     where
+        S: AsRef<str>,
         E: AsEntry<K, V>,
         <E as AsEntry<K, V>>::Value: Default + Clone,
     {
-        let mut llrb = Llrb::new(name, lsm);
-
-        let mut root = llrb.root.take();
+        let mut llrb = Llrb::new(name.as_ref().to_string(), lsm);
         for entry in iter {
-            let e_seqno = entry.seqno();
-            root = match Llrb::load_entry(root, entry.key(), entry)? {
-                Some(mut root) => {
-                    if e_seqno > llrb.seqno {
-                        llrb.seqno = e_seqno;
-                    }
-                    root.set_black();
-                    Some(root)
-                }
-                None => unreachable!(),
-            };
+            llrb.seqno = std::cmp::max(llrb.seqno, entry.seqno());
+            let mut node = Llrb::load_entry(llrb.root.take(), entry)?;
+            node.set_black();
+            llrb.root = Some(node);
             llrb.n_count += 1;
         }
-        llrb.root = root;
-
         Ok(llrb)
     }
 
-    fn load_entry<E>(
-        node: Option<Box<Node<K, V>>>,
-        key: K,
-        entry: E,
-    ) -> Result<Option<Box<Node<K, V>>>, BognError>
+    fn load_entry<E>(node: Option<Box<Node<K, V>>>, entry: E) -> Result<Box<Node<K, V>>, BognError>
     where
         E: AsEntry<K, V>,
         <E as AsEntry<K, V>>::Value: Default + Clone,
     {
         if node.is_none() {
-            Ok(Some(Node::from_entry(entry)))
-        } else {
-            let mut node = node.unwrap();
-            node = Llrb::walkdown_rot23(node);
-            match node.key.cmp(&key) {
-                Ordering::Greater => {
-                    node.left = Llrb::load_entry(node.left.take(), key, entry)?;
-                    Ok(Some(Llrb::walkuprot_23(node)))
-                }
-                Ordering::Less => {
-                    node.right = Llrb::load_entry(node.right.take(), key, entry)?;
-                    Ok(Some(Llrb::walkuprot_23(node)))
-                }
-                Ordering::Equal => {
-                    let err = format!("load_entry: {:?}", key);
-                    Err(BognError::DuplicateKey(err))
-                }
+            return Ok(Node::from_entry(entry));
+        }
+
+        let (mut node, key) = (node.unwrap(), entry.key_ref());
+        node = Llrb::walkdown_rot23(node);
+        match node.key.cmp(key) {
+            Ordering::Greater => {
+                node.left = Some(Llrb::load_entry(node.left.take(), entry)?);
+                Ok(Llrb::walkuprot_23(node))
+            }
+            Ordering::Less => {
+                node.right = Some(Llrb::load_entry(node.right.take(), entry)?);
+                Ok(Llrb::walkuprot_23(node))
+            }
+            Ordering::Equal => {
+                let err = format!("load_entry: {:?}", key);
+                Err(BognError::DuplicateKey(err))
             }
         }
     }

@@ -1,10 +1,10 @@
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 
 use crate::traits::{AsEntry, AsValue};
 
 /// A single entry in Llrb can have mutiple version of values, ValueNode
 /// represent each version.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct ValueNode<V>
 where
     V: Default + Clone,
@@ -44,25 +44,22 @@ where
         }
     }
 
-    // detach individual versions and collect them in a vector.
+    // detach individual versions, from latest to oldest, and collect
+    // them in a vector.
     fn value_nodes(&self, acc: &mut Vec<ValueNode<V>>) {
         acc.push(self.clone_detach());
-        if self.prev.is_some() {
-            self.prev.as_ref().unwrap().value_nodes(acc)
-        }
+        self.prev.as_ref().map(|v| v.value_nodes(acc));
     }
 
     // mark this version as deleted, along with its seqno.
     fn delete(&mut self, seqno: u64) {
-        // back-to-back deletes shall collapse
-        self.deleted = Some(seqno);
+        self.deleted = Some(seqno); // back-to-back deletes shall collapse
     }
 
     #[allow(dead_code)]
     fn undo(&mut self) -> bool {
         if self.deleted.is_some() {
-            // collapsed deletes can be undone only once
-            self.deleted = None;
+            self.deleted = None; // collapsed deletes can be undone only once
             true
         } else if self.prev.is_none() {
             false
@@ -74,35 +71,21 @@ where
     }
 }
 
-impl<V> Default for ValueNode<V>
-where
-    V: Default + Clone,
-{
-    fn default() -> ValueNode<V> {
-        ValueNode {
-            data: Default::default(),
-            seqno: 0,
-            deleted: None,
-            prev: None,
-        }
-    }
-}
-
 impl<V> AsValue<V> for ValueNode<V>
 where
     V: Default + Clone,
 {
+    #[inline]
     fn value(&self) -> V {
         self.data.clone()
     }
 
+    #[inline]
     fn seqno(&self) -> u64 {
-        match self.deleted {
-            Some(seqno) => seqno,
-            None => self.seqno,
-        }
+        self.deleted.map_or(self.seqno, |seqno| seqno)
     }
 
+    #[inline]
     fn is_deleted(&self) -> bool {
         self.deleted.is_some()
     }
@@ -131,10 +114,9 @@ where
 {
     // CREATE operation
     pub(crate) fn new(key: K, value: V, seqno: u64, black: bool) -> Box<Node<K, V>> {
-        let valn = ValueNode::new(value, seqno, None, None);
         let node = Box::new(Node {
             key,
-            valn,
+            valn: ValueNode::new(value, seqno, None, None),
             black,
             dirty: true,
             left: None,
@@ -166,18 +148,8 @@ where
     }
 
     pub(crate) fn mvcc_detach(&mut self) {
-        match self.left.take() {
-            Some(box_node) => {
-                Box::leak(box_node);
-            }
-            None => (),
-        };
-        match self.right.take() {
-            Some(box_node) => {
-                Box::leak(box_node);
-            }
-            None => (),
-        };
+        self.left.take().map(|box_node| Box::leak(box_node));
+        self.right.take().map(|box_node| Box::leak(box_node));
     }
 
     // unsafe clone for MVCC COW
@@ -185,53 +157,27 @@ where
         &self,
         reclaim: &mut Vec<Box<Node<K, V>>>, /* reclaim */
     ) -> Box<Node<K, V>> {
-        let mut new_node = Box::new(Node {
+        let new_node = Box::new(Node {
             key: self.key.clone(),
             valn: self.valn.clone(),
             black: self.black,
             dirty: self.dirty,
-            left: None,
-            right: None,
+            left: self.left_deref().map(|n| n.duplicate()),
+            right: self.right_deref().map(|n| n.duplicate()),
         });
         //println!("new node (mvcc) {:p} {:p}", self, new_node);
-        if self.left.is_some() {
-            let ref_node = self.left.as_ref().unwrap().deref();
-            new_node.left = unsafe {
-                Some(Box::from_raw(
-                    ref_node as *const Node<K, V> as *mut Node<K, V>,
-                ))
-            };
-        }
-        if self.right.is_some() {
-            let ref_node = self.right.as_ref().unwrap().deref();
-            new_node.right = unsafe {
-                Some(Box::from_raw(
-                    ref_node as *const Node<K, V> as *mut Node<K, V>,
-                ))
-            };
-        }
-
-        reclaim.push(unsafe { Box::from_raw(self as *const Node<K, V> as *mut Node<K, V>) });
-
+        reclaim.push(self.duplicate());
         new_node
     }
 
+    #[inline]
     pub(crate) fn left_deref(&self) -> Option<&Node<K, V>> {
         self.left.as_ref().map(|item| item.deref())
     }
 
+    #[inline]
     pub(crate) fn right_deref(&self) -> Option<&Node<K, V>> {
         self.right.as_ref().map(|item| item.deref())
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn left_deref_mut(&mut self) -> Option<&mut Node<K, V>> {
-        self.left.as_mut().map(|item| item.deref_mut())
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn right_deref_mut(&mut self) -> Option<&mut Node<K, V>> {
-        self.right.as_mut().map(|item| item.deref_mut())
     }
 
     // prepend operation, equivalent to SET / INSERT / UPDATE
@@ -245,6 +191,7 @@ where
     }
 
     // DELETE operation
+    #[inline]
     pub(crate) fn delete(&mut self, seqno: u64, _lsm: bool) {
         self.valn.delete(seqno)
     }
@@ -309,28 +256,34 @@ where
 {
     type Value = ValueNode<V>;
 
+    #[inline]
     fn key(&self) -> K {
         self.key.clone()
     }
 
+    #[inline]
     fn key_ref(&self) -> &K {
         &self.key
     }
 
+    #[inline]
     fn value(&self) -> &Self::Value {
         &self.valn
     }
 
+    #[inline]
     fn versions(&self) -> Vec<Self::Value> {
         let mut acc: Vec<Self::Value> = vec![];
         self.valn.value_nodes(&mut acc);
         acc
     }
 
+    #[inline]
     fn seqno(&self) -> u64 {
         self.valn.seqno()
     }
 
+    #[inline]
     fn is_deleted(&self) -> bool {
         self.valn.is_deleted()
     }

@@ -9,7 +9,6 @@ use std::sync::{
 use crate::error::BognError;
 use crate::llrb::Llrb;
 use crate::llrb_common::{self, drop_tree, is_black, is_red, Iter, Range, Stats};
-use crate::llrb_depth::Depth;
 use crate::llrb_node::Node;
 use crate::traits::AsEntry;
 
@@ -177,9 +176,8 @@ where
             arc,
             root: None,
             node_iter: vec![].into_iter(),
-            after_key: Bound::Unbounded,
-            limit: 100,
-            fin: false,
+            after_key: Some(Bound::Unbounded),
+            limit: llrb_common::ITER_LIMIT,
         }
     }
 
@@ -189,10 +187,9 @@ where
             arc,
             root: None,
             node_iter: vec![].into_iter(),
-            low,
+            low: Some(low),
             high,
-            limit: 100, // TODO: no magic number.
-            fin: false,
+            limit: llrb_common::ITER_LIMIT,
         }
     }
 
@@ -327,7 +324,7 @@ where
         let n_count = self.snapshot.clone(&self.rw).n_count;
         let node_size = std::mem::size_of::<Node<K, V>>();
         let mut stats = Stats::new(n_count, node_size);
-        stats.set_depths(Depth::new());
+        stats.set_depths(Default::default());
 
         let arc = self.snapshot.clone(&self.rw);
         let root = arc.as_ref().deref().as_ref();

@@ -211,6 +211,107 @@ fn test_delete() {
 }
 
 #[test]
+fn test_iter() {
+    let mut llrb: Llrb<i64, i64> = Llrb::new("test-llrb", false /*lsm*/);
+    let mut refns = RefNodes::new(false /*lsm*/, 10);
+
+    assert!(llrb.set(2, 10).is_none());
+    refns.set(2, 10);
+    assert!(llrb.set(1, 10).is_none());
+    refns.set(1, 10);
+    assert!(llrb.set(3, 10).is_none());
+    refns.set(3, 10);
+    assert!(llrb.set(6, 10).is_none());
+    refns.set(6, 10);
+    assert!(llrb.set(5, 10).is_none());
+    refns.set(5, 10);
+    assert!(llrb.set(4, 10).is_none());
+    refns.set(4, 10);
+    assert!(llrb.set(8, 10).is_none());
+    refns.set(8, 10);
+    assert!(llrb.set(0, 10).is_none());
+    refns.set(0, 10);
+    assert!(llrb.set(9, 10).is_none());
+    refns.set(9, 10);
+    assert!(llrb.set(7, 10).is_none());
+    refns.set(7, 10);
+
+    assert_eq!(llrb.len(), 10);
+    assert!(llrb.validate().is_ok());
+
+    // test iter
+    let (mut iter, mut iter_ref) = (llrb.iter(), refns.iter());
+    loop {
+        match (iter.next(), iter_ref.next()) {
+            (None, None) => break,
+            (node, Some(refn)) => check_node(node, Some(refn.clone())),
+            _ => panic!("invalid"),
+        };
+    }
+    assert!(iter.next().is_none());
+    assert!(iter.next().is_none());
+}
+
+#[test]
+fn test_range() {
+    let mut llrb: Llrb<i64, i64> = Llrb::new("test-llrb", false /*lsm*/);
+    let mut refns = RefNodes::new(false /*lsm*/, 10);
+
+    assert!(llrb.set(2, 10).is_none());
+    refns.set(2, 10);
+    assert!(llrb.set(1, 10).is_none());
+    refns.set(1, 10);
+    assert!(llrb.set(3, 10).is_none());
+    refns.set(3, 10);
+    assert!(llrb.set(6, 10).is_none());
+    refns.set(6, 10);
+    assert!(llrb.set(5, 10).is_none());
+    refns.set(5, 10);
+    assert!(llrb.set(4, 10).is_none());
+    refns.set(4, 10);
+    assert!(llrb.set(8, 10).is_none());
+    refns.set(8, 10);
+    assert!(llrb.set(0, 10).is_none());
+    refns.set(0, 10);
+    assert!(llrb.set(9, 10).is_none());
+    refns.set(9, 10);
+    assert!(llrb.set(7, 10).is_none());
+    refns.set(7, 10);
+
+    assert_eq!(llrb.len(), 10);
+    assert!(llrb.validate().is_ok());
+
+    // test range
+    for _ in 0..1_000 {
+        let (low, high) = random_low_high(llrb.len());
+
+        let mut iter = llrb.range(low, high);
+        let mut iter_ref = refns.range(low, high);
+        loop {
+            match (iter.next(), iter_ref.next()) {
+                (None, None) => break,
+                (node, Some(refn)) => check_node(node, Some(refn.clone())),
+                _ => panic!("invalid"),
+            };
+        }
+        assert!(iter.next().is_none());
+        assert!(iter.next().is_none());
+
+        let mut iter = llrb.range(low, high).rev();
+        let mut iter_ref = refns.reverse(low, high);
+        loop {
+            match (iter.next(), iter_ref.next()) {
+                (None, None) => break,
+                (node, Some(refn)) => check_node(node, Some(refn.clone())),
+                _ => panic!("invalid"),
+            };
+        }
+        assert!(iter.next().is_none());
+        assert!(iter.next().is_none());
+    }
+}
+
+#[test]
 fn test_crud() {
     let size = 1000;
     let mut llrb: Llrb<i64, i64> = Llrb::new("test-llrb", false /*lsm*/);

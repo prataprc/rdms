@@ -9,6 +9,24 @@ use crate::llrb_node::Node;
 use crate::mvcc::MvccRoot;
 use crate::traits::AsEntry;
 
+pub const ITER_LIMIT: usize = 100;
+
+pub fn is_red<K, V>(node: Option<&Node<K, V>>) -> bool
+where
+    K: Default + Clone + Ord,
+    V: Default + Clone,
+{
+    node.map_or(false, |node| !node.is_black())
+}
+
+pub fn is_black<K, V>(node: Option<&Node<K, V>>) -> bool
+where
+    K: Default + Clone + Ord,
+    V: Default + Clone,
+{
+    node.map_or(true, |node| node.is_black())
+}
+
 pub(crate) fn get<K, V, Q>(
     mut node: Option<&Node<K, V>>, // root node
     key: &Q,
@@ -88,9 +106,8 @@ where
     pub(crate) arc: Arc<Box<MvccRoot<K, V>>>,
     pub(crate) root: Option<&'a Node<K, V>>,
     pub(crate) node_iter: std::vec::IntoIter<Node<K, V>>,
-    pub(crate) after_key: Bound<K>,
+    pub(crate) after_key: Option<Bound<K>>,
     pub(crate) limit: usize,
-    pub(crate) fin: bool,
 }
 
 impl<'a, K, V> Iter<'a, K, V>
@@ -113,27 +130,24 @@ where
         if node.is_none() {
             return true;
         }
-
         let node = node.unwrap();
-        //println!("scan_iter {:?} {:?}", node.key, self.after_key);
-        let left = node.left_deref();
-        let right = node.right_deref();
+
+        let (left, right) = (node.left_deref(), node.right_deref());
         match &self.after_key {
-            Bound::Included(akey) | Bound::Excluded(akey) => {
+            None => return false,
+            Some(Bound::Included(akey)) | Some(Bound::Excluded(akey)) => {
                 if node.key.borrow().le(akey) {
                     return self.scan_iter(right, acc);
                 }
             }
-            Bound::Unbounded => (),
+            Some(Bound::Unbounded) => (),
         }
 
-        //println!("left {:?} {:?}", node.key, self.after_key);
         if !self.scan_iter(left, acc) {
             return false;
         }
 
         acc.push(node.clone_detach());
-        //println!("push {:?} {}", self.after_key, acc.len());
         if acc.len() >= self.limit {
             return false;
         }
@@ -150,27 +164,15 @@ where
     type Item = Node<K, V>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        //println!("yyy");
-        if self.fin {
-            return None;
-        }
-
-        let node = self.node_iter.next();
-        if node.is_some() {
-            return node;
-        }
-
-        let mut acc: Vec<Node<K, V>> = Vec::with_capacity(self.limit);
-        self.scan_iter(self.get_root(), &mut acc);
-
-        if acc.len() == 0 {
-            self.fin = true;
-            None
-        } else {
-            //println!("iter-next {}", acc.len());
-            self.after_key = Bound::Excluded(acc.last().unwrap().key());
-            self.node_iter = acc.into_iter();
-            self.node_iter.next()
+        match self.node_iter.next() {
+            None => {
+                let mut a: Vec<Node<K, V>> = Vec::with_capacity(self.limit);
+                self.scan_iter(self.get_root(), &mut a);
+                self.after_key = a.last().map(|x| Bound::Excluded(x.key()));
+                self.node_iter = a.into_iter();
+                self.node_iter.next()
+            }
+            item @ Some(_) => item,
         }
     }
 }
@@ -183,10 +185,9 @@ where
     pub(crate) arc: Arc<Box<MvccRoot<K, V>>>,
     pub(crate) root: Option<&'a Node<K, V>>,
     pub(crate) node_iter: std::vec::IntoIter<Node<K, V>>,
-    pub(crate) low: Bound<K>,
+    pub(crate) low: Option<Bound<K>>,
     pub(crate) high: Bound<K>,
     pub(crate) limit: usize,
-    pub(crate) fin: bool,
 }
 
 impl<'a, K, V> Range<'a, K, V>
@@ -206,10 +207,9 @@ where
             arc: self.arc,
             root: self.root,
             node_iter: vec![].into_iter(),
-            low: self.low,
-            high: self.high,
+            high: Some(self.high),
+            low: self.low.unwrap(),
             limit: self.limit,
-            fin: false,
         }
     }
 
@@ -221,33 +221,29 @@ where
         if node.is_none() {
             return true;
         }
-
         let node = node.unwrap();
-        //println!("range_iter {:?} {:?}", node.key, self.low);
-        let left = node.left_deref();
-        let right = node.right_deref();
+
+        let (left, right) = (node.left_deref(), node.right_deref());
         match &self.low {
-            Bound::Included(qow) if node.key.lt(qow) => {
+            Some(Bound::Included(qow)) if node.key.lt(qow) => {
                 return self.range_iter(right, acc);
             }
-            Bound::Excluded(qow) if node.key.le(qow) => {
+            Some(Bound::Excluded(qow)) if node.key.le(qow) => {
                 return self.range_iter(right, acc);
             }
             _ => (),
         }
 
-        //println!("left {:?} {:?}", node.key, self.low);
         if !self.range_iter(left, acc) {
             return false;
         }
 
         acc.push(node.clone_detach());
-        //println!("push {:?} {}", self.low, acc.len());
         if acc.len() >= self.limit {
             return false;
         }
 
-        return self.range_iter(right, acc);
+        self.range_iter(right, acc)
     }
 }
 
@@ -259,43 +255,29 @@ where
     type Item = Node<K, V>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        //println!("yyy");
-        if self.fin {
-            return None;
-        }
-
-        let node = self.node_iter.next();
-        let node = if node.is_none() {
-            let mut acc: Vec<Node<K, V>> = Vec::with_capacity(self.limit);
-            self.range_iter(self.get_root(), &mut acc);
-            if acc.len() > 0 {
-                //println!("iter-next {}", acc.len());
-                self.low = Bound::Excluded(acc.last().unwrap().key());
+        let item = match self.node_iter.next() {
+            None if self.low.is_some() => {
+                let mut acc: Vec<Node<K, V>> = Vec::with_capacity(self.limit);
+                self.range_iter(self.get_root(), &mut acc);
+                self.low = acc.last().map(|x| Bound::Excluded(x.key()));
                 self.node_iter = acc.into_iter();
                 self.node_iter.next()
-            } else {
-                None
             }
-        } else {
-            node
+            None => None,
+            item @ Some(_) => item,
         };
-
-        if node.is_none() {
-            self.fin = true;
-            return None;
-        }
-
-        // handle upper limit
-        let node = node.unwrap();
-        //println!("root next {:?}", node.key);
-        match &self.high {
-            Bound::Unbounded => Some(node),
-            Bound::Included(qigh) if node.key.le(qigh) => Some(node),
-            Bound::Excluded(qigh) if node.key.lt(qigh) => Some(node),
-            _ => {
-                self.fin = true;
-                None
-            }
+        // check for lower bound
+        match item {
+            None => None,
+            Some(item) => match &self.high {
+                Bound::Unbounded => Some(item),
+                Bound::Included(qigh) if item.key.le(qigh) => Some(item),
+                Bound::Excluded(qigh) if item.key.lt(qigh) => Some(item),
+                _ => {
+                    self.low = None;
+                    None
+                }
+            },
         }
     }
 }
@@ -308,10 +290,9 @@ where
     arc: Arc<Box<MvccRoot<K, V>>>,
     root: Option<&'a Node<K, V>>,
     node_iter: std::vec::IntoIter<Node<K, V>>,
-    high: Bound<K>,
+    high: Option<Bound<K>>,
     low: Bound<K>,
     limit: usize,
-    fin: bool,
 }
 
 impl<'a, K, V> Reverse<'a, K, V>
@@ -334,28 +315,24 @@ where
         if node.is_none() {
             return true;
         }
-
         let node = node.unwrap();
-        //println!("reverse_iter {:?} {:?}", node.key, self.high);
-        let left = node.left_deref();
-        let right = node.right_deref();
+
+        let (left, right) = (node.left_deref(), node.right_deref());
         match &self.high {
-            Bound::Included(qigh) if node.key.gt(qigh) => {
+            Some(Bound::Included(qigh)) if node.key.gt(qigh) => {
                 return self.reverse_iter(left, acc);
             }
-            Bound::Excluded(qigh) if node.key.ge(qigh) => {
+            Some(Bound::Excluded(qigh)) if node.key.ge(qigh) => {
                 return self.reverse_iter(left, acc);
             }
             _ => (),
         }
 
-        //println!("left {:?} {:?}", node.key, self.high);
         if !self.reverse_iter(right, acc) {
             return false;
         }
 
         acc.push(node.clone_detach());
-        //println!("push {:?} {}", self.high, acc.len());
         if acc.len() >= self.limit {
             return false;
         }
@@ -372,67 +349,30 @@ where
     type Item = Node<K, V>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        //println!("yyy");
-        if self.fin {
-            return None;
-        }
-
-        let node = self.node_iter.next();
-        let node = if node.is_none() {
-            let mut acc: Vec<Node<K, V>> = Vec::with_capacity(self.limit);
-            self.reverse_iter(self.get_root(), &mut acc);
-            if acc.len() > 0 {
-                //println!("iter-next {}", acc.len());
-                self.high = Bound::Excluded(acc.last().unwrap().key());
+        let item = match self.node_iter.next() {
+            None if self.high.is_some() => {
+                let mut acc: Vec<Node<K, V>> = Vec::with_capacity(self.limit);
+                self.reverse_iter(self.get_root(), &mut acc);
+                self.high = acc.last().map(|x| Bound::Excluded(x.key()));
                 self.node_iter = acc.into_iter();
                 self.node_iter.next()
-            } else {
-                None
             }
-        } else {
-            node
+            None => None,
+            item @ Some(_) => item,
         };
-
-        if node.is_none() {
-            self.fin = true;
-            return None;
+        // check for lower bound
+        match item {
+            None => None,
+            Some(item) => match &self.low {
+                Bound::Unbounded => Some(item),
+                Bound::Included(qow) if item.key.ge(qow) => Some(item),
+                Bound::Excluded(qow) if item.key.gt(qow) => Some(item),
+                _ => {
+                    self.high = None;
+                    None
+                }
+            },
         }
-
-        // handle lower limit
-        let node = node.unwrap();
-        //println!("llrb next {:?}", node.key);
-        match &self.low {
-            Bound::Unbounded => Some(node),
-            Bound::Included(qow) if node.key.ge(qow) => Some(node),
-            Bound::Excluded(qow) if node.key.gt(qow) => Some(node),
-            _ => {
-                //println!("llrb reverse over {:?}", &self.low);
-                self.fin = true;
-                None
-            }
-        }
-    }
-}
-
-pub fn is_red<K, V>(node: Option<&Node<K, V>>) -> bool
-where
-    K: Default + Clone + Ord,
-    V: Default + Clone,
-{
-    match node {
-        None => false,
-        node @ Some(_) => !is_black(node),
-    }
-}
-
-pub fn is_black<K, V>(node: Option<&Node<K, V>>) -> bool
-where
-    K: Default + Clone + Ord,
-    V: Default + Clone,
-{
-    match node {
-        None => true,
-        Some(node) => node.is_black(),
     }
 }
 
@@ -441,13 +381,13 @@ where
     K: Default + Clone + Ord,
     V: Default + Clone,
 {
-    println!("drop_tree - node {:p}", node);
+    //println!("drop_tree - node {:p}", node);
     node.left.take().map(|left| drop_tree(left));
     node.right.take().map(|right| drop_tree(right));
 }
 
 /// Statistics on LLRB tree.
-#[derive(Default, Debug)]
+#[derive(Default)]
 pub struct Stats {
     entries: usize, // number of entries in the tree.
     node_size: usize,
@@ -465,22 +405,27 @@ impl Stats {
         }
     }
 
+    #[inline]
     pub(crate) fn set_blacks(&mut self, blacks: usize) {
         self.blacks = Some(blacks)
     }
 
+    #[inline]
     pub(crate) fn set_depths(&mut self, depths: Depth) {
         self.depths = Some(depths)
     }
 
+    #[inline]
     pub fn entries(&self) -> usize {
         self.entries
     }
 
+    #[inline]
     pub fn node_size(&self) -> usize {
         self.node_size
     }
 
+    #[inline]
     pub fn blacks(&self) -> Option<usize> {
         self.blacks
     }

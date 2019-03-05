@@ -4,7 +4,6 @@ use std::ops::{Bound, Deref, DerefMut};
 
 use crate::error::BognError;
 use crate::llrb_common::{self, drop_tree, is_black, is_red, Iter, Range, Stats};
-use crate::llrb_depth::Depth;
 use crate::llrb_node::Node;
 use crate::traits::AsEntry;
 
@@ -146,21 +145,25 @@ where
 {
     /// Identify this instance. Applications can choose unique names while
     /// creating Llrb instances.
+    #[inline]
     pub fn id(&self) -> String {
         self.name.clone()
     }
 
     /// Return number of entries in this instance.
+    #[inline]
     pub fn len(&self) -> usize {
         self.n_count
     }
 
     /// Set current seqno.
+    #[inline]
     pub fn set_seqno(&mut self, seqno: u64) {
         self.seqno = seqno
     }
 
     /// Return current seqno.
+    #[inline]
     pub fn get_seqno(&self) -> u64 {
         self.seqno
     }
@@ -188,9 +191,8 @@ where
             arc: Default::default(),
             root: self.root.as_ref().map(|item| item.deref()),
             node_iter: vec![].into_iter(),
-            after_key: Bound::Unbounded,
-            limit: 100,
-            fin: false,
+            after_key: Some(Bound::Unbounded),
+            limit: llrb_common::ITER_LIMIT,
         }
     }
 
@@ -200,10 +202,9 @@ where
             arc: Default::default(),
             root: self.root.as_ref().map(|item| item.deref()),
             node_iter: vec![].into_iter(),
-            low,
+            low: Some(low),
             high,
-            limit: 100, // TODO: no magic number.
-            fin: false,
+            limit: llrb_common::ITER_LIMIT,
         }
     }
 
@@ -217,18 +218,19 @@ where
         let seqno = self.seqno + 1;
         let root = self.root.take();
 
-        match Llrb::upsert(root, key, value, seqno, self.lsm) {
+        let old_node = match Llrb::upsert(root, key, value, seqno, self.lsm) {
             (Some(mut root), old_node) => {
                 root.set_black();
                 self.root = Some(root);
-                if old_node.is_none() {
-                    self.n_count += 1;
-                }
                 self.seqno = seqno;
                 old_node
             }
             (None, _old_node) => unreachable!(),
+        };
+        if old_node.is_none() {
+            self.n_count += 1;
         }
+        old_node
     }
 
     /// Set a new entry into a non-mvcc instance, only if entry's seqno matches
@@ -317,7 +319,7 @@ where
     pub fn validate(&self) -> Result<Stats, BognError<K>> {
         let node_size = std::mem::size_of::<Node<K, V>>();
         let mut stats = Stats::new(self.n_count, node_size);
-        stats.set_depths(Depth::new());
+        stats.set_depths(Default::default());
 
         let root = self.root.as_ref().map(std::ops::Deref::deref);
         let (red, nb, d) = (is_red(root), 0, 0);

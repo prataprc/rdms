@@ -1,27 +1,15 @@
 /// Depth calculates minimum, maximum, average and percentile of leaf-node
 /// depth in the LLRB tree.
-#[derive(Clone, Default, Debug)]
+#[derive(Clone)]
 pub struct Depth {
     samples: usize,
     min: usize,
     max: usize,
     total: usize,
-    depths: Vec<usize>,
+    depths: [usize; 256],
 }
 
 impl Depth {
-    pub(crate) fn new() -> Depth {
-        let mut depth = Depth {
-            samples: 0,
-            min: 0,
-            max: 0,
-            total: 0,
-            depths: Vec::with_capacity(256),
-        };
-        depth.depths.resize(256, 0);
-        depth
-    }
-
     pub(crate) fn sample(&mut self, depth: usize) {
         self.samples += 1;
         self.total += depth;
@@ -98,5 +86,17 @@ impl Depth {
             format!("percentiles: {}", ps.join(", ")),
         ];
         ("{ ".to_string() + strs.join(", ").as_str() + " }").to_string()
+    }
+}
+
+impl Default for Depth {
+    fn default() -> Self {
+        Depth {
+            samples: 0,
+            min: 0,
+            max: 0,
+            total: 0,
+            depths: [0; 256],
+        }
     }
 }

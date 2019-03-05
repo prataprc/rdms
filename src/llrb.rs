@@ -6,7 +6,7 @@ use crate::error::BognError;
 use crate::llrb_common::{self, drop_tree, is_black, is_red, Iter, Range, Stats};
 use crate::llrb_depth::Depth;
 use crate::llrb_node::Node;
-use crate::traits::{AsEntry, AsKey};
+use crate::traits::AsEntry;
 
 // TODO: optimize comparison
 // TODO: Remove AtomicPtr and test/benchmark.
@@ -27,7 +27,7 @@ use crate::traits::{AsEntry, AsKey};
 /// [LSM mode]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
 pub struct Llrb<K, V>
 where
-    K: AsKey,
+    K: Default + Clone + Ord,
     V: Default + Clone,
 {
     pub(crate) name: String,
@@ -39,7 +39,7 @@ where
 
 impl<K, V> Drop for Llrb<K, V>
 where
-    K: AsKey,
+    K: Default + Clone + Ord,
     V: Default + Clone,
 {
     fn drop(&mut self) {
@@ -49,7 +49,7 @@ where
 
 impl<K, V> Clone for Llrb<K, V>
 where
-    K: AsKey,
+    K: Default + Clone + Ord,
     V: Default + Clone,
 {
     fn clone(&self) -> Llrb<K, V> {
@@ -66,7 +66,7 @@ where
 /// Different ways to construct a new Llrb instance.
 impl<K, V> Llrb<K, V>
 where
-    K: AsKey,
+    K: Default + Clone + Ord,
     V: Default + Clone,
 {
     /// Create an empty instance of Llrb, identified by `name`.
@@ -141,7 +141,7 @@ where
 /// Maintanence API.
 impl<K, V> Llrb<K, V>
 where
-    K: AsKey,
+    K: Default + Clone + Ord,
     V: Default + Clone,
 {
     /// Identify this instance. Applications can choose unique names while
@@ -169,7 +169,7 @@ where
 /// CRUD operations on Llrb instance.
 impl<K, V> Llrb<K, V>
 where
-    K: AsKey,
+    K: Default + Clone + Ord,
     V: Default + Clone,
 {
     /// Get the latest version for key.
@@ -329,7 +329,7 @@ where
 
 impl<K, V> Llrb<K, V>
 where
-    K: AsKey,
+    K: Default + Clone + Ord,
     V: Default + Clone,
 {
     fn upsert(

@@ -35,7 +35,7 @@ pub use crate::error::BognError;
 pub use crate::llrb::Llrb;
 pub use crate::llrb_common::Stats;
 pub use crate::mvcc::Mvcc;
-pub use crate::traits::{AsEntry, AsKey, AsValue};
+pub use crate::traits::{AsEntry, AsValue};
 
 #[cfg(test)]
 mod llrb_test;

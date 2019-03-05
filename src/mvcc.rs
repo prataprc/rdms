@@ -11,7 +11,7 @@ use crate::llrb::Llrb;
 use crate::llrb_common::{self, drop_tree, is_black, is_red, Iter, Range, Stats};
 use crate::llrb_depth::Depth;
 use crate::llrb_node::Node;
-use crate::traits::{AsEntry, AsKey};
+use crate::traits::AsEntry;
 
 // TODO: Remove AtomicPtr and test/benchmark.
 // TODO: Remove RwLock and use AtomicPtr and latch mechanism, test/benchmark.
@@ -21,7 +21,7 @@ const RECLAIM_CAP: usize = 128;
 
 pub struct Mvcc<K, V>
 where
-    K: AsKey,
+    K: Default + Clone + Ord,
     V: Default + Clone,
 {
     pub(crate) name: String,
@@ -33,7 +33,7 @@ where
 
 impl<K, V> Clone for Mvcc<K, V>
 where
-    K: AsKey,
+    K: Default + Clone + Ord,
     V: Default + Clone,
 {
     fn clone(&self) -> Mvcc<K, V> {
@@ -56,7 +56,7 @@ where
 
 impl<K, V> Drop for Mvcc<K, V>
 where
-    K: AsKey,
+    K: Default + Clone + Ord,
     V: Default + Clone,
 {
     fn drop(&mut self) {
@@ -86,7 +86,7 @@ where
 
 impl<K, V> From<Llrb<K, V>> for Mvcc<K, V>
 where
-    K: AsKey,
+    K: Default + Clone + Ord,
     V: Default + Clone,
 {
     fn from(mut llrb: Llrb<K, V>) -> Mvcc<K, V> {
@@ -104,7 +104,7 @@ where
 
 impl<K, V> Mvcc<K, V>
 where
-    K: AsKey,
+    K: Default + Clone + Ord,
     V: Default + Clone,
 {
     pub fn new<S>(name: S, lsm: bool) -> Mvcc<K, V>
@@ -124,7 +124,7 @@ where
 /// Maintanence API.
 impl<K, V> Mvcc<K, V>
 where
-    K: AsKey,
+    K: Default + Clone + Ord,
     V: Default + Clone,
 {
     /// Identify this instance. Applications can choose unique names while
@@ -157,7 +157,7 @@ where
 
 impl<K, V> Mvcc<K, V>
 where
-    K: AsKey,
+    K: Default + Clone + Ord,
     V: Default + Clone,
 {
     /// Get the latest version for key.
@@ -340,7 +340,7 @@ where
 
 impl<K, V> Mvcc<K, V>
 where
-    K: AsKey,
+    K: Default + Clone + Ord,
     V: Default + Clone,
 {
     fn upsert(
@@ -768,7 +768,7 @@ where
 #[derive(Default)]
 pub(crate) struct Snapshot<K, V>
 where
-    K: AsKey,
+    K: Default + Clone + Ord,
     V: Default + Clone,
 {
     pub(crate) value: AtomicPtr<Arc<Box<MvccRoot<K, V>>>>,
@@ -776,7 +776,7 @@ where
 
 impl<K, V> Snapshot<K, V>
 where
-    K: AsKey,
+    K: Default + Clone + Ord,
     V: Default + Clone,
 {
     fn new() -> Snapshot<K, V> {
@@ -854,7 +854,7 @@ where
 #[derive(Default)]
 pub(crate) struct MvccRoot<K, V>
 where
-    K: AsKey,
+    K: Default + Clone + Ord,
     V: Default + Clone,
 {
     pub(crate) root: Option<Box<Node<K, V>>>,
@@ -866,7 +866,7 @@ where
 
 impl<K, V> MvccRoot<K, V>
 where
-    K: AsKey,
+    K: Default + Clone + Ord,
     V: Default + Clone,
 {
     fn new() -> Box<MvccRoot<K, V>> {
@@ -898,7 +898,7 @@ where
 
 impl<K, V> Drop for MvccRoot<K, V>
 where
-    K: AsKey,
+    K: Default + Clone + Ord,
     V: Default + Clone,
 {
     fn drop(&mut self) {
@@ -932,7 +932,7 @@ where
 #[allow(dead_code)]
 pub(crate) fn print_reclaim<K, V>(prefix: &str, reclaim: &Vec<Box<Node<K, V>>>)
 where
-    K: AsKey,
+    K: Default + Clone + Ord,
     V: Default + Clone,
 {
     print!("{}reclaim ", prefix);

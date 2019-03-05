@@ -7,14 +7,14 @@ use crate::error::BognError;
 use crate::llrb_depth::Depth;
 use crate::llrb_node::Node;
 use crate::mvcc::MvccRoot;
-use crate::traits::{AsEntry, AsKey};
+use crate::traits::AsEntry;
 
 pub(crate) fn get<K, V, Q>(
     mut node: Option<&Node<K, V>>, // root node
     key: &Q,
 ) -> Option<impl AsEntry<K, V>>
 where
-    K: AsKey + Borrow<Q>,
+    K: Default + Clone + Ord + Borrow<Q>,
     V: Default + Clone,
     Q: Ord + ?Sized,
 {
@@ -37,7 +37,7 @@ pub(crate) fn validate_tree<K, V>(
     stats: &mut Stats,
 ) -> Result<usize, BognError<K>>
 where
-    K: AsKey,
+    K: Default + Clone + Ord,
     V: Default + Clone,
 {
     if node.is_none() {
@@ -82,7 +82,7 @@ where
 
 pub struct Iter<'a, K, V>
 where
-    K: AsKey,
+    K: Default + Clone + Ord,
     V: Default + Clone,
 {
     pub(crate) arc: Arc<Box<MvccRoot<K, V>>>,
@@ -95,7 +95,7 @@ where
 
 impl<'a, K, V> Iter<'a, K, V>
 where
-    K: AsKey,
+    K: Default + Clone + Ord,
     V: Default + Clone,
 {
     fn get_root(&self) -> Option<&Node<K, V>> {
@@ -144,7 +144,7 @@ where
 
 impl<'a, K, V> Iterator for Iter<'a, K, V>
 where
-    K: AsKey,
+    K: Default + Clone + Ord,
     V: Default + Clone,
 {
     type Item = Node<K, V>;
@@ -177,7 +177,7 @@ where
 
 pub struct Range<'a, K, V>
 where
-    K: AsKey,
+    K: Default + Clone + Ord,
     V: Default + Clone,
 {
     pub(crate) arc: Arc<Box<MvccRoot<K, V>>>,
@@ -191,7 +191,7 @@ where
 
 impl<'a, K, V> Range<'a, K, V>
 where
-    K: AsKey,
+    K: Default + Clone + Ord,
     V: Default + Clone,
 {
     fn get_root(&self) -> Option<&Node<K, V>> {
@@ -253,7 +253,7 @@ where
 
 impl<'a, K, V> Iterator for Range<'a, K, V>
 where
-    K: AsKey,
+    K: Default + Clone + Ord,
     V: Default + Clone,
 {
     type Item = Node<K, V>;
@@ -302,7 +302,7 @@ where
 
 pub struct Reverse<'a, K, V>
 where
-    K: AsKey,
+    K: Default + Clone + Ord,
     V: Default + Clone,
 {
     arc: Arc<Box<MvccRoot<K, V>>>,
@@ -316,7 +316,7 @@ where
 
 impl<'a, K, V> Reverse<'a, K, V>
 where
-    K: AsKey,
+    K: Default + Clone + Ord,
     V: Default + Clone,
 {
     fn get_root(&self) -> Option<&Node<K, V>> {
@@ -366,7 +366,7 @@ where
 
 impl<'a, K, V> Iterator for Reverse<'a, K, V>
 where
-    K: AsKey,
+    K: Default + Clone + Ord,
     V: Default + Clone,
 {
     type Item = Node<K, V>;
@@ -416,7 +416,7 @@ where
 
 pub fn is_red<K, V>(node: Option<&Node<K, V>>) -> bool
 where
-    K: AsKey,
+    K: Default + Clone + Ord,
     V: Default + Clone,
 {
     match node {
@@ -427,7 +427,7 @@ where
 
 pub fn is_black<K, V>(node: Option<&Node<K, V>>) -> bool
 where
-    K: AsKey,
+    K: Default + Clone + Ord,
     V: Default + Clone,
 {
     match node {
@@ -438,7 +438,7 @@ where
 
 pub fn drop_tree<K, V>(mut node: Box<Node<K, V>>)
 where
-    K: AsKey,
+    K: Default + Clone + Ord,
     V: Default + Clone,
 {
     println!("drop_tree - node {:p}", node);

@@ -1,6 +1,3 @@
-/// AsKey is an aggregate trait for key types.
-pub trait AsKey: Default + Clone + Ord {}
-
 /// AsValue act both as aggregate trait and define behaviour for
 /// each version of an index-entry.
 ///
@@ -26,7 +23,7 @@ where
 /// Key-Value <K,V> types.
 pub trait AsEntry<K, V>
 where
-    K: AsKey,
+    K: Default + Clone + Ord,
     V: Default + Clone,
 {
     type Value: AsValue<V>;
@@ -61,7 +58,3 @@ where
     /// [lsm]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
     fn versions(&self) -> Vec<Self::Value>;
 }
-
-impl AsKey for i64 {}
-impl AsKey for i32 {}
-impl AsKey for u64 {}

@@ -1,6 +1,6 @@
 use std::ops::{Deref, DerefMut};
 
-use crate::traits::{AsEntry, AsKey, AsValue};
+use crate::traits::{AsEntry, AsValue};
 
 /// A single entry in Llrb can have mutiple version of values, ValueNode
 /// represent each version.
@@ -112,7 +112,7 @@ where
 #[derive(Clone)]
 pub struct Node<K, V>
 where
-    K: AsKey,
+    K: Default + Clone + Ord,
     V: Default + Clone,
 {
     pub(crate) key: K,
@@ -126,7 +126,7 @@ where
 // Primary operations on a single node.
 impl<K, V> Node<K, V>
 where
-    K: AsKey,
+    K: Default + Clone + Ord,
     V: Default + Clone,
 {
     // CREATE operation
@@ -287,7 +287,7 @@ where
 
 impl<K, V> Default for Node<K, V>
 where
-    K: AsKey,
+    K: Default + Clone + Ord,
     V: Default + Clone,
 {
     fn default() -> Node<K, V> {
@@ -304,7 +304,7 @@ where
 
 impl<K, V> AsEntry<K, V> for Node<K, V>
 where
-    K: AsKey,
+    K: Default + Clone + Ord,
     V: Default + Clone,
 {
     type Value = ValueNode<V>;
@@ -338,7 +338,7 @@ where
 
 impl<K, V> Drop for Node<K, V>
 where
-    K: AsKey,
+    K: Default + Clone + Ord,
     V: Default + Clone,
 {
     fn drop(&mut self) {

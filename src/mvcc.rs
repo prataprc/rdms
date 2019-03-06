@@ -13,10 +13,6 @@ use crate::llrb_node::Node;
 use crate::sync_writer::SyncWriter;
 use crate::traits::AsEntry;
 
-// TODO: Remove AtomicPtr and test/benchmark.
-// TODO: Remove RwLock and use AtomicPtr and latch mechanism, test/benchmark.
-// TODO: Remove Mutex and check write performance.
-
 const RECLAIM_CAP: usize = 128;
 
 pub struct Mvcc<K, V>

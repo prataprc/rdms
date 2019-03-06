@@ -8,9 +8,6 @@ use crate::llrb_node::Node;
 use crate::traits::AsEntry;
 
 // TODO: optimize comparison
-// TODO: Remove AtomicPtr and test/benchmark.
-// TODO: Remove RwLock and use AtomicPtr and latch mechanism, test/benchmark.
-// TODO: Remove Mutex and check write performance.
 
 /// Llrb manage a single instance of in-memory index using
 /// [left-leaning-red-black][llrb] tree.

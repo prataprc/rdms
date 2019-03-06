@@ -28,6 +28,7 @@ mod llrb_common;
 mod llrb_depth;
 mod llrb_node;
 mod mvcc;
+mod sync_writer;
 mod traits;
 
 pub use crate::empty::Empty;

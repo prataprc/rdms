@@ -2,7 +2,7 @@ use std::borrow::Borrow;
 use std::cmp::{Ord, Ordering};
 use std::ops::{Bound, Deref, DerefMut};
 use std::sync::{
-    atomic::{AtomicPtr, AtomicU64, Ordering::Relaxed},
+    atomic::{AtomicPtr, Ordering::Relaxed},
     Arc,
 };
 
@@ -10,6 +10,7 @@ use crate::error::BognError;
 use crate::llrb::Llrb;
 use crate::llrb_common::{self, drop_tree, is_black, is_red, Iter, Range, Stats};
 use crate::llrb_node::Node;
+use crate::sync_writer::SyncWriter;
 use crate::traits::AsEntry;
 
 // TODO: Remove AtomicPtr and test/benchmark.
@@ -26,7 +27,7 @@ where
     pub(crate) name: String,
     pub(crate) lsm: bool,
     pub(crate) snapshot: Snapshot<K, V>,
-    pub(crate) writers: AtomicU64,
+    pub(crate) fencer: SyncWriter,
 }
 
 impl<K, V> Clone for Mvcc<K, V>
@@ -39,7 +40,7 @@ where
             name: self.name.clone(),
             lsm: self.lsm,
             snapshot: Snapshot::new(),
-            writers: AtomicU64::new(0),
+            fencer: SyncWriter::new(),
         };
 
         let arc: Arc<MvccRoot<K, V>> = self.snapshot.clone();
@@ -74,12 +75,7 @@ where
 
         //println!("drop mvcc {:p} {:p}", self, mvcc_root);
 
-        // TODO: drop root, make it functional
-        match mvcc_root.root.take() {
-            // drop root
-            Some(root) => drop_tree(root),
-            None => (),
-        };
+        mvcc_root.root.take().map(|root| drop_tree(root));
     }
 }
 
@@ -113,7 +109,7 @@ where
             name: name.as_ref().to_string(),
             lsm,
             snapshot: Snapshot::new(),
-            writers: AtomicU64::new(0),
+            fencer: SyncWriter::new(),
         }
     }
 }
@@ -137,19 +133,12 @@ where
 
     /// Set current seqno.
     pub fn set_seqno(&mut self, seqno: u64) {
-        if self.writers.compare_and_swap(0, 1, Relaxed) != 0 {
-            panic!("Mvcc cannot have concurrent writers");
-        }
+        let _fench = self.fencer.lock();
 
         let arc: Arc<MvccRoot<K, V>> = self.snapshot.clone();
-        let root = arc.deref().as_duplicate();
+        let (root, n_count) = (arc.deref().as_duplicate(), arc.n_count);
 
-        self.snapshot
-            .shift_snapshot(root, seqno, arc.n_count, vec![]);
-
-        if self.writers.compare_and_swap(1, 0, Relaxed) != 1 {
-            unreachable!();
-        }
+        self.snapshot.shift_snapshot(root, seqno, n_count, vec![]);
     }
 
     /// Return current seqno.
@@ -198,9 +187,7 @@ where
     }
 
     pub fn set(&self, key: K, value: V) -> Option<impl AsEntry<K, V>> {
-        if self.writers.compare_and_swap(0, 1, Relaxed) != 0 {
-            panic!("Mvcc cannot have concurrent writers");
-        }
+        let _fench = self.fencer.lock();
 
         let lsm = self.lsm;
         let arc = self.snapshot.clone();
@@ -208,9 +195,9 @@ where
         let seqno = arc.seqno + 1;
         let mut n_count = arc.n_count;
         let root = arc.as_duplicate();
-        let mut reclaim: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
+        let mut recl: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
 
-        let res = match Mvcc::upsert(root, key, value, seqno, lsm, &mut reclaim) {
+        match Mvcc::upsert(root, key, value, seqno, lsm, &mut recl) {
             (Some(mut root), Some(mut n), old_node) => {
                 root.set_black();
                 if old_node.is_none() {
@@ -219,16 +206,11 @@ where
                 n.dirty = false;
                 Box::leak(n);
                 self.snapshot
-                    .shift_snapshot(Some(root), seqno, n_count, reclaim);
+                    .shift_snapshot(Some(root), seqno, n_count, recl);
                 old_node
             }
             _ => unreachable!(),
-        };
-
-        if self.writers.compare_and_swap(1, 0, Relaxed) != 1 {
-            unreachable!();
         }
-        res
     }
 
     pub fn set_cas(
@@ -237,15 +219,11 @@ where
         value: V,
         cas: u64,
     ) -> Result<Option<impl AsEntry<K, V>>, BognError<K>> {
-        if self.writers.compare_and_swap(0, 1, Relaxed) != 0 {
-            panic!("Mvcc cannot have concurrent writers");
-        }
-
+        let _fench = self.fencer.lock();
         let lsm = self.lsm;
         let arc = self.snapshot.clone();
 
-        let seqno = arc.seqno + 1;
-        let mut n_count = arc.n_count;
+        let (seqno, mut n_count) = (arc.seqno + 1, arc.n_count);
 
         let root = arc.as_duplicate();
         let mut reclaim: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
@@ -273,9 +251,6 @@ where
             n.dirty = false;
             Box::leak(n);
         }
-        if self.writers.compare_and_swap(1, 0, Relaxed) != 1 {
-            unreachable!();
-        }
         ret
     }
 
@@ -285,12 +260,9 @@ where
         K: Borrow<Q> + From<Q>,
         Q: Clone + Ord + ?Sized,
     {
-        if self.writers.compare_and_swap(0, 1, Relaxed) != 0 {
-            panic!("Mvcc cannot have concurrent writers");
-        }
+        let _fench = self.fencer.lock();
 
         let arc = self.snapshot.clone();
-
         let mut seqno = arc.seqno + 1;
         let mut n_count = arc.n_count;
         let root = arc.as_duplicate();
@@ -332,9 +304,6 @@ where
         };
 
         self.snapshot.shift_snapshot(root, seqno, n_count, reclaim);
-        if self.writers.compare_and_swap(1, 0, Relaxed) != 1 {
-            unreachable!();
-        }
         old_node
     }
 

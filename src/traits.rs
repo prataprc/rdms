@@ -37,7 +37,10 @@ where
 
     /// Return reference to entry's latest value. Use [AsValue] methods
     /// to get value fields.
-    fn value(&self) -> &Self::Value;
+    fn latest_value(&self) -> &Self::Value;
+
+    /// Return a copy of the latest value.
+    fn value(&self) -> V;
 
     /// Return the sequence-number of most recent mutation for this entry.
     fn seqno(&self) -> u64;

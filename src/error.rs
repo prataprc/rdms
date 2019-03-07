@@ -1,6 +1,6 @@
 /// BognError enumerates over all possible errors that this package
 /// shall return.
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum BognError<K> {
     /// Applicable to set_cas() API. This error is returned when:
     /// * In non-lsm mode, requested entry is missing but specified

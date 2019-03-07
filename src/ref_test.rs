@@ -226,20 +226,10 @@ fn check_node(node: Option<impl AsEntry<i64, i64>>, refn: Option<RefNode>) -> bo
     //println!("check_node {} {}", node.key(), refn.key);
     assert_eq!(node.key(), refn.key, "key");
 
+    assert_eq!(node.value(), refn.versions[0].value, "key {}", refn.key);
+    assert_eq!(node.seqno(), refn.versions[0].seqno, "key {}", refn.key);
     assert_eq!(
-        node.value().value(),
-        refn.versions[0].value,
-        "key {}",
-        refn.key
-    );
-    assert_eq!(
-        node.value().seqno(),
-        refn.versions[0].seqno,
-        "key {}",
-        refn.key
-    );
-    assert_eq!(
-        node.value().is_deleted(),
+        node.is_deleted(),
         refn.versions[0].deleted.is_some(),
         "key {}",
         refn.key

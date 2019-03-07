@@ -132,7 +132,7 @@ where
         <E as AsEntry<K, V>>::Value: Default + Clone,
     {
         let black = false;
-        Node::new(entry.key(), entry.value().value(), entry.seqno(), black)
+        Node::new(entry.key(), entry.value(), entry.seqno(), black)
     }
 
     // clone and detach this node from the tree.
@@ -267,8 +267,13 @@ where
     }
 
     #[inline]
-    fn value(&self) -> &Self::Value {
+    fn latest_value(&self) -> &Self::Value {
         &self.valn
+    }
+
+    #[inline]
+    fn value(&self) -> V {
+        self.valn.value()
     }
 
     #[inline]

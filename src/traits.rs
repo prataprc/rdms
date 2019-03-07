@@ -1,4 +1,4 @@
-/// AsValue act both as aggregate trait and define behaviour for
+/// AsVersion act both as aggregate trait and define behaviour for
 /// each version of an index-entry.
 ///
 /// Note that in [LSM] mode, all mutations that happen over an
@@ -6,7 +6,7 @@
 /// shall create a new version for the entry.
 ///
 /// [LSM]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
-pub trait AsValue<V>
+pub trait AsVersion<V>
 where
     V: Default + Clone,
 {
@@ -26,7 +26,7 @@ where
     K: Default + Clone + Ord,
     V: Default + Clone,
 {
-    type Value: AsValue<V>;
+    type Version: AsVersion<V>;
 
     /// Return a copy of entry's key. In bogn-index each entry is
     /// identified by unique-key.
@@ -35,9 +35,9 @@ where
     /// Return a reference to entry's key.
     fn key_ref(&self) -> &K;
 
-    /// Return reference to entry's latest value. Use [AsValue] methods
+    /// Return reference to entry's latest value. Use [AsVersion] methods
     /// to get value fields.
-    fn latest_value(&self) -> &Self::Value;
+    fn latest_version(&self) -> &Self::Version;
 
     /// Return a copy of the latest value.
     fn value(&self) -> V;
@@ -59,5 +59,5 @@ where
     /// And versions() shall return a [`Vec`] with arity one.
     ///
     /// [lsm]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
-    fn versions(&self) -> Vec<Self::Value>;
+    fn versions(&self) -> Vec<Self::Version>;
 }

@@ -1,32 +1,27 @@
 use std::ops::Deref;
 
-use crate::traits::{AsEntry, AsValue};
+use crate::traits::{AsEntry, AsVersion};
 
-/// A single entry in Llrb can have mutiple version of values, ValueNode
+/// A single entry in Llrb can have mutiple version of values, Version
 /// represent each version.
 #[derive(Clone, Default)]
-pub struct ValueNode<V>
+pub struct Version<V>
 where
     V: Default + Clone,
 {
-    data: V,                         // actual value
-    seqno: u64,                      // when this version mutated
-    deleted: Option<u64>,            // for lsm, deleted can be > 0
-    prev: Option<Box<ValueNode<V>>>, // point to previous version
+    data: V,                       // actual value
+    seqno: u64,                    // when this version mutated
+    deleted: Option<u64>,          // for lsm, deleted can be > 0
+    prev: Option<Box<Version<V>>>, // point to previous version
 }
 
-// Various operations on ValueNode, all are immutable operations.
-impl<V> ValueNode<V>
+// Various operations on Version, all are immutable operations.
+impl<V> Version<V>
 where
     V: Default + Clone,
 {
-    fn new(
-        data: V,
-        seqno: u64,
-        deleted: Option<u64>,
-        prev: Option<Box<ValueNode<V>>>,
-    ) -> ValueNode<V> {
-        ValueNode {
+    fn new(data: V, seqno: u64, deleted: Option<u64>, prev: Option<Box<Version<V>>>) -> Version<V> {
+        Version {
             data,
             seqno,
             deleted,
@@ -35,8 +30,8 @@ where
     }
 
     // clone this version alone, detach it from previous versions.
-    fn clone_detach(&self) -> ValueNode<V> {
-        ValueNode {
+    fn clone_detach(&self) -> Version<V> {
+        Version {
             data: self.data.clone(),
             seqno: self.seqno,
             deleted: self.deleted,
@@ -46,7 +41,7 @@ where
 
     // detach individual versions, from latest to oldest, and collect
     // them in a vector.
-    fn value_nodes(&self, acc: &mut Vec<ValueNode<V>>) {
+    fn value_nodes(&self, acc: &mut Vec<Version<V>>) {
         acc.push(self.clone_detach());
         self.prev.as_ref().map(|v| v.value_nodes(acc));
     }
@@ -71,7 +66,7 @@ where
     }
 }
 
-impl<V> AsValue<V> for ValueNode<V>
+impl<V> AsVersion<V> for Version<V>
 where
     V: Default + Clone,
 {
@@ -99,7 +94,7 @@ where
     V: Default + Clone,
 {
     pub(crate) key: K,
-    pub(crate) valn: ValueNode<V>,
+    pub(crate) valn: Version<V>,
     pub(crate) black: bool,                    // store: black or red
     pub(crate) dirty: bool,                    // new node in mvcc path
     pub(crate) left: Option<Box<Node<K, V>>>,  // store: left child
@@ -116,7 +111,7 @@ where
     pub(crate) fn new(key: K, value: V, seqno: u64, black: bool) -> Box<Node<K, V>> {
         let node = Box::new(Node {
             key,
-            valn: ValueNode::new(value, seqno, None, None),
+            valn: Version::new(value, seqno, None, None),
             black,
             dirty: true,
             left: None,
@@ -129,7 +124,7 @@ where
     pub(crate) fn from_entry<E>(entry: E) -> Box<Node<K, V>>
     where
         E: AsEntry<K, V>,
-        <E as AsEntry<K, V>>::Value: Default + Clone,
+        <E as AsEntry<K, V>>::Version: Default + Clone,
     {
         let black = false;
         Node::new(entry.key(), entry.value(), entry.seqno(), black)
@@ -187,7 +182,7 @@ where
         } else {
             None
         };
-        self.valn = ValueNode::new(value, seqno, None, prev);
+        self.valn = Version::new(value, seqno, None, prev);
     }
 
     // DELETE operation
@@ -254,7 +249,7 @@ where
     K: Default + Clone + Ord,
     V: Default + Clone,
 {
-    type Value = ValueNode<V>;
+    type Version = Version<V>;
 
     #[inline]
     fn key(&self) -> K {
@@ -267,7 +262,7 @@ where
     }
 
     #[inline]
-    fn latest_value(&self) -> &Self::Value {
+    fn latest_version(&self) -> &Self::Version {
         &self.valn
     }
 
@@ -277,8 +272,8 @@ where
     }
 
     #[inline]
-    fn versions(&self) -> Vec<Self::Value> {
-        let mut acc: Vec<Self::Value> = vec![];
+    fn versions(&self) -> Vec<Self::Version> {
+        let mut acc: Vec<Self::Version> = vec![];
         self.valn.value_nodes(&mut acc);
         acc
     }

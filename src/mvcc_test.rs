@@ -6,7 +6,7 @@ use rand::prelude::random;
 use crate::empty::Empty;
 use crate::error::BognError;
 use crate::mvcc::Mvcc;
-use crate::traits::{AsEntry, AsValue};
+use crate::traits::{AsEntry, AsVersion};
 
 // TODO: repeatable randoms.
 

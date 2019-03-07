@@ -93,7 +93,7 @@ where
     where
         S: AsRef<str>,
         E: AsEntry<K, V>,
-        <E as AsEntry<K, V>>::Value: Default + Clone,
+        <E as AsEntry<K, V>>::Version: Default + Clone,
     {
         let mut llrb = Llrb::new(name.as_ref().to_string(), lsm);
         for entry in iter {
@@ -112,7 +112,7 @@ where
     ) -> Result<Box<Node<K, V>>, BognError<K>>
     where
         E: AsEntry<K, V>,
-        <E as AsEntry<K, V>>::Value: Default + Clone,
+        <E as AsEntry<K, V>>::Version: Default + Clone,
     {
         if node.is_none() {
             return Ok(Node::from_entry(entry));

@@ -5,7 +5,7 @@ use std::ops::{Bound, Deref, DerefMut};
 use crate::error::BognError;
 use crate::llrb_common::{self, drop_tree, is_black, is_red, Iter, Range, Stats};
 use crate::llrb_node::Node;
-use crate::traits::AsEntry;
+use crate::traits::{AsDelta, AsEntry, Diff};
 
 // TODO: optimize comparison
 
@@ -24,7 +24,7 @@ use crate::traits::AsEntry;
 pub struct Llrb<K, V>
 where
     K: Default + Clone + Ord,
-    V: Default + Clone,
+    V: Default + Clone + Diff,
 {
     pub(crate) name: String,
     pub(crate) lsm: bool,
@@ -36,7 +36,7 @@ where
 impl<K, V> Drop for Llrb<K, V>
 where
     K: Default + Clone + Ord,
-    V: Default + Clone,
+    V: Default + Clone + Diff,
 {
     fn drop(&mut self) {
         self.root.take().map(|node| drop_tree(node));
@@ -46,7 +46,7 @@ where
 impl<K, V> Clone for Llrb<K, V>
 where
     K: Default + Clone + Ord,
-    V: Default + Clone,
+    V: Default + Clone + Diff,
 {
     fn clone(&self) -> Llrb<K, V> {
         Llrb {
@@ -63,7 +63,7 @@ where
 impl<K, V> Llrb<K, V>
 where
     K: Default + Clone + Ord,
-    V: Default + Clone,
+    V: Default + Clone + Diff,
 {
     /// Create an empty instance of Llrb, identified by `name`.
     /// Applications can choose unique names. When `lsm` is true, mutations
@@ -93,7 +93,7 @@ where
     where
         S: AsRef<str>,
         E: AsEntry<K, V>,
-        <E as AsEntry<K, V>>::Version: Default + Clone,
+        <E as AsEntry<K, V>>::Delta: AsDelta<V> + Clone,
     {
         let mut llrb = Llrb::new(name.as_ref().to_string(), lsm);
         for entry in iter {
@@ -112,7 +112,7 @@ where
     ) -> Result<Box<Node<K, V>>, BognError<K>>
     where
         E: AsEntry<K, V>,
-        <E as AsEntry<K, V>>::Version: Default + Clone,
+        <E as AsEntry<K, V>>::Delta: AsDelta<V> + Clone,
     {
         if node.is_none() {
             return Ok(Node::from_entry(entry));
@@ -138,7 +138,7 @@ where
 impl<K, V> Llrb<K, V>
 where
     K: Default + Clone + Ord,
-    V: Default + Clone,
+    V: Default + Clone + Diff,
 {
     /// Identify this instance. Applications can choose unique names while
     /// creating Llrb instances.
@@ -170,7 +170,7 @@ where
 impl<K, V> Llrb<K, V>
 where
     K: Default + Clone + Ord,
-    V: Default + Clone,
+    V: Default + Clone + Diff,
 {
     /// Get the latest version for key.
     pub fn get<Q>(&self, key: &Q) -> Option<impl AsEntry<K, V>>
@@ -329,7 +329,7 @@ where
 impl<K, V> Llrb<K, V>
 where
     K: Default + Clone + Ord,
-    V: Default + Clone,
+    V: Default + Clone + Diff,
 {
     fn upsert(
         node: Option<Box<Node<K, V>>>,
@@ -434,7 +434,7 @@ where
             let (key, black) = (key.clone().into(), false);
             let mut node = Node::new(key, Default::default(), seqno, black);
             node.dirty = false;
-            node.delete(seqno, true /*lsm*/);
+            node.delete(seqno);
             return (Some(node), None);
         }
 
@@ -457,7 +457,7 @@ where
                 if node.is_deleted() {
                     (node, Some(old_node)) // noop
                 } else {
-                    node.delete(seqno, true /*lsm*/);
+                    node.delete(seqno);
                     (node, Some(old_node))
                 }
             }

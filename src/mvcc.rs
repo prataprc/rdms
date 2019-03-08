@@ -11,14 +11,14 @@ use crate::llrb::Llrb;
 use crate::llrb_common::{self, drop_tree, is_black, is_red, Iter, Range, Stats};
 use crate::llrb_node::Node;
 use crate::sync_writer::SyncWriter;
-use crate::traits::AsEntry;
+use crate::traits::{AsEntry, Diff};
 
 const RECLAIM_CAP: usize = 128;
 
 pub struct Mvcc<K, V>
 where
     K: Default + Clone + Ord,
-    V: Default + Clone,
+    V: Default + Clone + Diff,
 {
     pub(crate) name: String,
     pub(crate) lsm: bool,
@@ -29,7 +29,7 @@ where
 impl<K, V> Clone for Mvcc<K, V>
 where
     K: Default + Clone + Ord,
-    V: Default + Clone,
+    V: Default + Clone + Diff,
 {
     fn clone(&self) -> Mvcc<K, V> {
         let mvcc = Mvcc {
@@ -52,7 +52,7 @@ where
 impl<K, V> Drop for Mvcc<K, V>
 where
     K: Default + Clone + Ord,
-    V: Default + Clone,
+    V: Default + Clone + Diff,
 {
     fn drop(&mut self) {
         // NOTE: Means all references to mvcc are gone and ownership is going out
@@ -78,7 +78,7 @@ where
 impl<K, V> From<Llrb<K, V>> for Mvcc<K, V>
 where
     K: Default + Clone + Ord,
-    V: Default + Clone,
+    V: Default + Clone + Diff,
 {
     fn from(mut llrb: Llrb<K, V>) -> Mvcc<K, V> {
         let mvcc = Mvcc::new(llrb.name.clone(), llrb.lsm);
@@ -95,7 +95,7 @@ where
 impl<K, V> Mvcc<K, V>
 where
     K: Default + Clone + Ord,
-    V: Default + Clone,
+    V: Default + Clone + Diff,
 {
     pub fn new<S>(name: S, lsm: bool) -> Mvcc<K, V>
     where
@@ -114,7 +114,7 @@ where
 impl<K, V> Mvcc<K, V>
 where
     K: Default + Clone + Ord,
-    V: Default + Clone,
+    V: Default + Clone + Diff,
 {
     /// Identify this instance. Applications can choose unique names while
     /// creating Mvcc instances.
@@ -146,7 +146,7 @@ where
 impl<K, V> Mvcc<K, V>
 where
     K: Default + Clone + Ord,
-    V: Default + Clone,
+    V: Default + Clone + Diff,
 {
     /// Get the latest version for key.
     pub fn get<Q>(&self, key: &Q) -> Option<impl AsEntry<K, V>>
@@ -330,7 +330,7 @@ where
 impl<K, V> Mvcc<K, V>
 where
     K: Default + Clone + Ord,
-    V: Default + Clone,
+    V: Default + Clone + Diff,
 {
     fn upsert(
         node: Option<Box<Node<K, V>>>,
@@ -457,7 +457,7 @@ where
         if node.is_none() {
             let (key, black) = (key.clone().into(), false);
             let mut node = Node::new(key, Default::default(), seqno, black);
-            node.delete(seqno, true /*lsm*/);
+            node.delete(seqno);
             let n = node.duplicate();
             return (Some(node), Some(n), None);
         }
@@ -480,7 +480,7 @@ where
                 (n, old_node)
             }
             Ordering::Equal => {
-                new_node.delete(seqno, true /*lsm*/);
+                new_node.delete(seqno);
                 new_node.dirty = true;
                 let n = new_node.duplicate();
                 (Some(n), Some(node.clone_detach()))
@@ -758,7 +758,7 @@ where
 pub(crate) struct Snapshot<K, V>
 where
     K: Default + Clone + Ord,
-    V: Default + Clone,
+    V: Default + Clone + Diff,
 {
     pub(crate) value: AtomicPtr<Arc<MvccRoot<K, V>>>,
 }
@@ -766,7 +766,7 @@ where
 impl<K, V> Snapshot<K, V>
 where
     K: Default + Clone + Ord,
-    V: Default + Clone,
+    V: Default + Clone + Diff,
 {
     fn new() -> Snapshot<K, V> {
         let next = Some(Arc::new(MvccRoot::new(None)));
@@ -837,7 +837,7 @@ where
 pub(crate) struct MvccRoot<K, V>
 where
     K: Default + Clone + Ord,
-    V: Default + Clone,
+    V: Default + Clone + Diff,
 {
     pub(crate) root: Option<Box<Node<K, V>>>,
     pub(crate) reclaim: Vec<Box<Node<K, V>>>,
@@ -849,7 +849,7 @@ where
 impl<K, V> MvccRoot<K, V>
 where
     K: Default + Clone + Ord,
-    V: Default + Clone,
+    V: Default + Clone + Diff,
 {
     fn new(next: Option<Arc<MvccRoot<K, V>>>) -> MvccRoot<K, V> {
         //println!("new mvcc-root {:p}", mvcc_root);
@@ -886,7 +886,7 @@ where
 impl<K, V> Drop for MvccRoot<K, V>
 where
     K: Default + Clone + Ord,
-    V: Default + Clone,
+    V: Default + Clone + Diff,
 {
     fn drop(&mut self) {
         // NOTE: `root` will be leaked, so that the tree is intact.
@@ -924,7 +924,7 @@ where
 pub(crate) fn print_reclaim<K, V>(prefix: &str, reclaim: &Vec<Box<Node<K, V>>>)
 where
     K: Default + Clone + Ord,
-    V: Default + Clone,
+    V: Default + Clone + Diff,
 {
     print!("{}reclaim ", prefix);
     reclaim.iter().for_each(|item| print!("{:p} ", *item));

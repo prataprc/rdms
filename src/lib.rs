@@ -29,6 +29,8 @@ mod llrb_depth;
 mod llrb_node;
 mod mvcc;
 mod sync_writer;
+mod trait_bytes;
+mod trait_i64;
 mod traits;
 
 pub use crate::empty::Empty;
@@ -36,7 +38,7 @@ pub use crate::error::BognError;
 pub use crate::llrb::Llrb;
 pub use crate::llrb_common::Stats;
 pub use crate::mvcc::Mvcc;
-pub use crate::traits::{AsEntry, AsVersion};
+pub use crate::traits::{AsDelta, AsEntry, Diff};
 
 #[cfg(test)]
 mod llrb_test;

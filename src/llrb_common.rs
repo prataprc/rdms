@@ -7,14 +7,14 @@ use crate::error::BognError;
 use crate::llrb_depth::Depth;
 use crate::llrb_node::Node;
 use crate::mvcc::MvccRoot;
-use crate::traits::AsEntry;
+use crate::traits::{AsEntry, Diff};
 
 pub const ITER_LIMIT: usize = 100;
 
 pub fn is_red<K, V>(node: Option<&Node<K, V>>) -> bool
 where
     K: Default + Clone + Ord,
-    V: Default + Clone,
+    V: Default + Clone + Diff,
 {
     node.map_or(false, |node| !node.is_black())
 }
@@ -22,7 +22,7 @@ where
 pub fn is_black<K, V>(node: Option<&Node<K, V>>) -> bool
 where
     K: Default + Clone + Ord,
-    V: Default + Clone,
+    V: Default + Clone + Diff,
 {
     node.map_or(true, |node| node.is_black())
 }
@@ -33,7 +33,7 @@ pub(crate) fn get<K, V, Q>(
 ) -> Option<impl AsEntry<K, V>>
 where
     K: Default + Clone + Ord + Borrow<Q>,
-    V: Default + Clone,
+    V: Default + Clone + Diff,
     Q: Ord + ?Sized,
 {
     while node.is_some() {
@@ -56,7 +56,7 @@ pub(crate) fn validate_tree<K, V>(
 ) -> Result<usize, BognError<K>>
 where
     K: Default + Clone + Ord,
-    V: Default + Clone,
+    V: Default + Clone + Diff,
 {
     if node.is_none() {
         stats.depths.as_mut().unwrap().sample(depth);
@@ -101,7 +101,7 @@ where
 pub struct Iter<'a, K, V>
 where
     K: Default + Clone + Ord,
-    V: Default + Clone,
+    V: Default + Clone + Diff,
 {
     pub(crate) arc: Arc<MvccRoot<K, V>>,
     pub(crate) root: Option<&'a Node<K, V>>,
@@ -113,7 +113,7 @@ where
 impl<'a, K, V> Iter<'a, K, V>
 where
     K: Default + Clone + Ord,
-    V: Default + Clone,
+    V: Default + Clone + Diff,
 {
     fn get_root(&self) -> Option<&Node<K, V>> {
         match self.root {
@@ -159,7 +159,7 @@ where
 impl<'a, K, V> Iterator for Iter<'a, K, V>
 where
     K: Default + Clone + Ord,
-    V: Default + Clone,
+    V: Default + Clone + Diff,
 {
     type Item = Node<K, V>;
 
@@ -180,7 +180,7 @@ where
 pub struct Range<'a, K, V>
 where
     K: Default + Clone + Ord,
-    V: Default + Clone,
+    V: Default + Clone + Diff,
 {
     pub(crate) arc: Arc<MvccRoot<K, V>>,
     pub(crate) root: Option<&'a Node<K, V>>,
@@ -193,7 +193,7 @@ where
 impl<'a, K, V> Range<'a, K, V>
 where
     K: Default + Clone + Ord,
-    V: Default + Clone,
+    V: Default + Clone + Diff,
 {
     fn get_root(&self) -> Option<&Node<K, V>> {
         match self.root {
@@ -250,7 +250,7 @@ where
 impl<'a, K, V> Iterator for Range<'a, K, V>
 where
     K: Default + Clone + Ord,
-    V: Default + Clone,
+    V: Default + Clone + Diff,
 {
     type Item = Node<K, V>;
 
@@ -285,7 +285,7 @@ where
 pub struct Reverse<'a, K, V>
 where
     K: Default + Clone + Ord,
-    V: Default + Clone,
+    V: Default + Clone + Diff,
 {
     arc: Arc<MvccRoot<K, V>>,
     root: Option<&'a Node<K, V>>,
@@ -298,7 +298,7 @@ where
 impl<'a, K, V> Reverse<'a, K, V>
 where
     K: Default + Clone + Ord,
-    V: Default + Clone,
+    V: Default + Clone + Diff,
 {
     fn get_root(&self) -> Option<&Node<K, V>> {
         match self.root {
@@ -344,7 +344,7 @@ where
 impl<'a, K, V> Iterator for Reverse<'a, K, V>
 where
     K: Default + Clone + Ord,
-    V: Default + Clone,
+    V: Default + Clone + Diff,
 {
     type Item = Node<K, V>;
 
@@ -379,7 +379,7 @@ where
 pub fn drop_tree<K, V>(mut node: Box<Node<K, V>>)
 where
     K: Default + Clone + Ord,
-    V: Default + Clone,
+    V: Default + Clone + Diff,
 {
     //println!("drop_tree - node {:p}", node);
     node.left.take().map(|left| drop_tree(left));

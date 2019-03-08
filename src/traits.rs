@@ -1,4 +1,4 @@
-/// AsVersion act both as aggregate trait and define behaviour for
+/// AsDelta act both as aggregate trait and define behaviour for
 /// each version of an index-entry.
 ///
 /// Note that in [LSM] mode, all mutations that happen over an
@@ -6,27 +6,29 @@
 /// shall create a new version for the entry.
 ///
 /// [LSM]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
-pub trait AsVersion<V>
+pub trait AsDelta<V>
 where
-    V: Default + Clone,
+    V: Default + Clone + Diff,
 {
-    /// Return a copy of the value for this version.
-    fn value(&self) -> V;
+    /// Return the difference value.
+    fn delta(&self) -> <V as Diff>::D;
+
     /// Return sequence-number at which the mutation happened.
     fn seqno(&self) -> u64;
-    /// Valid only in LSM mode. Return whether this version is marked as
-    /// deleted.
+
+    /// Valid only in LSM mode. Return whether this version is
+    /// marked as deleted.
     fn is_deleted(&self) -> bool;
 }
 
-/// AsEntry define behaviour for a single index-entry parametrised over
-/// Key-Value <K,V> types.
+/// AsEntry define behaviour for a single index-entry parametrised
+/// over Key-Value <K,V> types.
 pub trait AsEntry<K, V>
 where
     K: Default + Clone + Ord,
-    V: Default + Clone,
+    V: Default + Clone + Diff,
 {
-    type Version: AsVersion<V>;
+    type Delta: Default + AsDelta<V> + Clone;
 
     /// Return a copy of entry's key. In bogn-index each entry is
     /// identified by unique-key.
@@ -35,29 +37,46 @@ where
     /// Return a reference to entry's key.
     fn key_ref(&self) -> &K;
 
-    /// Return reference to entry's latest value. Use [AsVersion] methods
-    /// to get value fields.
-    fn latest_version(&self) -> &Self::Version;
-
     /// Return a copy of the latest value.
     fn value(&self) -> V;
 
     /// Return the sequence-number of most recent mutation for this entry.
     fn seqno(&self) -> u64;
 
-    /// Valid only in LSM mode. Return whether this entry is marked as deleted.
+    /// Valid only in LSM mode. Return whether this entry is marked as
+    /// deleted.
     fn is_deleted(&self) -> bool;
 
-    /// Return a copy of entry's versions.
+    /// Return previous versions as delta of a newer version. The current
+    /// version (A), the previous version (B), and the difference between
+    /// the two (D) share the following relation ship.
     ///
-    /// In [LSM] mode, mutations on the same key shall be preserved
-    /// as a log list. And versions() shall return a [`Vec`] of all mutations
-    /// for this node, latest first and oldest last.
-    ///
-    /// In non-lsm mode, entries shall have only one version, because
-    /// newer muations on the same key will over-write its previous mutation.
-    /// And versions() shall return a [`Vec`] with arity one.
-    ///
-    /// [lsm]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
-    fn versions(&self) -> Vec<Self::Version>;
+    /// Op(A) = B | where Op is operation on A.
+    /// A - D = B
+    /// A = B + D
+    /// By successively applying the delta on the latest version we get
+    /// the previous version.
+    fn deltas(&self) -> Vec<Self::Delta>;
+}
+
+/// Values must support diff-ability. If,
+///
+/// O = previous value
+/// N = next value
+/// D = difference between previous value and next value
+///
+/// Then,
+///
+/// D = O - N (diff operation)
+/// O = N + D (merge operation)
+pub trait Diff {
+    type D: Default + Clone;
+
+    /// Return the delta between two version of value.
+    /// O - N = D
+    fn diff(&self, a: &Self) -> Self::D;
+
+    /// Merge delta with this value to create another value.
+    /// N + D = O
+    fn merge(&self, a: &Self::D) -> Self;
 }

@@ -1,3 +1,5 @@
+use crate::traits::Diff;
+
 #[derive(Clone, Default)]
 struct RefValue {
     value: i64,
@@ -217,7 +219,7 @@ fn check_node(node: Option<impl AsEntry<i64, i64>>, refn: Option<RefNode>) -> bo
         panic!("node is none but not refn {:?}", refn.unwrap().key);
     } else if refn.is_none() {
         let node = node.as_ref().unwrap();
-        println!("node num_versions {}", node.versions().len());
+        println!("node num_versions {}", node.deltas().len());
         panic!("refn is none but not node {:?}", node.key());
     }
 
@@ -226,45 +228,31 @@ fn check_node(node: Option<impl AsEntry<i64, i64>>, refn: Option<RefNode>) -> bo
     //println!("check_node {} {}", node.key(), refn.key);
     assert_eq!(node.key(), refn.key, "key");
 
-    assert_eq!(node.value(), refn.versions[0].value, "key {}", refn.key);
-    assert_eq!(node.seqno(), refn.versions[0].seqno, "key {}", refn.key);
-    assert_eq!(
-        node.is_deleted(),
-        refn.versions[0].deleted.is_some(),
-        "key {}",
-        refn.key
-    );
-
+    let ver = &refn.versions[0];
+    assert_eq!(node.value(), ver.value, "key {}", refn.key);
+    assert_eq!(node.seqno(), ver.seqno, "key {}", refn.key);
+    assert_eq!(node.is_deleted(), ver.deleted.is_some(), "key {}", refn.key);
     assert_eq!(node.seqno(), refn.get_seqno(), "key {}", refn.key);
     assert_eq!(node.is_deleted(), refn.is_deleted(), "key {}", refn.key);
-    assert_eq!(
-        node.versions().len(),
-        refn.versions.len(),
-        "key {}",
-        refn.key
-    );
-    for (i, value) in node.versions().iter().enumerate() {
+
+    let (n_vers, refn_vers) = (node.deltas().len() + 1, refn.versions.len());
+    assert_eq!(n_vers, refn_vers, "key {}", refn.key);
+
+    let mut curr_value = node.value();
+    println!("{} {}", n_vers, refn_vers);
+    for (i, delta) in node.deltas().iter().rev().enumerate() {
+        let ver = &refn.versions[i + 1];
+        let prev_value = curr_value.merge(&delta.delta());
+        assert_eq!(prev_value, ver.value, "key {} i {}", refn.key, i,);
+        assert_eq!(delta.seqno(), ver.seqno, "key {} i {}", refn.key, i);
         assert_eq!(
-            value.value(),
-            refn.versions[i].value,
-            "key {} i {}",
-            refn.key,
-            i,
-        );
-        assert_eq!(
-            value.seqno(),
-            refn.versions[i].seqno,
+            delta.is_deleted(),
+            ver.deleted.is_some(),
             "key {} i {}",
             refn.key,
             i
         );
-        assert_eq!(
-            value.is_deleted(),
-            refn.versions[i].deleted.is_some(),
-            "key {} i {}",
-            refn.key,
-            i
-        );
+        curr_value = prev_value;
     }
 
     return true;

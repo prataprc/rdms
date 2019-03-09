@@ -25,7 +25,7 @@ where
 /// over Key-Value <K,V> types.
 pub trait AsEntry<K, V>
 where
-    K: Default + Clone + Ord,
+    K: Default + Clone + Ord + Serialize,
     V: Default + Clone + Diff,
 {
     type Delta: Default + AsDelta<V> + Clone;
@@ -69,8 +69,8 @@ where
 ///
 /// D = O - N (diff operation)
 /// O = N + D (merge operation)
-pub trait Diff {
-    type D: Default + Clone;
+pub trait Diff: Serialize {
+    type D: Serialize + Default + Clone;
 
     /// Return the delta between two version of value.
     /// O - N = D
@@ -79,4 +79,10 @@ pub trait Diff {
     /// Merge delta with this value to create another value.
     /// N + D = O
     fn merge(&self, a: &Self::D) -> Self;
+}
+
+pub trait Serialize {
+    fn encode(&self, buf: Vec<u8>) -> Vec<u8>;
+
+    fn decode(buf: &[u8]) -> Result<Self, BognError>;
 }

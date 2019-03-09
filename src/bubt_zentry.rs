@@ -1,25 +1,76 @@
 use std::fs::File;
 
-use crate::traits::{AsVersion, Serialize};
+use crate::traits::{AsDelta, Serialize, Diff, AsEntry};
 
-pub enum ZValue1<V>
+pub struct ZDelta1<'a, V>
 where
-    V: Serialize,
+    V: Default + Clone + Diff,
 {
-    Value{seqno: u64, deleted: bool, value: V},
-    FileRef{seqno: u64, deleted: bool, fpos: u64, len: u64},
+    len: u64,
+    seqno: u64,
+    deleted: Option<u64>,
+    fpos: u64,
 }
 
-impl<V> ZValue1<V>
+// Delta:
+//
+// |flags|      60-bit delta-len              |
+// *-----*------------------------------------*
+// |              64-bit seqno                |
+// *-------------------*----------------------*
+// |                fpos                      |
+// *------------------------------------------*
+//
+// Flags: 3-2-1-0  D - Deleted
+//            D R  R - File Reference, always 1.
+impl<V> ZDelta1<V>
 where
     V: Serialize,
 {
-    fn new_native(value: V) -> ZValue1<V> {
-        ZValue1::Native{value}
+    const FLAG_FILEREF: u64 = 0x1000000000000000
+    const FLAG_DELETED: u64 = 0x2000000000000000
+    const MASK_LEN: u64 = 0xF000000000000000
+
+    fn new_bytes(buf: &[u8]) -> ZDelta1<'a, V> {
+        ZDelta1::Bytes(buf)
     }
 
-    fn new_ref(seqno: u64, deleted: bool, fpos: u64, len: u64) -> ZValue1<V> {
-        ZValue1::FileRef{seqno, deleted, fpos, len}
+    fn encode(len: u64, seqno: u64, fpos: u64, deleted: bool, buf: Vec<u8>) -> Vec<u8> {
+        if len > 1152921504606846975 {
+            panic!("delta length {} cannot be > 2^60", len);
+        }
+        let hdr1 = Self::FLAG_FILEREF | len;
+        if deleted {
+            hdr1 |= Self::FLAG_DELETED;
+        }
+        buf.extend_from_slice(&hdr1.to_be_bytes());
+        buf.extend_from_slice(&seqno.to_be_bytes());
+        buf.extend_from_slice(&fpos.to_be_bytes());
+    }
+
+    fn decode(buf: &[u8]) -> ZDelta1 {
+        let mut scratch = [0_u8; 8];
+        // hdr1
+        scratch.copy_from_slice(&buf[..8]);
+        let hdr1 = u64::from_be_bytes(scratch);
+        let len = hdr1 & Self::MASK_LEN;
+        let is_deleted = hdr1 & Self::FLAG_DELETED;
+        // seqno
+        scratch.copy_from_slice(&buf[8..16]);
+        let seqno = u64::from_be_bytes(scratch);
+        // fpos
+        scratch.copy_from_slice(&buf[16..24]);
+        let fpos = u64::from_be_bytes(scratch);
+
+        if len > 1152921504606846975 {
+            panic!("delta length {} cannot be > 2^60", len);
+        }
+
+        if is_deleted {
+            ZDelta1{ len, seqno, fpos, deleted: Some(seqno) };
+        } else {
+            ZDelta1{ len, seqno, fpos, deleted: None };
+        }
     }
 }
 
@@ -62,25 +113,30 @@ where
     }
 }
 
-pub struct ZEntry1<K, V>
+pub struct ZEntry1<'a, K, V>
 where
     V: Serialize,
 {
-    key: K,
-    versions: Vec<ZValue1<V>>,
+    Parsed{key: K, value: V, seqno: u64, deleted: Option<u64>, deltas: Vec<ZDelta1<V>>},
+    Bytes(&'a [u8]),
 }
 
-impl<K, V> ZEntry1<K, V>
+impl<'a, K, V> ZEntry1<'a, K, V>
 where
     V: Serialize,
 {
-    pub fn new(key: K, versions: Vec<ZValue1<V>>, seqno: u64, deleted: bool) {
-        ZEntry1 {
-            key,
-            versions,
-            seqno,
-            deleted: false,
+    pub fn new_value(key: K, value: V) -> ZEntry1<'a, K,V> {
+        ZEntry1::Parsed {
+            key: K,
+            value: V,
+            seqno: Default::default(),
+            deleted: Default::default(),
+            deltas: Default::default(),
         }
+    }
+
+    pub fn new_bytes(buf: &[u8]) -> ZEntry1<'a, K,V> {
+        ZEntry1::Bytes(buf)
     }
 }
 
@@ -96,7 +152,7 @@ where
         &self.key
     }
 
-    pub fn value(&self) -> Optional<V> {
+    pub fn value(&self) -> Option<V> {
         self.value
     }
 
@@ -109,20 +165,27 @@ where
     }
 }
 
-// |     4-bits flags  | 60-bits seqno        |
+// |  32-bit total len |   32-bit key-len     |
 // *-------------------*----------------------*
-// |           64-bit key-len                 |
+// |                  key                     |
+// *-----*------------------------------------*
+// |flags|      60-bit value-len              |
+// *-----*------------------------------------*
+// |              64-bit seqno                |
+// *-------------------*----------------------*
+// |             value / fpos                 |
 // *------------------------------------------*
-// |                   key                    |
+// |                delta 1                   |
 // *------------------------------------------*
-// |             value (optional)             |
+// |                delta 2                   |
 // *------------------------------------------*
-impl<K, V> ZNode<K, V> {
-    pub fn encode(&self, buf: &mut [u8]) -> u64 {
-        // TODO
+//
+impl<K, V> ZEntry1<K, V> {
+    fn encode(&self, buf: Vec<u8>) -> (Vec<u8>, u64) {
+        // TODO:
     }
 
-    pub fn decode(&mut self, buf: &[u8]) -> Result<u64, BognError> {
-        // TODO
+    fn decode(&mut self, buf: &[u8]) -> Result<u64, BognError> {
+        // TODO:
     }
 }

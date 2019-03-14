@@ -8,7 +8,7 @@
 /// [LSM]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
 pub trait AsDelta<V>
 where
-    V: Default + Clone + Diff,
+    V: Default + Clone + Serialize + Diff,
 {
     /// Return the difference value.
     fn delta(&self) -> <V as Diff>::D;
@@ -26,7 +26,7 @@ where
 pub trait AsEntry<K, V>
 where
     K: Default + Clone + Ord + Serialize,
-    V: Default + Clone + Diff,
+    V: Default + Clone + Serialize + Diff,
 {
     type Delta: Default + AsDelta<V> + Clone;
 

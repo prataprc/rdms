@@ -2,7 +2,7 @@
 /// shall return.
 #[derive(Debug, PartialEq)]
 pub enum BognError<K> {
-    /// Applicable to set_cas() API. This error is returned when:
+    /// Can be returned by set_cas() API when:
     /// * In non-lsm mode, requested entry is missing but specified
     ///   CAS is not ZERO. Note that this combination is an alias for
     ///   create-only operation.

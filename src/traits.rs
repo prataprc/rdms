@@ -8,8 +8,8 @@
 ///
 /// D = N - O (diff operation)
 /// O = N - D (merge operation)
-pub trait Diff: Serialize {
-    type D: Serialize + Default + Clone;
+pub trait Diff {
+    type D: Default + Clone;
 
     /// Return the delta between two version of value.
     /// D = N - O
@@ -29,7 +29,7 @@ pub trait Diff: Serialize {
 /// [LSM]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
 pub trait AsDelta<V>
 where
-    V: Default + Clone + Serialize + Diff,
+    V: Default + Clone + Diff,
 {
     /// Return the difference value.
     fn delta(&self) -> <V as Diff>::D;
@@ -46,8 +46,8 @@ where
 /// over Key-Value <K,V> types.
 pub trait AsEntry<K, V>
 where
-    K: Default + Clone + Ord + Serialize,
-    V: Default + Clone + Serialize + Diff,
+    K: Default + Clone + Ord,
+    V: Default + Clone + Diff,
 {
     type Delta: Default + AsDelta<V> + Clone;
 
@@ -60,6 +60,9 @@ where
 
     /// Return a copy of the latest value.
     fn value(&self) -> V;
+
+    /// Return a reference to entry's latest value.
+    fn value_ref(&self) -> &V;
 
     /// Return the sequence-number of most recent mutation for this entry.
     fn seqno(&self) -> u64;
@@ -80,8 +83,8 @@ where
     fn deltas(&self) -> Vec<Self::Delta>;
 }
 
-pub trait Serialize {
+pub trait Serialize: Sized {
     fn encode(&self, buf: Vec<u8>) -> Vec<u8>;
 
-    fn decode(buf: &[u8]) -> Result<Self, BognError>;
+    fn decode(buf: &[u8]) -> Result<Self, String>;
 }

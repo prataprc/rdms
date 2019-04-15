@@ -1,4 +1,4 @@
-use crate::traits::Diff;
+use crate::traits::{Diff, Serialize};
 
 /// Empty value, can be used for indexing entries that have a
 /// key but no value.
@@ -16,5 +16,15 @@ impl Diff for Empty {
     /// N + D = O
     fn merge(&self, _a: &Self::D) -> Self {
         Empty
+    }
+}
+
+impl Serialize for Empty {
+    fn encode(&self, buf: Vec<u8>) -> Vec<u8> {
+        buf
+    }
+
+    fn decode(_buf: &[u8]) -> Result<Self, String> {
+        Ok(Empty)
     }
 }

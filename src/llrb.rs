@@ -1,11 +1,16 @@
 use std::borrow::Borrow;
 use std::cmp::{Ord, Ordering};
 use std::ops::{Bound, Deref, DerefMut};
+use std::sync::Arc;
 
 use crate::error::BognError;
-use crate::llrb_common::{self, drop_tree, is_black, is_red, Iter, Range, Stats};
+// use crate::llrb_common::{self, drop_tree, is_black, is_red, Iter, Range, Stats};
 use crate::llrb_node::Node;
+use crate::llrb_util::Stats;
+use crate::mvcc::MvccRoot;
 use crate::traits::{AsDelta, AsEntry, Diff};
+
+include!("llrb_common.rs");
 
 // TODO: optimize comparison
 
@@ -179,7 +184,7 @@ where
         Q: Ord + ?Sized,
     {
         let root = self.root.as_ref().map(|item| item.deref());
-        llrb_common::get(root, key)
+        get(root, key)
     }
 
     /// Return an iterator over all entries in this instance.
@@ -189,7 +194,7 @@ where
             root: self.root.as_ref().map(|item| item.deref()),
             node_iter: vec![].into_iter(),
             after_key: Some(Bound::Unbounded),
-            limit: llrb_common::ITER_LIMIT,
+            limit: ITER_LIMIT,
         }
     }
 
@@ -201,7 +206,7 @@ where
             node_iter: vec![].into_iter(),
             low: Some(low),
             high,
-            limit: llrb_common::ITER_LIMIT,
+            limit: ITER_LIMIT,
         }
     }
 
@@ -320,7 +325,7 @@ where
 
         let root = self.root.as_ref().map(std::ops::Deref::deref);
         let (red, nb, d) = (is_red(root), 0, 0);
-        let blacks = llrb_common::validate_tree(root, red, nb, d, &mut stats)?;
+        let blacks = validate_tree(root, red, nb, d, &mut stats)?;
         stats.set_blacks(blacks);
         Ok(stats)
     }

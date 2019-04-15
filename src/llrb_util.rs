@@ -1,10 +1,12 @@
+use crate::llrb_depth::Depth;
+
 /// Statistics on LLRB tree.
 #[derive(Default)]
 pub struct Stats {
     entries: usize, // number of entries in the tree.
     node_size: usize,
     blacks: Option<usize>,
-    depths: Option<Depth>,
+    pub(crate) depths: Option<Depth>,
 }
 
 impl Stats {

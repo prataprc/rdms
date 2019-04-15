@@ -24,9 +24,9 @@
 mod empty;
 mod error;
 mod llrb;
-mod llrb_common;
 mod llrb_depth;
 mod llrb_node;
+mod llrb_util;
 mod mvcc;
 mod sync_writer;
 mod trait_bytes;
@@ -36,7 +36,7 @@ mod traits;
 pub use crate::empty::Empty;
 pub use crate::error::BognError;
 pub use crate::llrb::Llrb;
-pub use crate::llrb_common::Stats;
+pub use crate::llrb_util::Stats;
 pub use crate::mvcc::Mvcc;
 pub use crate::traits::{AsDelta, AsEntry, Diff};
 

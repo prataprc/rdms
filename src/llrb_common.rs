@@ -1,17 +1,6 @@
-use std::borrow::Borrow;
-use std::cmp::{Ord, Ordering};
-use std::ops::{Bound, Deref};
-use std::sync::Arc;
+const ITER_LIMIT: usize = 100;
 
-use crate::error::BognError;
-use crate::llrb_depth::Depth;
-use crate::llrb_node::Node;
-use crate::mvcc::MvccRoot;
-use crate::traits::{AsEntry, Diff};
-
-pub const ITER_LIMIT: usize = 100;
-
-pub fn is_red<K, V>(node: Option<&Node<K, V>>) -> bool
+fn is_red<K, V>(node: Option<&Node<K, V>>) -> bool
 where
     K: Default + Clone + Ord,
     V: Default + Clone + Diff,
@@ -19,7 +8,7 @@ where
     node.map_or(false, |node| !node.is_black())
 }
 
-pub fn is_black<K, V>(node: Option<&Node<K, V>>) -> bool
+fn is_black<K, V>(node: Option<&Node<K, V>>) -> bool
 where
     K: Default + Clone + Ord,
     V: Default + Clone + Diff,
@@ -27,7 +16,7 @@ where
     node.map_or(true, |node| node.is_black())
 }
 
-pub(crate) fn get<K, V, Q>(
+fn get<K, V, Q>(
     mut node: Option<&Node<K, V>>, // root node
     key: &Q,
 ) -> Option<impl AsEntry<K, V>>
@@ -47,7 +36,7 @@ where
     None
 }
 
-pub(crate) fn validate_tree<K, V>(
+fn validate_tree<K, V>(
     node: Option<&Node<K, V>>,
     fromred: bool,
     mut nb: usize,
@@ -103,11 +92,11 @@ where
     K: Default + Clone + Ord,
     V: Default + Clone + Diff,
 {
-    pub(crate) arc: Arc<MvccRoot<K, V>>,
-    pub(crate) root: Option<&'a Node<K, V>>,
-    pub(crate) node_iter: std::vec::IntoIter<Node<K, V>>,
-    pub(crate) after_key: Option<Bound<K>>,
-    pub(crate) limit: usize,
+    arc: Arc<MvccRoot<K, V>>,
+    root: Option<&'a Node<K, V>>,
+    node_iter: std::vec::IntoIter<Node<K, V>>,
+    after_key: Option<Bound<K>>,
+    limit: usize,
 }
 
 impl<'a, K, V> Iter<'a, K, V>
@@ -182,12 +171,12 @@ where
     K: Default + Clone + Ord,
     V: Default + Clone + Diff,
 {
-    pub(crate) arc: Arc<MvccRoot<K, V>>,
-    pub(crate) root: Option<&'a Node<K, V>>,
-    pub(crate) node_iter: std::vec::IntoIter<Node<K, V>>,
-    pub(crate) low: Option<Bound<K>>,
-    pub(crate) high: Bound<K>,
-    pub(crate) limit: usize,
+    arc: Arc<MvccRoot<K, V>>,
+    root: Option<&'a Node<K, V>>,
+    node_iter: std::vec::IntoIter<Node<K, V>>,
+    low: Option<Bound<K>>,
+    high: Bound<K>,
+    limit: usize,
 }
 
 impl<'a, K, V> Range<'a, K, V>
@@ -376,7 +365,7 @@ where
     }
 }
 
-pub fn drop_tree<K, V>(mut node: Box<Node<K, V>>)
+fn drop_tree<K, V>(mut node: Box<Node<K, V>>)
 where
     K: Default + Clone + Ord,
     V: Default + Clone + Diff,
@@ -384,57 +373,4 @@ where
     //println!("drop_tree - node {:p}", node);
     node.left.take().map(|left| drop_tree(left));
     node.right.take().map(|right| drop_tree(right));
-}
-
-/// Statistics on LLRB tree.
-#[derive(Default)]
-pub struct Stats {
-    entries: usize, // number of entries in the tree.
-    node_size: usize,
-    blacks: Option<usize>,
-    depths: Option<Depth>,
-}
-
-impl Stats {
-    pub(crate) fn new(entries: usize, node_size: usize) -> Stats {
-        Stats {
-            entries,
-            blacks: None,
-            depths: None,
-            node_size,
-        }
-    }
-
-    #[inline]
-    pub(crate) fn set_blacks(&mut self, blacks: usize) {
-        self.blacks = Some(blacks)
-    }
-
-    #[inline]
-    pub(crate) fn set_depths(&mut self, depths: Depth) {
-        self.depths = Some(depths)
-    }
-
-    #[inline]
-    pub fn entries(&self) -> usize {
-        self.entries
-    }
-
-    #[inline]
-    pub fn node_size(&self) -> usize {
-        self.node_size
-    }
-
-    #[inline]
-    pub fn blacks(&self) -> Option<usize> {
-        self.blacks
-    }
-
-    pub fn depths(&self) -> Option<Depth> {
-        if self.depths.as_ref().unwrap().samples() == 0 {
-            None
-        } else {
-            self.depths.clone()
-        }
-    }
 }

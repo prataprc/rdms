@@ -8,12 +8,15 @@ use std::sync::{
 
 use crate::error::BognError;
 use crate::llrb::Llrb;
-use crate::llrb_common::{self, drop_tree, is_black, is_red, Iter, Range, Stats};
+// use crate::llrb_common::{self, drop_tree, is_black, is_red, Iter, Range, Stats};
 use crate::llrb_node::Node;
+use crate::llrb_util::Stats;
 use crate::sync_writer::SyncWriter;
 use crate::traits::{AsEntry, Diff};
 
 const RECLAIM_CAP: usize = 128;
+
+include!("llrb_common.rs");
 
 pub struct Mvcc<K, V>
 where
@@ -156,7 +159,7 @@ where
     {
         let arc = self.snapshot.clone();
         let mvcc_root: &MvccRoot<K, V> = arc.as_ref();
-        llrb_common::get(mvcc_root.as_ref(), key)
+        get(mvcc_root.as_ref(), key)
     }
 
     pub fn iter(&self) -> Iter<K, V> {
@@ -166,7 +169,7 @@ where
             root: None,
             node_iter: vec![].into_iter(),
             after_key: Some(Bound::Unbounded),
-            limit: llrb_common::ITER_LIMIT,
+            limit: ITER_LIMIT,
         }
     }
 
@@ -178,7 +181,7 @@ where
             node_iter: vec![].into_iter(),
             low: Some(low),
             high,
-            limit: llrb_common::ITER_LIMIT,
+            limit: ITER_LIMIT,
         }
     }
 
@@ -321,7 +324,7 @@ where
 
         let root = arc.as_ref().as_ref();
         let (red, nb, d) = (is_red(root), 0, 0);
-        let blacks = llrb_common::validate_tree(root, red, nb, d, &mut stats)?;
+        let blacks = validate_tree(root, red, nb, d, &mut stats)?;
         stats.set_blacks(blacks);
         Ok(stats)
     }

@@ -23,10 +23,10 @@ where
     K: Default + Clone + Ord,
     V: Default + Clone + Diff,
 {
-    pub(crate) name: String,
-    pub(crate) lsm: bool,
-    pub(crate) snapshot: Snapshot<K, V>,
-    pub(crate) fencer: SyncWriter,
+    name: String,
+    lsm: bool,
+    snapshot: Snapshot<K, V>,
+    fencer: SyncWriter,
 }
 
 impl<K, V> Clone for Mvcc<K, V>
@@ -69,7 +69,8 @@ where
         // have to get past that and drop it here.
 
         // drop arc.
-        let mut boxed_arc = unsafe { Box::from_raw(self.snapshot.value.load(Relaxed)) };
+        let root_arc = self.snapshot.value.load(Relaxed);
+        let mut boxed_arc = unsafe { Box::from_raw(root_arc) };
         let mvcc_root = Arc::get_mut(boxed_arc.deref_mut()).unwrap();
 
         //println!("drop mvcc {:p} {:p}", self, mvcc_root);
@@ -84,13 +85,10 @@ where
     V: Default + Clone + Diff,
 {
     fn from(mut llrb: Llrb<K, V>) -> Mvcc<K, V> {
-        let mvcc = Mvcc::new(llrb.name.clone(), llrb.lsm);
-        mvcc.snapshot.shift_snapshot(
-            llrb.root.take(),
-            llrb.seqno,
-            llrb.n_count,
-            vec![], /*reclaim*/
-        );
+        let mvcc = Mvcc::new(llrb.id(), llrb.is_lsm());
+        let (root, seqno, n_count) = llrb.take_root();
+        mvcc.snapshot
+            .shift_snapshot(root, seqno, n_count, vec![] /*reclaim*/);
         mvcc
     }
 }
@@ -143,6 +141,10 @@ where
     /// Return current seqno.
     pub fn get_seqno(&self) -> u64 {
         self.snapshot.clone().seqno
+    }
+
+    pub fn root_ref(&self) -> &MvccRoot<K, V> {
+        unsafe { self.snapshot.value.load(Relaxed).as_ref().unwrap() }
     }
 }
 
@@ -214,8 +216,8 @@ where
 
     pub fn set_cas(
         &self,
-        key: K,
-        value: V,
+        k: K,
+        v: V,
         cas: u64,
     ) -> Result<Option<impl AsEntry<K, V>>, BognError<K>> {
         let _fench = self.fencer.lock();
@@ -227,21 +229,21 @@ where
         let root = arc.as_duplicate();
         let mut reclaim: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
 
-        let (root, optn, ret) =
-            match Mvcc::upsert_cas(root, key, value, cas, seqno, lsm, &mut reclaim) {
-                (Some(mut root), optn, _, Some(err)) => {
-                    root.set_black();
-                    (root, optn, Err(err))
+        let s = match Mvcc::upsert_cas(root, k, v, cas, seqno, lsm, &mut reclaim) {
+            (Some(mut root), optn, _, Some(err)) => {
+                root.set_black();
+                (root, optn, Err(err))
+            }
+            (Some(mut root), optn, old_node, None) => {
+                root.set_black();
+                if old_node.is_none() {
+                    n_count += 1
                 }
-                (Some(mut root), optn, old_node, None) => {
-                    root.set_black();
-                    if old_node.is_none() {
-                        n_count += 1
-                    }
-                    (root, optn, Ok(old_node))
-                }
-                _ => panic!("set_cas: impossible case, call programmer"),
-            };
+                (root, optn, Ok(old_node))
+            }
+            _ => panic!("set_cas: impossible case, call programmer"),
+        };
+        let (root, optn, ret) = s;
 
         self.snapshot
             .shift_snapshot(Some(root), seqno, n_count, reclaim);
@@ -268,13 +270,15 @@ where
         let mut reclaim: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
 
         let (root, old_node) = if self.lsm {
-            let (root, optn, old_node) = match Mvcc::delete_lsm(root, key, seqno, &mut reclaim) {
+            let s = match Mvcc::delete_lsm(root, key, seqno, &mut reclaim) {
                 (Some(mut root), optn, old_node) => {
                     root.set_black();
                     (Some(root), optn, old_node)
                 }
                 (None, optn, old_node) => (None, optn, old_node),
             };
+            let (root, optn, old_node) = s;
+
             match old_node.as_ref() {
                 None => n_count += 1,
                 Some(old_node) if old_node.is_deleted() => seqno -= 1,
@@ -412,13 +416,15 @@ where
 
         let cmp = new_node.key.cmp(&key);
         let (new_node, n, old_node, err) = if cmp == Ordering::Greater {
-            let (k, v, left) = (key, val, new_node.left.take());
-            let (l, n, o, e) = Mvcc::upsert_cas(left, k, v, cas, seqno, lsm, reclaim);
-            new_node.left = l;
+            let left = new_node.left.take();
+            let s = Mvcc::upsert_cas(left, key, val, cas, seqno, lsm, reclaim);
+            let (left, n, o, e) = s;
+            new_node.left = left;
             (Some(Mvcc::walkuprot_23(new_node, reclaim)), n, o, e)
         } else if cmp == Ordering::Less {
-            let (k, v, right) = (key, val, new_node.right.take());
-            let (rh, n, o, e) = Mvcc::upsert_cas(right, k, v, cas, seqno, lsm, reclaim);
+            let right = new_node.right.take();
+            let s = Mvcc::upsert_cas(right, key, val, cas, seqno, lsm, reclaim);
+            let (rh, n, o, e) = s;
             new_node.right = rh;
             (Some(Mvcc::walkuprot_23(new_node, reclaim)), n, o, e)
         } else if new_node.is_deleted() && cas != 0 && cas != new_node.seqno() {
@@ -472,13 +478,15 @@ where
         let (n, old_node) = match new_node.key.borrow().cmp(&key) {
             Ordering::Greater => {
                 let left = new_node.left.take();
-                let (left, n, old_node) = Mvcc::delete_lsm(left, key, seqno, reclaim);
+                let s = Mvcc::delete_lsm(left, key, seqno, reclaim);
+                let (left, n, old_node) = s;
                 new_node.left = left;
                 (n, old_node)
             }
             Ordering::Less => {
                 let right = new_node.right.take();
-                let (right, n, old_node) = Mvcc::delete_lsm(right, key, seqno, reclaim);
+                let s = Mvcc::delete_lsm(right, key, seqno, reclaim);
+                let (right, n, old_node) = s;
                 new_node.right = right;
                 (n, old_node)
             }
@@ -758,12 +766,12 @@ where
 }
 
 #[derive(Default)]
-pub(crate) struct Snapshot<K, V>
+struct Snapshot<K, V>
 where
     K: Default + Clone + Ord,
     V: Default + Clone + Diff,
 {
-    pub(crate) value: AtomicPtr<Arc<MvccRoot<K, V>>>,
+    value: AtomicPtr<Arc<MvccRoot<K, V>>>,
 }
 
 impl<K, V> Snapshot<K, V>
@@ -837,16 +845,16 @@ where
 }
 
 #[derive(Default)]
-pub(crate) struct MvccRoot<K, V>
+pub struct MvccRoot<K, V>
 where
     K: Default + Clone + Ord,
     V: Default + Clone + Diff,
 {
-    pub(crate) root: Option<Box<Node<K, V>>>,
-    pub(crate) reclaim: Vec<Box<Node<K, V>>>,
-    pub(crate) seqno: u64,     // starts from 0 and incr for every mutation.
-    pub(crate) n_count: usize, // number of entries in the tree.
-    pub(crate) next: Option<Arc<MvccRoot<K, V>>>,
+    root: Option<Box<Node<K, V>>>,
+    reclaim: Vec<Box<Node<K, V>>>,
+    seqno: u64,     // starts from 0 and incr for every mutation.
+    n_count: usize, // number of entries in the tree.
+    next: Option<Arc<MvccRoot<K, V>>>,
 }
 
 impl<K, V> MvccRoot<K, V>
@@ -861,12 +869,12 @@ where
         mvcc_root
     }
 
-    pub(crate) fn as_ref(&self) -> Option<&Node<K, V>> {
+    pub fn as_ref(&self) -> Option<&Node<K, V>> {
         self.root.as_ref().map(|item| item.deref())
     }
 
     #[allow(dead_code)]
-    pub(crate) fn as_mut(&self) -> Option<&mut Node<K, V>> {
+    fn as_mut(&self) -> Option<&mut Node<K, V>> {
         unsafe {
             (&self.root as *const Option<Box<Node<K, V>>> as *mut Option<Box<Node<K, V>>>)
                 .as_mut()
@@ -876,7 +884,7 @@ where
         }
     }
 
-    pub(crate) fn as_duplicate(&self) -> Option<Box<Node<K, V>>> {
+    fn as_duplicate(&self) -> Option<Box<Node<K, V>>> {
         let x = &self.root as *const Option<Box<Node<K, V>>> as *mut Option<Box<Node<K, V>>>;
         let y = unsafe { x.as_mut().unwrap() };
         if y.is_none() {
@@ -924,7 +932,7 @@ where
 }
 
 #[allow(dead_code)]
-pub(crate) fn print_reclaim<K, V>(prefix: &str, reclaim: &Vec<Box<Node<K, V>>>)
+fn print_reclaim<K, V>(prefix: &str, reclaim: &Vec<Box<Node<K, V>>>)
 where
     K: Default + Clone + Ord,
     V: Default + Clone + Diff,

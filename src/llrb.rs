@@ -31,11 +31,11 @@ where
     K: Default + Clone + Ord,
     V: Default + Clone + Diff,
 {
-    pub(crate) name: String,
-    pub(crate) lsm: bool,
-    pub(crate) root: Option<Box<Node<K, V>>>,
-    pub(crate) seqno: u64,     // starts from 0 and incr for every mutation.
-    pub(crate) n_count: usize, // number of entries in the tree.
+    name: String,
+    lsm: bool,
+    root: Option<Box<Node<K, V>>>,
+    seqno: u64,     // starts from 0 and incr for every mutation.
+    n_count: usize, // number of entries in the tree.
 }
 
 impl<K, V> Drop for Llrb<K, V>
@@ -168,6 +168,22 @@ where
     #[inline]
     pub fn get_seqno(&self) -> u64 {
         self.seqno
+    }
+
+    /// Return whether this instance support lsm mode.
+    #[inline]
+    pub(crate) fn is_lsm(&self) -> bool {
+        self.lsm
+    }
+
+    /// Take away the root.
+    #[inline]
+    pub(crate) fn take_root(&mut self) -> (Option<Box<Node<K, V>>>, u64, usize) {
+        let (seqno, n_count) = (self.seqno, self.n_count);
+        self.seqno = 0;
+        self.n_count = 0;
+        self.lsm = false;
+        (self.root.take(), seqno, n_count)
     }
 }
 

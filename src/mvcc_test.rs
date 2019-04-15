@@ -1,5 +1,4 @@
 use std::ops::Bound;
-use std::sync::atomic::Ordering::Relaxed;
 
 use rand::prelude::random;
 
@@ -13,7 +12,7 @@ use crate::traits::{AsDelta, AsEntry};
 #[test]
 fn test_id() {
     let mvcc: Mvcc<i32, Empty> = Mvcc::new("test-mvcc", false);
-    let _arc = unsafe { mvcc.snapshot.value.load(Relaxed).as_ref().unwrap() };
+    let _arc = mvcc.root_ref();
     assert_eq!(mvcc.id(), "test-mvcc".to_string());
 }
 

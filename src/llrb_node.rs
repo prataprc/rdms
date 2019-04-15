@@ -257,6 +257,11 @@ where
     }
 
     #[inline]
+    fn value_ref(&self) -> &V {
+        &self.value
+    }
+
+    #[inline]
     fn seqno(&self) -> u64 {
         self.deleted.map_or(self.seqno, |seqno| seqno)
     }

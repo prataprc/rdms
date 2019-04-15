@@ -1,5 +1,26 @@
-/// AsDelta act both as aggregate trait and define behaviour for
-/// each version of an index-entry.
+/// Diffable values.
+///
+/// O = previous value
+/// N = next value
+/// D = difference between O and N
+///
+/// Then,
+///
+/// D = N - O (diff operation)
+/// O = N - D (merge operation)
+pub trait Diff: Serialize {
+    type D: Serialize + Default + Clone;
+
+    /// Return the delta between two version of value.
+    /// D = N - O
+    fn diff(&self, other: &Self) -> Self::D;
+
+    /// Merge delta with this value to create another value.
+    /// O = N - D
+    fn merge(&self, other: &Self::D) -> Self;
+}
+
+/// AsDelta define behaviour for each version of an index-entry.
 ///
 /// Note that in [LSM] mode, all mutations that happen over an
 /// entry will be managed as a log list. In such cases, each mutation
@@ -16,8 +37,8 @@ where
     /// Return sequence-number at which the mutation happened.
     fn seqno(&self) -> u64;
 
-    /// Valid only in LSM mode. Return whether this version is
-    /// marked as deleted.
+    /// Return whether this version is marked as deleted. Valid
+    /// only in LSM mode.
     fn is_deleted(&self) -> bool;
 }
 
@@ -47,7 +68,7 @@ where
     /// deleted.
     fn is_deleted(&self) -> bool;
 
-    /// Return previous versions as delta of a newer version. The current
+    /// Return previous versions as delta of current version. The current
     /// version (A), the previous version (B), and the difference between
     /// the two (D) share the following relation ship.
     ///
@@ -57,28 +78,6 @@ where
     /// By successively applying the delta on the latest version we get
     /// the previous version.
     fn deltas(&self) -> Vec<Self::Delta>;
-}
-
-/// Values must support diff-ability. If,
-///
-/// O = previous value
-/// N = next value
-/// D = difference between previous value and next value
-///
-/// Then,
-///
-/// D = O - N (diff operation)
-/// O = N + D (merge operation)
-pub trait Diff: Serialize {
-    type D: Serialize + Default + Clone;
-
-    /// Return the delta between two version of value.
-    /// O - N = D
-    fn diff(&self, a: &Self) -> Self::D;
-
-    /// Merge delta with this value to create another value.
-    /// N + D = O
-    fn merge(&self, a: &Self::D) -> Self;
 }
 
 pub trait Serialize {

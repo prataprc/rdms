@@ -19,11 +19,11 @@ impl<V> DeltaNode<V>
 where
     V: Default + Clone + Diff,
 {
-    fn new(delta: <V as Diff>::D, seqno: u64, deleted: Option<u64>) -> DeltaNode<V> {
+    fn new(delta: <V as Diff>::D, seqno: u64, del: Option<u64>) -> DeltaNode<V> {
         DeltaNode {
             delta,
             seqno,
-            deleted,
+            deleted: del,
         }
     }
 }
@@ -38,8 +38,18 @@ where
     }
 
     #[inline]
+    fn delta_ref(&self) -> &<V as Diff>::D {
+        &self.delta
+    }
+
+    #[inline]
+    fn delta_mut(&mut self) -> &mut <V as Diff>::D {
+        &mut self.delta
+    }
+
+    #[inline]
     fn seqno(&self) -> u64 {
-        self.deleted.map_or(self.seqno, |seqno| seqno)
+        self.deleted.unwrap_or(self.seqno)
     }
 
     #[inline]
@@ -73,10 +83,10 @@ where
     V: Default + Clone + Diff,
 {
     // CREATE operation
-    pub(crate) fn new(key: K, value: V, seqno: u64, black: bool) -> Box<Node<K, V>> {
+    pub(crate) fn new(k: K, v: V, seqno: u64, black: bool) -> Box<Node<K, V>> {
         let node = Box::new(Node {
-            key,
-            value,
+            key: k,
+            value: v,
             seqno,
             deleted: None,
             deltas: vec![],
@@ -92,17 +102,22 @@ where
     pub(crate) fn from_entry<E>(entry: E) -> Box<Node<K, V>>
     where
         E: AsEntry<K, V>,
-        <E as AsEntry<K, V>>::Delta: Default + Clone,
+        <E as AsEntry<K, V>>::Delta: Clone,
     {
         let black = false;
-        let mut node = Node::new(entry.key(), entry.value(), entry.seqno(), black);
-        for delta in entry.deltas().into_iter() {
-            let (dt, sq) = (delta.delta(), delta.seqno());
-            let dl = if delta.is_deleted() { Some(sq) } else { None };
-            node.deltas.push(DeltaNode::new(dt, sq, dl));
-        }
+        let (key, value) = (entry.key(), entry.value());
+        let mut node = Node::new(key, value, entry.seqno(), black);
         if entry.is_deleted() {
             node.deleted = Some(entry.seqno())
+        }
+        for e_delta in entry.deltas().into_iter() {
+            let (delta, seqno) = (e_delta.delta(), e_delta.seqno());
+            let del = if e_delta.is_deleted() {
+                Some(seqno)
+            } else {
+                None
+            };
+            node.deltas.push(DeltaNode::new(delta, seqno, del));
         }
         node
     }
@@ -120,8 +135,8 @@ where
             deltas: self.deltas.clone(),
             black: self.black,
             dirty: self.dirty,
-            left: self.left_deref().map(|n| n.duplicate()), // TODO: Node::duplicate
-            right: self.right_deref().map(|n| n.duplicate()),
+            left: self.left.as_ref().map(|n| n.duplicate()),
+            right: self.right.as_ref().map(|n| n.duplicate()),
         });
         //println!("new node (mvcc) {:p} {:p}", self, new_node);
         reclaim.push(self.duplicate());
@@ -130,20 +145,20 @@ where
 
     #[inline]
     pub(crate) fn left_deref(&self) -> Option<&Node<K, V>> {
-        self.left.as_ref().map(|item| item.deref()) // TODO: Box::deref
+        self.left.as_ref().map(Deref::deref)
     }
 
     #[inline]
     pub(crate) fn right_deref(&self) -> Option<&Node<K, V>> {
-        self.right.as_ref().map(|item| item.deref()) // TODO: Box::deref
+        self.right.as_ref().map(Deref::deref)
     }
 
     // prepend operation, equivalent to SET / INSERT / UPDATE
     pub(crate) fn prepend_version(&mut self, value: V, seqno: u64, lsm: bool) {
         if lsm {
-            let delta = self.value.diff(&value);
-            let dn = DeltaNode::new(delta, self.seqno, self.deleted);
-            self.deltas.push(dn);
+            let d = self.value.diff(&value);
+            let delta = DeltaNode::new(d, self.seqno, self.deleted);
+            self.deltas.push(delta);
             self.value = value;
             self.seqno = seqno;
             self.deleted = None;
@@ -153,7 +168,7 @@ where
         }
     }
 
-    // DELETE operation
+    // DELETE operation, back to back delete shall collapse
     #[inline]
     pub(crate) fn delete(&mut self, seqno: u64) {
         if self.deleted.is_none() {
@@ -194,8 +209,8 @@ where
 {
     // leak nodes children.
     pub(crate) fn mvcc_detach(&mut self) {
-        self.left.take().map(|box_node| Box::leak(box_node));
-        self.right.take().map(|box_node| Box::leak(box_node));
+        self.left.take().map(Box::leak);
+        self.right.take().map(Box::leak);
     }
 
     // clone and detach this node from the tree.
@@ -263,7 +278,7 @@ where
 
     #[inline]
     fn seqno(&self) -> u64 {
-        self.deleted.map_or(self.seqno, |seqno| seqno)
+        self.deleted.unwrap_or(self.seqno)
     }
 
     #[inline]
@@ -284,7 +299,7 @@ where
     V: Default + Clone + Diff,
 {
     fn drop(&mut self) {
-        self.left.take().map(|left| Box::leak(left));
-        self.right.take().map(|right| Box::leak(right));
+        self.left.take().map(Box::leak);
+        self.right.take().map(Box::leak);
     }
 }

@@ -31,8 +31,14 @@ pub trait AsDelta<V>
 where
     V: Default + Clone + Diff,
 {
-    /// Return the difference value.
+    /// Return a copy of difference.
     fn delta(&self) -> <V as Diff>::D;
+
+    /// Return a reference to difference.
+    fn delta_ref(&self) -> &<V as Diff>::D;
+
+    /// Return a mutable reference to difference.
+    fn delta_mut(&mut self) -> &mut <V as Diff>::D;
 
     /// Return sequence-number at which the mutation happened.
     fn seqno(&self) -> u64;
@@ -49,7 +55,7 @@ where
     K: Default + Clone + Ord,
     V: Default + Clone + Diff,
 {
-    type Delta: Default + AsDelta<V> + Clone;
+    type Delta: Clone + AsDelta<V>;
 
     /// Return a copy of entry's key. In bogn-index each entry is
     /// identified by unique-key.

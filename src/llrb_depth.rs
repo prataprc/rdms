@@ -43,15 +43,15 @@ impl Depth {
     }
 
     /// Return depth as tuple of percentiles, each tuple provides
-    /// (percentile, depth).
+    /// (percentile, depth). Returned percentiles from 90, 91 .. 99
     pub fn percentiles(&self) -> Vec<(u8, usize)> {
         let mut percentiles: Vec<(u8, usize)> = vec![];
-        let (mut acc, mut prev_perc) = (0_f64, 89_u8);
+        let (mut acc, mut prev_perc) = (0_f64, 90_u8);
         let iter = self.depths.iter().enumerate().filter(|(_, &item)| item > 0);
         for (depth, samples) in iter {
             acc += *samples as f64;
             let perc = ((acc / (self.samples as f64)) * 100_f64) as u8;
-            if perc > prev_perc {
+            if perc >= prev_perc {
                 percentiles.push((perc, depth));
                 prev_perc = perc;
             }

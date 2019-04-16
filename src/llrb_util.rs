@@ -6,16 +6,16 @@ pub struct Stats {
     entries: usize, // number of entries in the tree.
     node_size: usize,
     blacks: Option<usize>,
-    pub(crate) depths: Option<Depth>,
+    depths: Option<Depth>,
 }
 
 impl Stats {
     pub(crate) fn new(entries: usize, node_size: usize) -> Stats {
         Stats {
             entries,
+            node_size,
             blacks: None,
             depths: None,
-            node_size,
         }
     }
 
@@ -42,6 +42,11 @@ impl Stats {
     #[inline]
     pub fn blacks(&self) -> Option<usize> {
         self.blacks
+    }
+
+    #[inline]
+    pub(crate) fn sample_depth(&mut self, depth: usize) {
+        self.depths.as_mut().unwrap().sample(depth)
     }
 
     pub fn depths(&self) -> Option<Depth> {

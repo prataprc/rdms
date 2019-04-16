@@ -44,7 +44,7 @@ where
     V: Default + Clone + Diff,
 {
     fn drop(&mut self) {
-        self.root.take().map(|node| drop_tree(node));
+        self.root.take().map(drop_tree);
     }
 }
 
@@ -119,22 +119,25 @@ where
         E: AsEntry<K, V>,
         <E as AsEntry<K, V>>::Delta: AsDelta<V> + Clone,
     {
-        if node.is_none() {
-            return Ok(Node::from_entry(entry));
-        }
-
-        let (mut node, key) = (node.unwrap(), entry.key_ref());
-        node = Llrb::walkdown_rot23(node);
-        match node.key.cmp(key) {
-            Ordering::Greater => {
-                node.left = Some(Llrb::load_entry(node.left.take(), entry)?);
-                Ok(Llrb::walkuprot_23(node))
+        let key = entry.key_ref();
+        match node {
+            None => Ok(Node::from_entry(entry)),
+            Some(mut node) => {
+                node = Llrb::walkdown_rot23(node);
+                match node.key.cmp(key) {
+                    Ordering::Greater => {
+                        let left = node.left.take();
+                        node.left = Some(Llrb::load_entry(left, entry)?);
+                        Ok(Llrb::walkuprot_23(node))
+                    }
+                    Ordering::Less => {
+                        let right = node.right.take();
+                        node.right = Some(Llrb::load_entry(right, entry)?);
+                        Ok(Llrb::walkuprot_23(node))
+                    }
+                    Ordering::Equal => Err(BognError::DuplicateKey(key.clone())),
+                }
             }
-            Ordering::Less => {
-                node.right = Some(Llrb::load_entry(node.right.take(), entry)?);
-                Ok(Llrb::walkuprot_23(node))
-            }
-            Ordering::Equal => Err(BognError::DuplicateKey(key.clone())),
         }
     }
 }
@@ -199,15 +202,14 @@ where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        let root = self.root.as_ref().map(|item| item.deref());
-        get(root, key)
+        get(self.root.as_ref().map(Deref::deref), key)
     }
 
     /// Return an iterator over all entries in this instance.
     pub fn iter(&self) -> Iter<K, V> {
         Iter {
             arc: Default::default(),
-            root: self.root.as_ref().map(|item| item.deref()),
+            root: self.root.as_ref().map(Deref::deref),
             node_iter: vec![].into_iter(),
             after_key: Some(Bound::Unbounded),
             limit: ITER_LIMIT,
@@ -218,7 +220,7 @@ where
     pub fn range(&self, low: Bound<K>, high: Bound<K>) -> Range<K, V> {
         Range {
             arc: Default::default(),
-            root: self.root.as_ref().map(|item| item.deref()),
+            root: self.root.as_ref().map(Deref::deref),
             node_iter: vec![].into_iter(),
             low: Some(low),
             high,
@@ -236,19 +238,18 @@ where
         let seqno = self.seqno + 1;
         let root = self.root.take();
 
-        let old_node = match Llrb::upsert(root, key, value, seqno, self.lsm) {
+        match Llrb::upsert(root, key, value, seqno, self.lsm) {
             (Some(mut root), old_node) => {
                 root.set_black();
                 self.root = Some(root);
                 self.seqno = seqno;
+                if old_node.is_none() {
+                    self.n_count += 1;
+                }
                 old_node
             }
-            (None, _old_node) => unreachable!(),
-        };
-        if old_node.is_none() {
-            self.n_count += 1;
+            _ => panic!("set: impossible case, call programmer"),
         }
-        old_node
     }
 
     /// Set a new entry into a non-mvcc instance, only if entry's seqno matches
@@ -339,7 +340,7 @@ where
         let mut stats = Stats::new(self.n_count, node_size);
         stats.set_depths(Default::default());
 
-        let root = self.root.as_ref().map(std::ops::Deref::deref);
+        let root = self.root.as_ref().map(Deref::deref);
         let (red, nb, d) = (is_red(root), 0, 0);
         let blacks = validate_tree(root, red, nb, d, &mut stats)?;
         stats.set_blacks(blacks);
@@ -360,8 +361,7 @@ where
         lsm: bool,
     ) -> (Option<Box<Node<K, V>>>, Option<Node<K, V>>) {
         if node.is_none() {
-            let black = false;
-            let mut node = Node::new(key, value, seqno, black);
+            let mut node = Node::new(key, value, seqno, false /*black*/);
             node.dirty = false;
             return (Some(node), None);
         }
@@ -371,12 +371,14 @@ where
 
         match node.key.cmp(&key) {
             Ordering::Greater => {
-                let (l, o) = Llrb::upsert(node.left.take(), key, value, seqno, lsm);
+                let s = Llrb::upsert(node.left.take(), key, value, seqno, lsm);
+                let (l, o) = s;
                 node.left = l;
                 (Some(Llrb::walkuprot_23(node)), o)
             }
             Ordering::Less => {
-                let (r, o) = Llrb::upsert(node.right.take(), key, value, seqno, lsm);
+                let s = Llrb::upsert(node.right.take(), key, value, seqno, lsm);
+                let (r, o) = s;
                 node.right = r;
                 (Some(Llrb::walkuprot_23(node)), o)
             }
@@ -403,8 +405,7 @@ where
         if node.is_none() && cas > 0 {
             return (None, None, Some(BognError::InvalidCAS));
         } else if node.is_none() {
-            let black = false;
-            let mut node = Node::new(key, val, seqno, black);
+            let mut node = Node::new(key, val, seqno, false /*black*/);
             node.dirty = false;
             return (Some(node), None, None);
         }

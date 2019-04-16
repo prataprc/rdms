@@ -239,7 +239,7 @@ fn check_node(node: Option<impl AsEntry<i64, i64>>, refn: Option<RefNode>) -> bo
     assert_eq!(n_vers, refn_vers, "key {}", refn.key);
 
     let mut curr_value = node.value();
-    println!("{} {}", n_vers, refn_vers);
+    //println!("{} {}", n_vers, refn_vers);
     for (i, delta) in node.deltas().iter().rev().enumerate() {
         let ver = &refn.versions[i + 1];
         let prev_value = curr_value.merge(&delta.delta());

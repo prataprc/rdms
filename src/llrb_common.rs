@@ -47,44 +47,39 @@ where
     K: Default + Clone + Ord,
     V: Default + Clone + Diff,
 {
-    if node.is_none() {
-        stats.depths.as_mut().unwrap().sample(depth);
-        return Ok(nb);
-    } else if node.as_ref().unwrap().dirty {
-        return Err(BognError::DirtyNode);
-    }
-
-    let red = is_red(node.as_ref().map(|item| item.deref()));
-    if fromred && red {
-        return Err(BognError::ConsecutiveReds);
-    }
-
-    if !red {
-        nb += 1;
-    }
-
-    let node = &node.as_ref().unwrap();
-    let (left, right) = (node.left_deref(), node.right_deref());
-    let lblacks = validate_tree(left, red, nb, depth + 1, stats)?;
-    let rblacks = validate_tree(right, red, nb, depth + 1, stats)?;
-    if lblacks != rblacks {
-        return Err(BognError::UnbalancedBlacks(lblacks, rblacks));
-    }
-    if node.left.is_some() {
-        let left = node.left.as_ref().unwrap();
-        if left.key.ge(&node.key) {
-            let (left, parent) = (left.key.clone(), node.key.clone());
-            return Err(BognError::SortError(left, parent));
+    let red = is_red(node);
+    match node {
+        Some(node) if node.dirty => Err(BognError::DirtyNode),
+        Some(_node) if fromred && red => Err(BognError::ConsecutiveReds),
+        Some(node) => {
+            if !red {
+                nb += 1;
+            }
+            let (left, right) = (node.left_deref(), node.right_deref());
+            let l = validate_tree(left, red, nb, depth + 1, stats)?;
+            let r = validate_tree(right, red, nb, depth + 1, stats)?;
+            if l != r {
+                return Err(BognError::UnbalancedBlacks(l, r));
+            }
+            if let Some(left) = left {
+                if left.key.ge(&node.key) {
+                    let (left, parent) = (left.key.clone(), node.key.clone());
+                    return Err(BognError::SortError(left, parent));
+                }
+            }
+            if let Some(right) = right {
+                if right.key.le(&node.key) {
+                    let (parent, right) = (node.key.clone(), right.key.clone());
+                    return Err(BognError::SortError(parent, right));
+                }
+            }
+            Ok(l)
+        }
+        None => {
+            stats.sample_depth(depth);
+            Ok(nb)
         }
     }
-    if node.right.is_some() {
-        let right = node.right.as_ref().unwrap();
-        if right.key.le(&node.key) {
-            let (parent, right) = (node.key.clone(), right.key.clone());
-            return Err(BognError::SortError(parent, right));
-        }
-    }
-    Ok(lblacks)
 }
 
 pub struct Iter<'a, K, V>
@@ -107,11 +102,11 @@ where
     fn get_root(&self) -> Option<&Node<K, V>> {
         match self.root {
             root @ Some(_) => root,
-            None => self.arc.as_ref().as_ref(), // Arc<MvccRoot>
+            None => self.arc.as_ref().root_ref(),
         }
     }
 
-    fn scan_iter(
+    fn batch_scan(
         &self,
         node: Option<&Node<K, V>>,
         acc: &mut Vec<Node<K, V>>, // accumulator for batch of nodes
@@ -126,13 +121,13 @@ where
             None => return false,
             Some(Bound::Included(akey)) | Some(Bound::Excluded(akey)) => {
                 if node.key.borrow().le(akey) {
-                    return self.scan_iter(right, acc);
+                    return self.batch_scan(right, acc);
                 }
             }
             Some(Bound::Unbounded) => (),
         }
 
-        if !self.scan_iter(left, acc) {
+        if !self.batch_scan(left, acc) {
             return false;
         }
 
@@ -141,7 +136,7 @@ where
             return false;
         }
 
-        return self.scan_iter(right, acc);
+        return self.batch_scan(right, acc);
     }
 }
 
@@ -156,7 +151,7 @@ where
         match self.node_iter.next() {
             None => {
                 let mut a: Vec<Node<K, V>> = Vec::with_capacity(self.limit);
-                self.scan_iter(self.get_root(), &mut a);
+                self.batch_scan(self.get_root(), &mut a);
                 self.after_key = a.last().map(|x| Bound::Excluded(x.key()));
                 self.node_iter = a.into_iter();
                 self.node_iter.next()
@@ -187,7 +182,7 @@ where
     fn get_root(&self) -> Option<&Node<K, V>> {
         match self.root {
             root @ Some(_) => root,
-            None => self.arc.as_ref().as_ref(), // Arc<MvccRoot>
+            None => self.arc.as_ref().root_ref(), // Arc<MvccRoot>
         }
     }
 
@@ -202,7 +197,7 @@ where
         }
     }
 
-    fn range_iter(
+    fn batch_scan(
         &self,
         node: Option<&Node<K, V>>,
         acc: &mut Vec<Node<K, V>>, // accumulator for batch of nodes
@@ -215,15 +210,15 @@ where
         let (left, right) = (node.left_deref(), node.right_deref());
         match &self.low {
             Some(Bound::Included(qow)) if node.key.lt(qow) => {
-                return self.range_iter(right, acc);
+                return self.batch_scan(right, acc);
             }
             Some(Bound::Excluded(qow)) if node.key.le(qow) => {
-                return self.range_iter(right, acc);
+                return self.batch_scan(right, acc);
             }
             _ => (),
         }
 
-        if !self.range_iter(left, acc) {
+        if !self.batch_scan(left, acc) {
             return false;
         }
 
@@ -232,7 +227,7 @@ where
             return false;
         }
 
-        self.range_iter(right, acc)
+        self.batch_scan(right, acc)
     }
 }
 
@@ -247,7 +242,7 @@ where
         let item = match self.node_iter.next() {
             None if self.low.is_some() => {
                 let mut acc: Vec<Node<K, V>> = Vec::with_capacity(self.limit);
-                self.range_iter(self.get_root(), &mut acc);
+                self.batch_scan(self.get_root(), &mut acc);
                 self.low = acc.last().map(|x| Bound::Excluded(x.key()));
                 self.node_iter = acc.into_iter();
                 self.node_iter.next()
@@ -292,11 +287,11 @@ where
     fn get_root(&self) -> Option<&Node<K, V>> {
         match self.root {
             root @ Some(_) => root,
-            None => self.arc.as_ref().as_ref(), // Arc<MvccRoot>
+            None => self.arc.as_ref().root_ref(),
         }
     }
 
-    fn reverse_iter(
+    fn batch_scan(
         &self,
         node: Option<&Node<K, V>>,
         acc: &mut Vec<Node<K, V>>, // accumulator for batch of nodes
@@ -309,15 +304,15 @@ where
         let (left, right) = (node.left_deref(), node.right_deref());
         match &self.high {
             Some(Bound::Included(qigh)) if node.key.gt(qigh) => {
-                return self.reverse_iter(left, acc);
+                return self.batch_scan(left, acc);
             }
             Some(Bound::Excluded(qigh)) if node.key.ge(qigh) => {
-                return self.reverse_iter(left, acc);
+                return self.batch_scan(left, acc);
             }
             _ => (),
         }
 
-        if !self.reverse_iter(right, acc) {
+        if !self.batch_scan(right, acc) {
             return false;
         }
 
@@ -326,7 +321,7 @@ where
             return false;
         }
 
-        return self.reverse_iter(left, acc);
+        return self.batch_scan(left, acc);
     }
 }
 
@@ -341,7 +336,7 @@ where
         let item = match self.node_iter.next() {
             None if self.high.is_some() => {
                 let mut acc: Vec<Node<K, V>> = Vec::with_capacity(self.limit);
-                self.reverse_iter(self.get_root(), &mut acc);
+                self.batch_scan(self.get_root(), &mut acc);
                 self.high = acc.last().map(|x| Bound::Excluded(x.key()));
                 self.node_iter = acc.into_iter();
                 self.node_iter.next()

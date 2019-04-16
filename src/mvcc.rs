@@ -43,7 +43,7 @@ where
         };
 
         let arc: Arc<MvccRoot<K, V>> = self.snapshot.clone();
-        let root = Box::new(arc.as_ref().as_ref().unwrap().clone());
+        let root = Box::new(arc.as_ref().root_ref().unwrap().clone());
 
         let (seqno, n_count) = (arc.seqno, arc.n_count);
         mvcc.snapshot
@@ -161,7 +161,7 @@ where
     {
         let arc = self.snapshot.clone();
         let mvcc_root: &MvccRoot<K, V> = arc.as_ref();
-        get(mvcc_root.as_ref(), key)
+        get(mvcc_root.root_ref(), key)
     }
 
     pub fn iter(&self) -> Iter<K, V> {
@@ -326,7 +326,7 @@ where
         let mut stats = Stats::new(n_count, node_size);
         stats.set_depths(Default::default());
 
-        let root = arc.as_ref().as_ref();
+        let root = arc.as_ref().root_ref();
         let (red, nb, d) = (is_red(root), 0, 0);
         let blacks = validate_tree(root, red, nb, d, &mut stats)?;
         stats.set_blacks(blacks);
@@ -869,8 +869,8 @@ where
         mvcc_root
     }
 
-    pub fn as_ref(&self) -> Option<&Node<K, V>> {
-        self.root.as_ref().map(|item| item.deref())
+    pub fn root_ref(&self) -> Option<&Node<K, V>> {
+        self.root.as_ref().map(Deref::deref)
     }
 
     #[allow(dead_code)]

@@ -11,3 +11,16 @@ Key Value store
 * [ ] ACID compliance.
 * [ ] Memory optimised LLRB, Left Leaning Red black tree.
 * [ ] Append only btree.
+
+Open design decisions
+=====================
+
+Given Rust's threading model, is it more efficient to en-force, using atomic
+primitives, that all write operations on MVCC index is deligated to single
+thread or is it more efficient to serialize write operations from multiple
+threads.
+
+Is it enough to use ``Relaxed`` [memory-ordering][memory-ordering] for
+AtomicPtr operations to manage MVCC Snapshots ?
+
+[memory-ordering]: https://doc.rust-lang.org/std/sync/atomic/enum.Ordering.html

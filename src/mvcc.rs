@@ -8,7 +8,6 @@ use std::sync::{
 
 use crate::error::BognError;
 use crate::llrb::Llrb;
-// use crate::llrb_common::{self, drop_tree, is_black, is_red, Iter, Range, Stats};
 use crate::llrb_node::Node;
 use crate::llrb_util::Stats;
 use crate::sync_writer::SyncWriter;
@@ -42,7 +41,7 @@ where
             fencer: SyncWriter::new(),
         };
 
-        let arc: Arc<MvccRoot<K, V>> = self.snapshot.clone();
+        let arc: Arc<MvccRoot<K, V>> = Snapshot::clone(&self.snapshot);
         let root = Box::new(arc.as_ref().root_ref().unwrap().clone());
 
         let (seqno, n_count) = (arc.seqno, arc.n_count);
@@ -125,22 +124,22 @@ where
 
     /// Return number of entries in this instance.
     pub fn len(&self) -> usize {
-        self.snapshot.clone().n_count
+        Snapshot::clone(&self.snapshot).n_count
     }
 
     /// Set current seqno.
     pub fn set_seqno(&mut self, seqno: u64) {
         let _fench = self.fencer.lock();
 
-        let arc: Arc<MvccRoot<K, V>> = self.snapshot.clone();
-        let (root, n_count) = (arc.deref().as_duplicate(), arc.n_count);
+        let arc: Arc<MvccRoot<K, V>> = Snapshot::clone(&self.snapshot);
+        let (root, n_count) = (arc.deref().inner_duplicate(), arc.n_count);
 
         self.snapshot.shift_snapshot(root, seqno, n_count, vec![]);
     }
 
     /// Return current seqno.
     pub fn get_seqno(&self) -> u64 {
-        self.snapshot.clone().seqno
+        Snapshot::clone(&self.snapshot).seqno
     }
 
     pub fn root_ref(&self) -> &MvccRoot<K, V> {
@@ -159,13 +158,13 @@ where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        let arc = self.snapshot.clone();
+        let arc = Snapshot::clone(&self.snapshot);
         let mvcc_root: &MvccRoot<K, V> = arc.as_ref();
         get(mvcc_root.root_ref(), key)
     }
 
     pub fn iter(&self) -> Iter<K, V> {
-        let arc = self.snapshot.clone();
+        let arc = Snapshot::clone(&self.snapshot);
         Iter {
             arc,
             root: None,
@@ -176,7 +175,7 @@ where
     }
 
     pub fn range(&self, low: Bound<K>, high: Bound<K>) -> Range<K, V> {
-        let arc = self.snapshot.clone();
+        let arc = Snapshot::clone(&self.snapshot);
         Range {
             arc,
             root: None,
@@ -191,11 +190,11 @@ where
         let _fench = self.fencer.lock();
 
         let lsm = self.lsm;
-        let arc = self.snapshot.clone();
+        let arc = Snapshot::clone(&self.snapshot);
 
         let seqno = arc.seqno + 1;
         let mut n_count = arc.n_count;
-        let root = arc.as_duplicate();
+        let root = arc.inner_duplicate();
         let mut recl: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
 
         match Mvcc::upsert(root, key, value, seqno, lsm, &mut recl) {
@@ -222,14 +221,14 @@ where
     ) -> Result<Option<impl AsEntry<K, V>>, BognError<K>> {
         let _fench = self.fencer.lock();
         let lsm = self.lsm;
-        let arc = self.snapshot.clone();
+        let arc = Snapshot::clone(&self.snapshot);
 
         let (seqno, mut n_count) = (arc.seqno + 1, arc.n_count);
 
-        let root = arc.as_duplicate();
-        let mut reclaim: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
+        let root = arc.inner_duplicate();
+        let mut reclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
 
-        let s = match Mvcc::upsert_cas(root, k, v, cas, seqno, lsm, &mut reclaim) {
+        let s = match Mvcc::upsert_cas(root, k, v, cas, seqno, lsm, &mut reclm) {
             (Some(mut root), optn, _, Some(err)) => {
                 root.set_black();
                 (root, optn, Err(err))
@@ -246,7 +245,7 @@ where
         let (root, optn, ret) = s;
 
         self.snapshot
-            .shift_snapshot(Some(root), seqno, n_count, reclaim);
+            .shift_snapshot(Some(root), seqno, n_count, reclm);
 
         if let Some(mut n) = optn {
             n.dirty = false;
@@ -263,14 +262,14 @@ where
     {
         let _fench = self.fencer.lock();
 
-        let arc = self.snapshot.clone();
+        let arc = Snapshot::clone(&self.snapshot);
         let mut seqno = arc.seqno + 1;
         let mut n_count = arc.n_count;
-        let root = arc.as_duplicate();
-        let mut reclaim: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
+        let root = arc.inner_duplicate();
+        let mut reclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
 
         let (root, old_node) = if self.lsm {
-            let s = match Mvcc::delete_lsm(root, key, seqno, &mut reclaim) {
+            let s = match Mvcc::delete_lsm(root, key, seqno, &mut reclm) {
                 (Some(mut root), optn, old_node) => {
                     root.set_black();
                     (Some(root), optn, old_node)
@@ -291,7 +290,7 @@ where
             (root, old_node)
         } else {
             // in non-lsm mode remove the entry from the tree.
-            let (root, old_node) = match Mvcc::do_delete(root, key, &mut reclaim) {
+            let (root, old_node) = match Mvcc::do_delete(root, key, &mut reclm) {
                 (None, old_node) => (None, old_node),
                 (Some(mut root), old_node) => {
                     root.set_black();
@@ -306,7 +305,7 @@ where
             (root, old_node.map(|item| *item))
         };
 
-        self.snapshot.shift_snapshot(root, seqno, n_count, reclaim);
+        self.snapshot.shift_snapshot(root, seqno, n_count, reclm);
         old_node
     }
 
@@ -319,7 +318,7 @@ where
     /// Additionally return full statistics on the tree. Refer to [`Stats`]
     /// for more information.
     pub fn validate(&self) -> Result<Stats, BognError<K>> {
-        let arc = self.snapshot.clone();
+        let arc = Snapshot::clone(&self.snapshot);
 
         let n_count = arc.n_count;
         let node_size = std::mem::size_of::<Node<K, V>>();
@@ -789,6 +788,10 @@ where
         }
     }
 
+    fn clone(this: &Snapshot<K, V>) -> Arc<MvccRoot<K, V>> {
+        Arc::clone(unsafe { this.value.load(Relaxed).as_ref().unwrap() })
+    }
+
     fn shift_snapshot(
         &self,
         root: Option<Box<Node<K, V>>>,
@@ -796,13 +799,11 @@ where
         n_count: usize,
         reclaim: Vec<Box<Node<K, V>>>,
     ) {
-        let arc = unsafe {
-            Box::from_raw(self.value.load(Relaxed)) // gets arc-dropped
-        };
-
-        let next_arc = Box::new(Arc::clone(arc.as_ref().next.as_ref().unwrap()));
+        // gets arc-dropped
+        let arc = unsafe { Box::from_raw(self.value.load(Relaxed)) };
+        let next_arc = Box::new(Arc::clone(arc.next.as_ref().unwrap()));
         let mvcc_root = unsafe {
-            (next_arc.deref().deref() as *const MvccRoot<K, V> as *mut MvccRoot<K, V>)
+            (&**next_arc as *const MvccRoot<K, V> as *mut MvccRoot<K, V>)
                 .as_mut()
                 .unwrap()
         };
@@ -822,25 +823,6 @@ where
         mvcc_root.reclaim = reclaim;
 
         self.value.store(Box::leak(next_arc), Relaxed);
-    }
-
-    fn clone(&self) -> Arc<MvccRoot<K, V>> {
-        Arc::clone(unsafe { self.value.load(Relaxed).as_ref().unwrap() })
-    }
-
-    #[allow(dead_code)]
-    fn as_ref(&self) -> &MvccRoot<K, V> {
-        unsafe { self.value.load(Relaxed).as_ref().unwrap() }
-    }
-
-    #[allow(dead_code)]
-    fn as_mut(&self) -> &mut MvccRoot<K, V> {
-        unsafe {
-            (self.value.load(Relaxed).as_mut().unwrap().deref().deref() as *const MvccRoot<K, V>
-                as *mut MvccRoot<K, V>)
-                .as_mut()
-                .unwrap()
-        }
     }
 }
 
@@ -869,28 +851,18 @@ where
         mvcc_root
     }
 
+    fn inner_duplicate(&self) -> Option<Box<Node<K, V>>> {
+        match &self.root {
+            None => None,
+            Some(node) => {
+                let node = node.deref() as *const Node<K, V> as *mut Node<K, V>;
+                Some(unsafe { Box::from_raw(node) })
+            }
+        }
+    }
+
     pub fn root_ref(&self) -> Option<&Node<K, V>> {
         self.root.as_ref().map(Deref::deref)
-    }
-
-    #[allow(dead_code)]
-    fn as_mut(&self) -> Option<&mut Node<K, V>> {
-        unsafe {
-            (&self.root as *const Option<Box<Node<K, V>>> as *mut Option<Box<Node<K, V>>>)
-                .as_mut()
-                .unwrap()
-                .as_mut()
-                .map(|item| item.deref_mut())
-        }
-    }
-
-    fn as_duplicate(&self) -> Option<Box<Node<K, V>>> {
-        let x = &self.root as *const Option<Box<Node<K, V>>> as *mut Option<Box<Node<K, V>>>;
-        let y = unsafe { x.as_mut().unwrap() };
-        if y.is_none() {
-            return None;
-        }
-        Some(unsafe { Box::from_raw(y.as_mut().unwrap().deref_mut()) })
     }
 }
 
@@ -903,31 +875,13 @@ where
         // NOTE: `root` will be leaked, so that the tree is intact.
 
         // NOTE: `reclaim` nodes will be dropped, but due the Drop
-        // drop implementation of Node, child nodes won't be dropped.
+        // implementation of Node, child nodes won't be dropped.
 
         // NOTE: `next` snapshot will be dropped and its reference
-        // count decremented, whether it is freed is based on the active
-        // reference at this instant.
+        // count decremented, whether it is freed is based on the last
+        // active reference at that moment.
 
-        self.root.take().map(|root| Box::leak(root)); // Leak root
-
-        // NOTE debug
-        //let next_arc = match self.next.as_ref() {
-        //    None => return (),
-        //    Some(boxed_next_arc) => boxed_next_arc.deref(),
-        //};
-        //let next_mvcc_root = unsafe {
-        //    (next_arc.deref().deref().deref() as *const MvccRoot<K, V> as *mut MvccRoot<K, V>)
-        //        .as_mut()
-        //        .unwrap()
-        //};
-        //println!(
-        //    "drop mvcc-root {:p} -> {:p} {}",
-        //    self,
-        //    next_mvcc_root,
-        //    Arc::strong_count(&next_arc)
-        //);
-        //print_reclaim("    ", &mut self.reclaim);
+        self.root.take().map(Box::leak); // Leak root
     }
 }
 

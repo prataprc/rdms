@@ -1,5 +1,10 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
+/// SyncWriter is used to make sure that only one writer is going to
+/// access MVCC index. Calling lock() from more than one thread will
+/// cause panic. It is better to deligate all write operations to
+/// single thread as opposed to serializing the write operations from
+/// multiple threads.
 pub struct SyncWriter {
     writers: AtomicU64,
 }

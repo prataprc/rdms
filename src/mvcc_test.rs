@@ -12,7 +12,7 @@ use crate::traits::{AsDelta, AsEntry};
 #[test]
 fn test_id() {
     let mvcc: Mvcc<i32, Empty> = Mvcc::new("test-mvcc", false);
-    let _arc = mvcc.root_ref();
+    let _arc = mvcc.mvccroot_ref();
     assert_eq!(mvcc.id(), "test-mvcc".to_string());
 }
 

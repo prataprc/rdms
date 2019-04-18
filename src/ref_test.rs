@@ -188,7 +188,8 @@ impl RefNodes {
                 self.seqno += 1;
                 Some(refn)
             } else if self.lsm {
-                // noop
+                entry.versions[0].deleted = Some(self.seqno + 1);
+                self.seqno += 1;
                 Some(entry.clone())
             } else {
                 let refn = entry.clone();
@@ -205,8 +206,8 @@ impl RefNodes {
                 };
                 entry.versions.insert(0, refval);
                 entry.key = key;
-                self.seqno += 1;
             }
+            self.seqno += 1;
             None
         }
     }

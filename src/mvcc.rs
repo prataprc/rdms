@@ -41,12 +41,13 @@ where
             fencer: SyncWriter::new(),
         };
 
-        let arc: Arc<MvccRoot<K, V>> = Snapshot::clone(&self.snapshot);
-        let root = Box::new(arc.as_ref().root_ref().unwrap().clone());
-
-        let (seqno, n_count) = (arc.seqno, arc.n_count);
+        let arc_mvcc: Arc<MvccRoot<K, V>> = Snapshot::clone(&self.snapshot);
+        let root = match arc_mvcc.root_ref() {
+            None => None,
+            Some(n) => Some(Box::new(n.clone())),
+        };
         mvcc.snapshot
-            .shift_snapshot(Some(root), seqno, n_count, vec![]);
+            .shift_snapshot(root, arc_mvcc.seqno, arc_mvcc.n_count, vec![]);
         mvcc
     }
 }
@@ -85,7 +86,7 @@ where
 {
     fn from(mut llrb: Llrb<K, V>) -> Mvcc<K, V> {
         let mvcc = Mvcc::new(llrb.id(), llrb.is_lsm());
-        let (root, seqno, n_count) = llrb.take_root();
+        let (root, seqno, n_count) = llrb.squash();
         mvcc.snapshot
             .shift_snapshot(root, seqno, n_count, vec![] /*reclaim*/);
         mvcc
@@ -129,10 +130,10 @@ where
 
     /// Set current seqno.
     pub fn set_seqno(&mut self, seqno: u64) {
-        let _fench = self.fencer.lock();
+        let _lock = self.fencer.lock();
 
-        let arc: Arc<MvccRoot<K, V>> = Snapshot::clone(&self.snapshot);
-        let (root, n_count) = (arc.deref().inner_duplicate(), arc.n_count);
+        let mvcc_arc: Arc<MvccRoot<K, V>> = Snapshot::clone(&self.snapshot);
+        let (root, n_count) = (mvcc_arc.root_duplicate(), mvcc_arc.n_count);
 
         self.snapshot.shift_snapshot(root, seqno, n_count, vec![]);
     }
@@ -142,7 +143,7 @@ where
         Snapshot::clone(&self.snapshot).seqno
     }
 
-    pub fn root_ref(&self) -> &MvccRoot<K, V> {
+    pub fn mvccroot_ref(&self) -> &MvccRoot<K, V> {
         unsafe { self.snapshot.value.load(Relaxed).as_ref().unwrap() }
     }
 }
@@ -158,15 +159,13 @@ where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        let arc = Snapshot::clone(&self.snapshot);
-        let mvcc_root: &MvccRoot<K, V> = arc.as_ref();
-        get(mvcc_root.root_ref(), key)
+        let arc_mvcc = Snapshot::clone(&self.snapshot);
+        get(arc_mvcc.root_ref(), key)
     }
 
     pub fn iter(&self) -> Iter<K, V> {
-        let arc = Snapshot::clone(&self.snapshot);
         Iter {
-            arc,
+            arc: Snapshot::clone(&self.snapshot),
             root: None,
             node_iter: vec![].into_iter(),
             after_key: Some(Bound::Unbounded),
@@ -175,9 +174,8 @@ where
     }
 
     pub fn range(&self, low: Bound<K>, high: Bound<K>) -> Range<K, V> {
-        let arc = Snapshot::clone(&self.snapshot);
         Range {
-            arc,
+            arc: Snapshot::clone(&self.snapshot),
             root: None,
             node_iter: vec![].into_iter(),
             low: Some(low),
@@ -187,17 +185,16 @@ where
     }
 
     pub fn set(&self, key: K, value: V) -> Option<impl AsEntry<K, V>> {
-        let _fench = self.fencer.lock();
+        let _lock = self.fencer.lock();
 
         let lsm = self.lsm;
-        let arc = Snapshot::clone(&self.snapshot);
+        let arc_mvcc = Snapshot::clone(&self.snapshot);
 
-        let seqno = arc.seqno + 1;
-        let mut n_count = arc.n_count;
-        let root = arc.inner_duplicate();
-        let mut recl: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
+        let (seqno, mut n_count) = (arc_mvcc.seqno + 1, arc_mvcc.n_count);
+        let root = arc_mvcc.root_duplicate();
+        let mut reclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
 
-        match Mvcc::upsert(root, key, value, seqno, lsm, &mut recl) {
+        match Mvcc::upsert(root, key, value, seqno, lsm, &mut reclm) {
             (Some(mut root), Some(mut n), old_node) => {
                 root.set_black();
                 if old_node.is_none() {
@@ -206,7 +203,7 @@ where
                 n.dirty = false;
                 Box::leak(n);
                 self.snapshot
-                    .shift_snapshot(Some(root), seqno, n_count, recl);
+                    .shift_snapshot(Some(root), seqno, n_count, reclm);
                 old_node
             }
             _ => unreachable!(),
@@ -219,13 +216,12 @@ where
         v: V,
         cas: u64,
     ) -> Result<Option<impl AsEntry<K, V>>, BognError<K>> {
-        let _fench = self.fencer.lock();
+        let _lock = self.fencer.lock();
+
         let lsm = self.lsm;
-        let arc = Snapshot::clone(&self.snapshot);
-
-        let (seqno, mut n_count) = (arc.seqno + 1, arc.n_count);
-
-        let root = arc.inner_duplicate();
+        let arc_mvcc = Snapshot::clone(&self.snapshot);
+        let (seqno, mut n_count) = (arc_mvcc.seqno + 1, arc_mvcc.n_count);
+        let root = arc_mvcc.root_duplicate();
         let mut reclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
 
         let s = match Mvcc::upsert_cas(root, k, v, cas, seqno, lsm, &mut reclm) {
@@ -260,12 +256,11 @@ where
         K: Borrow<Q> + From<Q>,
         Q: Clone + Ord + ?Sized,
     {
-        let _fench = self.fencer.lock();
+        let _lock = self.fencer.lock();
 
-        let arc = Snapshot::clone(&self.snapshot);
-        let mut seqno = arc.seqno + 1;
-        let mut n_count = arc.n_count;
-        let root = arc.inner_duplicate();
+        let arc_mvcc = Snapshot::clone(&self.snapshot);
+        let (seqno, mut n_count) = (arc_mvcc.seqno + 1, arc_mvcc.n_count);
+        let root = arc_mvcc.root_duplicate();
         let mut reclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
 
         let (root, old_node) = if self.lsm {
@@ -278,10 +273,8 @@ where
             };
             let (root, optn, old_node) = s;
 
-            match old_node.as_ref() {
-                None => n_count += 1,
-                Some(old_node) if old_node.is_deleted() => seqno -= 1,
-                _ => (),
+            if old_node.is_none() {
+                n_count += 1
             }
             if let Some(mut n) = optn {
                 n.dirty = false;
@@ -299,8 +292,6 @@ where
             };
             if old_node.is_some() {
                 n_count -= 1;
-            } else {
-                seqno -= 1;
             }
             (root, old_node.map(|item| *item))
         };
@@ -318,14 +309,14 @@ where
     /// Additionally return full statistics on the tree. Refer to [`Stats`]
     /// for more information.
     pub fn validate(&self) -> Result<Stats, BognError<K>> {
-        let arc = Snapshot::clone(&self.snapshot);
+        let arc_mvcc = Snapshot::clone(&self.snapshot);
 
-        let n_count = arc.n_count;
+        let n_count = arc_mvcc.n_count;
         let node_size = std::mem::size_of::<Node<K, V>>();
         let mut stats = Stats::new(n_count, node_size);
         stats.set_depths(Default::default());
 
-        let root = arc.as_ref().root_ref();
+        let root = arc.root_ref();
         let (red, nb, d) = (is_red(root), 0, 0);
         let blacks = validate_tree(root, red, nb, d, &mut stats)?;
         stats.set_blacks(blacks);
@@ -851,7 +842,7 @@ where
         mvcc_root
     }
 
-    fn inner_duplicate(&self) -> Option<Box<Node<K, V>>> {
+    fn root_duplicate(&self) -> Option<Box<Node<K, V>>> {
         match &self.root {
             None => None,
             Some(node) => {

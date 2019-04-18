@@ -21,7 +21,7 @@ include!("llrb_common.rs");
 /// means that nothing shall be over-written in the tree and all the
 /// mutations for the same key shall be preserved until they are undone or
 /// purged. Although there is one exception to it, back-to-back deletes
-/// will collapse into a no-op and only the first delete shall be ingested.
+/// will collapse into a no-op and only the last delete shall be ingested.
 ///
 /// [llrb]: https://en.wikipedia.org/wiki/Left-leaning_red-black_tree
 /// [LSM mode]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
@@ -178,9 +178,9 @@ where
         self.lsm
     }
 
-    /// Take away the root.
+    /// Squash this instance and return the root and its book-keeping.
     #[inline]
-    pub(crate) fn take_root(&mut self) -> (Option<Box<Node<K, V>>>, u64, usize) {
+    pub(crate) fn squash(&mut self) -> (Option<Box<Node<K, V>>>, u64, usize) {
         let (seqno, n_count) = (self.seqno, self.n_count);
         self.seqno = 0;
         self.n_count = 0;
@@ -321,8 +321,8 @@ where
         self.root = root;
         if old_node.is_some() {
             self.n_count -= 1;
-            self.seqno = seqno;
         }
+        self.seqno = seqno;
         old_node
     }
 

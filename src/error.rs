@@ -1,6 +1,8 @@
+use std::{ffi, io};
+
 /// BognError enumerates over all possible errors that this package
 /// shall return.
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub enum BognError<K> {
     /// Can be returned by set_cas() API when:
     /// * In non-lsm mode, requested entry is missing but specified
@@ -29,4 +31,12 @@ pub enum BognError<K> {
     /// MVCC algorithm uses dirty node marker for newly created nodes
     /// in its mutation path.
     DirtyNode,
+    InvalidFile(ffi::OsString),
+    IoError(io::Error),
+}
+
+impl<K> From<io::Error> for BognError<K> {
+    fn from(err: io::Error) -> BognError<K> {
+        BognError::IoError(err)
+    }
 }

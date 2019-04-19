@@ -24,6 +24,7 @@ travis-ci = { repository = "bnclabs/bogn" }
 
 [dependencies]
 structopt = { version = "0.2", default-features = false }
+lazy_static = "1.2.0"
 rand = "0.6.4"
 im="12.3.0"
 

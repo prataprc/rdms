@@ -21,6 +21,7 @@
 
 #![feature(rc_into_raw_non_null)]
 
+mod bubt;
 mod empty;
 mod error;
 mod llrb;
@@ -33,6 +34,7 @@ mod trait_bytes;
 mod trait_i64;
 mod traits;
 
+pub use crate::bubt::Builder;
 pub use crate::empty::Empty;
 pub use crate::error::BognError;
 pub use crate::llrb::Llrb;

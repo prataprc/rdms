@@ -2,7 +2,7 @@ use std::fs;
 
 use crate::traits::{AsDelta, Serialize, Diff, AsEntry};
 
-pub struct ZDelta1<V>
+pub struct ZDelta<V>
 where
     V: Default + Clone + Serialize + Diff,
 {
@@ -24,7 +24,7 @@ where
 //
 // Flags: 3-2-1-0  D - Deleted
 //            D R  R - File Reference, always 1.
-impl<V> ZDelta1<V>
+impl<V> ZDelta<V>
 where
     V: Default + Clone + Serialize + Diff,
 {
@@ -47,7 +47,7 @@ where
         Ok(buf)
     }
 
-    fn decode(buf: &[u8]) -> Result<(ZDelta1, u64), BognError> {
+    fn decode(buf: &[u8]) -> Result<(ZDelta, u64), BognError> {
         let mut scratch = [0_u8; 8];
         // hdr1
         scratch.copy_from_slice(&buf[..8]);
@@ -68,7 +68,7 @@ where
         } else {
             None
         }
-        (Ok(ZDelta1{len, seqno, fpos, deleted, delta: None}), Self::DELTA_LEN)
+        (Ok(ZDelta{len, seqno, fpos, deleted, delta: None}), Self::DELTA_LEN)
     }
 
     fn set_delta(&mut self, delta: delta: <V as Diff>::D) {
@@ -89,7 +89,7 @@ where
     }
 }
 
-impl<V> AsDelta<V> for ZDelta1<V>
+impl<V> AsDelta<V> for ZDelta<V>
 where
     V: Default + Clone + Serialize + Diff,
 {
@@ -106,15 +106,13 @@ where
     }
 }
 
-pub struct ZValue1<V>
+pub struct ZValue<V>
 where
     V: Default + Clone + Serialize + Diff,
 {
-    len: u64,
+    value: V,
     seqno: u64,
     deleted: Option<u64>,
-    fpos: u64,
-    value: Option<V>,
 }
 
 // *-----*------------------------------------*
@@ -125,18 +123,12 @@ where
 // |             value / fpos                 |
 // *-------------------*----------------------*
 
-impl<V> ZValue1<V>
+impl<V> ZValue<V>
 where
     V: Default + Clone + Serialize + Diff,
 {
-    fn new(seqno: u64, deleted: Option<u64>, fpos: u64, value: Option<V>) -> ZValue1 {
-        ZValue1{
-            len: 0,
-            seqno,
-            deleted,
-            fpos,
-            value,
-        }
+    fn new(value: V, seqno: u64, deleted: Option<u64>) -> ZValue {
+        ZValue{ value, seqno, deleted }
     }
 
     fn encode_with_fpos(&self, len: u64, buf: Vec<u8>) -> Result<Vec<u8>, BognError> {
@@ -171,7 +163,7 @@ where
         Ok(buf)
     }
 
-    fn decode(buf: &[u8]) -> Result<(ZValue1, u64), BognError> {
+    fn decode(buf: &[u8]) -> Result<(ZValue, u64), BognError> {
         let mut scratch = [0_u8; 8];
         // hdr1
         scratch.copy_from_slice(&buf[..8]);
@@ -196,7 +188,7 @@ where
         } else {
             None
         }
-        (Ok(ZValue1{len: vlen, seqno, fpos, deleted, value}), len)
+        (Ok(ZValue{len: vlen, seqno, fpos, deleted, value}), len)
     }
 
     fn value_len(buf: &[u8]) -> u64 {
@@ -225,13 +217,13 @@ where
     }
 }
 
-pub struct ZEntry1<K, V>
+pub struct ZEntry<K, V>
 where
     V: Default + Clone + Serialize + Diff,
 {
     key: K,
-    value: ZValue1,
-    deltas: Vec<ZDelta1>,
+    value: ZValue,
+    deltas: Vec<ZDelta>,
 }
 
 // |  32-bit total len |   32-bit key-len     |
@@ -244,25 +236,25 @@ where
 // *-----*------------------------------------*
 // |              64-bit seqno                |
 // *-------------------*----------------------*
-// |             value / fpos                 |
+// |              value / fpos                |
 // *------------------------------------------*
 // |                delta 1                   |
 // *------------------------------------------*
 // |                delta 2                   |
 // *------------------------------------------*
 
-impl<K, V> ZEntry1<K, V>
+impl<K, V> ZEntry<K, V>
 where
     V: Default + Clone + Serialize + Diff,
 {
     const MASK_TOTAL_LEN: u32 = 0xFFFFFFFF00000000;
     const MASK_KEY_LEN: u32 = 0x00000000FFFFFFFF;
 
-    fn new(key: K, value: ZValue1) -> ZEntry1 {
-        ZEntry1{key, value, deltas: vec![]}
+    fn new(key: K, value: ZValue) -> ZEntry {
+        ZEntry{key, value, deltas: vec![]}
     }
 
-    fn append_delta(&mut self, delta: ZDelta1) {
+    fn append_delta(&mut self, delta: ZDelta) {
         self.push(delta);
     }
 
@@ -274,7 +266,7 @@ where
         self.value.value_ref()
     }
 
-    fn decode(buf: &[u8]) -> Result<(ZEntry1, u64), BognError> {
+    fn decode(buf: &[u8]) -> Result<(ZEntry, u64), BognError> {
         let mut scratch = [0_u8; 8];
         // hdr1
         scratch.copy_from_slice(&buf[..8]);
@@ -288,24 +280,24 @@ where
         }
         let (key, off) = (K::decode(buf[off..off+key_len])?, off+key_len);
 
-        let vlen = ZValue1::value_len(buf[off..off+8);
+        let vlen = ZValue::value_len(buf[off..off+8);
         if (off + vlen) > buf.len() {
             return Err(BognError::BubtZEntryValueOverflow(vlen));
         }
-        let (value, zvlen) = ZValue1::decode(buf[off..off+vlen)?;
+        let (value, zvlen) = ZValue::decode(buf[off..off+vlen)?;
         let off += zvlen;
 
         let deltas = vec![];
         for _i in 0..n_deltas {
-            let dlen = ZDelta1::disk_len();
+            let dlen = ZDelta::disk_len();
             if (off + dlen) > buf.len() {
                 return Err(BognError::BubtZEntryDeltaOverflow(vlen));
             }
-            let (delta, dlen) = ZDelta1::decode(buf[off..off+dlen)?;
+            let (delta, dlen) = ZDelta::decode(buf[off..off+dlen)?;
             let off += dlen;
             deltas.push(delta);
         }
-        ZEntry1{key, value, deltas}
+        ZEntry{key, value, deltas}
     }
 
     fn entry_len(buf: &[u8]) -> u64 {
@@ -322,7 +314,7 @@ where
     }
 }
 
-impl<K,V> AsEntry<K,V> for ZEntry1<K,V>
+impl<K,V> AsEntry<K,V> for ZEntry<K,V>
 where
     V: Default + Clone + Serialize + Diff,
 {
@@ -346,7 +338,7 @@ where
     }
 }
 
-impl<K, V> ZEntry1<K, V> {
+impl<K, V> ZEntry<K, V> {
     fn encode(&self, buf: Vec<u8>) -> (Vec<u8>, u64) {
         // TODO:
     }

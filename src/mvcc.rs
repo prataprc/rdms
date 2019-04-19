@@ -316,7 +316,7 @@ where
         let mut stats = Stats::new(n_count, node_size);
         stats.set_depths(Default::default());
 
-        let root = arc.root_ref();
+        let root = arc_mvcc.root_ref();
         let (red, nb, d) = (is_red(root), 0, 0);
         let blacks = validate_tree(root, red, nb, d, &mut stats)?;
         stats.set_blacks(blacks);

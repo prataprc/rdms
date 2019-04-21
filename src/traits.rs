@@ -1,3 +1,6 @@
+use crate::error::BognError;
+use crate::vlog;
+
 /// Diffable values.
 ///
 /// O = previous value
@@ -9,7 +12,7 @@
 /// D = N - O (diff operation)
 /// O = N - D (merge operation)
 pub trait Diff {
-    type D: Default + Clone;
+    type D: Default + Clone + Serialize;
 
     /// Return the delta between two version of value.
     /// D = N - O
@@ -29,16 +32,10 @@ pub trait Diff {
 /// [LSM]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
 pub trait AsDelta<V>
 where
-    V: Default + Clone + Diff,
+    V: Default + Clone + Diff + Serialize,
 {
     /// Return a copy of difference.
-    fn delta(&self) -> <V as Diff>::D;
-
-    /// Return a reference to difference.
-    fn delta_ref(&self) -> &<V as Diff>::D;
-
-    /// Return a mutable reference to difference.
-    fn delta_mut(&mut self) -> &mut <V as Diff>::D;
+    fn delta(&self) -> vlog::Delta<V>;
 
     /// Return sequence-number at which the mutation happened.
     fn seqno(&self) -> u64;
@@ -53,7 +50,7 @@ where
 pub trait AsEntry<K, V>
 where
     K: Default + Clone + Ord,
-    V: Default + Clone + Diff,
+    V: Default + Clone + Diff + Serialize,
 {
     type Delta: Clone + AsDelta<V>;
 
@@ -65,10 +62,7 @@ where
     fn key_ref(&self) -> &K;
 
     /// Return a copy of the latest value.
-    fn value(&self) -> V;
-
-    /// Return a reference to entry's latest value.
-    fn value_ref(&self) -> &V;
+    fn value(&self) -> vlog::Value<V>;
 
     /// Return the sequence-number of most recent mutation for this entry.
     fn seqno(&self) -> u64;
@@ -92,5 +86,5 @@ where
 pub trait Serialize: Sized {
     fn encode(&self, buf: Vec<u8>) -> Vec<u8>;
 
-    fn decode(buf: &[u8]) -> Result<Self, String>;
+    fn decode(&mut self, buf: &[u8]) -> Result<(), BognError>;
 }

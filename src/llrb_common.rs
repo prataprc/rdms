@@ -2,16 +2,16 @@ const ITER_LIMIT: usize = 100;
 
 fn is_red<K, V>(node: Option<&Node<K, V>>) -> bool
 where
-    K: Default + Clone + Ord,
-    V: Default + Clone + Diff,
+    K: Default + Clone + Ord + Debug,
+    V: Default + Clone + Diff + Serialize,
 {
     node.map_or(false, |node| !node.is_black())
 }
 
 fn is_black<K, V>(node: Option<&Node<K, V>>) -> bool
 where
-    K: Default + Clone + Ord,
-    V: Default + Clone + Diff,
+    K: Default + Clone + Ord + Debug,
+    V: Default + Clone + Diff + Serialize,
 {
     node.map_or(true, |node| node.is_black())
 }
@@ -21,8 +21,8 @@ fn get<K, V, Q>(
     key: &Q,
 ) -> Option<impl AsEntry<K, V>>
 where
-    K: Default + Clone + Ord + Borrow<Q>,
-    V: Default + Clone + Diff,
+    K: Default + Clone + Ord + Borrow<Q> + Debug,
+    V: Default + Clone + Diff + Serialize,
     Q: Ord + ?Sized,
 {
     while node.is_some() {
@@ -42,10 +42,10 @@ fn validate_tree<K, V>(
     mut nb: usize,
     depth: usize,
     stats: &mut Stats,
-) -> Result<usize, BognError<K>>
+) -> Result<usize, BognError>
 where
-    K: Default + Clone + Ord,
-    V: Default + Clone + Diff,
+    K: Default + Clone + Ord + Debug,
+    V: Default + Clone + Diff + Serialize,
 {
     let red = is_red(node);
     match node {
@@ -63,13 +63,15 @@ where
             }
             if let Some(left) = left {
                 if left.key.ge(&node.key) {
-                    let (left, parent) = (left.key.clone(), node.key.clone());
+                    let left = format!("{:?}", left.key);
+                    let parent = format!("{:?}", node.key);
                     return Err(BognError::SortError(left, parent));
                 }
             }
             if let Some(right) = right {
                 if right.key.le(&node.key) {
-                    let (parent, right) = (node.key.clone(), right.key.clone());
+                    let parent = format!("{:?}", node.key);
+                    let right = format!("{:?}", right.key);
                     return Err(BognError::SortError(parent, right));
                 }
             }
@@ -84,8 +86,8 @@ where
 
 pub struct Iter<'a, K, V>
 where
-    K: Default + Clone + Ord,
-    V: Default + Clone + Diff,
+    K: Default + Clone + Ord + Debug,
+    V: Default + Clone + Diff + Serialize,
 {
     arc: Arc<MvccRoot<K, V>>,
     root: Option<&'a Node<K, V>>,
@@ -96,8 +98,8 @@ where
 
 impl<'a, K, V> Iter<'a, K, V>
 where
-    K: Default + Clone + Ord,
-    V: Default + Clone + Diff,
+    K: Default + Clone + Ord + Debug,
+    V: Default + Clone + Diff + Serialize,
 {
     fn get_root(&self) -> Option<&Node<K, V>> {
         match self.root {
@@ -142,8 +144,8 @@ where
 
 impl<'a, K, V> Iterator for Iter<'a, K, V>
 where
-    K: Default + Clone + Ord,
-    V: Default + Clone + Diff,
+    K: Default + Clone + Ord + Debug,
+    V: Default + Clone + Diff + Serialize,
 {
     type Item = Node<K, V>;
 
@@ -163,8 +165,8 @@ where
 
 pub struct Range<'a, K, V>
 where
-    K: Default + Clone + Ord,
-    V: Default + Clone + Diff,
+    K: Default + Clone + Ord + Debug,
+    V: Default + Clone + Diff + Serialize,
 {
     arc: Arc<MvccRoot<K, V>>,
     root: Option<&'a Node<K, V>>,
@@ -176,8 +178,8 @@ where
 
 impl<'a, K, V> Range<'a, K, V>
 where
-    K: Default + Clone + Ord,
-    V: Default + Clone + Diff,
+    K: Default + Clone + Ord + Debug,
+    V: Default + Clone + Diff + Serialize,
 {
     fn get_root(&self) -> Option<&Node<K, V>> {
         match self.root {
@@ -233,8 +235,8 @@ where
 
 impl<'a, K, V> Iterator for Range<'a, K, V>
 where
-    K: Default + Clone + Ord,
-    V: Default + Clone + Diff,
+    K: Default + Clone + Ord + Debug,
+    V: Default + Clone + Diff + Serialize,
 {
     type Item = Node<K, V>;
 
@@ -268,8 +270,8 @@ where
 
 pub struct Reverse<'a, K, V>
 where
-    K: Default + Clone + Ord,
-    V: Default + Clone + Diff,
+    K: Default + Clone + Ord + Debug,
+    V: Default + Clone + Diff + Serialize,
 {
     arc: Arc<MvccRoot<K, V>>,
     root: Option<&'a Node<K, V>>,
@@ -281,8 +283,8 @@ where
 
 impl<'a, K, V> Reverse<'a, K, V>
 where
-    K: Default + Clone + Ord,
-    V: Default + Clone + Diff,
+    K: Default + Clone + Ord + Debug,
+    V: Default + Clone + Diff + Serialize,
 {
     fn get_root(&self) -> Option<&Node<K, V>> {
         match self.root {
@@ -327,8 +329,8 @@ where
 
 impl<'a, K, V> Iterator for Reverse<'a, K, V>
 where
-    K: Default + Clone + Ord,
-    V: Default + Clone + Diff,
+    K: Default + Clone + Ord + Debug,
+    V: Default + Clone + Diff + Serialize,
 {
     type Item = Node<K, V>;
 
@@ -362,8 +364,8 @@ where
 
 fn drop_tree<K, V>(mut node: Box<Node<K, V>>)
 where
-    K: Default + Clone + Ord,
-    V: Default + Clone + Diff,
+    K: Default + Clone + Ord + Debug,
+    V: Default + Clone + Diff + Serialize,
 {
     //println!("drop_tree - node {:p}", node);
     node.left.take().map(|left| drop_tree(left));

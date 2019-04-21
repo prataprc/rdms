@@ -1,3 +1,4 @@
+use crate::error::BognError;
 use crate::traits::{Diff, Serialize};
 
 /// Empty value, can be used for indexing entries that have a
@@ -24,7 +25,7 @@ impl Serialize for Empty {
         buf
     }
 
-    fn decode(_buf: &[u8]) -> Result<Self, String> {
-        Ok(Empty)
+    fn decode(&mut self, _buf: &[u8]) -> Result<(), BognError> {
+        Ok(())
     }
 }

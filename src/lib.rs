@@ -22,7 +22,6 @@
 #![feature(rc_into_raw_non_null)]
 
 mod bubt;
-mod empty;
 mod error;
 mod llrb;
 mod llrb_depth;
@@ -31,15 +30,17 @@ mod llrb_util;
 mod mvcc;
 mod sync_writer;
 mod trait_bytes;
+mod trait_empty;
 mod trait_i64;
 mod traits;
+mod vlog;
 
 pub use crate::bubt::Builder;
-pub use crate::empty::Empty;
 pub use crate::error::BognError;
 pub use crate::llrb::Llrb;
 pub use crate::llrb_util::Stats;
 pub use crate::mvcc::Mvcc;
+pub use crate::trait_empty::Empty; // TODO: proper nomenclature.
 pub use crate::traits::{AsDelta, AsEntry, Diff};
 
 #[cfg(test)]

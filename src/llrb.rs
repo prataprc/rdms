@@ -1,5 +1,6 @@
 use std::borrow::Borrow;
 use std::cmp::{Ord, Ordering};
+use std::fmt::Debug;
 use std::ops::{Bound, Deref, DerefMut};
 use std::sync::Arc;
 
@@ -7,7 +8,7 @@ use crate::error::BognError;
 use crate::llrb_node::Node;
 use crate::llrb_util::Stats;
 use crate::mvcc::MvccRoot;
-use crate::traits::{AsDelta, AsEntry, Diff};
+use crate::traits::{AsDelta, AsEntry, Diff, Serialize};
 
 include!("llrb_common.rs");
 
@@ -27,8 +28,8 @@ include!("llrb_common.rs");
 /// [LSM mode]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
 pub struct Llrb<K, V>
 where
-    K: Default + Clone + Ord,
-    V: Default + Clone + Diff,
+    K: Default + Clone + Ord + Debug,
+    V: Default + Clone + Diff + Serialize,
 {
     name: String,
     lsm: bool,
@@ -39,8 +40,8 @@ where
 
 impl<K, V> Drop for Llrb<K, V>
 where
-    K: Default + Clone + Ord,
-    V: Default + Clone + Diff,
+    K: Default + Clone + Ord + Debug,
+    V: Default + Clone + Diff + Serialize,
 {
     fn drop(&mut self) {
         self.root.take().map(drop_tree);
@@ -49,8 +50,8 @@ where
 
 impl<K, V> Clone for Llrb<K, V>
 where
-    K: Default + Clone + Ord,
-    V: Default + Clone + Diff,
+    K: Default + Clone + Ord + Debug,
+    V: Default + Clone + Diff + Serialize,
 {
     fn clone(&self) -> Llrb<K, V> {
         Llrb {
@@ -66,8 +67,8 @@ where
 /// Different ways to construct a new Llrb instance.
 impl<K, V> Llrb<K, V>
 where
-    K: Default + Clone + Ord,
-    V: Default + Clone + Diff,
+    K: Default + Clone + Ord + Debug,
+    V: Default + Clone + Diff + Serialize,
 {
     /// Create an empty instance of Llrb, identified by `name`.
     /// Applications can choose unique names. When `lsm` is true, mutations
@@ -93,7 +94,7 @@ where
         name: S,
         iter: impl Iterator<Item = E>,
         lsm: bool,
-    ) -> Result<Llrb<K, V>, BognError<K>>
+    ) -> Result<Llrb<K, V>, BognError>
     where
         S: AsRef<str>,
         E: AsEntry<K, V>,
@@ -110,17 +111,14 @@ where
         Ok(llrb)
     }
 
-    fn load_entry<E>(
-        node: Option<Box<Node<K, V>>>,
-        entry: E,
-    ) -> Result<Box<Node<K, V>>, BognError<K>>
+    fn load_entry<E>(node: Option<Box<Node<K, V>>>, entry: E) -> Result<Box<Node<K, V>>, BognError>
     where
         E: AsEntry<K, V>,
         <E as AsEntry<K, V>>::Delta: AsDelta<V> + Clone,
     {
         let key = entry.key_ref();
         match node {
-            None => Ok(Node::from_entry(entry)),
+            None => Ok(Node::from_entry(entry)?),
             Some(mut node) => {
                 node = Llrb::walkdown_rot23(node);
                 match node.key.cmp(key) {
@@ -134,7 +132,10 @@ where
                         node.right = Some(Llrb::load_entry(right, entry)?);
                         Ok(Llrb::walkuprot_23(node))
                     }
-                    Ordering::Equal => Err(BognError::DuplicateKey(key.clone())),
+                    Ordering::Equal => {
+                        let arg = format!("{:?}", key);
+                        Err(BognError::DuplicateKey(arg))
+                    }
                 }
             }
         }
@@ -144,8 +145,8 @@ where
 /// Maintanence API.
 impl<K, V> Llrb<K, V>
 where
-    K: Default + Clone + Ord,
-    V: Default + Clone + Diff,
+    K: Default + Clone + Ord + Debug,
+    V: Default + Clone + Diff + Serialize,
 {
     /// Identify this instance. Applications can choose unique names while
     /// creating Llrb instances.
@@ -192,13 +193,13 @@ where
 /// CRUD operations on Llrb instance.
 impl<K, V> Llrb<K, V>
 where
-    K: Default + Clone + Ord,
-    V: Default + Clone + Diff,
+    K: Default + Clone + Ord + Debug,
+    V: Default + Clone + Diff + Serialize,
 {
     /// Get the latest version for key.
     pub fn get<Q>(&self, key: &Q) -> Option<impl AsEntry<K, V>>
     where
-        K: Borrow<Q>,
+        K: Borrow<Q> + Debug,
         Q: Ord + ?Sized,
     {
         get(self.root.as_ref().map(Deref::deref), key)
@@ -260,7 +261,7 @@ where
         key: K,
         value: V,
         cas: u64,
-    ) -> Result<Option<impl AsEntry<K, V>>, BognError<K>> {
+    ) -> Result<Option<impl AsEntry<K, V>>, BognError> {
         let seqno = self.seqno + 1;
         let root = self.root.take();
 
@@ -288,7 +289,7 @@ where
     pub fn delete<Q>(&mut self, key: &Q) -> Option<impl AsEntry<K, V>>
     where
         // TODO: From<Q> and Clone will fail if V=String and Q=str
-        K: Borrow<Q> + From<Q>,
+        K: Borrow<Q> + From<Q> + Debug,
         Q: Clone + Ord + ?Sized,
     {
         let seqno = self.seqno + 1;
@@ -334,7 +335,7 @@ where
     ///
     /// Additionally return full statistics on the tree. Refer to [`Stats`]
     /// for more information.
-    pub fn validate(&self) -> Result<Stats, BognError<K>> {
+    pub fn validate(&self) -> Result<Stats, BognError> {
         let node_size = std::mem::size_of::<Node<K, V>>();
         let mut stats = Stats::new(self.n_count, node_size);
         stats.set_depths(Default::default());
@@ -349,8 +350,8 @@ where
 
 impl<K, V> Llrb<K, V>
 where
-    K: Default + Clone + Ord,
-    V: Default + Clone + Diff,
+    K: Default + Clone + Ord + Debug,
+    V: Default + Clone + Diff + Serialize,
 {
     fn upsert(
         node: Option<Box<Node<K, V>>>,
@@ -399,7 +400,7 @@ where
     ) -> (
         Option<Box<Node<K, V>>>,
         Option<Node<K, V>>,
-        Option<BognError<K>>,
+        Option<BognError>,
     ) {
         if node.is_none() && cas > 0 {
             return (None, None, Some(BognError::InvalidCAS));
@@ -447,7 +448,7 @@ where
         seqno: u64,
     ) -> (Option<Box<Node<K, V>>>, Option<Node<K, V>>)
     where
-        K: Borrow<Q> + From<Q>,
+        K: Borrow<Q> + From<Q> + Debug,
         Q: Clone + Ord + ?Sized,
     {
         if node.is_none() {
@@ -493,7 +494,7 @@ where
         key: &Q,
     ) -> (Option<Box<Node<K, V>>>, Option<Node<K, V>>)
     where
-        K: Borrow<Q>,
+        K: Borrow<Q> + Debug,
         Q: Ord + ?Sized,
     {
         let mut node = match node {

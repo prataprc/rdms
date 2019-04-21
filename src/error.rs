@@ -2,8 +2,7 @@ use std::{ffi, io};
 
 /// BognError enumerates over all possible errors that this package
 /// shall return.
-#[derive(Debug)]
-pub enum BognError<K> {
+pub enum BognError {
     /// Can be returned by set_cas() API when:
     /// * In non-lsm mode, requested entry is missing but specified
     ///   CAS is not ZERO. Note that this combination is an alias for
@@ -24,19 +23,22 @@ pub enum BognError<K> {
     UnbalancedBlacks(usize, usize),
     /// Fatal case, index entries are not in sort-order. The two
     /// keys are the mismatching items.
-    SortError(K, K),
+    SortError(String, String),
     /// Duplicated keys are not allowed in the index. Each and every
     /// Key must be unique.
-    DuplicateKey(K),
+    DuplicateKey(String),
     /// MVCC algorithm uses dirty node marker for newly created nodes
     /// in its mutation path.
     DirtyNode,
     InvalidFile(ffi::OsString),
     IoError(io::Error),
+    PartialRead(usize, usize),
+    PartialWrite(usize, usize),
+    ValueDecode(Vec<u8>),
 }
 
-impl<K> From<io::Error> for BognError<K> {
-    fn from(err: io::Error) -> BognError<K> {
+impl From<io::Error> for BognError {
+    fn from(err: io::Error) -> BognError {
         BognError::IoError(err)
     }
 }

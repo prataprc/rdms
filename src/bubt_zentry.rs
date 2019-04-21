@@ -2,6 +2,115 @@ use std::fs;
 
 use crate::traits::{AsDelta, Serialize, Diff, AsEntry};
 
+pub struct ZValue<V>
+where
+    V: Default + Clone + Serialize + Diff,
+{
+    value: V,
+    seqno: u64,
+    deleted: Option<u64>,
+}
+
+// *-----*------------------------------------*
+// |flags|        60-bit length               |
+// *-----*------------------------------------*
+// |                 payload                  |
+// *-------------------*----------------------*
+
+impl<V> ZValue<V>
+where
+    V: Default + Clone + Serialize + Diff,
+{
+    fn new(value: V, seqno: u64, deleted: Option<u64>) -> ZValue {
+        ZValue{ value, seqno, deleted }
+    }
+
+    fn encode_with_fpos(&self, len: u64, buf: Vec<u8>) -> Result<Vec<u8>, BognError> {
+        if len > 1152921504606846975 {
+            return Err(BognError::BubtValueOverflow(len));
+        }
+        let hdr1 = Self::FLAG_FILEREF | len;
+        if self.deleted.is_some() {
+            hdr1 |= Self::FLAG_DELETED;
+        }
+        let seqno = self.deleted.unwrap_or(self.seqno);
+        buf.extend_from_slice(&hdr1.to_be_bytes());
+        buf.extend_from_slice(&seqno.to_be_bytes());
+        buf.extend_from_slice(&fpos.to_be_bytes());
+        Ok(buf)
+    }
+
+    fn encode_with_value(&self, buf: Vec<u8>) -> Result<Vec<u8>,  BognError> {
+        let valbuf = self.value.unwrap().encode(vec![]);
+        let len = valbuf.len();
+        if len > 1152921504606846975 {
+            return Err(BognError::BubtValueOverflow(len));
+        }
+        let hdr1 = len;
+        if self.deleted.is_some() {
+            hdr1 |= Self::FLAG_DELETED;
+        }
+        let seqno = self.deleted.unwrap_or(self.seqno);
+        buf.extend_from_slice(&hdr1.to_be_bytes());
+        buf.extend_from_slice(&seqno.to_be_bytes());
+        buf.extend_from_slice(&valbuf);
+        Ok(buf)
+    }
+
+    fn decode(buf: &[u8]) -> Result<(ZValue, u64), BognError> {
+        let mut scratch = [0_u8; 8];
+        // hdr1
+        scratch.copy_from_slice(&buf[..8]);
+        let hdr1 = u64::from_be_bytes(scratch);
+        let vlen = hdr1 & Self::MASK_LEN;
+        // seqno
+        scratch.copy_from_slice(&buf[8..16]);
+        let seqno = u64::from_be_bytes(scratch);
+
+        if vlen > 1152921504606846975 {
+            return Err(BognError::BubtValueOverflow(vlen));
+        }
+
+        let (fpos, value, len) = if hdr1 & Self::FLAG_FILEREF {
+            scratch.copy_from_slice(&buf[16..24]);
+            (u64::from_be_bytes(scratch), None, 24)
+        } else {
+            (Default::default(), Some(V::decode(&buf[16..16+vlen])?), 16+vlen)
+        }
+        let deleted = if hdr1 & Self::FLAG_DELETED {
+            Some(seqno)
+        } else {
+            None
+        }
+        (Ok(ZValue{len: vlen, seqno, fpos, deleted, value}), len)
+    }
+
+    fn value_len(buf: &[u8]) -> u64 {
+        let mut scratch = [0_u8; 8];
+        scratch.copy_from_slice(&buf[..8]);
+        u64::from_be_bytes(scratch) & Self::MASK_LEN
+    }
+
+    fn value_ref(&mut self) -> &V {
+        self.value.as_ref().unwrap()
+    }
+
+    fn fetch_value_ref(&mut self, file: &fs::File, mut buf: Vec<u8>) -> Result<(&V, Vec<u8>), BognError> {
+        use std::io::SeekFrom;
+
+        match self.value {
+            Some(value) => (Ok(value, buf)),
+            None => {
+                buf.resize(self.len, 0);
+                file.seek(SeekFrom::Start(self.fpos))?;
+                file.read_exact(&mut buf)?;
+                self.value = V::decode(&buf)?;
+                Ok((&self.value, buf))
+            }
+        }
+    }
+}
+
 pub struct ZDelta<V>
 where
     V: Default + Clone + Serialize + Diff,
@@ -103,117 +212,6 @@ where
 
     fn is_deleted(&self) -> bool {
         self.deleted.is_some()
-    }
-}
-
-pub struct ZValue<V>
-where
-    V: Default + Clone + Serialize + Diff,
-{
-    value: V,
-    seqno: u64,
-    deleted: Option<u64>,
-}
-
-// *-----*------------------------------------*
-// |flags|      60-bit value-len              |
-// *-----*------------------------------------*
-// |              64-bit seqno                |
-// *-------------------*----------------------*
-// |             value / fpos                 |
-// *-------------------*----------------------*
-
-impl<V> ZValue<V>
-where
-    V: Default + Clone + Serialize + Diff,
-{
-    fn new(value: V, seqno: u64, deleted: Option<u64>) -> ZValue {
-        ZValue{ value, seqno, deleted }
-    }
-
-    fn encode_with_fpos(&self, len: u64, buf: Vec<u8>) -> Result<Vec<u8>, BognError> {
-        if len > 1152921504606846975 {
-            return Err(BognError::BubtValueOverflow(len));
-        }
-        let hdr1 = Self::FLAG_FILEREF | len;
-        if self.deleted.is_some() {
-            hdr1 |= Self::FLAG_DELETED;
-        }
-        let seqno = self.deleted.unwrap_or(self.seqno);
-        buf.extend_from_slice(&hdr1.to_be_bytes());
-        buf.extend_from_slice(&seqno.to_be_bytes());
-        buf.extend_from_slice(&fpos.to_be_bytes());
-        Ok(buf)
-    }
-
-    fn encode_with_value(&self, buf: Vec<u8>) -> Result<Vec<u8>,  BognError> {
-        let valbuf = self.value.unwrap().encode(vec![]);
-        let len = valbuf.len();
-        if len > 1152921504606846975 {
-            return Err(BognError::BubtValueOverflow(len));
-        }
-        let hdr1 = len;
-        if self.deleted.is_some() {
-            hdr1 |= Self::FLAG_DELETED;
-        }
-        let seqno = self.deleted.unwrap_or(self.seqno);
-        buf.extend_from_slice(&hdr1.to_be_bytes());
-        buf.extend_from_slice(&seqno.to_be_bytes());
-        buf.extend_from_slice(&valbuf);
-        Ok(buf)
-    }
-
-    fn decode(buf: &[u8]) -> Result<(ZValue, u64), BognError> {
-        let mut scratch = [0_u8; 8];
-        // hdr1
-        scratch.copy_from_slice(&buf[..8]);
-        let hdr1 = u64::from_be_bytes(scratch);
-        let vlen = hdr1 & Self::MASK_LEN;
-        // seqno
-        scratch.copy_from_slice(&buf[8..16]);
-        let seqno = u64::from_be_bytes(scratch);
-
-        if vlen > 1152921504606846975 {
-            return Err(BognError::BubtValueOverflow(vlen));
-        }
-
-        let (fpos, value, len) = if hdr1 & Self::FLAG_FILEREF {
-            scratch.copy_from_slice(&buf[16..24]);
-            (u64::from_be_bytes(scratch), None, 24)
-        } else {
-            (Default::default(), Some(V::decode(&buf[16..16+vlen])?), 16+vlen)
-        }
-        let deleted = if hdr1 & Self::FLAG_DELETED {
-            Some(seqno)
-        } else {
-            None
-        }
-        (Ok(ZValue{len: vlen, seqno, fpos, deleted, value}), len)
-    }
-
-    fn value_len(buf: &[u8]) -> u64 {
-        let mut scratch = [0_u8; 8];
-        scratch.copy_from_slice(&buf[..8]);
-        u64::from_be_bytes(scratch) & Self::MASK_LEN
-    }
-
-    fn value_ref(&mut self) -> &V {
-        self.value.as_ref().unwrap()
-    }
-
-    fn fetch_value_ref(&mut self, file: &fs::File, mut buf: Vec<u8>) -> Result<(&V, Vec<u8>), BognError> {
-        use std::io::SeekFrom;
-
-        match self.value {
-            Some(value) => (Ok(value, buf)),
-            None => {
-                buf.resize(self.len, 0);
-                file.seek(SeekFrom::Start(self.fpos))?;
-                file.read_exact(&mut buf)?;
-                self.value = V::decode(&buf)?;
-                Ok((&self.value, buf))
-            }
-        }
     }
 }
 

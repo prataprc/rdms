@@ -1,5 +1,6 @@
 use std::borrow::Borrow;
 use std::cmp::{Ord, Ordering};
+use std::fmt::Debug;
 use std::ops::{Bound, Deref, DerefMut};
 use std::sync::{
     atomic::{AtomicPtr, Ordering::Relaxed},
@@ -11,7 +12,7 @@ use crate::llrb::Llrb;
 use crate::llrb_node::Node;
 use crate::llrb_util::Stats;
 use crate::sync_writer::SyncWriter;
-use crate::traits::{AsEntry, Diff};
+use crate::traits::{AsEntry, Diff, Serialize};
 
 const RECLAIM_CAP: usize = 128;
 
@@ -19,8 +20,8 @@ include!("llrb_common.rs");
 
 pub struct Mvcc<K, V>
 where
-    K: Default + Clone + Ord,
-    V: Default + Clone + Diff,
+    K: Default + Clone + Ord + Debug,
+    V: Default + Clone + Diff + Serialize,
 {
     name: String,
     lsm: bool,
@@ -30,8 +31,8 @@ where
 
 impl<K, V> Clone for Mvcc<K, V>
 where
-    K: Default + Clone + Ord,
-    V: Default + Clone + Diff,
+    K: Default + Clone + Ord + Debug,
+    V: Default + Clone + Diff + Serialize,
 {
     fn clone(&self) -> Mvcc<K, V> {
         let mvcc = Mvcc {
@@ -54,8 +55,8 @@ where
 
 impl<K, V> Drop for Mvcc<K, V>
 where
-    K: Default + Clone + Ord,
-    V: Default + Clone + Diff,
+    K: Default + Clone + Ord + Debug,
+    V: Default + Clone + Diff + Serialize,
 {
     fn drop(&mut self) {
         // NOTE: Means all references to mvcc are gone and ownership is going out
@@ -81,8 +82,8 @@ where
 
 impl<K, V> From<Llrb<K, V>> for Mvcc<K, V>
 where
-    K: Default + Clone + Ord,
-    V: Default + Clone + Diff,
+    K: Default + Clone + Ord + Debug,
+    V: Default + Clone + Diff + Serialize,
 {
     fn from(mut llrb: Llrb<K, V>) -> Mvcc<K, V> {
         let mvcc = Mvcc::new(llrb.id(), llrb.is_lsm());
@@ -95,8 +96,8 @@ where
 
 impl<K, V> Mvcc<K, V>
 where
-    K: Default + Clone + Ord,
-    V: Default + Clone + Diff,
+    K: Default + Clone + Ord + Debug,
+    V: Default + Clone + Diff + Serialize,
 {
     pub fn new<S>(name: S, lsm: bool) -> Mvcc<K, V>
     where
@@ -114,8 +115,8 @@ where
 /// Maintanence API.
 impl<K, V> Mvcc<K, V>
 where
-    K: Default + Clone + Ord,
-    V: Default + Clone + Diff,
+    K: Default + Clone + Ord + Debug,
+    V: Default + Clone + Diff + Serialize,
 {
     /// Identify this instance. Applications can choose unique names while
     /// creating Mvcc instances.
@@ -150,13 +151,13 @@ where
 
 impl<K, V> Mvcc<K, V>
 where
-    K: Default + Clone + Ord,
-    V: Default + Clone + Diff,
+    K: Default + Clone + Ord + Debug,
+    V: Default + Clone + Diff + Serialize,
 {
     /// Get the latest version for key.
     pub fn get<Q>(&self, key: &Q) -> Option<impl AsEntry<K, V>>
     where
-        K: Borrow<Q>,
+        K: Borrow<Q> + Debug,
         Q: Ord + ?Sized,
     {
         let arc_mvcc = Snapshot::clone(&self.snapshot);
@@ -212,10 +213,10 @@ where
 
     pub fn set_cas(
         &self,
-        k: K,
-        v: V,
+        key: K,
+        value: V,
         cas: u64,
-    ) -> Result<Option<impl AsEntry<K, V>>, BognError<K>> {
+    ) -> Result<Option<impl AsEntry<K, V>>, BognError> {
         let _lock = self.fencer.lock();
 
         let lsm = self.lsm;
@@ -224,7 +225,7 @@ where
         let root = arc_mvcc.root_duplicate();
         let mut reclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
 
-        let s = match Mvcc::upsert_cas(root, k, v, cas, seqno, lsm, &mut reclm) {
+        let s = match Mvcc::upsert_cas(root, key, value, cas, seqno, lsm, &mut reclm) {
             (Some(mut root), optn, _, Some(err)) => {
                 root.set_black();
                 (root, optn, Err(err))
@@ -253,7 +254,7 @@ where
     pub fn delete<Q>(&self, key: &Q) -> Option<impl AsEntry<K, V>>
     where
         // TODO: From<Q> and Clone will fail if V=String and Q=str
-        K: Borrow<Q> + From<Q>,
+        K: Borrow<Q> + From<Q> + Debug,
         Q: Clone + Ord + ?Sized,
     {
         let _lock = self.fencer.lock();
@@ -308,7 +309,7 @@ where
     ///
     /// Additionally return full statistics on the tree. Refer to [`Stats`]
     /// for more information.
-    pub fn validate(&self) -> Result<Stats, BognError<K>> {
+    pub fn validate(&self) -> Result<Stats, BognError> {
         let arc_mvcc = Snapshot::clone(&self.snapshot);
 
         let n_count = arc_mvcc.n_count;
@@ -326,8 +327,8 @@ where
 
 impl<K, V> Mvcc<K, V>
 where
-    K: Default + Clone + Ord,
-    V: Default + Clone + Diff,
+    K: Default + Clone + Ord + Debug,
+    V: Default + Clone + Diff + Serialize,
 {
     fn upsert(
         node: Option<Box<Node<K, V>>>,
@@ -390,7 +391,7 @@ where
         Option<Box<Node<K, V>>>, // mvcc-path
         Option<Box<Node<K, V>>>, // new_node
         Option<Node<K, V>>,
-        Option<BognError<K>>,
+        Option<BognError>,
     ) {
         if node.is_none() && cas > 0 {
             return (None, None, None, Some(BognError::InvalidCAS));
@@ -450,7 +451,7 @@ where
         Option<Node<K, V>>,
     )
     where
-        K: Borrow<Q> + From<Q>,
+        K: Borrow<Q> + From<Q> + Debug,
         Q: Clone + Ord + ?Sized,
     {
         if node.is_none() {
@@ -499,7 +500,7 @@ where
         reclaim: &mut Vec<Box<Node<K, V>>>,
     ) -> (Option<Box<Node<K, V>>>, Option<Box<Node<K, V>>>)
     where
-        K: Borrow<Q>,
+        K: Borrow<Q> + Debug,
         Q: Ord + ?Sized,
     {
         if node.is_none() {
@@ -758,16 +759,16 @@ where
 #[derive(Default)]
 struct Snapshot<K, V>
 where
-    K: Default + Clone + Ord,
-    V: Default + Clone + Diff,
+    K: Default + Clone + Ord + Debug,
+    V: Default + Clone + Diff + Serialize,
 {
     value: AtomicPtr<Arc<MvccRoot<K, V>>>,
 }
 
 impl<K, V> Snapshot<K, V>
 where
-    K: Default + Clone + Ord,
-    V: Default + Clone + Diff,
+    K: Default + Clone + Ord + Debug,
+    V: Default + Clone + Diff + Serialize,
 {
     fn new() -> Snapshot<K, V> {
         let next = Some(Arc::new(MvccRoot::new(None)));
@@ -820,8 +821,8 @@ where
 #[derive(Default)]
 pub struct MvccRoot<K, V>
 where
-    K: Default + Clone + Ord,
-    V: Default + Clone + Diff,
+    K: Default + Clone + Ord + Debug,
+    V: Default + Clone + Diff + Serialize,
 {
     root: Option<Box<Node<K, V>>>,
     reclaim: Vec<Box<Node<K, V>>>,
@@ -832,8 +833,8 @@ where
 
 impl<K, V> MvccRoot<K, V>
 where
-    K: Default + Clone + Ord,
-    V: Default + Clone + Diff,
+    K: Default + Clone + Ord + Debug,
+    V: Default + Clone + Diff + Serialize,
 {
     fn new(next: Option<Arc<MvccRoot<K, V>>>) -> MvccRoot<K, V> {
         //println!("new mvcc-root {:p}", mvcc_root);
@@ -859,8 +860,8 @@ where
 
 impl<K, V> Drop for MvccRoot<K, V>
 where
-    K: Default + Clone + Ord,
-    V: Default + Clone + Diff,
+    K: Default + Clone + Ord + Debug,
+    V: Default + Clone + Diff + Serialize,
 {
     fn drop(&mut self) {
         // NOTE: `root` will be leaked, so that the tree is intact.
@@ -880,7 +881,7 @@ where
 fn print_reclaim<K, V>(prefix: &str, reclaim: &Vec<Box<Node<K, V>>>)
 where
     K: Default + Clone + Ord,
-    V: Default + Clone + Diff,
+    V: Default + Clone + Diff + Serialize,
 {
     print!("{}reclaim ", prefix);
     reclaim.iter().for_each(|item| print!("{:p} ", *item));

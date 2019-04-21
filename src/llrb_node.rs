@@ -1,13 +1,15 @@
 use std::ops::Deref;
 
-use crate::traits::{AsDelta, AsEntry, Diff};
+use crate::error::BognError;
+use crate::traits::{AsDelta, AsEntry, Diff, Serialize};
+use crate::vlog;
 
 /// A single entry in Llrb can have mutiple version of values, DeltaNode
 /// represent the difference between this value and next value.
 #[derive(Clone, Default)]
 pub struct DeltaNode<V>
 where
-    V: Default + Clone + Diff,
+    V: Default + Clone + Diff + Serialize,
 {
     delta: <V as Diff>::D, // actual value
     seqno: u64,            // when this version mutated
@@ -17,7 +19,7 @@ where
 // Various operations on DeltaNode, all are immutable operations.
 impl<V> DeltaNode<V>
 where
-    V: Default + Clone + Diff,
+    V: Default + Clone + Diff + Serialize,
 {
     fn new(delta: <V as Diff>::D, seqno: u64, del: Option<u64>) -> DeltaNode<V> {
         DeltaNode {
@@ -30,21 +32,13 @@ where
 
 impl<V> AsDelta<V> for DeltaNode<V>
 where
-    V: Default + Clone + Diff,
+    V: Default + Clone + Diff + Serialize,
 {
     #[inline]
-    fn delta(&self) -> <V as Diff>::D {
-        self.delta.clone()
-    }
-
-    #[inline]
-    fn delta_ref(&self) -> &<V as Diff>::D {
-        &self.delta
-    }
-
-    #[inline]
-    fn delta_mut(&mut self) -> &mut <V as Diff>::D {
-        &mut self.delta
+    fn delta(&self) -> vlog::Delta<V> {
+        vlog::Delta::Native {
+            delta: self.delta.clone(),
+        }
     }
 
     #[inline]
@@ -63,7 +57,7 @@ where
 pub struct Node<K, V>
 where
     K: Default + Clone + Ord,
-    V: Default + Clone + Diff,
+    V: Default + Clone + Diff + Serialize,
 {
     pub(crate) key: K,
     pub(crate) value: V,
@@ -80,7 +74,7 @@ where
 impl<K, V> Node<K, V>
 where
     K: Default + Clone + Ord,
-    V: Default + Clone + Diff,
+    V: Default + Clone + Diff + Serialize,
 {
     // CREATE operation
     pub(crate) fn new(k: K, v: V, seqno: u64, black: bool) -> Box<Node<K, V>> {
@@ -99,19 +93,19 @@ where
         node
     }
 
-    pub(crate) fn from_entry<E>(entry: E) -> Box<Node<K, V>>
+    pub(crate) fn from_entry<E>(entry: E) -> Result<Box<Node<K, V>>, BognError>
     where
         E: AsEntry<K, V>,
         <E as AsEntry<K, V>>::Delta: Clone,
     {
         let black = false;
-        let (key, value) = (entry.key(), entry.value());
+        let (key, value) = (entry.key(), entry.value().value());
         let mut node = Node::new(key, value, entry.seqno(), black);
         if entry.is_deleted() {
             node.deleted = Some(entry.seqno())
         }
         for e_delta in entry.deltas().into_iter() {
-            let (delta, seqno) = (e_delta.delta(), e_delta.seqno());
+            let (delta, seqno) = (e_delta.delta().delta(), e_delta.seqno());
             let del = if e_delta.is_deleted() {
                 Some(seqno)
             } else {
@@ -119,7 +113,7 @@ where
             };
             node.deltas.push(DeltaNode::new(delta, seqno, del));
         }
-        node
+        Ok(node)
     }
 
     // unsafe clone for MVCC CoW
@@ -205,7 +199,7 @@ where
 impl<K, V> Node<K, V>
 where
     K: Default + Clone + Ord,
-    V: Default + Clone + Diff,
+    V: Default + Clone + Diff + Serialize,
 {
     // leak nodes children.
     pub(crate) fn mvcc_detach(&mut self) {
@@ -232,7 +226,7 @@ where
 impl<K, V> Default for Node<K, V>
 where
     K: Default + Clone + Ord,
-    V: Default + Clone + Diff,
+    V: Default + Clone + Diff + Serialize,
 {
     fn default() -> Node<K, V> {
         Node {
@@ -252,7 +246,7 @@ where
 impl<K, V> AsEntry<K, V> for Node<K, V>
 where
     K: Default + Clone + Ord,
-    V: Default + Clone + Diff,
+    V: Default + Clone + Diff + Serialize,
 {
     type Delta = DeltaNode<V>;
 
@@ -267,13 +261,10 @@ where
     }
 
     #[inline]
-    fn value(&self) -> V {
-        self.value.clone()
-    }
-
-    #[inline]
-    fn value_ref(&self) -> &V {
-        &self.value
+    fn value(&self) -> vlog::Value<V> {
+        vlog::Value::Native {
+            value: self.value.clone(),
+        }
     }
 
     #[inline]
@@ -296,7 +287,7 @@ where
 impl<K, V> Drop for Node<K, V>
 where
     K: Default + Clone + Ord,
-    V: Default + Clone + Diff,
+    V: Default + Clone + Diff + Serialize,
 {
     fn drop(&mut self) {
         self.left.take().map(Box::leak);

@@ -20,7 +20,7 @@ include!("llrb_common.rs");
 
 pub struct Mvcc<K, V>
 where
-    K: Default + Clone + Ord + Debug,
+    K: Clone + Ord + Debug,
     V: Default + Clone + Diff + Serialize,
 {
     name: String,
@@ -31,7 +31,7 @@ where
 
 impl<K, V> Clone for Mvcc<K, V>
 where
-    K: Default + Clone + Ord + Debug,
+    K: Clone + Ord + Debug,
     V: Default + Clone + Diff + Serialize,
 {
     fn clone(&self) -> Mvcc<K, V> {
@@ -55,7 +55,7 @@ where
 
 impl<K, V> Drop for Mvcc<K, V>
 where
-    K: Default + Clone + Ord + Debug,
+    K: Clone + Ord + Debug,
     V: Default + Clone + Diff + Serialize,
 {
     fn drop(&mut self) {
@@ -82,7 +82,7 @@ where
 
 impl<K, V> From<Llrb<K, V>> for Mvcc<K, V>
 where
-    K: Default + Clone + Ord + Debug,
+    K: Clone + Ord + Debug,
     V: Default + Clone + Diff + Serialize,
 {
     fn from(mut llrb: Llrb<K, V>) -> Mvcc<K, V> {
@@ -96,7 +96,7 @@ where
 
 impl<K, V> Mvcc<K, V>
 where
-    K: Default + Clone + Ord + Debug,
+    K: Clone + Ord + Debug,
     V: Default + Clone + Diff + Serialize,
 {
     pub fn new<S>(name: S, lsm: bool) -> Mvcc<K, V>
@@ -115,7 +115,7 @@ where
 /// Maintanence API.
 impl<K, V> Mvcc<K, V>
 where
-    K: Default + Clone + Ord + Debug,
+    K: Clone + Ord + Debug,
     V: Default + Clone + Diff + Serialize,
 {
     /// Identify this instance. Applications can choose unique names while
@@ -151,7 +151,7 @@ where
 
 impl<K, V> Mvcc<K, V>
 where
-    K: Default + Clone + Ord + Debug,
+    K: Clone + Ord + Debug,
     V: Default + Clone + Diff + Serialize,
 {
     /// Get the latest version for key.
@@ -327,7 +327,7 @@ where
 
 impl<K, V> Mvcc<K, V>
 where
-    K: Default + Clone + Ord + Debug,
+    K: Clone + Ord + Debug,
     V: Default + Clone + Diff + Serialize,
 {
     fn upsert(
@@ -759,7 +759,7 @@ where
 #[derive(Default)]
 struct Snapshot<K, V>
 where
-    K: Default + Clone + Ord + Debug,
+    K: Clone + Ord + Debug,
     V: Default + Clone + Diff + Serialize,
 {
     value: AtomicPtr<Arc<MvccRoot<K, V>>>,
@@ -767,7 +767,7 @@ where
 
 impl<K, V> Snapshot<K, V>
 where
-    K: Default + Clone + Ord + Debug,
+    K: Clone + Ord + Debug,
     V: Default + Clone + Diff + Serialize,
 {
     fn new() -> Snapshot<K, V> {
@@ -818,10 +818,9 @@ where
     }
 }
 
-#[derive(Default)]
 pub struct MvccRoot<K, V>
 where
-    K: Default + Clone + Ord + Debug,
+    K: Clone + Ord + Debug,
     V: Default + Clone + Diff + Serialize,
 {
     root: Option<Box<Node<K, V>>>,
@@ -833,7 +832,7 @@ where
 
 impl<K, V> MvccRoot<K, V>
 where
-    K: Default + Clone + Ord + Debug,
+    K: Clone + Ord + Debug,
     V: Default + Clone + Diff + Serialize,
 {
     fn new(next: Option<Arc<MvccRoot<K, V>>>) -> MvccRoot<K, V> {
@@ -860,7 +859,7 @@ where
 
 impl<K, V> Drop for MvccRoot<K, V>
 where
-    K: Default + Clone + Ord + Debug,
+    K: Clone + Ord + Debug,
     V: Default + Clone + Diff + Serialize,
 {
     fn drop(&mut self) {
@@ -877,10 +876,26 @@ where
     }
 }
 
+impl<K, V> Default for MvccRoot<K, V>
+where
+    K: Clone + Ord + Debug,
+    V: Default + Clone + Diff + Serialize,
+{
+    fn default() -> MvccRoot<K, V> {
+        MvccRoot {
+            root: Default::default(),
+            reclaim: Default::default(),
+            seqno: Default::default(),
+            n_count: Default::default(),
+            next: Default::default(),
+        }
+    }
+}
+
 #[allow(dead_code)]
 fn print_reclaim<K, V>(prefix: &str, reclaim: &Vec<Box<Node<K, V>>>)
 where
-    K: Default + Clone + Ord,
+    K: Clone + Ord,
     V: Default + Clone + Diff + Serialize,
 {
     print!("{}reclaim ", prefix);

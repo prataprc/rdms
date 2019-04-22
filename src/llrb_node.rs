@@ -56,7 +56,7 @@ where
 #[derive(Clone)]
 pub struct Node<K, V>
 where
-    K: Default + Clone + Ord,
+    K: Clone + Ord,
     V: Default + Clone + Diff + Serialize,
 {
     pub(crate) key: K,
@@ -73,7 +73,7 @@ where
 // Primary operations on a single node.
 impl<K, V> Node<K, V>
 where
-    K: Default + Clone + Ord,
+    K: Clone + Ord,
     V: Default + Clone + Diff + Serialize,
 {
     // CREATE operation
@@ -198,7 +198,7 @@ where
 
 impl<K, V> Node<K, V>
 where
-    K: Default + Clone + Ord,
+    K: Clone + Ord,
     V: Default + Clone + Diff + Serialize,
 {
     // leak nodes children.
@@ -223,29 +223,9 @@ where
     }
 }
 
-impl<K, V> Default for Node<K, V>
-where
-    K: Default + Clone + Ord,
-    V: Default + Clone + Diff + Serialize,
-{
-    fn default() -> Node<K, V> {
-        Node {
-            key: Default::default(),
-            value: Default::default(),
-            seqno: Default::default(),
-            deleted: Default::default(),
-            deltas: Default::default(),
-            black: false,
-            dirty: true,
-            left: Default::default(),
-            right: Default::default(),
-        }
-    }
-}
-
 impl<K, V> AsEntry<K, V> for Node<K, V>
 where
-    K: Default + Clone + Ord,
+    K: Clone + Ord,
     V: Default + Clone + Diff + Serialize,
 {
     type Delta = DeltaNode<V>;
@@ -286,7 +266,7 @@ where
 /// Fence recursive drops
 impl<K, V> Drop for Node<K, V>
 where
-    K: Default + Clone + Ord,
+    K: Clone + Ord,
     V: Default + Clone + Diff + Serialize,
 {
     fn drop(&mut self) {

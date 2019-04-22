@@ -2,7 +2,7 @@ const ITER_LIMIT: usize = 100;
 
 fn is_red<K, V>(node: Option<&Node<K, V>>) -> bool
 where
-    K: Default + Clone + Ord + Debug,
+    K: Clone + Ord + Debug,
     V: Default + Clone + Diff + Serialize,
 {
     node.map_or(false, |node| !node.is_black())
@@ -10,7 +10,7 @@ where
 
 fn is_black<K, V>(node: Option<&Node<K, V>>) -> bool
 where
-    K: Default + Clone + Ord + Debug,
+    K: Clone + Ord + Debug,
     V: Default + Clone + Diff + Serialize,
 {
     node.map_or(true, |node| node.is_black())
@@ -21,7 +21,7 @@ fn get<K, V, Q>(
     key: &Q,
 ) -> Option<impl AsEntry<K, V>>
 where
-    K: Default + Clone + Ord + Borrow<Q> + Debug,
+    K: Clone + Ord + Borrow<Q> + Debug,
     V: Default + Clone + Diff + Serialize,
     Q: Ord + ?Sized,
 {
@@ -44,7 +44,7 @@ fn validate_tree<K, V>(
     stats: &mut Stats,
 ) -> Result<usize, BognError>
 where
-    K: Default + Clone + Ord + Debug,
+    K: Clone + Ord + Debug,
     V: Default + Clone + Diff + Serialize,
 {
     let red = is_red(node);
@@ -86,7 +86,7 @@ where
 
 pub struct Iter<'a, K, V>
 where
-    K: Default + Clone + Ord + Debug,
+    K: Clone + Ord + Debug,
     V: Default + Clone + Diff + Serialize,
 {
     arc: Arc<MvccRoot<K, V>>,
@@ -98,7 +98,7 @@ where
 
 impl<'a, K, V> Iter<'a, K, V>
 where
-    K: Default + Clone + Ord + Debug,
+    K: Clone + Ord + Debug,
     V: Default + Clone + Diff + Serialize,
 {
     fn get_root(&self) -> Option<&Node<K, V>> {
@@ -144,7 +144,7 @@ where
 
 impl<'a, K, V> Iterator for Iter<'a, K, V>
 where
-    K: Default + Clone + Ord + Debug,
+    K: Clone + Ord + Debug,
     V: Default + Clone + Diff + Serialize,
 {
     type Item = Node<K, V>;
@@ -165,7 +165,7 @@ where
 
 pub struct Range<'a, K, V>
 where
-    K: Default + Clone + Ord + Debug,
+    K: Clone + Ord + Debug,
     V: Default + Clone + Diff + Serialize,
 {
     arc: Arc<MvccRoot<K, V>>,
@@ -178,7 +178,7 @@ where
 
 impl<'a, K, V> Range<'a, K, V>
 where
-    K: Default + Clone + Ord + Debug,
+    K: Clone + Ord + Debug,
     V: Default + Clone + Diff + Serialize,
 {
     fn get_root(&self) -> Option<&Node<K, V>> {
@@ -235,7 +235,7 @@ where
 
 impl<'a, K, V> Iterator for Range<'a, K, V>
 where
-    K: Default + Clone + Ord + Debug,
+    K: Clone + Ord + Debug,
     V: Default + Clone + Diff + Serialize,
 {
     type Item = Node<K, V>;
@@ -270,7 +270,7 @@ where
 
 pub struct Reverse<'a, K, V>
 where
-    K: Default + Clone + Ord + Debug,
+    K: Clone + Ord + Debug,
     V: Default + Clone + Diff + Serialize,
 {
     arc: Arc<MvccRoot<K, V>>,
@@ -283,7 +283,7 @@ where
 
 impl<'a, K, V> Reverse<'a, K, V>
 where
-    K: Default + Clone + Ord + Debug,
+    K: Clone + Ord + Debug,
     V: Default + Clone + Diff + Serialize,
 {
     fn get_root(&self) -> Option<&Node<K, V>> {
@@ -329,7 +329,7 @@ where
 
 impl<'a, K, V> Iterator for Reverse<'a, K, V>
 where
-    K: Default + Clone + Ord + Debug,
+    K: Clone + Ord + Debug,
     V: Default + Clone + Diff + Serialize,
 {
     type Item = Node<K, V>;
@@ -364,7 +364,7 @@ where
 
 fn drop_tree<K, V>(mut node: Box<Node<K, V>>)
 where
-    K: Default + Clone + Ord + Debug,
+    K: Clone + Ord + Debug,
     V: Default + Clone + Diff + Serialize,
 {
     //println!("drop_tree - node {:p}", node);

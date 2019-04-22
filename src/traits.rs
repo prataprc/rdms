@@ -49,7 +49,7 @@ where
 /// over Key-Value <K,V> types.
 pub trait AsEntry<K, V>
 where
-    K: Default + Clone + Ord,
+    K: Clone + Ord,
     V: Default + Clone + Diff + Serialize,
 {
     type Delta: Clone + AsDelta<V>;

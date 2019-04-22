@@ -28,7 +28,7 @@ include!("llrb_common.rs");
 /// [LSM mode]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
 pub struct Llrb<K, V>
 where
-    K: Default + Clone + Ord + Debug,
+    K: Clone + Ord + Debug,
     V: Default + Clone + Diff + Serialize,
 {
     name: String,
@@ -40,7 +40,7 @@ where
 
 impl<K, V> Drop for Llrb<K, V>
 where
-    K: Default + Clone + Ord + Debug,
+    K: Clone + Ord + Debug,
     V: Default + Clone + Diff + Serialize,
 {
     fn drop(&mut self) {
@@ -50,7 +50,7 @@ where
 
 impl<K, V> Clone for Llrb<K, V>
 where
-    K: Default + Clone + Ord + Debug,
+    K: Clone + Ord + Debug,
     V: Default + Clone + Diff + Serialize,
 {
     fn clone(&self) -> Llrb<K, V> {
@@ -67,7 +67,7 @@ where
 /// Different ways to construct a new Llrb instance.
 impl<K, V> Llrb<K, V>
 where
-    K: Default + Clone + Ord + Debug,
+    K: Clone + Ord + Debug,
     V: Default + Clone + Diff + Serialize,
 {
     /// Create an empty instance of Llrb, identified by `name`.
@@ -111,7 +111,10 @@ where
         Ok(llrb)
     }
 
-    fn load_entry<E>(node: Option<Box<Node<K, V>>>, entry: E) -> Result<Box<Node<K, V>>, BognError>
+    fn load_entry<E>(
+        node: Option<Box<Node<K, V>>>,
+        entry: E, /* must implement AsEntry*/
+    ) -> Result<Box<Node<K, V>>, BognError>
     where
         E: AsEntry<K, V>,
         <E as AsEntry<K, V>>::Delta: AsDelta<V> + Clone,
@@ -145,7 +148,7 @@ where
 /// Maintanence API.
 impl<K, V> Llrb<K, V>
 where
-    K: Default + Clone + Ord + Debug,
+    K: Clone + Ord + Debug,
     V: Default + Clone + Diff + Serialize,
 {
     /// Identify this instance. Applications can choose unique names while
@@ -193,7 +196,7 @@ where
 /// CRUD operations on Llrb instance.
 impl<K, V> Llrb<K, V>
 where
-    K: Default + Clone + Ord + Debug,
+    K: Clone + Ord + Debug,
     V: Default + Clone + Diff + Serialize,
 {
     /// Get the latest version for key.
@@ -350,7 +353,7 @@ where
 
 impl<K, V> Llrb<K, V>
 where
-    K: Default + Clone + Ord + Debug,
+    K: Clone + Ord + Debug,
     V: Default + Clone + Diff + Serialize,
 {
     fn upsert(

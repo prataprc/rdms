@@ -36,9 +36,7 @@ where
 {
     #[inline]
     fn delta(&self) -> vlog::Delta<V> {
-        vlog::Delta::Native {
-            delta: self.delta.clone(),
-        }
+        vlog::Delta::new_delta(self.delta.clone())
     }
 
     #[inline]
@@ -99,13 +97,13 @@ where
         <E as AsEntry<K, V>>::Delta: Clone,
     {
         let black = false;
-        let (key, value) = (entry.key(), entry.value().value());
+        let (key, value) = (entry.key(), entry.value().value()?);
         let mut node = Node::new(key, value, entry.seqno(), black);
         if entry.is_deleted() {
             node.deleted = Some(entry.seqno())
         }
         for e_delta in entry.deltas().into_iter() {
-            let (delta, seqno) = (e_delta.delta().delta(), e_delta.seqno());
+            let (delta, seqno) = (e_delta.delta().delta()?, e_delta.seqno());
             let del = if e_delta.is_deleted() {
                 Some(seqno)
             } else {
@@ -242,9 +240,7 @@ where
 
     #[inline]
     fn value(&self) -> vlog::Value<V> {
-        vlog::Value::Native {
-            value: self.value.clone(),
-        }
+        vlog::Value::new_value(self.value.clone())
     }
 
     #[inline]

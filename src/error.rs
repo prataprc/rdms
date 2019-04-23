@@ -1,5 +1,7 @@
 use std::{ffi, io};
 
+// TODO: check unused error variants and double check error arguments.
+
 /// BognError enumerates over all possible errors that this package
 /// shall return.
 pub enum BognError {

@@ -16,8 +16,9 @@ impl Diff for Vec<u8> {
 }
 
 impl Serialize for Vec<u8> {
-    fn encode(&self, buf: Vec<u8>) -> Vec<u8> {
-        buf
+    fn encode(&self, buf: &mut Vec<u8>) {
+        buf.resize(self.len(), 0);
+        buf.copy_from_slice(self);
     }
 
     fn decode(&mut self, buf: &[u8]) -> Result<(), BognError> {

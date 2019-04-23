@@ -16,10 +16,9 @@ impl Diff for i64 {
 }
 
 impl Serialize for i64 {
-    fn encode(&self, mut buf: Vec<u8>) -> Vec<u8> {
+    fn encode(&self, buf: &mut Vec<u8>) {
         buf.resize(8, 0);
         buf.copy_from_slice(&self.to_be_bytes()[..8]);
-        buf
     }
 
     fn decode(&mut self, buf: &[u8]) -> Result<(), BognError> {

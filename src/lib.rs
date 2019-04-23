@@ -21,7 +21,8 @@
 
 #![feature(rc_into_raw_non_null)]
 
-mod bubt;
+//mod bubt;
+//mod bubt_build;
 mod error;
 mod llrb;
 mod llrb_depth;
@@ -35,7 +36,7 @@ mod trait_i64;
 mod traits;
 mod vlog;
 
-pub use crate::bubt::Builder;
+//pub use crate::bubt_build::Builder;
 pub use crate::error::BognError;
 pub use crate::llrb::Llrb;
 pub use crate::llrb_util::Stats;

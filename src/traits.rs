@@ -84,7 +84,7 @@ where
 }
 
 pub trait Serialize: Sized {
-    fn encode(&self, buf: Vec<u8>) -> Vec<u8>;
+    fn encode(&self, buf: &mut Vec<u8>);
 
     fn decode(&mut self, buf: &[u8]) -> Result<(), BognError>;
 }

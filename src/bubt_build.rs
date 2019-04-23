@@ -3,8 +3,8 @@ use std::sync::mpsc::{Receiver, SyncSender};
 use std::{cmp, ffi, fs, io::Write, marker, path, sync::mpsc, thread};
 
 use crate::bubt;
+use crate::core::{AsDelta, AsEntry, Diff, Serialize};
 use crate::error::BognError;
-use crate::traits::{AsDelta, AsEntry, Diff, Serialize};
 
 pub struct Builder<K, V>
 where

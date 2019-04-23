@@ -1,5 +1,5 @@
+use crate::core::{Diff, Serialize};
 use crate::error::BognError;
-use crate::traits::{Diff, Serialize};
 
 /// Empty value, can be used for indexing entries that have a
 /// key but no value.

@@ -4,11 +4,11 @@ use std::fmt::Debug;
 use std::ops::{Bound, Deref, DerefMut};
 use std::sync::Arc;
 
+use crate::core::{AsDelta, AsEntry, Diff, Serialize};
 use crate::error::BognError;
 use crate::llrb_node::Node;
 use crate::llrb_util::Stats;
 use crate::mvcc::MvccRoot;
-use crate::traits::{AsDelta, AsEntry, Diff, Serialize};
 
 include!("llrb_common.rs");
 

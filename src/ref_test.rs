@@ -1,4 +1,4 @@
-use crate::traits::Diff;
+use crate::core::Diff;
 
 #[derive(Clone, Default)]
 struct RefValue {

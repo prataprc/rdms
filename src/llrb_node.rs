@@ -1,7 +1,7 @@
 use std::ops::Deref;
 
+use crate::core::{AsDelta, AsEntry, Diff, Serialize};
 use crate::error::BognError;
-use crate::traits::{AsDelta, AsEntry, Diff, Serialize};
 use crate::vlog;
 
 /// A single entry in Llrb can have mutiple version of values, DeltaNode

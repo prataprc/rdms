@@ -7,12 +7,12 @@ use std::sync::{
     Arc,
 };
 
+use crate::core::{AsEntry, Diff, Serialize};
 use crate::error::BognError;
 use crate::llrb::Llrb;
 use crate::llrb_node::Node;
 use crate::llrb_util::Stats;
 use crate::sync_writer::SyncWriter;
-use crate::traits::{AsEntry, Diff, Serialize};
 
 const RECLAIM_CAP: usize = 128;
 

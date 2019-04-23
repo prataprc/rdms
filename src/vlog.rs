@@ -3,8 +3,8 @@ use std::{
     io::{Read, Seek, Write},
 };
 
+use crate::core::{Diff, Serialize};
 use crate::error::BognError;
-use crate::traits::{Diff, Serialize};
 
 // *-----*------------------------------------*
 // |flags|        60-bit length               |

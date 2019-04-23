@@ -1,4 +1,4 @@
-use crate::traits::{AsDelta, AsEntry, Diff, Serialize};
+use crate::core::{AsDelta, AsEntry, Diff, Serialize};
 use crate::vlog;
 
 pub struct Entry<K, V, T>

@@ -23,6 +23,7 @@
 
 //mod bubt;
 //mod bubt_build;
+mod core;
 mod error;
 mod llrb;
 mod llrb_depth;
@@ -30,19 +31,18 @@ mod llrb_node;
 mod llrb_util;
 mod mvcc;
 mod sync_writer;
-mod trait_bytes;
-mod trait_empty;
-mod trait_i64;
-mod traits;
+mod type_bytes;
+mod type_empty;
+mod type_i64;
 mod vlog;
 
 //pub use crate::bubt_build::Builder;
+pub use crate::core::{AsDelta, AsEntry, Diff};
 pub use crate::error::BognError;
 pub use crate::llrb::Llrb;
 pub use crate::llrb_util::Stats;
 pub use crate::mvcc::Mvcc;
-pub use crate::trait_empty::Empty; // TODO: proper nomenclature.
-pub use crate::traits::{AsDelta, AsEntry, Diff};
+pub use crate::type_empty::Empty; // TODO: proper nomenclature.
 
 #[cfg(test)]
 mod llrb_test;

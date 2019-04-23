@@ -1,8 +1,8 @@
+use crate::core::{Diff, Serialize};
 use crate::error::BognError;
-use crate::traits::{Diff, Serialize};
 
-impl Diff for i64 {
-    type D = i64;
+impl Diff for Vec<u8> {
+    type D = Vec<u8>;
 
     /// O - N = D
     fn diff(&self, _a: &Self) -> Self::D {
@@ -15,16 +15,15 @@ impl Diff for i64 {
     }
 }
 
-impl Serialize for i64 {
+impl Serialize for Vec<u8> {
     fn encode(&self, buf: &mut Vec<u8>) {
-        buf.resize(8, 0);
-        buf.copy_from_slice(&self.to_be_bytes()[..8]);
+        buf.resize(self.len(), 0);
+        buf.copy_from_slice(self);
     }
 
     fn decode(&mut self, buf: &[u8]) -> Result<(), BognError> {
-        let mut scratch = [0_u8; 8];
-        scratch.copy_from_slice(&buf[..8]);
-        *self = i64::from_be_bytes(scratch);
+        self.resize(buf.len(), 0);
+        self.copy_from_slice(buf);
         Ok(())
     }
 }

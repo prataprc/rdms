@@ -36,7 +36,7 @@ where
 {
     #[inline]
     fn delta(&self) -> vlog::Delta<V> {
-        vlog::Delta::new_delta(self.delta.clone())
+        vlog::Delta::new_native(self.delta.clone())
     }
 
     #[inline]
@@ -240,7 +240,7 @@ where
 
     #[inline]
     fn value(&self) -> vlog::Value<V> {
-        vlog::Value::new_value(self.value.clone())
+        vlog::Value::new_native(self.value.clone())
     }
 
     #[inline]

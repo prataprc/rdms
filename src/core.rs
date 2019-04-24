@@ -23,68 +23,132 @@ pub trait Diff {
     fn merge(&self, other: &Self::D) -> Self;
 }
 
-/// AsDelta define behaviour for each version of an index-entry.
-///
-/// Note that in [LSM] mode, all mutations that happen over an
-/// entry will be managed as a log list. In such cases, each mutation
-/// shall create a new version for the entry.
-///
-/// [LSM]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
-pub trait AsDelta<V>
-where
-    V: Default + Clone + Diff + Serialize,
-{
-    /// Return a copy of difference.
-    fn delta(&self) -> vlog::Delta<V>;
-
-    /// Return sequence-number at which the mutation happened.
-    fn seqno(&self) -> u64;
-
-    /// Return whether this version is marked as deleted. Valid
-    /// only in LSM mode.
-    fn is_deleted(&self) -> bool;
-}
-
-/// AsEntry define behaviour for a single index-entry parametrised
-/// over Key-Value <K,V> types.
-pub trait AsEntry<K, V>
-where
-    K: Clone + Ord,
-    V: Default + Clone + Diff + Serialize,
-{
-    type Delta: Clone + AsDelta<V>;
-
-    /// Return a copy of entry's key. In bogn-index each entry is
-    /// identified by unique-key.
-    fn key(&self) -> K;
-
-    /// Return a reference to entry's key.
-    fn key_ref(&self) -> &K;
-
-    /// Return a copy of the latest value.
-    fn value(&self) -> vlog::Value<V>;
-
-    /// Return the sequence-number of most recent mutation for this entry.
-    fn seqno(&self) -> u64;
-
-    /// Valid only in LSM mode. Return whether this entry is marked as
-    /// deleted.
-    fn is_deleted(&self) -> bool;
-
-    /// Return previous versions as delta of current version. The current
-    /// version (A), the previous version (B), and the difference between
-    /// the two (D) share the following relation ship.
-    ///
-    /// Op(A) = B | where Op is operation on A.
-    /// A - D = B
-    /// A = B + D
-    /// By successively applying the delta on the latest version we get
-    /// the previous version.
-    fn deltas(&self) -> Vec<Self::Delta>;
-}
-
 pub trait Serialize: Sized {
     fn encode(&self, buf: &mut Vec<u8>);
 
     fn decode(&mut self, buf: &[u8]) -> Result<(), BognError>;
+}
+
+#[derive(Clone)]
+pub struct Delta<V>
+where
+    V: Default + Clone + Diff + Serialize,
+{
+    delta: vlog::Delta<V>, // actual value
+    seqno: u64,            // when this version mutated
+    deleted: Option<u64>,  // for lsm, deleted can be > 0
+}
+
+impl<V> Delta<V>
+where
+    V: Default + Clone + Diff + Serialize,
+{
+    fn new(delta: <V as Diff>::D, seqno: u64, deleted: Option<u64>) -> Delta<V> {
+        Delta {
+            delta: vlog::Delta::new_native(delta),
+            seqno,
+            deleted,
+        }
+    }
+
+    fn delta(&self) -> vlog::Delta<V> {
+        self.delta.clone()
+    }
+
+    fn seqno(&self) -> u64 {
+        self.deleted.unwrap_or(self.seqno)
+    }
+
+    fn is_deleted(&self) -> bool {
+        self.deleted.is_some()
+    }
+}
+
+#[derive(Clone)]
+pub struct Entry<K, V>
+where
+    K: Clone + Ord,
+    V: Default + Clone + Diff + Serialize,
+{
+    key: K,
+    value: vlog::Value<V>,
+    seqno: u64,
+    deleted: Option<u64>,
+    deltas: Vec<Delta<V>>,
+}
+
+impl<K, V> Entry<K, V>
+where
+    K: Clone + Ord,
+    V: Default + Clone + Diff + Serialize,
+{
+    pub(crate) fn new(key: K, value: V, seqno: u64) -> Entry<K, V> {
+        Entry {
+            key,
+            value: vlog::Value::new_native(value),
+            seqno,
+            deleted: None,
+            deltas: vec![],
+        }
+    }
+
+    pub(crate) fn prepend_version(&mut self, value: V, seqno: u64, lsm: bool) {
+        if lsm {
+            match &self.value {
+                vlog::Value::Native { value: old_value } => {
+                    let d = value.diff(old_value);
+                    let delta = Delta::new(d, self.seqno, self.deleted);
+                    self.deltas.push(delta);
+                    self.value = vlog::Value::new_native(value);
+                    self.seqno = seqno;
+                    self.deleted = None;
+                }
+                vlog::Value::Reference { fpos: _, length: _ } => {
+                    self.value = vlog::Value::new_native(value);
+                    self.seqno = seqno;
+                    self.deleted = None;
+                }
+            }
+        } else {
+            self.value = vlog::Value::new_native(value);
+            self.seqno = seqno;
+            self.deleted = None;
+        }
+    }
+
+    pub(crate) fn delete(&mut self, seqno: u64) {
+        if self.deleted.is_none() {
+            self.deleted = Some(seqno)
+        }
+    }
+
+    pub fn key(&self) -> K {
+        self.key.clone()
+    }
+
+    pub fn key_ref(&self) -> &K {
+        &self.key
+    }
+
+    pub fn value(&self) -> V {
+        match &self.value {
+            vlog::Value::Native { value } => value.clone(),
+            vlog::Value::Reference { fpos: _, length: _ } => {
+                let msg = "impossible situation";
+                panic!(msg)
+            }
+        }
+    }
+
+    pub fn seqno(&self) -> u64 {
+        self.deleted.unwrap_or(self.seqno)
+    }
+
+    pub fn is_deleted(&self) -> bool {
+        self.deleted.is_some()
+    }
+
+    pub fn deltas(&self) -> Vec<Delta<V>> {
+        self.deltas.clone()
+    }
 }

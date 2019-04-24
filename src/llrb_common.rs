@@ -19,7 +19,7 @@ where
 fn get<K, V, Q>(
     mut node: Option<&Node<K, V>>, // root node
     key: &Q,
-) -> Option<impl AsEntry<K, V>>
+) -> Option<core::Entry<K, V>>
 where
     K: Clone + Ord + Borrow<Q> + Debug,
     V: Default + Clone + Diff + Serialize,
@@ -27,10 +27,10 @@ where
 {
     while node.is_some() {
         let nref = node.unwrap();
-        node = match nref.key.borrow().cmp(key) {
+        node = match nref.key_ref().borrow().cmp(key) {
             Ordering::Less => nref.right_deref(),
             Ordering::Greater => nref.left_deref(),
-            Ordering::Equal => return Some(nref.clone_detach()),
+            Ordering::Equal => return Some(nref.entry.clone()),
         };
     }
     None
@@ -62,16 +62,16 @@ where
                 return Err(BognError::UnbalancedBlacks(l, r));
             }
             if let Some(left) = left {
-                if left.key.ge(&node.key) {
-                    let left = format!("{:?}", left.key);
-                    let parent = format!("{:?}", node.key);
+                if left.key_ref().ge(node.key_ref()) {
+                    let left = format!("{:?}", left.key_ref());
+                    let parent = format!("{:?}", node.key_ref());
                     return Err(BognError::SortError(left, parent));
                 }
             }
             if let Some(right) = right {
-                if right.key.le(&node.key) {
-                    let parent = format!("{:?}", node.key);
-                    let right = format!("{:?}", right.key);
+                if right.key_ref().le(node.key_ref()) {
+                    let parent = format!("{:?}", node.key_ref());
+                    let right = format!("{:?}", right.key_ref());
                     return Err(BognError::SortError(parent, right));
                 }
             }
@@ -122,7 +122,7 @@ where
         match &self.after_key {
             None => return false,
             Some(Bound::Included(akey)) | Some(Bound::Excluded(akey)) => {
-                if node.key.borrow().le(akey) {
+                if node.key_ref().borrow().le(akey) {
                     return self.batch_scan(right, acc);
                 }
             }
@@ -211,10 +211,10 @@ where
 
         let (left, right) = (node.left_deref(), node.right_deref());
         match &self.low {
-            Some(Bound::Included(qow)) if node.key.lt(qow) => {
+            Some(Bound::Included(qow)) if node.key_ref().lt(qow) => {
                 return self.batch_scan(right, acc);
             }
-            Some(Bound::Excluded(qow)) if node.key.le(qow) => {
+            Some(Bound::Excluded(qow)) if node.key_ref().le(qow) => {
                 return self.batch_scan(right, acc);
             }
             _ => (),
@@ -257,8 +257,8 @@ where
             None => None,
             Some(item) => match &self.high {
                 Bound::Unbounded => Some(item),
-                Bound::Included(qigh) if item.key.le(qigh) => Some(item),
-                Bound::Excluded(qigh) if item.key.lt(qigh) => Some(item),
+                Bound::Included(qigh) if item.key_ref().le(qigh) => Some(item),
+                Bound::Excluded(qigh) if item.key_ref().lt(qigh) => Some(item),
                 _ => {
                     self.low = None;
                     None
@@ -305,10 +305,10 @@ where
 
         let (left, right) = (node.left_deref(), node.right_deref());
         match &self.high {
-            Some(Bound::Included(qigh)) if node.key.gt(qigh) => {
+            Some(Bound::Included(qigh)) if node.key_ref().gt(qigh) => {
                 return self.batch_scan(left, acc);
             }
-            Some(Bound::Excluded(qigh)) if node.key.ge(qigh) => {
+            Some(Bound::Excluded(qigh)) if node.key_ref().ge(qigh) => {
                 return self.batch_scan(left, acc);
             }
             _ => (),
@@ -351,8 +351,8 @@ where
             None => None,
             Some(item) => match &self.low {
                 Bound::Unbounded => Some(item),
-                Bound::Included(qow) if item.key.ge(qow) => Some(item),
-                Bound::Excluded(qow) if item.key.gt(qow) => Some(item),
+                Bound::Included(qow) if item.key_ref().ge(qow) => Some(item),
+                Bound::Excluded(qow) if item.key_ref().gt(qow) => Some(item),
                 _ => {
                     self.high = None;
                     None

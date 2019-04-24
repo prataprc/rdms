@@ -37,7 +37,7 @@ mod type_i64;
 mod vlog;
 
 //pub use crate::bubt_build::Builder;
-pub use crate::core::{AsDelta, AsEntry, Diff};
+pub use crate::core::{Diff, Serialize};
 pub use crate::error::BognError;
 pub use crate::llrb::Llrb;
 pub use crate::llrb_util::Stats;

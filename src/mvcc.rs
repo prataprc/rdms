@@ -7,7 +7,7 @@ use std::sync::{
     Arc,
 };
 
-use crate::core::{AsEntry, Diff, Serialize};
+use crate::core::{self, Diff, Serialize};
 use crate::error::BognError;
 use crate::llrb::Llrb;
 use crate::llrb_node::Node;
@@ -155,7 +155,7 @@ where
     V: Default + Clone + Diff + Serialize,
 {
     /// Get the latest version for key.
-    pub fn get<Q>(&self, key: &Q) -> Option<impl AsEntry<K, V>>
+    pub fn get<Q>(&self, key: &Q) -> Option<core::Entry<K, V>>
     where
         K: Borrow<Q> + Debug,
         Q: Ord + ?Sized,
@@ -185,7 +185,7 @@ where
         }
     }
 
-    pub fn set(&self, key: K, value: V) -> Option<impl AsEntry<K, V>> {
+    pub fn set(&self, key: K, value: V) -> Option<core::Entry<K, V>> {
         let _lock = self.fencer.lock();
 
         let lsm = self.lsm;
@@ -196,16 +196,16 @@ where
         let mut reclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
 
         match Mvcc::upsert(root, key, value, seqno, lsm, &mut reclm) {
-            (Some(mut root), Some(mut n), old_node) => {
+            (Some(mut root), Some(mut n), entry) => {
                 root.set_black();
-                if old_node.is_none() {
+                if entry.is_none() {
                     n_count += 1;
                 }
                 n.dirty = false;
                 Box::leak(n);
                 self.snapshot
                     .shift_snapshot(Some(root), seqno, n_count, reclm);
-                old_node
+                entry
             }
             _ => unreachable!(),
         }
@@ -216,42 +216,42 @@ where
         key: K,
         value: V,
         cas: u64,
-    ) -> Result<Option<impl AsEntry<K, V>>, BognError> {
+    ) -> Result<Option<core::Entry<K, V>>, BognError> {
         let _lock = self.fencer.lock();
 
         let lsm = self.lsm;
         let arc_mvcc = Snapshot::clone(&self.snapshot);
         let (seqno, mut n_count) = (arc_mvcc.seqno + 1, arc_mvcc.n_count);
-        let root = arc_mvcc.root_duplicate();
-        let mut reclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
+        let rt = arc_mvcc.root_duplicate();
+        let mut rclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
 
-        let s = match Mvcc::upsert_cas(root, key, value, cas, seqno, lsm, &mut reclm) {
+        let s = match Mvcc::upsert_cas(rt, key, value, cas, seqno, lsm, &mut rclm) {
             (Some(mut root), optn, _, Some(err)) => {
                 root.set_black();
                 (root, optn, Err(err))
             }
-            (Some(mut root), optn, old_node, None) => {
+            (Some(mut root), optn, entry, None) => {
                 root.set_black();
-                if old_node.is_none() {
+                if entry.is_none() {
                     n_count += 1
                 }
-                (root, optn, Ok(old_node))
+                (root, optn, Ok(entry))
             }
             _ => panic!("set_cas: impossible case, call programmer"),
         };
-        let (root, optn, ret) = s;
+        let (root, optn, entry) = s;
 
         self.snapshot
-            .shift_snapshot(Some(root), seqno, n_count, reclm);
+            .shift_snapshot(Some(root), seqno, n_count, rclm);
 
         if let Some(mut n) = optn {
             n.dirty = false;
             Box::leak(n);
         }
-        ret
+        entry
     }
 
-    pub fn delete<Q>(&self, key: &Q) -> Option<impl AsEntry<K, V>>
+    pub fn delete<Q>(&self, key: &Q) -> Option<core::Entry<K, V>>
     where
         // TODO: From<Q> and Clone will fail if V=String and Q=str
         K: Borrow<Q> + From<Q> + Debug,
@@ -264,41 +264,41 @@ where
         let root = arc_mvcc.root_duplicate();
         let mut reclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
 
-        let (root, old_node) = if self.lsm {
+        let (root, entry) = if self.lsm {
             let s = match Mvcc::delete_lsm(root, key, seqno, &mut reclm) {
-                (Some(mut root), optn, old_node) => {
+                (Some(mut root), optn, entry) => {
                     root.set_black();
-                    (Some(root), optn, old_node)
+                    (Some(root), optn, entry)
                 }
-                (None, optn, old_node) => (None, optn, old_node),
+                (None, optn, entry) => (None, optn, entry),
             };
-            let (root, optn, old_node) = s;
+            let (root, optn, entry) = s;
 
-            if old_node.is_none() {
+            if entry.is_none() {
                 n_count += 1
             }
             if let Some(mut n) = optn {
                 n.dirty = false;
                 Box::leak(n);
             }
-            (root, old_node)
+            (root, entry)
         } else {
             // in non-lsm mode remove the entry from the tree.
-            let (root, old_node) = match Mvcc::do_delete(root, key, &mut reclm) {
-                (None, old_node) => (None, old_node),
-                (Some(mut root), old_node) => {
+            let (root, entry) = match Mvcc::do_delete(root, key, &mut reclm) {
+                (None, entry) => (None, entry),
+                (Some(mut root), entry) => {
                     root.set_black();
-                    (Some(root), old_node)
+                    (Some(root), entry)
                 }
             };
-            if old_node.is_some() {
+            if entry.is_some() {
                 n_count -= 1;
             }
-            (root, old_node.map(|item| *item))
+            (root, entry)
         };
 
         self.snapshot.shift_snapshot(root, seqno, n_count, reclm);
-        old_node
+        entry
     }
 
     /// Validate LLRB tree with following rules:
@@ -340,7 +340,7 @@ where
     ) -> (
         Option<Box<Node<K, V>>>,
         Option<Box<Node<K, V>>>,
-        Option<Node<K, V>>,
+        Option<core::Entry<K, V>>,
     ) {
         if node.is_none() {
             let node = Node::new(key, value, seqno, false /*black*/);
@@ -352,31 +352,31 @@ where
         let mut new_node = node.mvcc_clone(reclaim);
         //node = Mvcc::walkdown_rot23(node);
 
-        let cmp = new_node.key.cmp(&key);
-        let (new_node, n, old_node) = if cmp == Ordering::Greater {
+        let cmp = new_node.key_ref().cmp(&key);
+        let (new_node, n, entry) = if cmp == Ordering::Greater {
             let left = new_node.left.take();
-            let (l, n, o) = Mvcc::upsert(left, key, value, seqno, lsm, reclaim);
+            let (l, n, en) = Mvcc::upsert(left, key, value, seqno, lsm, reclaim);
             new_node.left = l;
-            (Some(Mvcc::walkuprot_23(new_node, reclaim)), n, o)
+            (Some(Mvcc::walkuprot_23(new_node, reclaim)), n, en)
         } else if cmp == Ordering::Less {
             let right = new_node.right.take();
-            let (r, n, o) = Mvcc::upsert(right, key, value, seqno, lsm, reclaim);
+            let (r, n, en) = Mvcc::upsert(right, key, value, seqno, lsm, reclaim);
             new_node.right = r;
-            (Some(Mvcc::walkuprot_23(new_node, reclaim)), n, o)
+            (Some(Mvcc::walkuprot_23(new_node, reclaim)), n, en)
         } else {
-            let old_node = node.clone_detach();
+            let entry = node.entry.clone();
             new_node.prepend_version(value, seqno, lsm);
             new_node.dirty = true;
             let n = new_node.duplicate();
             (
                 Some(Mvcc::walkuprot_23(new_node, reclaim)),
                 Some(n),
-                Some(old_node),
+                Some(entry
             )
         };
 
         Box::leak(node);
-        (new_node, n, old_node)
+        (new_node, n, entry)
     }
 
     fn upsert_cas(
@@ -390,7 +390,7 @@ where
     ) -> (
         Option<Box<Node<K, V>>>, // mvcc-path
         Option<Box<Node<K, V>>>, // new_node
-        Option<Node<K, V>>,
+        Option<core::Entry<K, V>>,
         Option<BognError>,
     ) {
         if node.is_none() && cas > 0 {
@@ -405,39 +405,39 @@ where
         let mut new_node = node.mvcc_clone(reclaim);
         // node = Mvcc::walkdown_rot23(node);
 
-        let cmp = new_node.key.cmp(&key);
-        let (new_node, n, old_node, err) = if cmp == Ordering::Greater {
+        let cmp = new_node.key_ref().cmp(&key);
+        let (new_node, n, entry, err) = if cmp == Ordering::Greater {
             let left = new_node.left.take();
             let s = Mvcc::upsert_cas(left, key, val, cas, seqno, lsm, reclaim);
-            let (left, n, o, e) = s;
+            let (left, n, entry, e) = s;
             new_node.left = left;
-            (Some(Mvcc::walkuprot_23(new_node, reclaim)), n, o, e)
+            (Some(Mvcc::walkuprot_23(new_node, reclaim)), n, entry, e)
         } else if cmp == Ordering::Less {
             let right = new_node.right.take();
             let s = Mvcc::upsert_cas(right, key, val, cas, seqno, lsm, reclaim);
-            let (rh, n, o, e) = s;
+            let (rh, n, entry, e) = s;
             new_node.right = rh;
-            (Some(Mvcc::walkuprot_23(new_node, reclaim)), n, o, e)
+            (Some(Mvcc::walkuprot_23(new_node, reclaim)), n, entry, e)
         } else if new_node.is_deleted() && cas != 0 && cas != new_node.seqno() {
             // TODO: should we have the cas != new_node.seqno() predicate ??
             (Some(new_node), None, None, Some(BognError::InvalidCAS))
         } else if !new_node.is_deleted() && cas != new_node.seqno() {
             (Some(new_node), None, None, Some(BognError::InvalidCAS))
         } else {
-            let old_node = Some(node.clone_detach());
+            let entry = Some(node.entry.clone());
             new_node.prepend_version(val, seqno, lsm);
             new_node.dirty = true;
             let n = new_node.duplicate();
             (
                 Some(Mvcc::walkuprot_23(new_node, reclaim)),
                 Some(n),
-                old_node,
+                entry,
                 None,
             )
         };
 
         Box::leak(node);
-        (new_node, n, old_node, err)
+        (new_node, n, entry, err)
     }
 
     fn delete_lsm<Q>(
@@ -448,7 +448,7 @@ where
     ) -> (
         Option<Box<Node<K, V>>>,
         Option<Box<Node<K, V>>>,
-        Option<Node<K, V>>,
+        Option<core::Entry<K, V>>,
     )
     where
         K: Borrow<Q> + From<Q> + Debug,
@@ -466,31 +466,31 @@ where
         let mut new_node = node.mvcc_clone(reclaim);
         //let mut node = Mvcc::walkdown_rot23(node.unwrap());
 
-        let (n, old_node) = match new_node.key.borrow().cmp(&key) {
+        let (n, entry) = match new_node.key_ref().borrow().cmp(&key) {
             Ordering::Greater => {
                 let left = new_node.left.take();
                 let s = Mvcc::delete_lsm(left, key, seqno, reclaim);
-                let (left, n, old_node) = s;
+                let (left, n, entry) = s;
                 new_node.left = left;
-                (n, old_node)
+                (n, entry)
             }
             Ordering::Less => {
                 let right = new_node.right.take();
                 let s = Mvcc::delete_lsm(right, key, seqno, reclaim);
-                let (right, n, old_node) = s;
+                let (right, n, entry) = s;
                 new_node.right = right;
-                (n, old_node)
+                (n, entry)
             }
             Ordering::Equal => {
                 new_node.delete(seqno);
                 new_node.dirty = true;
                 let n = new_node.duplicate();
-                (Some(n), Some(node.clone_detach()))
+                (Some(n), Some(node.entry.clone()))
             }
         };
 
         Box::leak(node);
-        (Some(Mvcc::walkuprot_23(new_node, reclaim)), n, old_node)
+        (Some(Mvcc::walkuprot_23(new_node, reclaim)), n, entry)
     }
 
     // this is the non-lsm path.
@@ -498,7 +498,7 @@ where
         node: Option<Box<Node<K, V>>>,
         key: &Q,
         reclaim: &mut Vec<Box<Node<K, V>>>,
-    ) -> (Option<Box<Node<K, V>>>, Option<Box<Node<K, V>>>)
+    ) -> (Option<Box<Node<K, V>>>, Option<core::Entry<K, V>>)
     where
         K: Borrow<Q> + Debug,
         Q: Ord + ?Sized,
@@ -511,7 +511,7 @@ where
         let mut new_node = node.mvcc_clone(reclaim);
         Box::leak(node);
 
-        if new_node.key.borrow().gt(key) {
+        if new_node.key_ref().borrow().gt(key) {
             if new_node.left.is_none() {
                 // key not present, nothing to delete
                 (Some(new_node), None)
@@ -521,9 +521,9 @@ where
                     new_node = Mvcc::move_red_left(new_node, reclaim);
                 }
                 let left = new_node.left.take();
-                let (left, old_node) = Mvcc::do_delete(left, key, reclaim);
+                let (left, entry) = Mvcc::do_delete(left, key, reclaim);
                 new_node.left = left;
-                (Some(Mvcc::fixup(new_node, reclaim)), old_node)
+                (Some(Mvcc::fixup(new_node, reclaim)), entry)
             }
         } else {
             if is_red(new_node.left_deref()) {
@@ -531,9 +531,9 @@ where
             }
 
             // if key equals node and no right children
-            if !new_node.key.borrow().lt(key) && new_node.right.is_none() {
+            if !new_node.key_ref().borrow().lt(key) && new_node.right.is_none() {
                 new_node.mvcc_detach();
-                return (None, Some(new_node));
+                return (None, Some(new_node.entry.clone()));
             }
 
             let ok = new_node.right.is_some() && !is_red(new_node.right_deref());
@@ -542,7 +542,7 @@ where
             }
 
             // if key equal node and there is a right children
-            if !new_node.key.borrow().lt(key) {
+            if !new_node.key_ref().borrow().lt(key) {
                 // node == key
                 let right = new_node.right.take();
                 let (right, mut res_node) = Mvcc::delete_min(right, reclaim);
@@ -554,12 +554,13 @@ where
                 newnode.left = new_node.left.take();
                 newnode.right = new_node.right.take();
                 newnode.black = new_node.black;
-                (Some(Mvcc::fixup(newnode, reclaim)), Some(new_node))
+                let entry = new_node.entry.clone();
+                (Some(Mvcc::fixup(newnode, reclaim)), Some(entry))
             } else {
                 let right = new_node.right.take();
-                let (right, old_node) = Mvcc::do_delete(right, key, reclaim);
+                let (right, entry) = Mvcc::do_delete(right, key, reclaim);
                 new_node.right = right;
-                (Some(Mvcc::fixup(new_node, reclaim)), old_node)
+                (Some(Mvcc::fixup(new_node, reclaim)), entry)
             }
         }
     }

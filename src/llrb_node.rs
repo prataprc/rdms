@@ -1,54 +1,7 @@
 use std::ops::Deref;
 
-use crate::core::{AsDelta, AsEntry, Diff, Serialize};
-use crate::error::BognError;
+use crate::core::{self, Diff, Serialize};
 use crate::vlog;
-
-/// A single entry in Llrb can have mutiple version of values, DeltaNode
-/// represent the difference between this value and next value.
-#[derive(Clone, Default)]
-pub struct DeltaNode<V>
-where
-    V: Default + Clone + Diff + Serialize,
-{
-    delta: <V as Diff>::D, // actual value
-    seqno: u64,            // when this version mutated
-    deleted: Option<u64>,  // for lsm, deleted can be > 0
-}
-
-// Various operations on DeltaNode, all are immutable operations.
-impl<V> DeltaNode<V>
-where
-    V: Default + Clone + Diff + Serialize,
-{
-    fn new(delta: <V as Diff>::D, seqno: u64, del: Option<u64>) -> DeltaNode<V> {
-        DeltaNode {
-            delta,
-            seqno,
-            deleted: del,
-        }
-    }
-}
-
-impl<V> AsDelta<V> for DeltaNode<V>
-where
-    V: Default + Clone + Diff + Serialize,
-{
-    #[inline]
-    fn delta(&self) -> vlog::Delta<V> {
-        vlog::Delta::new_native(self.delta.clone())
-    }
-
-    #[inline]
-    fn seqno(&self) -> u64 {
-        self.deleted.unwrap_or(self.seqno)
-    }
-
-    #[inline]
-    fn is_deleted(&self) -> bool {
-        self.deleted.is_some()
-    }
-}
 
 /// Node corresponds to a single entry in Llrb instance.
 #[derive(Clone)]
@@ -57,11 +10,7 @@ where
     K: Clone + Ord,
     V: Default + Clone + Diff + Serialize,
 {
-    pub(crate) key: K,
-    pub(crate) value: V,
-    pub(crate) seqno: u64,
-    pub(crate) deleted: Option<u64>,
-    pub(crate) deltas: Vec<DeltaNode<V>>,
+    pub(crate) entry: core::Entry<K, V>,
     pub(crate) black: bool,                    // store: black or red
     pub(crate) dirty: bool,                    // new node in mvcc path
     pub(crate) left: Option<Box<Node<K, V>>>,  // store: left child
@@ -77,11 +26,7 @@ where
     // CREATE operation
     pub(crate) fn new(k: K, v: V, seqno: u64, black: bool) -> Box<Node<K, V>> {
         let node = Box::new(Node {
-            key: k,
-            value: v,
-            seqno,
-            deleted: None,
-            deltas: vec![],
+            entry: core::Entry::new(k, v, seqno),
             black,
             dirty: true,
             left: None,
@@ -91,40 +36,13 @@ where
         node
     }
 
-    pub(crate) fn from_entry<E>(entry: E) -> Result<Box<Node<K, V>>, BognError>
-    where
-        E: AsEntry<K, V>,
-        <E as AsEntry<K, V>>::Delta: Clone,
-    {
-        let black = false;
-        let (key, value) = (entry.key(), entry.value().value()?);
-        let mut node = Node::new(key, value, entry.seqno(), black);
-        if entry.is_deleted() {
-            node.deleted = Some(entry.seqno())
-        }
-        for e_delta in entry.deltas().into_iter() {
-            let (delta, seqno) = (e_delta.delta().delta()?, e_delta.seqno());
-            let del = if e_delta.is_deleted() {
-                Some(seqno)
-            } else {
-                None
-            };
-            node.deltas.push(DeltaNode::new(delta, seqno, del));
-        }
-        Ok(node)
-    }
-
     // unsafe clone for MVCC CoW
     pub(crate) fn mvcc_clone(
         &self,
         reclaim: &mut Vec<Box<Node<K, V>>>, /* reclaim */
     ) -> Box<Node<K, V>> {
         let new_node = Box::new(Node {
-            key: self.key.clone(),
-            value: self.value.clone(),
-            seqno: self.seqno,
-            deleted: self.deleted,
-            deltas: self.deltas.clone(),
+            entry: self.entry.clone(),
             black: self.black,
             dirty: self.dirty,
             left: self.left.as_ref().map(|n| n.duplicate()),
@@ -147,25 +65,13 @@ where
 
     // prepend operation, equivalent to SET / INSERT / UPDATE
     pub(crate) fn prepend_version(&mut self, value: V, seqno: u64, lsm: bool) {
-        if lsm {
-            let d = self.value.diff(&value);
-            let delta = DeltaNode::new(d, self.seqno, self.deleted);
-            self.deltas.push(delta);
-            self.value = value;
-            self.seqno = seqno;
-            self.deleted = None;
-        } else {
-            self.value = value;
-            self.seqno = seqno;
-        }
+        self.entry.prepend_version(value, seqno, lsm)
     }
 
     // DELETE operation, back to back delete shall collapse
     #[inline]
     pub(crate) fn delete(&mut self, seqno: u64) {
-        if self.deleted.is_none() {
-            self.deleted = Some(seqno)
-        }
+        self.entry.delete(seqno)
     }
 
     #[inline]
@@ -192,6 +98,26 @@ where
     pub(crate) fn is_black(&self) -> bool {
         self.black
     }
+
+    pub fn key(&self) -> K {
+        self.entry.key()
+    }
+
+    pub fn key_ref(&self) -> &K {
+        &self.entry.key_ref()
+    }
+
+    pub fn seqno(&self) -> u64 {
+        self.entry.seqno()
+    }
+
+    pub fn is_deleted(&self) -> bool {
+        self.entry.is_deleted()
+    }
+
+    pub fn deltas(&self) -> Vec<core::Delta<V>> {
+        self.entry.deltas()
+    }
 }
 
 impl<K, V> Node<K, V>
@@ -208,54 +134,12 @@ where
     // clone and detach this node from the tree.
     pub(crate) fn clone_detach(&self) -> Node<K, V> {
         Node {
-            key: self.key.clone(),
-            value: self.value.clone(),
-            seqno: self.seqno,
-            deleted: self.deleted,
-            deltas: self.deltas.clone(),
+            entry: self.entry.clone(),
             black: self.black,
             dirty: true,
             left: None,
             right: None,
         }
-    }
-}
-
-impl<K, V> AsEntry<K, V> for Node<K, V>
-where
-    K: Clone + Ord,
-    V: Default + Clone + Diff + Serialize,
-{
-    type Delta = DeltaNode<V>;
-
-    #[inline]
-    fn key(&self) -> K {
-        self.key.clone()
-    }
-
-    #[inline]
-    fn key_ref(&self) -> &K {
-        &self.key
-    }
-
-    #[inline]
-    fn value(&self) -> vlog::Value<V> {
-        vlog::Value::new_native(self.value.clone())
-    }
-
-    #[inline]
-    fn seqno(&self) -> u64 {
-        self.deleted.unwrap_or(self.seqno)
-    }
-
-    #[inline]
-    fn is_deleted(&self) -> bool {
-        self.deleted.is_some()
-    }
-
-    #[inline]
-    fn deltas(&self) -> Vec<Self::Delta> {
-        self.deltas.clone()
     }
 }
 
@@ -268,5 +152,21 @@ where
     fn drop(&mut self) {
         self.left.take().map(Box::leak);
         self.right.take().map(Box::leak);
+    }
+}
+
+impl<K, V> From<core::Entry<K, V>> for Node<K, V>
+where
+    K: Clone + Ord,
+    V: Default + Clone + Diff + Serialize,
+{
+    fn from(entry: core::Entry<K, V>) -> Node<K, V> {
+        Node {
+            entry,
+            black: false,
+            dirty: true,
+            left: None,
+            right: None,
+        }
     }
 }

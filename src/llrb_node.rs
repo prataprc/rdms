@@ -1,7 +1,6 @@
 use std::ops::Deref;
 
 use crate::core::{self, Diff, Serialize};
-use crate::vlog;
 
 /// Node corresponds to a single entry in Llrb instance.
 #[derive(Clone)]

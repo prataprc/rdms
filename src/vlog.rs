@@ -40,10 +40,10 @@ where
     pub fn fetch(self, fd: &mut fs::File) -> Result<Value<V>, BognError> {
         match self {
             Value::Reference { fpos, length } => {
-                let offset = (length + 8) as usize;
-                let mut buf = Vec::with_capacity(offset);
-                buf.resize(offset, 0);
-                fd.seek(io::SeekFrom::Start(offset as u64))?;
+                let offset = fpos + 8;
+                let mut buf = Vec::with_capacity(length as usize);
+                buf.resize(length as usize, 0);
+                fd.seek(io::SeekFrom::Start(offset))?;
                 let n = fd.read(&mut buf)?;
                 if (n as u64) == length {
                     let mut value: V = Default::default();
@@ -116,10 +116,10 @@ where
     pub fn fetch(self, fd: &mut fs::File) -> Result<Delta<V>, BognError> {
         match self {
             Delta::Reference { fpos, length } => {
-                let offset = (length + 8) as usize;
-                let mut buf = Vec::with_capacity(offset);
-                buf.resize(offset, 0);
-                fd.seek(io::SeekFrom::Start(offset as u64))?;
+                let offset = fpos + 8;
+                let mut buf = Vec::with_capacity(length as usize);
+                buf.resize(length as usize, 0);
+                fd.seek(io::SeekFrom::Start(offset))?;
                 let n = fd.read(&mut buf)?;
                 if (n as u64) == length {
                     let mut delta: <V as Diff>::D = Default::default();

@@ -2,10 +2,9 @@ use std::ops::Bound;
 
 use rand::prelude::random;
 
-use crate::core::{AsDelta, AsEntry};
-use crate::empty::Empty;
 use crate::error::BognError;
 use crate::llrb::Llrb;
+use crate::type_empty::Empty;
 
 // TODO: repeatable randoms.
 

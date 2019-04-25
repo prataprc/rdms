@@ -168,7 +168,7 @@ where
         Iter {
             arc: Snapshot::clone(&self.snapshot),
             root: None,
-            node_iter: vec![].into_iter(),
+            iter: vec![].into_iter(),
             after_key: Some(Bound::Unbounded),
             limit: ITER_LIMIT,
         }
@@ -178,7 +178,7 @@ where
         Range {
             arc: Snapshot::clone(&self.snapshot),
             root: None,
-            node_iter: vec![].into_iter(),
+            iter: vec![].into_iter(),
             low: Some(low),
             high,
             limit: ITER_LIMIT,

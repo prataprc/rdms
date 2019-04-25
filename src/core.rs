@@ -51,15 +51,15 @@ where
         }
     }
 
-    fn delta(&self) -> vlog::Delta<V> {
+    pub fn delta(&self) -> vlog::Delta<V> {
         self.delta.clone()
     }
 
-    fn seqno(&self) -> u64 {
+    pub fn seqno(&self) -> u64 {
         self.deleted.unwrap_or(self.seqno)
     }
 
-    fn is_deleted(&self) -> bool {
+    pub fn is_deleted(&self) -> bool {
         self.deleted.is_some()
     }
 }

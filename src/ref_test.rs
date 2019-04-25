@@ -1,4 +1,5 @@
-use crate::core::Diff;
+use crate::core::{Diff, Entry};
+use crate::vlog;
 
 #[derive(Clone, Default)]
 struct RefValue {
@@ -213,7 +214,7 @@ impl RefNodes {
     }
 }
 
-fn check_node(node: Option<impl AsEntry<i64, i64>>, refn: Option<RefNode>) -> bool {
+fn check_node(node: Option<Entry<i64, i64>>, refn: Option<RefNode>) -> bool {
     if node.is_none() && refn.is_none() {
         return false;
     } else if node.is_none() {
@@ -241,10 +242,18 @@ fn check_node(node: Option<impl AsEntry<i64, i64>>, refn: Option<RefNode>) -> bo
 
     let mut curr_value = node.value();
     //println!("{} {}", n_vers, refn_vers);
-    for (i, delta) in node.deltas().iter().rev().enumerate() {
+    for (i, delta) in node.deltas().into_iter().rev().enumerate() {
         let ver = &refn.versions[i + 1];
-        let prev_value = curr_value.merge(&delta.delta());
-        assert_eq!(prev_value, ver.value, "key {} i {}", refn.key, i,);
+        match delta.delta() {
+            vlog::Delta::Native { delta } => {
+                let prev_value = curr_value.merge(&delta);
+                assert_eq!(prev_value, ver.value, "key {} i {}", refn.key, i,);
+                curr_value = prev_value;
+            }
+            vlog::Delta::Reference { fpos, length } => {
+                panic!("unexpected Reference {} {}", fpos, length);
+            }
+        }
         assert_eq!(delta.seqno(), ver.seqno, "key {} i {}", refn.key, i);
         assert_eq!(
             delta.is_deleted(),
@@ -253,7 +262,6 @@ fn check_node(node: Option<impl AsEntry<i64, i64>>, refn: Option<RefNode>) -> bo
             refn.key,
             i
         );
-        curr_value = prev_value;
     }
 
     return true;

@@ -1,5 +1,7 @@
 const ITER_LIMIT: usize = 100;
 
+type Entry<K, V> = core::Entry<K, V>;
+
 fn is_red<K, V>(node: Option<&Node<K, V>>) -> bool
 where
     K: Clone + Ord + Debug,
@@ -19,7 +21,7 @@ where
 fn get<K, V, Q>(
     mut node: Option<&Node<K, V>>, // root node
     key: &Q,
-) -> Option<core::Entry<K, V>>
+) -> Option<Entry<K, V>>
 where
     K: Clone + Ord + Borrow<Q> + Debug,
     V: Default + Clone + Diff + Serialize,
@@ -91,7 +93,7 @@ where
 {
     arc: Arc<MvccRoot<K, V>>,
     root: Option<&'a Node<K, V>>,
-    node_iter: std::vec::IntoIter<Node<K, V>>,
+    iter: std::vec::IntoIter<Entry<K, V>>,
     after_key: Option<Bound<K>>,
     limit: usize,
 }
@@ -111,7 +113,7 @@ where
     fn batch_scan(
         &self,
         node: Option<&Node<K, V>>,
-        acc: &mut Vec<Node<K, V>>, // accumulator for batch of nodes
+        acc: &mut Vec<Entry<K, V>>, // batch of entries
     ) -> bool {
         if node.is_none() {
             return true;
@@ -133,7 +135,7 @@ where
             return false;
         }
 
-        acc.push(node.clone_detach());
+        acc.push(node.entry.clone());
         if acc.len() >= self.limit {
             return false;
         }
@@ -147,16 +149,16 @@ where
     K: Clone + Ord + Debug,
     V: Default + Clone + Diff + Serialize,
 {
-    type Item = Node<K, V>;
+    type Item = Entry<K, V>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match self.node_iter.next() {
+        match self.iter.next() {
             None => {
-                let mut a: Vec<Node<K, V>> = Vec::with_capacity(self.limit);
-                self.batch_scan(self.get_root(), &mut a);
-                self.after_key = a.last().map(|x| Bound::Excluded(x.key()));
-                self.node_iter = a.into_iter();
-                self.node_iter.next()
+                let mut acc: Vec<Entry<K, V>> = Vec::with_capacity(self.limit);
+                self.batch_scan(self.get_root(), &mut acc);
+                self.after_key = acc.last().map(|x| Bound::Excluded(x.key()));
+                self.iter = acc.into_iter();
+                self.iter.next()
             }
             item @ Some(_) => item,
         }
@@ -170,7 +172,7 @@ where
 {
     arc: Arc<MvccRoot<K, V>>,
     root: Option<&'a Node<K, V>>,
-    node_iter: std::vec::IntoIter<Node<K, V>>,
+    iter: std::vec::IntoIter<Entry<K, V>>,
     low: Option<Bound<K>>,
     high: Bound<K>,
     limit: usize,
@@ -192,7 +194,7 @@ where
         Reverse {
             arc: self.arc,
             root: self.root,
-            node_iter: vec![].into_iter(),
+            iter: vec![].into_iter(),
             high: Some(self.high),
             low: self.low.unwrap(),
             limit: self.limit,
@@ -202,7 +204,7 @@ where
     fn batch_scan(
         &self,
         node: Option<&Node<K, V>>,
-        acc: &mut Vec<Node<K, V>>, // accumulator for batch of nodes
+        acc: &mut Vec<Entry<K, V>>, // batch of entries
     ) -> bool {
         if node.is_none() {
             return true;
@@ -224,7 +226,7 @@ where
             return false;
         }
 
-        acc.push(node.clone_detach());
+        acc.push(node.entry.clone());
         if acc.len() >= self.limit {
             return false;
         }
@@ -238,16 +240,16 @@ where
     K: Clone + Ord + Debug,
     V: Default + Clone + Diff + Serialize,
 {
-    type Item = Node<K, V>;
+    type Item = Entry<K, V>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let item = match self.node_iter.next() {
+        let item = match self.iter.next() {
             None if self.low.is_some() => {
-                let mut acc: Vec<Node<K, V>> = Vec::with_capacity(self.limit);
+                let mut acc: Vec<Entry<K, V>> = Vec::with_capacity(self.limit);
                 self.batch_scan(self.get_root(), &mut acc);
                 self.low = acc.last().map(|x| Bound::Excluded(x.key()));
-                self.node_iter = acc.into_iter();
-                self.node_iter.next()
+                self.iter = acc.into_iter();
+                self.iter.next()
             }
             None => None,
             item @ Some(_) => item,
@@ -275,7 +277,7 @@ where
 {
     arc: Arc<MvccRoot<K, V>>,
     root: Option<&'a Node<K, V>>,
-    node_iter: std::vec::IntoIter<Node<K, V>>,
+    iter: std::vec::IntoIter<Entry<K, V>>,
     high: Option<Bound<K>>,
     low: Bound<K>,
     limit: usize,
@@ -296,7 +298,7 @@ where
     fn batch_scan(
         &self,
         node: Option<&Node<K, V>>,
-        acc: &mut Vec<Node<K, V>>, // accumulator for batch of nodes
+        acc: &mut Vec<Entry<K, V>>, // batch of entries
     ) -> bool {
         if node.is_none() {
             return true;
@@ -318,7 +320,7 @@ where
             return false;
         }
 
-        acc.push(node.clone_detach());
+        acc.push(node.entry.clone());
         if acc.len() >= self.limit {
             return false;
         }
@@ -332,16 +334,16 @@ where
     K: Clone + Ord + Debug,
     V: Default + Clone + Diff + Serialize,
 {
-    type Item = Node<K, V>;
+    type Item = Entry<K, V>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let item = match self.node_iter.next() {
+        let item = match self.iter.next() {
             None if self.high.is_some() => {
-                let mut acc: Vec<Node<K, V>> = Vec::with_capacity(self.limit);
+                let mut acc: Vec<Entry<K, V>> = Vec::with_capacity(self.limit);
                 self.batch_scan(self.get_root(), &mut acc);
                 self.high = acc.last().map(|x| Bound::Excluded(x.key()));
-                self.node_iter = acc.into_iter();
-                self.node_iter.next()
+                self.iter = acc.into_iter();
+                self.iter.next()
             }
             None => None,
             item @ Some(_) => item,

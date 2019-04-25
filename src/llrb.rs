@@ -206,7 +206,7 @@ where
         Iter {
             arc: Default::default(),
             root: self.root.as_ref().map(Deref::deref),
-            node_iter: vec![].into_iter(),
+            iter: vec![].into_iter(),
             after_key: Some(Bound::Unbounded),
             limit: ITER_LIMIT,
         }
@@ -217,7 +217,7 @@ where
         Range {
             arc: Default::default(),
             root: self.root.as_ref().map(Deref::deref),
-            node_iter: vec![].into_iter(),
+            iter: vec![].into_iter(),
             low: Some(low),
             high,
             limit: ITER_LIMIT,

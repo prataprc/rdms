@@ -4,14 +4,14 @@ use crate::error::BognError;
 impl Diff for Vec<u8> {
     type D = Vec<u8>;
 
-    /// O - N = D
-    fn diff(&self, _a: &Self) -> Self::D {
-        self.clone()
+    /// D = N - O
+    fn diff(&self, old: &Self) -> Self::D {
+        old.clone()
     }
 
-    /// N + D = O
-    fn merge(&self, a: &Self::D) -> Self {
-        a.clone()
+    /// O = N - D
+    fn merge(&self, delta: &Self::D) -> Self {
+        delta.clone()
     }
 }
 

@@ -6,6 +6,8 @@ use crate::error::BognError;
 use crate::mvcc::Mvcc;
 use crate::type_empty::Empty;
 
+include!("./ref_test.rs");
+
 // TODO: repeatable randoms.
 
 #[test]
@@ -463,5 +465,3 @@ fn test_crud_lsm() {
         }
     }
 }
-
-include!("./ref_test.rs");

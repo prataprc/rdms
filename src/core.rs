@@ -16,11 +16,11 @@ pub trait Diff {
 
     /// Return the delta between two version of value.
     /// D = N - O
-    fn diff(&self, other: &Self) -> Self::D;
+    fn diff(&self, old: &Self) -> Self::D;
 
     /// Merge delta with this value to create another value.
     /// O = N - D
-    fn merge(&self, other: &Self::D) -> Self;
+    fn merge(&self, delta: &Self::D) -> Self;
 }
 
 pub trait Serialize: Sized {
@@ -98,7 +98,7 @@ where
                 vlog::Value::Native { value: old_value } => {
                     let d = value.diff(old_value);
                     let delta = Delta::new(d, self.seqno, self.deleted);
-                    self.deltas.push(delta);
+                    self.deltas.insert(0, delta);
                     self.value = vlog::Value::new_native(value);
                     self.seqno = seqno;
                     self.deleted = None;

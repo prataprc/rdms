@@ -6,6 +6,8 @@ use crate::error::BognError;
 use crate::llrb::Llrb;
 use crate::type_empty::Empty;
 
+include!("./ref_test.rs");
+
 // TODO: repeatable randoms.
 
 #[test]
@@ -59,9 +61,9 @@ fn test_set() {
 
     // test get
     for i in 0..10 {
-        let node = llrb.get(&i);
+        let entry = llrb.get(&i);
         let refn = refns.get(i);
-        check_node(node, refn);
+        check_node(entry, refn);
     }
     // test iter
     let (mut iter, mut iter_ref) = (llrb.iter(), refns.iter());
@@ -100,33 +102,33 @@ fn test_cas_lsm() {
 
     // repeated mutations on same key
 
-    let node = llrb.set_cas(0, 200, 8).ok().unwrap();
+    let entry = llrb.set_cas(0, 200, 8).ok().unwrap();
     let refn = refns.set_cas(0, 200, 8);
-    check_node(node, refn);
+    check_node(entry, refn);
 
-    let node = llrb.set_cas(5, 200, 5).ok().unwrap();
+    let entry = llrb.set_cas(5, 200, 5).ok().unwrap();
     let refn = refns.set_cas(5, 200, 5);
-    check_node(node, refn);
+    check_node(entry, refn);
 
-    let node = llrb.set_cas(6, 200, 4).ok().unwrap();
+    let entry = llrb.set_cas(6, 200, 4).ok().unwrap();
     let refn = refns.set_cas(6, 200, 4);
-    check_node(node, refn);
+    check_node(entry, refn);
 
-    let node = llrb.set_cas(9, 200, 9).ok().unwrap();
+    let entry = llrb.set_cas(9, 200, 9).ok().unwrap();
     let refn = refns.set_cas(9, 200, 9);
-    check_node(node, refn);
+    check_node(entry, refn);
 
-    let node = llrb.set_cas(0, 300, 11).ok().unwrap();
+    let entry = llrb.set_cas(0, 300, 11).ok().unwrap();
     let refn = refns.set_cas(0, 300, 11);
-    check_node(node, refn);
+    check_node(entry, refn);
 
-    let node = llrb.set_cas(5, 300, 12).ok().unwrap();
+    let entry = llrb.set_cas(5, 300, 12).ok().unwrap();
     let refn = refns.set_cas(5, 300, 12);
-    check_node(node, refn);
+    check_node(entry, refn);
 
-    let node = llrb.set_cas(9, 300, 14).ok().unwrap();
+    let entry = llrb.set_cas(9, 300, 14).ok().unwrap();
     let refn = refns.set_cas(9, 300, 14);
-    check_node(node, refn);
+    check_node(entry, refn);
 
     // create
     assert!(llrb.set_cas(10, 100, 0).ok().unwrap().is_none());
@@ -141,9 +143,9 @@ fn test_cas_lsm() {
 
     // test get
     for i in 0..11 {
-        let node = llrb.get(&i);
+        let entry = llrb.get(&i);
         let refn = refns.get(i);
-        check_node(node, refn);
+        check_node(entry, refn);
     }
     // test iter
     let (mut iter, mut iter_ref) = (llrb.iter(), refns.iter());
@@ -199,9 +201,9 @@ fn test_delete() {
 
     // delete all entry. and set new entries
     for i in 0..10 {
-        let node = llrb.delete(&i);
+        let entry = llrb.delete(&i);
         let refn = refns.delete(i);
-        check_node(node, refn);
+        check_node(entry, refn);
     }
     assert_eq!(llrb.len(), 0);
     assert!(llrb.validate().is_ok());
@@ -243,7 +245,7 @@ fn test_iter() {
     loop {
         match (iter.next(), iter_ref.next()) {
             (None, None) => break,
-            (node, Some(refn)) => check_node(node, Some(refn.clone())),
+            (entry, Some(refn)) => check_node(entry, Some(refn.clone())),
             _ => panic!("invalid"),
         };
     }
@@ -289,7 +291,7 @@ fn test_range() {
         loop {
             match (iter.next(), iter_ref.next()) {
                 (None, None) => break,
-                (node, Some(refn)) => check_node(node, Some(refn.clone())),
+                (entry, Some(refn)) => check_node(entry, Some(refn.clone())),
                 _ => panic!("invalid"),
             };
         }
@@ -301,7 +303,7 @@ fn test_range() {
         loop {
             match (iter.next(), iter_ref.next()) {
                 (None, None) => break,
-                (node, Some(refn)) => check_node(node, Some(refn.clone())),
+                (entry, Some(refn)) => check_node(entry, Some(refn.clone())),
                 _ => panic!("invalid"),
             };
         }
@@ -323,9 +325,9 @@ fn test_crud() {
         //println!("key {} value {} op {}", key, value, op);
         match op {
             0 => {
-                let node = llrb.set(key, value);
+                let entry = llrb.set(key, value);
                 let refn = refns.set(key, value);
-                check_node(node, refn);
+                check_node(entry, refn);
                 false
             }
             1 => {
@@ -336,15 +338,15 @@ fn test_crud() {
                     0
                 };
 
-                let node = llrb.set_cas(key, value, cas).ok().unwrap();
+                let entry = llrb.set_cas(key, value, cas).ok().unwrap();
                 let refn = refns.set_cas(key, value, cas);
-                check_node(node, refn);
+                check_node(entry, refn);
                 false
             }
             2 => {
-                let node = llrb.delete(&key);
+                let entry = llrb.delete(&key);
                 let refn = refns.delete(key);
-                check_node(node, refn);
+                check_node(entry, refn);
                 true
             }
             op => panic!("unreachable {}", op),
@@ -399,9 +401,9 @@ fn test_crud_lsm() {
         //println!("op {} on {}", op, key);
         match op {
             0 => {
-                let node = llrb.set(key, value);
+                let entry = llrb.set(key, value);
                 let refn = refns.set(key, value);
-                check_node(node, refn);
+                check_node(entry, refn);
                 false
             }
             1 => {
@@ -413,15 +415,15 @@ fn test_crud_lsm() {
                 };
 
                 //println!("set_cas {} {}", key, seqno);
-                let node = llrb.set_cas(key, value, cas).ok().unwrap();
+                let entry = llrb.set_cas(key, value, cas).ok().unwrap();
                 let refn = refns.set_cas(key, value, cas);
-                check_node(node, refn);
+                check_node(entry, refn);
                 false
             }
             2 => {
-                let node = llrb.delete(&key);
+                let entry = llrb.delete(&key);
                 let refn = refns.delete(key);
-                check_node(node, refn);
+                check_node(entry, refn);
                 true
             }
             op => panic!("unreachable {}", op),
@@ -462,5 +464,3 @@ fn test_crud_lsm() {
         }
     }
 }
-
-include!("./ref_test.rs");

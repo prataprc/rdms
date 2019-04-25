@@ -1,7 +1,7 @@
 use crate::core::{Diff, Entry};
 use crate::vlog;
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 struct RefValue {
     value: i64,
     seqno: u64,
@@ -22,7 +22,7 @@ impl RefValue {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 struct RefNode {
     key: i64,
     versions: Vec<RefValue>,
@@ -172,6 +172,7 @@ impl RefNodes {
             } else {
                 entry.versions[0] = refval;
             };
+            // println!("{:?} {}", entry, self.lsm);
             self.seqno += 1;
             refn
         } else {
@@ -214,49 +215,55 @@ impl RefNodes {
     }
 }
 
-fn check_node(node: Option<Entry<i64, i64>>, refn: Option<RefNode>) -> bool {
-    if node.is_none() && refn.is_none() {
+fn check_node(entry: Option<Entry<i64, i64>>, refn: Option<RefNode>) -> bool {
+    if entry.is_none() && refn.is_none() {
         return false;
-    } else if node.is_none() {
-        panic!("node is none but not refn {:?}", refn.unwrap().key);
+    } else if entry.is_none() {
+        panic!("entry is none but not refn {:?}", refn.unwrap().key);
     } else if refn.is_none() {
-        let node = node.as_ref().unwrap();
-        println!("node num_versions {}", node.deltas().len());
-        panic!("refn is none but not node {:?}", node.key());
+        let entry = entry.as_ref().unwrap();
+        println!("entry num_versions {}", entry.deltas().len());
+        panic!("refn is none but not entry {:?}", entry.key());
     }
 
-    let node = node.unwrap();
+    let entry = entry.unwrap();
     let refn = refn.unwrap();
-    //println!("check_node {} {}", node.key(), refn.key);
-    assert_eq!(node.key(), refn.key, "key");
+    //println!("check_node {} {}", entry.key(), refn.key);
+    assert_eq!(entry.key(), refn.key, "key");
 
     let ver = &refn.versions[0];
-    assert_eq!(node.value(), ver.value, "key {}", refn.key);
-    assert_eq!(node.seqno(), ver.seqno, "key {}", refn.key);
-    assert_eq!(node.is_deleted(), ver.deleted.is_some(), "key {}", refn.key);
-    assert_eq!(node.seqno(), refn.get_seqno(), "key {}", refn.key);
-    assert_eq!(node.is_deleted(), refn.is_deleted(), "key {}", refn.key);
+    assert_eq!(entry.value(), ver.value, "key {}", refn.key);
+    assert_eq!(entry.seqno(), ver.seqno, "key {}", refn.key);
+    assert_eq!(
+        entry.is_deleted(),
+        ver.deleted.is_some(),
+        "key {}",
+        refn.key
+    );
+    assert_eq!(entry.seqno(), refn.get_seqno(), "key {}", refn.key);
+    assert_eq!(entry.is_deleted(), refn.is_deleted(), "key {}", refn.key);
 
-    let (n_vers, refn_vers) = (node.deltas().len() + 1, refn.versions.len());
+    let (n_vers, refn_vers) = (entry.deltas().len() + 1, refn.versions.len());
     assert_eq!(n_vers, refn_vers, "key {}", refn.key);
 
-    let mut curr_value = node.value();
-    //println!("{} {}", n_vers, refn_vers);
-    for (i, delta) in node.deltas().into_iter().rev().enumerate() {
+    let mut curr_value = entry.value();
+    //println!("versions {} {}", n_vers, refn_vers);
+    for (i, dlt) in entry.deltas().into_iter().enumerate() {
+        //println!("..... {} {:?}", dlt.seqno(), refn.versions);
         let ver = &refn.versions[i + 1];
-        match delta.delta() {
+        match dlt.delta() {
             vlog::Delta::Native { delta } => {
                 let prev_value = curr_value.merge(&delta);
-                assert_eq!(prev_value, ver.value, "key {} i {}", refn.key, i,);
+                assert_eq!(prev_value, ver.value, "key {} i {}", refn.key, i);
                 curr_value = prev_value;
             }
             vlog::Delta::Reference { fpos, length } => {
                 panic!("unexpected Reference {} {}", fpos, length);
             }
         }
-        assert_eq!(delta.seqno(), ver.seqno, "key {} i {}", refn.key, i);
+        assert_eq!(dlt.seqno(), ver.seqno, "key {} i {}", refn.key, i);
         assert_eq!(
-            delta.is_deleted(),
+            dlt.is_deleted(),
             ver.deleted.is_some(),
             "key {} i {}",
             refn.key,

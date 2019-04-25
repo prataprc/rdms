@@ -9,12 +9,12 @@ pub struct Empty;
 impl Diff for Empty {
     type D = Empty;
 
-    /// O - N = D
+    /// D = N - O
     fn diff(&self, _a: &Self) -> Self::D {
         Empty
     }
 
-    /// N + D = O
+    /// O = N - D
     fn merge(&self, _a: &Self::D) -> Self {
         Empty
     }

@@ -1,13 +1,13 @@
 Symbols used to describe rest of this writeup.
 
 M  : Memory index, whose life time equal the life time of bogn-index.
-Mw : Memory index, to handles all write operation. It is a sliding index
-     that will become "Mf" index when it reaches a certian size or when
-     "flush-time" elapses. Applicable only in "random-dgm" and
-     "working-set-dgm" configuration.
-Mf : Memory index, that was "Mw" in previous cycle. It is a read-only index
-     that will be merged/flushed to disk and forgotten. Applicable only in
+Mw : Transient memory index, to handles all write operation. It is a
+     ephimeral index that will become "Mf" index when it reaches a
+     certian size or when "flush-time" elapses. Applicable only in
      "random-dgm" and "working-set-dgm" configuration.
+Mf : Transient memory index, that was "Mw" in previous cycle. It is a
+     read-only index that will be merged/flushed to disk and forgotten.
+     Applicable only in "random-dgm" and "working-set-dgm" configuration.
 Mc : Memory index, used to cache read operations from disk. It cases only
      the latest value for an entry. Applicable only in "working-set-dgm"
      configuration.
@@ -49,7 +49,7 @@ Configurations
     {MΔ, DΔ}
         MΔ + DΔ -> DΔ               "backup-cycle"
 
-    This configuration shall have Value and Delta reference to Disk.
+    This configuration shall have "Value-Delta-reference" to Disk.
 
 "random-dgm" configuration
     "lsm", multi-level disk, delta/non-delta mode.
@@ -94,8 +94,8 @@ Configurations
     Dz won't have deltas if configured in non-delta mode. But all other
     disk snapshot shall have deltas.
 
-    Memory snapshots shall always be persisted shall always be persisted
-    to first disk snapshot.
+    Memory snapshots shall be persisted to the last, and only, disk
+    snapshot.
 
 Any of the above configuration can be in delta mode or non-delta mode.
 In the former case, older values are preserved a deltas (also called diff).
@@ -118,6 +118,15 @@ of two parameters:
 
 Evict algorithm
 ===============
+
+Applicable only in "backup" configuration, where for every node evicted,
+latest disk snapshot will be touched to learn the file-position for the
+entry. Once the node is evicted, a reference to on-disk entry as
+unary tuple - {file, fpos} shall be maintained. This logic implies that
+older snapshot files cannot be deleted, until all such references are
+pruged. There will be background scanner that shall update the older
+references to latest snapshot. After which, older snapshot can be
+compacted away.
 
 "Evict walk", shall be a write operation walking from root node to
 leaf node of memory index, deleting all deltas on its path. Optionally
@@ -142,9 +151,6 @@ If node was last accessed before 1 hour, then "most-frequently-used"
 moving average between access-time shall be used to evict.
 
 If node as accessed within past 1 hour, then it shall be left as is.
-
-In "memory" and "backup" configuration, the node shall maintain
-a reference to on-disk entry as unary tuple - {fpos}.
 
 In "backup" configuration, and "non-delta" mode, evict logic shall
 pruge all deltas older than the disk-seqno. Remember, there is only

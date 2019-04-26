@@ -47,9 +47,7 @@ impl From<io::Error> for BognError {
 
 impl PartialEq for BognError {
     fn eq(&self, other: &BognError) -> bool {
-        use BognError::{ConsecutiveReds, InvalidCAS, UnbalancedBlacks};
-        use BognError::{DirtyNode, DuplicateKey, InvalidFile, SortError};
-        use BognError::{IoError, PartialRead, PartialWrite, ValueDecode};
+        use BognError::{ConsecutiveReds, DirtyNode, InvalidCAS};
 
         match (self, other) {
             (InvalidCAS, InvalidCAS) => true,

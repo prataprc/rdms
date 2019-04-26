@@ -51,8 +51,14 @@ where
         }
     }
 
-    pub fn delta(&self) -> vlog::Delta<V> {
-        self.delta.clone()
+    pub fn delta(&self) -> <V as Diff>::D {
+        match &self.delta {
+            vlog::Delta::Native { delta } => delta.clone(),
+            vlog::Delta::Reference { fpos: _, length: _ } => {
+                panic!("impossible situation, call the programmer")
+            }
+            vlog::Delta::Backup { .. } => panic!("impossible situation"),
+        }
     }
 
     pub fn seqno(&self) -> u64 {
@@ -103,11 +109,14 @@ where
                     self.seqno = seqno;
                     self.deleted = None;
                 }
-                vlog::Value::Reference { fpos: _, length: _ } => {
-                    self.value = vlog::Value::new_native(value);
-                    self.seqno = seqno;
-                    self.deleted = None;
+                vlog::Value::Backup { file, fpos, length } => {
+                    // TODO: Figure out a way to use {file, fpos, length} to
+                    // get the entry details from disk. Note that disk index
+                    // can have different formats based on configuration.
+                    // Take that into account.
+                    panic!("TBD")
                 }
+                vlog::Value::Reference { .. } => panic!("impossible situation"),
             }
         } else {
             self.value = vlog::Value::new_native(value);
@@ -137,6 +146,7 @@ where
                 let msg = "impossible situation";
                 panic!(msg)
             }
+            vlog::Value::Backup { .. } => panic!("impossible situation"),
         }
     }
 

@@ -251,16 +251,11 @@ fn check_node(entry: Option<Entry<i64, i64>>, refn: Option<RefNode>) -> bool {
     for (i, dlt) in entry.deltas().into_iter().enumerate() {
         //println!("..... {} {:?}", dlt.seqno(), refn.versions);
         let ver = &refn.versions[i + 1];
-        match dlt.delta() {
-            vlog::Delta::Native { delta } => {
-                let prev_value = curr_value.merge(&delta);
-                assert_eq!(prev_value, ver.value, "key {} i {}", refn.key, i);
-                curr_value = prev_value;
-            }
-            vlog::Delta::Reference { fpos, length } => {
-                panic!("unexpected Reference {} {}", fpos, length);
-            }
-        }
+        let delta = dlt.delta();
+        let prev_value = curr_value.merge(&delta);
+        assert_eq!(prev_value, ver.value, "key {} i {}", refn.key, i);
+        curr_value = prev_value;
+
         assert_eq!(dlt.seqno(), ver.seqno, "key {} i {}", refn.key, i);
         assert_eq!(
             dlt.is_deleted(),

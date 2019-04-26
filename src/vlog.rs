@@ -1,7 +1,4 @@
-use std::{
-    fs, io,
-    io::{Read, Seek, Write},
-};
+use std::{fs, io::Write};
 
 use crate::core::{Diff, Serialize};
 use crate::error::BognError;
@@ -19,8 +16,18 @@ pub(crate) enum Value<V>
 where
     V: Default + Serialize,
 {
-    Native { value: V },
-    Reference { fpos: u64, length: u64 },
+    Native {
+        value: V,
+    },
+    Reference {
+        fpos: u64,
+        length: u64,
+    },
+    Backup {
+        file: String, // must be either be a vlog or index filename with path
+        fpos: u64,
+        length: u64,
+    }, // points to entry on disk.
 }
 
 impl<V> Value<V>
@@ -29,35 +36,35 @@ where
 {
     const VALUE_FLAG: u64 = 0x1000000000000000;
 
-    pub fn new_native(value: V) -> Value<V> {
+    pub(crate) fn new_native(value: V) -> Value<V> {
         Value::Native { value }
     }
 
-    pub fn new_reference(fpos: u64, length: u64) -> Value<V> {
+    pub(crate) fn new_reference(fpos: u64, length: u64) -> Value<V> {
         Value::Reference { fpos, length }
     }
 
-    pub fn fetch(self, fd: &mut fs::File) -> Result<Value<V>, BognError> {
-        match self {
-            Value::Reference { fpos, length } => {
-                let offset = fpos + 8;
-                let mut buf = Vec::with_capacity(length as usize);
-                buf.resize(length as usize, 0);
-                fd.seek(io::SeekFrom::Start(offset))?;
-                let n = fd.read(&mut buf)?;
-                if (n as u64) == length {
-                    let mut value: V = Default::default();
-                    value.decode(&buf)?;
-                    Ok(Value::Native { value })
-                } else {
-                    Err(BognError::PartialRead(length as usize, n))
-                }
-            }
-            obj @ Value::Native { value: _ } => Ok(obj),
-        }
-    }
+    //pub fn fetch(self, fd: &mut fs::File) -> Result<Value<V>, BognError> {
+    //    match self {
+    //        Value::Reference { fpos, length } => {
+    //            let offset = fpos + 8;
+    //            let mut buf = Vec::with_capacity(length as usize);
+    //            buf.resize(length as usize, 0);
+    //            fd.seek(io::SeekFrom::Start(offset))?;
+    //            let n = fd.read(&mut buf)?;
+    //            if (n as u64) == length {
+    //                let mut value: V = Default::default();
+    //                value.decode(&buf)?;
+    //                Ok(Value::Native { value })
+    //            } else {
+    //                Err(BognError::PartialRead(length as usize, n))
+    //            }
+    //        }
+    //        obj @ Value::Native { value: _ } => Ok(obj),
+    //    }
+    //}
 
-    pub fn append_to(
+    pub(crate) fn append_to(
         self,
         fd: &mut fs::File,
         buf: &mut Vec<u8>, /* reuse buffer */
@@ -80,6 +87,7 @@ where
                 }
             }
             obj @ Value::Reference { .. } => Ok(obj),
+            Value::Backup { .. } => panic!("impossible situation"),
         }
     }
 }
@@ -93,45 +101,55 @@ where
 // bit 60 shall be clear.
 
 #[derive(Clone)]
-pub enum Delta<V>
+pub(crate) enum Delta<V>
 where
     V: Default + Diff,
 {
-    Native { delta: <V as Diff>::D },
-    Reference { fpos: u64, length: u64 },
+    Native {
+        delta: <V as Diff>::D,
+    },
+    Reference {
+        fpos: u64,
+        length: u64,
+    },
+    Backup {
+        file: String, // must be a vlog file name, with full path
+        fpos: u64,
+        length: u64,
+    }, // points to entry on disk.
 }
 
 impl<V> Delta<V>
 where
     V: Default + Diff,
 {
-    pub fn new_native(delta: <V as Diff>::D) -> Delta<V> {
+    pub(crate) fn new_native(delta: <V as Diff>::D) -> Delta<V> {
         Delta::Native { delta }
     }
 
-    pub fn new_reference(fpos: u64, length: u64) -> Delta<V> {
+    pub(crate) fn new_reference(fpos: u64, length: u64) -> Delta<V> {
         Delta::Reference { fpos, length }
     }
 
-    pub fn fetch(self, fd: &mut fs::File) -> Result<Delta<V>, BognError> {
-        match self {
-            Delta::Reference { fpos, length } => {
-                let offset = fpos + 8;
-                let mut buf = Vec::with_capacity(length as usize);
-                buf.resize(length as usize, 0);
-                fd.seek(io::SeekFrom::Start(offset))?;
-                let n = fd.read(&mut buf)?;
-                if (n as u64) == length {
-                    let mut delta: <V as Diff>::D = Default::default();
-                    delta.decode(&buf)?;
-                    Ok(Delta::Native { delta })
-                } else {
-                    Err(BognError::PartialRead(length as usize, n))
-                }
-            }
-            obj @ Delta::Native { delta: _ } => Ok(obj),
-        }
-    }
+    //pub fn fetch(self, fd: &mut fs::File) -> Result<Delta<V>, BognError> {
+    //    match self {
+    //        Delta::Reference { fpos, length } => {
+    //            let offset = fpos + 8;
+    //            let mut buf = Vec::with_capacity(length as usize);
+    //            buf.resize(length as usize, 0);
+    //            fd.seek(io::SeekFrom::Start(offset))?;
+    //            let n = fd.read(&mut buf)?;
+    //            if (n as u64) == length {
+    //                let mut delta: <V as Diff>::D = Default::default();
+    //                delta.decode(&buf)?;
+    //                Ok(Delta::Native { delta })
+    //            } else {
+    //                Err(BognError::PartialRead(length as usize, n))
+    //            }
+    //        }
+    //        obj @ Delta::Native { delta: _ } => Ok(obj),
+    //    }
+    //}
 
     pub fn append_to(
         self,
@@ -156,6 +174,7 @@ where
                 }
             }
             obj @ Delta::Reference { .. } => Ok(obj),
+            Delta::Backup { .. } => panic!("impossible situation"),
         }
     }
 }

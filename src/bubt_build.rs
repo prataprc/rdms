@@ -6,23 +6,8 @@ use crate::bubt;
 use crate::core::{AsDelta, AsEntry, Diff, Serialize};
 use crate::error::BognError;
 
-pub struct Builder<K, V>
-where
-    K: marker::Send,
-{
-    name: String,
-    dir: String,
-    m_blocksize: usize,
-    z_blocksize: usize,
-    v_blocksize: usize,
-
-    incremental: bool,
-    tomb_purge: bool,
-    md_ok: bool,
-    indx_tx: mpsc::SyncSender<Vec<u8>>,
-    vlog_tx: Option<mpsc::SyncSender<Vec<u8>>>,
-
-    // stats
+#[derive(Default)]
+pub struct Stats {
     n_count: usize,
     n_deleted: usize,
     paddingmem: usize,
@@ -33,6 +18,69 @@ where
     maxseqno: u64,
     keymem: usize,
     valmem: usize,
+}
+
+#[derive(Default)]
+pub struct Config {
+    pub dir: String,
+    pub m_blocksize: usize,
+    pub z_blocksize: usize,
+    pub v_blocksize: usize,
+    pub tomb_purge: Option<u64>,
+    pub value_log: bool
+    pub value_file: Option<ffi::OsString>,
+}
+
+impl Config {
+    pub fn new(dir: String) -> Config {
+        let config = Default::default();
+        config.dir = dir
+        config
+    }
+
+    pub fn set_blocksize(&mut self, m: usize, z: usize, v: usize) -> &mut Config {
+        self.m_blocksize = m;
+        self.z_blocksize = z;
+        self.v_blocksize = v;
+        self
+    }
+
+    pub fn set_value_log(&mut self, value_file: ffi::OsString) -> &mut Config {
+        self.value_file = Some(value_file);
+        self
+    }
+
+    pub fn set_tombstone_purge(&mut self, before: u64) -> &mut Config {
+        self.tomb_purge = Some(before);
+        self
+    }
+
+    fn index_file(&self, name: &str) -> ffi::OsString {
+        let mut index_file = path::PathBuf::from(self.dir);
+        index_file.push(format!("bubt-{}.indx", name));
+        index_file.into_os_string()
+    }
+
+    fn vlog_file(&self, name: &str) -> ffi::OsString {
+        let mut vlog_file = path::PathBuf::from(self.dir);
+        vlog_file.push(format!("bubt-{}.vlog", name));
+        vlog_file.into_os_string()
+    }
+
+}
+
+pub struct Builder<K, V>
+where
+    K: marker::Send,
+{
+    name: String,
+    config: Config,
+
+    md_ok: bool,
+    indx_tx: mpsc::SyncSender<Vec<u8>>,
+    vlog_tx: Option<mpsc::SyncSender<Vec<u8>>>,
+
+    stats: Stats,
 
     phantom_key: marker::PhantomData<K>,
     phantom_val: marker::PhantomData<V>,
@@ -45,94 +93,51 @@ where
     K: Clone + Ord + marker::Send,
     V: Default + Clone + Diff + Serialize,
 {
-    fn default(indx_tx: mpsc::SyncSender<Vec<u8>>) -> Builder<K, V> {
-        Builder {
-            name: Default::default(),
-            dir: Default::default(),
-            m_blocksize: Default::default(),
-            z_blocksize: Default::default(),
-            v_blocksize: Default::default(),
+    fn initial(name: String, config: Config) -> Result<Builder<K, V>, BognError> {
+        let file = conf.index_file(&name);
+        let (indx_tx, _n_abytes) = Self::start_flusher(file, false /*append*/)?;
 
-            incremental: Default::default(),
-            tomb_purge: Default::default(),
-            md_ok: Default::default(),
+        let vlog_tx = if conf.value_log {
+            let file = conf.vlog_file(&name);
+            let (vlog_tx, _n_abytes) = Self::start_flusher(file, false)?;
+            Some(vlog_tx)
+        } else {
+            None
+        }
+
+        Ok(Builder{
+            name,
+            config,
+            incremental: false,
+            md_ok: false,
             indx_tx,
-            vlog_tx: None,
-
-            n_count: Default::default(),
-            n_deleted: Default::default(),
-            paddingmem: Default::default(),
-            n_zbytes: Default::default(),
-            n_mbytes: Default::default(),
-            n_vbytes: Default::default(),
-            n_abytes: Default::default(),
-            maxseqno: Default::default(),
-            keymem: Default::default(),
-            valmem: Default::default(),
-
+            vlog_tx,
+            stats: Default::default(),
             phantom_key: marker::PhantomData,
             phantom_val: marker::PhantomData,
+        })
+    }
+
+    fn incremental(name: String, c: Config) -> Result<Builder<K, V>, BognError> {
+        // create flushers
+        let file = c.index_file(&name);
+        let (indx_tx, _n_abytes) = Self::start_flusher(file, false /*append*/)?;
+        let (vlog_tx, n_abytes) = match c.value_file {
+            Some(value_file) => Self::start_flusher(value_file, true)?,
+            None => panic!("set value_file for incremental build"),
         }
-    }
 
-    fn initial(
-        name: String,
-        dir: String,
-        mblock: usize,
-        zblock: usize,
-        vblock: Option<usize>,
-    ) -> Result<Builder<K, V>, BognError> {
-        // create flushers
-        let file = Self::index_file(dir.clone(), name.clone());
-        let (indx_tx, _) = Self::start_flusher(file, false /*append*/)?;
-
-        let (vlog_tx, v_blocksize) = match vblock {
-            None => (None, 0),
-            Some(vblock) => {
-                let file = Self::vlog_file(dir.clone(), name.clone());
-                let (vlog_tx, _) = Self::start_flusher(file, false /*append*/)?;
-                (Some(vlog_tx), vblock)
-            }
-        };
-
-        let z_blocksize = cmp::max(zblock, mblock);
-        let v_blocksize = cmp::max(v_blocksize, zblock);
-
-        let mut builder = Builder::default(indx_tx);
-        builder.name = name;
-        builder.dir = dir;
-        builder.m_blocksize = mblock;
-        builder.z_blocksize = z_blocksize;
-        builder.v_blocksize = v_blocksize;
-        builder.vlog_tx = vlog_tx;
-        Ok(builder)
-    }
-
-    fn incremental(
-        name: String,
-        dir: String,
-        mblock: usize,
-        zblock: usize,
-        vblock: usize,
-        value_file: ffi::OsString,
-    ) -> Result<Builder<K, V>, BognError> {
-        // create flushers
-        let file = Self::index_file(dir.clone(), name.clone());
-        let (indx_tx, _) = Self::start_flusher(file, false /*append*/)?;
-        let (vlog_tx, n_abytes) = Self::start_flusher(value_file, true)?;
-
-        let z_blocksize = cmp::max(zblock, mblock);
-        let v_blocksize = cmp::max(vblock, zblock);
-
-        let mut builder = Builder::default(indx_tx);
-        builder.name = name;
-        builder.dir = dir;
-        builder.m_blocksize = mblock;
-        builder.z_blocksize = z_blocksize;
-        builder.v_blocksize = v_blocksize;
-        builder.vlog_tx = Some(vlog_tx);
-        builder.n_abytes = n_abytes as usize;
-        Ok(builder)
+        Ok(Builder{
+            name,
+            config,
+            incremental: true,
+            md_ok: false,
+            indx_tx,
+            vlog_tx: Some(vlog_tx),
+            stats: Default::default(),
+            phantom_key: marker::PhantomData,
+            phantom_val: marker::PhantomData,
+        })
     }
 
     fn start_flusher(
@@ -145,22 +150,6 @@ where
 
         thread::spawn(move || flusher.run(rx));
         Ok((tx, size))
-    }
-
-    fn index_file(dir: String, name: String) -> ffi::OsString {
-        let mut index_file = path::PathBuf::from(dir);
-        index_file.push(format!("bubt-{}.indx", name));
-        index_file.into_os_string()
-    }
-
-    fn vlog_file(dir: String, name: String) -> ffi::OsString {
-        let mut vlog_file = path::PathBuf::from(dir);
-        vlog_file.push(format!("bubt-{}.vlog", name));
-        vlog_file.into_os_string()
-    }
-
-    fn set_tombstone_purge(&mut self, purge: bool) {
-        self.tomb_purge = purge;
     }
 
     //pub fn build<I,E>(&mut self, iter: I, metadata: Vec<u8> /* appended to indx file */) -> Result<(), BognError> {

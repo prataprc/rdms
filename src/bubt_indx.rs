@@ -3,12 +3,6 @@ use std::fs;
 use crate::traits::{AsDelta, Serialize, Diff, AsEntry};
 
 
-struct ZDelta<V> {
-    delta: vlog::Delta<V>,
-    seqno: u64,
-    is_deleted: bool,
-}
-
 enum ZBlock<'a, K, V> {
     Encode {
         indx_block: Vec<u8>,

@@ -32,6 +32,8 @@ cannot fit into a single memory index.
 Configurations
 ==============
 
+broad sketch: "memory", "backup", "random-dgm", "working-set-dgm"
+
 "memory" configuration
     "no-lsm", no-disk, delta/non-delta mode.
 
@@ -101,8 +103,8 @@ Any of the above configuration can be in delta mode or non-delta mode.
 In the former case, older values are preserved a deltas (also called diff).
 In the later case, older values are not preserved.
 
-There can be upto 16 levels of disk snapshot, where Dz is the 16th level and
-Da is the 1st elvel.
+There can be upto 16 levels of disk snapshot, where Dz is the 16th
+level and Da is the 1st level.
 
 Access measurement
 ==================
@@ -135,10 +137,10 @@ high. The former is called "delta-evict" and the later is called
 "value-evict".
 
 If memory pressure is > 98%
-    Between two write operation _two_ evict operation shall be inserted.
+    For every write operation _two_ evict operation shall be inserted.
     Includes both "delta-evict" and "value-evict".
 If memory pressure is > 95%
-    Between two write operation _one_ evict operation shall be inserted.
+    For every write operation _one_ evict operation shall be inserted.
     Includes both "delta-evict" and "value-evict".
 If memory pressure is > 90%
     Between two write operation _one_ evit operation shall be inserted.
@@ -170,3 +172,16 @@ deltas, we have to hit the disk.
 The side-effect of this design is that, there will be duplicate entries
 on disk for the same seqno. So, read/iteration/merge operations on disk
 index should take care of this.
+
+Misc.
+=====
+
+Delta variants in memory index for different configurations:
+
+"memory"            - Native
+"backup"            - Native | Backup
+"random-dgm"        - Native
+"working-set-dgm"   - Native
+
+Reference variant for Delta objects will be constructed during
+lambda-merge, when vlog file is re-used for the new target.

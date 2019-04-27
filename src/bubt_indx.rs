@@ -14,8 +14,6 @@ pub struct Config {
     pub value_in_vlog: bool,
 }
 
-//use std::fs;
-
 // Binary format (ZDelta):
 //
 // *-----*------------------------------------*
@@ -64,6 +62,24 @@ pub struct Config {
 // * bit 63 reserved
 //
 // If deleted seqno is ZERO, then that version was never deleted.
+//
+// Binary format (ZBlock):
+//
+// *----------------------*
+// |      num-entries     |
+// *----------------------*
+// |    1-entry-offset    |
+// *----------------------*
+// |        .......       |
+// *----------------------*
+// |    n-entry-offset    |
+// *-------------------*----------------------* 1-entry-offset
+// |                ZEntry-1                  |
+// *-------------------*----------------------* ...
+// |                ........                  |
+// *-------------------*----------------------* n-entry-offset
+// |                ZEntry-n                  |
+// *------------------------------------------*
 
 pub(crate) enum ZBlock {
     Encode {
@@ -227,7 +243,7 @@ impl ZBlock {
                 ..
             } => {
                 let size = mem::size_of_val(num_entries);
-                size + (offsets.len() * size)
+                size + ((offsets.len() + 1) * size)
             }
         }
     }
@@ -252,6 +268,7 @@ impl ZBlock {
             } => (i_block, v_block, vpos, k_buf, v_buf, d_bufs, config),
         };
 
+        // header
         let klen = k_buf.len() as u64;
         let num_deltas = d_bufs.len() as u64;
         let vlen = v_buf.len() as u64;
@@ -339,83 +356,178 @@ impl ZBlock {
     }
 }
 
-//pub struct ZEntry<K, V>
-//where
-//    V: Default + Clone + Serialize + Diff,
-//{
-//    key: K,
-//    value: ZValue,
-//    deltas: Vec<ZDelta>,
-//}
+// Binary format (MEntry):
 //
+// *------*------------*----------------------*
+// |flags |   reserved |   32-bit key-len     |
+// *------*------------*----------------------*
+// |             child-block fpos             |
+// *-------------------*----------------------*
+// |                  key                     |
+// *-------------------*----------------------*
 //
-//impl<K, V> ZEntry<K, V>
-//where
-//    V: Default + Clone + Serialize + Diff,
-//{
-//    const MASK_TOTAL_LEN: u32 = 0xFFFFFFFF00000000;
-//    const MASK_KEY_LEN: u32 = 0x00000000FFFFFFFF;
+// Flags:
+// * bit 60 set = means child-block is a ZBlock.
+// * bit 61 reserved
+// * bit 62 reserved
+// * bit 63 reserved
 //
-//    fn new(key: K, value: ZValue) -> ZEntry {
-//        ZEntry{key, value, deltas: vec![]}
-//    }
+// Binary format (MBlock):
 //
-//    fn append_delta(&mut self, delta: ZDelta) {
-//        self.push(delta);
-//    }
-//
-//    fn value_ref(&self) -> &V {
-//        self.value.value_ref()
-//    }
-//
-//    fn encode(&self, file: &fs::File, buf: Vec<u8>) -> Vec<u8> {
-//        self.value.value_ref()
-//    }
-//
-//    fn decode(buf: &[u8]) -> Result<(ZEntry, u64), BognError> {
-//        let mut scratch = [0_u8; 8];
-//        // hdr1
-//        scratch.copy_from_slice(&buf[..8]);
-//        let (hdr1, off) = (u64::from_be_bytes(scratch), 8);
-//        scratch.copy_from_slice(&buf[off..off+8]);
-//        let (n_deltas, off) = (u64::from_be_bytes(scratch), off+8);
-//        let total_len = hdr1 & Self::MASK_TOTAL_LEN;
-//        let key_len = hdr1 & Self::MASK_KEY_LEN;
-//        if (off + key_len) > buf.len() {
-//            return Err(BognError::BubtZEntryKeyOverflow(key_len));
-//        }
-//        let (key, off) = (K::decode(buf[off..off+key_len])?, off+key_len);
-//
-//        let vlen = ZValue::value_len(buf[off..off+8);
-//        if (off + vlen) > buf.len() {
-//            return Err(BognError::BubtZEntryValueOverflow(vlen));
-//        }
-//        let (value, zvlen) = ZValue::decode(buf[off..off+vlen)?;
-//        let off += zvlen;
-//
-//        let deltas = vec![];
-//        for _i in 0..n_deltas {
-//            let dlen = ZDelta::disk_len();
-//            if (off + dlen) > buf.len() {
-//                return Err(BognError::BubtZEntryDeltaOverflow(vlen));
-//            }
-//            let (delta, dlen) = ZDelta::decode(buf[off..off+dlen)?;
-//            let off += dlen;
-//            deltas.push(delta);
-//        }
-//        ZEntry{key, value, deltas}
-//    }
-//
-//    fn entry_len(buf: &[u8]) -> u64 {
-//        let mut scratch = [0_u8; 8];
-//        scratch.copy_from_slice(&buf[..8]);
-//        (u64::from_be_bytes(scratch) & Self::MASK_TOTAL_LEN) >> 32
-//    }
-//
-//    fn entry_key(buf: &[u8]) -> K {
-//        let mut scratch = [0_u8; 8];
-//        scratch.copy_from_slice(&buf[..8]);
-//        let klen = u64::from_be_bytes(scratch) & Self::MASK_KEY_LEN;
-//        K::decode(&buf[8..8+klen]).ok().unwrap()
-//    }
-//}
+// *----------------------*
+// |      num-entries     |
+// *----------------------*
+// |    1-entry-offset    |
+// *----------------------*
+// |        .......       |
+// *----------------------*
+// |    n-entry-offset    |
+// *-------------------*----------------------* 1-entry-offset
+// |                MEntry-1                  |
+// *-------------------*----------------------* ...
+// |                ........                  |
+// *-------------------*----------------------* n-entry-offset
+// |                MEntry-n                  |
+// *------------------------------------------*
+
+pub(crate) enum MBlock {
+    Encode {
+        i_block: Vec<u8>,
+        num_entries: u32,
+        offsets: Vec<u32>,
+        // working buffer
+        k_buf: Vec<u8>,
+        config: Config,
+    },
+}
+
+impl MBlock {
+    const ENTRY_HEADER: usize = 8 + 8;
+    const FLAGS_ZBLOCK: u64 = 0x1000000000000000;
+
+    pub(crate) fn new_encode(config: Config) -> MBlock {
+        MBlock::Encode {
+            i_block: Vec::with_capacity(config.m_blocksize),
+            num_entries: Default::default(),
+            offsets: Default::default(),
+            k_buf: Default::default(),
+            config,
+        }
+    }
+
+    pub(crate) fn reset(&mut self) {
+        match self {
+            MBlock::Encode {
+                i_block,
+                num_entries,
+                offsets,
+                ..
+            } => {
+                i_block.truncate(0);
+                *num_entries = Default::default();
+                offsets.truncate(0);
+            }
+        }
+    }
+
+    pub(crate) fn insert<K: Serialize>(
+        &mut self,
+        key: &K,
+        child_fpos: u64,
+        zblock: bool, /*  child_fpos points to Z-block */
+    ) -> bool {
+        let mut size = Self::ENTRY_HEADER;
+        size += self.encode_key(key);
+        size += self.compute_next_offset();
+
+        match self {
+            MBlock::Encode { i_block, .. } => {
+                if (i_block.len() + size) < i_block.capacity() {
+                    self.encode_entry(child_fpos, zblock);
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    fn encode_key<K: Serialize>(&mut self, key: &K) -> usize {
+        match self {
+            MBlock::Encode { k_buf, .. } => {
+                k_buf.truncate(0);
+                key.encode(k_buf);
+                k_buf.len()
+            }
+        }
+    }
+
+    fn compute_next_offset(&self) -> usize {
+        match self {
+            MBlock::Encode {
+                num_entries,
+                offsets,
+                ..
+            } => {
+                let size = mem::size_of_val(num_entries);
+                size + ((offsets.len() + 1) * size)
+            }
+        }
+    }
+
+    fn encode_entry(
+        &mut self,
+        child_fpos: u64,
+        zblock: bool, /* child_fpos points to Z-block */
+    ) {
+        self.start_encode_entry();
+
+        let (i_block, k_buf, config) = match self {
+            MBlock::Encode {
+                i_block,
+                k_buf,
+                config,
+                ..
+            } => (i_block, k_buf, config),
+        };
+
+        // header
+        let klen = k_buf.len() as u64;
+        Self::encode_header(i_block, klen, child_fpos, zblock);
+        // key
+        i_block.extend_from_slice(k_buf);
+    }
+
+    fn start_encode_entry(&mut self) {
+        match self {
+            MBlock::Encode {
+                i_block,
+                num_entries,
+                offsets,
+                ..
+            } => {
+                *num_entries += 1;
+                offsets.push(i_block.len() as u32); // adjust this during flush
+            }
+        }
+    }
+
+    fn encode_header(
+        i_block: &mut Vec<u8>,
+        klen: u64,
+        child_fpos: u64,
+        zblock: bool, /* child_fpos points to Z-block*/
+    ) {
+        // header field 1, klen and flags.
+        let hdr1 = if zblock {
+            klen | Self::FLAGS_ZBLOCK
+        } else {
+            klen
+        };
+        let scratch = hdr1.to_be_bytes();
+        i_block.extend_from_slice(&scratch);
+        // header field 2, child_fpos
+        let scratch = child_fpos.to_be_bytes();
+        i_block.extend_from_slice(&scratch);
+    }
+}

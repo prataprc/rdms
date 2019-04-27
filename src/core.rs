@@ -143,16 +143,16 @@ where
         }
     }
 
+    pub(crate) fn vlog_value_ref(&self) -> &vlog::Value<V> {
+        &self.value
+    }
+
     pub fn key(&self) -> K {
         self.key.clone()
     }
 
     pub fn key_ref(&self) -> &K {
         &self.key
-    }
-
-    pub(crate) fn vlog_value_ref(&self) -> &vlog::Value<V> {
-        &self.value
     }
 
     pub fn value(&self) -> V {

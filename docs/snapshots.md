@@ -176,12 +176,21 @@ index should take care of this.
 Misc.
 =====
 
-Delta variants in memory index for different configurations:
+* Delta variants, memory index, for different configurations:
 
-"memory"            - Native
-"backup"            - Native | Backup
-"random-dgm"        - Native
-"working-set-dgm"   - Native
+Native : "memory", "backup", "random-dgm", "working-set-dgm"
+Backup : "backup"
 
-Reference variant for Delta objects will be constructed during
-lambda-merge, when vlog file is re-used for the new target.
+* Delta variants, disk index:
+
+Native    : For APIs asking for previous versions of a value.
+Reference : constructed during lambda-merge, when re-using vlog file.
+
+* Value variants, memory index, for different configurations:
+
+Native    : "memory", "backup", "random-dgm", "working-set-dgm"
+Backup    : "backup"
+
+* Value variants, disk index:
+
+Native    : For all cases

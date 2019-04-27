@@ -6,7 +6,7 @@ use crate::core::{self, Diff, Serialize};
 #[derive(Clone)]
 pub struct Node<K, V>
 where
-    K: Clone + Ord,
+    K: Clone + Ord + Serialize,
     V: Default + Clone + Diff + Serialize,
 {
     pub(crate) entry: core::Entry<K, V>,
@@ -19,7 +19,7 @@ where
 // Primary operations on a single node.
 impl<K, V> Node<K, V>
 where
-    K: Clone + Ord,
+    K: Clone + Ord + Serialize,
     V: Default + Clone + Diff + Serialize,
 {
     // CREATE operation
@@ -121,7 +121,7 @@ where
 
 impl<K, V> Node<K, V>
 where
-    K: Clone + Ord,
+    K: Clone + Ord + Serialize,
     V: Default + Clone + Diff + Serialize,
 {
     // leak nodes children.
@@ -145,7 +145,7 @@ where
 /// Fence recursive drops
 impl<K, V> Drop for Node<K, V>
 where
-    K: Clone + Ord,
+    K: Clone + Ord + Serialize,
     V: Default + Clone + Diff + Serialize,
 {
     fn drop(&mut self) {
@@ -156,7 +156,7 @@ where
 
 impl<K, V> From<core::Entry<K, V>> for Node<K, V>
 where
-    K: Clone + Ord,
+    K: Clone + Ord + Serialize,
     V: Default + Clone + Diff + Serialize,
 {
     fn from(entry: core::Entry<K, V>) -> Node<K, V> {

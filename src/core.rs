@@ -51,6 +51,10 @@ where
         }
     }
 
+    pub(crate) fn vlog_delta_ref(&self) -> &vlog::Delta<V> {
+        &self.delta
+    }
+
     pub fn delta(&self) -> <V as Diff>::D {
         match &self.delta {
             vlog::Delta::Native { delta } => delta.clone(),
@@ -65,6 +69,14 @@ where
         self.deleted.unwrap_or(self.seqno)
     }
 
+    pub fn born_seqno(&self) -> u64 {
+        self.seqno
+    }
+
+    pub fn dead_seqno(&self) -> Option<u64> {
+        self.deleted
+    }
+
     pub fn is_deleted(&self) -> bool {
         self.deleted.is_some()
     }
@@ -73,7 +85,7 @@ where
 #[derive(Clone)]
 pub struct Entry<K, V>
 where
-    K: Clone + Ord,
+    K: Ord + Clone + Serialize,
     V: Default + Clone + Diff + Serialize,
 {
     key: K,
@@ -85,7 +97,7 @@ where
 
 impl<K, V> Entry<K, V>
 where
-    K: Clone + Ord,
+    K: Ord + Clone + Serialize,
     V: Default + Clone + Diff + Serialize,
 {
     pub(crate) fn new(key: K, value: V, seqno: u64) -> Entry<K, V> {
@@ -109,7 +121,7 @@ where
                     self.seqno = seqno;
                     self.deleted = None;
                 }
-                vlog::Value::Backup { file, fpos, length } => {
+                vlog::Value::Backup { /*file, fpos, length*/ .. } => {
                     // TODO: Figure out a way to use {file, fpos, length} to
                     // get the entry details from disk. Note that disk index
                     // can have different formats based on configuration.
@@ -139,13 +151,14 @@ where
         &self.key
     }
 
+    pub(crate) fn vlog_value_ref(&self) -> &vlog::Value<V> {
+        &self.value
+    }
+
     pub fn value(&self) -> V {
         match &self.value {
             vlog::Value::Native { value } => value.clone(),
-            vlog::Value::Reference { fpos: _, length: _ } => {
-                let msg = "impossible situation";
-                panic!(msg)
-            }
+            vlog::Value::Reference { .. } => panic!("impossible situation"),
             vlog::Value::Backup { .. } => panic!("impossible situation"),
         }
     }
@@ -154,11 +167,23 @@ where
         self.deleted.unwrap_or(self.seqno)
     }
 
+    pub fn born_seqno(&self) -> u64 {
+        self.seqno
+    }
+
+    pub fn dead_seqno(&self) -> Option<u64> {
+        self.deleted
+    }
+
     pub fn is_deleted(&self) -> bool {
         self.deleted.is_some()
     }
 
     pub fn deltas(&self) -> Vec<Delta<V>> {
         self.deltas.clone()
+    }
+
+    pub fn deltas_ref(&self) -> &Vec<Delta<V>> {
+        &self.deltas
     }
 }

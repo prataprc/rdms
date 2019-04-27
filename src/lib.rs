@@ -22,7 +22,7 @@
 #![feature(rc_into_raw_non_null)]
 
 //mod bubt;
-//mod bubt_build;
+mod bubt_indx;
 mod core;
 mod error;
 mod llrb;
@@ -33,6 +33,7 @@ mod mvcc;
 mod sync_writer;
 mod type_bytes;
 mod type_empty;
+mod type_i32;
 mod type_i64;
 mod vlog;
 

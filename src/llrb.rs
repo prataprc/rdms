@@ -28,7 +28,7 @@ include!("llrb_common.rs");
 /// [LSM mode]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
 pub struct Llrb<K, V>
 where
-    K: Clone + Ord + Debug,
+    K: Clone + Ord + Debug + Serialize,
     V: Default + Clone + Diff + Serialize,
 {
     name: String,
@@ -40,7 +40,7 @@ where
 
 impl<K, V> Drop for Llrb<K, V>
 where
-    K: Clone + Ord + Debug,
+    K: Clone + Ord + Debug + Serialize,
     V: Default + Clone + Diff + Serialize,
 {
     fn drop(&mut self) {
@@ -50,7 +50,7 @@ where
 
 impl<K, V> Clone for Llrb<K, V>
 where
-    K: Clone + Ord + Debug,
+    K: Clone + Ord + Debug + Serialize,
     V: Default + Clone + Diff + Serialize,
 {
     fn clone(&self) -> Llrb<K, V> {
@@ -67,7 +67,7 @@ where
 /// Different ways to construct a new Llrb instance.
 impl<K, V> Llrb<K, V>
 where
-    K: Clone + Ord + Debug,
+    K: Clone + Ord + Debug + Serialize,
     V: Default + Clone + Diff + Serialize,
 {
     /// Create an empty instance of Llrb, identified by `name`.
@@ -141,7 +141,7 @@ where
 /// Maintanence API.
 impl<K, V> Llrb<K, V>
 where
-    K: Clone + Ord + Debug,
+    K: Clone + Ord + Debug + Serialize,
     V: Default + Clone + Diff + Serialize,
 {
     /// Identify this instance. Applications can choose unique names while
@@ -189,13 +189,13 @@ where
 /// CRUD operations on Llrb instance.
 impl<K, V> Llrb<K, V>
 where
-    K: Clone + Ord + Debug,
+    K: Clone + Ord + Debug + Serialize,
     V: Default + Clone + Diff + Serialize,
 {
     /// Get the latest version for key.
     pub fn get<Q>(&self, key: &Q) -> Option<core::Entry<K, V>>
     where
-        K: Borrow<Q> + Debug,
+        K: Borrow<Q> + Debug + Serialize,
         Q: Ord + ?Sized,
     {
         get(self.root.as_ref().map(Deref::deref), key)
@@ -286,7 +286,7 @@ where
     where
         // TODO: From<Q> and Clone will fail if V=String and Q=str
         // TODO: Test case for back-to-back delete.
-        K: Borrow<Q> + From<Q> + Debug,
+        K: Borrow<Q> + From<Q> + Debug + Serialize,
         Q: Clone + Ord + ?Sized,
     {
         let seqno = self.seqno + 1;
@@ -347,7 +347,7 @@ where
 
 impl<K, V> Llrb<K, V>
 where
-    K: Clone + Ord + Debug,
+    K: Clone + Ord + Debug + Serialize,
     V: Default + Clone + Diff + Serialize,
 {
     fn upsert(
@@ -445,7 +445,7 @@ where
         seqno: u64,
     ) -> (Option<Box<Node<K, V>>>, Option<core::Entry<K, V>>)
     where
-        K: Borrow<Q> + From<Q> + Debug,
+        K: Borrow<Q> + From<Q> + Debug + Serialize,
         Q: Clone + Ord + ?Sized,
     {
         if node.is_none() {
@@ -491,7 +491,7 @@ where
         key: &Q,
     ) -> (Option<Box<Node<K, V>>>, Option<core::Entry<K, V>>)
     where
-        K: Borrow<Q> + Debug,
+        K: Borrow<Q> + Debug + Serialize,
         Q: Ord + ?Sized,
     {
         let mut node = match node {

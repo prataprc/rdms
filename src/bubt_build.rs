@@ -27,8 +27,8 @@ pub struct Config {
     pub z_blocksize: usize,
     pub v_blocksize: usize,
     pub tomb_purge: Option<u64>,
-    pub value_log: bool
-    pub value_file: Option<ffi::OsString>,
+    pub vlog_file: Option<ffi::OsString>,
+    pub value_in_vlog: bool,
 }
 
 impl Config {
@@ -45,8 +45,9 @@ impl Config {
         self
     }
 
-    pub fn set_value_log(&mut self, value_file: ffi::OsString) -> &mut Config {
-        self.value_file = Some(value_file);
+    pub fn set_vlog(&mut self, file: ffi::OsString, vin: bool) -> &mut Config {
+        self.vlog_file = Some(vlog_file);
+        self.value_in_vlog = vin;
         self
     }
 
@@ -97,7 +98,7 @@ where
         let file = conf.index_file(&name);
         let (indx_tx, _n_abytes) = Self::start_flusher(file, false /*append*/)?;
 
-        let vlog_tx = if conf.value_log {
+        let vlog_tx = if conf.vlog_file.is_some() {
             let file = conf.vlog_file(&name);
             let (vlog_tx, _n_abytes) = Self::start_flusher(file, false)?;
             Some(vlog_tx)

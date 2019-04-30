@@ -121,7 +121,7 @@ where
                     self.seqno = seqno;
                     self.deleted = None;
                 }
-                vlog::Value::Backup { /*file, fpos, length*/ .. } => {
+                vlog::Value::Backup { /* file, fpos, length */ .. } => {
                     // TODO: Figure out a way to use {file, fpos, length} to
                     // get the entry details from disk. Note that disk index
                     // can have different formats based on configuration.
@@ -145,6 +145,21 @@ where
 
     pub(crate) fn vlog_value_ref(&self) -> &vlog::Value<V> {
         &self.value
+    }
+
+    pub(crate) fn purge(&mut self, before: u64) -> bool {
+        if self.seqno < before {
+            // purge everything
+            true
+        } else {
+            for i in 0..self.deltas.len() {
+                if self.deltas[i].seqno < before {
+                    self.deltas.truncate(i); // purge everything after `i`
+                    break;
+                }
+            }
+            false
+        }
     }
 
     pub fn key(&self) -> K {

@@ -1,18 +1,8 @@
-use std::{ffi, mem};
+use std::{marker, mem, sync::mpsc};
 
+use crate::bubt_build::Config;
 use crate::core::{self, Diff, Serialize};
 use crate::vlog;
-
-#[derive(Default)]
-pub struct Config {
-    pub dir: String,
-    pub m_blocksize: usize,
-    pub z_blocksize: usize,
-    pub v_blocksize: usize,
-    pub tomb_purge: Option<u64>,
-    pub vlog_file: Option<ffi::OsString>,
-    pub value_in_vlog: bool,
-}
 
 // Binary format (ZDelta):
 //
@@ -81,7 +71,11 @@ pub struct Config {
 // |                ZEntry-n                  |
 // *------------------------------------------*
 
-pub(crate) enum ZBlock {
+pub(crate) enum ZBlock<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Default + Clone + Diff + Serialize,
+{
     Encode {
         i_block: Vec<u8>,
         v_block: Vec<u8>,
@@ -89,30 +83,39 @@ pub(crate) enum ZBlock {
         offsets: Vec<u32>,
         vpos: u64,
         // working buffers
+        first_key: Option<K>,
         k_buf: Vec<u8>,
         v_buf: Vec<u8>,
         d_bufs: Vec<Vec<u8>>,
         config: Config,
+
+        phantomValue: marker::PhantomData<V>,
     },
 }
 
-impl ZBlock {
+impl<K, V> ZBlock<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Default + Clone + Diff + Serialize,
+{
     const DELTA_HEADER: usize = 8 + 8 + 8 + 8;
     const ENTRY_HEADER: usize = 8 + 8 + 8 + 8;
     const FLAGS_VLOG: u64 = 0x1000000000000000;
 
-    pub(crate) fn new_encode(vpos: u64, config: Config) -> ZBlock {
+    pub(crate) fn new_encode(vpos: u64, config: Config) -> ZBlock<K, V> {
         ZBlock::Encode {
             i_block: Vec::with_capacity(config.z_blocksize),
             v_block: Vec::with_capacity(config.v_blocksize),
             num_entries: Default::default(),
             offsets: Default::default(),
             vpos,
+            first_key: None,
             // working buffers
             k_buf: Default::default(),
             v_buf: Default::default(),
             d_bufs: Default::default(),
             config,
+            phantomValue: marker::PhantomData,
         }
     }
 
@@ -135,11 +138,7 @@ impl ZBlock {
         }
     }
 
-    pub(crate) fn insert<K, V>(&mut self, entry: &core::Entry<K, V>) -> bool
-    where
-        K: Clone + Ord + Serialize,
-        V: Default + Clone + Diff + Serialize,
-    {
+    pub(crate) fn insert(&mut self, entry: &core::Entry<K, V>) -> bool {
         let mut size = Self::ENTRY_HEADER;
         size += self.encode_key(entry);
         size += self.try_encode_value(entry);
@@ -147,8 +146,11 @@ impl ZBlock {
         size += self.compute_next_offset();
 
         match self {
-            ZBlock::Encode { i_block, .. } => {
+            ZBlock::Encode {
+                i_block, first_key, ..
+            } => {
                 if (i_block.len() + size) < i_block.capacity() {
+                    first_key.get_or_insert(entry.key());
                     self.encode_entry(entry);
                     true
                 } else {
@@ -158,11 +160,33 @@ impl ZBlock {
         }
     }
 
-    fn encode_key<K, V>(&mut self, entry: &core::Entry<K, V>) -> usize
-    where
-        K: Clone + Ord + Serialize,
-        V: Default + Clone + Diff + Serialize,
-    {
+    pub(crate) fn first_key(&self) -> Option<K> {
+        match self {
+            ZBlock::Encode { first_key, .. } => first_key.clone(),
+        }
+    }
+
+    pub(crate) fn flush(
+        &mut self,
+        indx_tx: &mpsc::SyncSender<Vec<u8>>,
+        vlog_tx: &mpsc::SyncSender<Vec<u8>>,
+    ) -> (usize, usize) {
+        match self {
+            ZBlock::Encode {
+                i_block,
+                v_block,
+                config,
+                ..
+            } => {
+                i_block.resize(config.z_blocksize, 0);
+                indx_tx.send(i_block.clone());
+                vlog_tx.send(v_block.clone());
+                (config.z_blocksize, v_block.len())
+            }
+        }
+    }
+
+    fn encode_key(&mut self, entry: &core::Entry<K, V>) -> usize {
         match self {
             ZBlock::Encode { k_buf, .. } => {
                 k_buf.truncate(0);
@@ -172,25 +196,17 @@ impl ZBlock {
         }
     }
 
-    fn try_encode_value<K, V>(&mut self, entry: &core::Entry<K, V>) -> usize
-    where
-        K: Clone + Ord + Serialize,
-        V: Default + Clone + Diff + Serialize,
-    {
+    fn try_encode_value(&mut self, entry: &core::Entry<K, V>) -> usize {
         match self {
             ZBlock::Encode { config, .. } if !config.value_in_vlog => 8,
             ZBlock::Encode { v_buf, .. } => Self::encode_value(v_buf, entry),
         }
     }
 
-    fn encode_value<K, V>(
+    fn encode_value(
         v_buf: &mut Vec<u8>, /* encode value of its file position */
         entry: &core::Entry<K, V>,
-    ) -> usize
-    where
-        K: Clone + Ord + Serialize,
-        V: Default + Clone + Diff + Serialize,
-    {
+    ) -> usize {
         v_buf.truncate(0);
         let value = match entry.vlog_value_ref() {
             vlog::Value::Native { value } => value,
@@ -201,25 +217,17 @@ impl ZBlock {
         v_buf.len()
     }
 
-    fn try_encode_deltas<K, V>(&mut self, entry: &core::Entry<K, V>) -> usize
-    where
-        K: Clone + Ord + Serialize,
-        V: Default + Clone + Diff + Serialize,
-    {
+    fn try_encode_deltas(&mut self, entry: &core::Entry<K, V>) -> usize {
         match self {
             ZBlock::Encode { config, .. } if config.vlog_file.is_none() => 0,
             ZBlock::Encode { d_bufs, .. } => Self::encode_deltas(d_bufs, entry),
         }
     }
 
-    fn encode_deltas<K, V>(
+    fn encode_deltas(
         d_bufs: &mut Vec<Vec<u8>>, /* list of buffers for delta encoding */
         entry: &core::Entry<K, V>,
-    ) -> usize
-    where
-        K: Clone + Ord + Serialize,
-        V: Default + Clone + Diff + Serialize,
-    {
+    ) -> usize {
         let mut entry_size = 0;
         d_bufs.truncate(0);
         for (i, delta) in entry.deltas_ref().iter().enumerate() {
@@ -248,11 +256,7 @@ impl ZBlock {
         }
     }
 
-    fn encode_entry<K, V>(&mut self, entry: &core::Entry<K, V>)
-    where
-        K: Clone + Ord + Serialize,
-        V: Default + Clone + Diff + Serialize,
-    {
+    fn encode_entry(&mut self, entry: &core::Entry<K, V>) {
         self.start_encode_entry();
 
         let (i_block, v_block, vpos, k_buf, v_buf, d_bufs, config) = match self {
@@ -324,17 +328,14 @@ impl ZBlock {
         }
     }
 
-    fn encode_header<K, V>(
+    fn encode_header(
         i_block: &mut Vec<u8>,
         klen: u64,
         num_deltas: u64,
         vlen: u64,
         entry: &core::Entry<K, V>,
         config: &Config,
-    ) where
-        K: Clone + Ord + Serialize,
-        V: Default + Clone + Diff + Serialize,
-    {
+    ) {
         // header field 1, klen and number-of-deltas
         let hdr1 = (klen << 32) | num_deltas;
         let scratch = hdr1.to_be_bytes();
@@ -390,26 +391,34 @@ impl ZBlock {
 // |                MEntry-n                  |
 // *------------------------------------------*
 
-pub(crate) enum MBlock {
+pub(crate) enum MBlock<K>
+where
+    K: Clone + Ord + Serialize,
+{
     Encode {
         i_block: Vec<u8>,
         num_entries: u32,
         offsets: Vec<u32>,
         // working buffer
+        first_key: Option<K>,
         k_buf: Vec<u8>,
         config: Config,
     },
 }
 
-impl MBlock {
+impl<K> MBlock<K>
+where
+    K: Clone + Ord + Serialize,
+{
     const ENTRY_HEADER: usize = 8 + 8;
     const FLAGS_ZBLOCK: u64 = 0x1000000000000000;
 
-    pub(crate) fn new_encode(config: Config) -> MBlock {
+    pub(crate) fn new_encode(config: Config) -> MBlock<K> {
         MBlock::Encode {
             i_block: Vec::with_capacity(config.m_blocksize),
             num_entries: Default::default(),
             offsets: Default::default(),
+            first_key: None,
             k_buf: Default::default(),
             config,
         }
@@ -430,20 +439,27 @@ impl MBlock {
         }
     }
 
-    pub(crate) fn insert<K: Serialize>(
+    pub(crate) fn insertz(
         &mut self,
-        key: &K,
+        key: &Option<K>, /* first key of child node */
         child_fpos: u64,
-        zblock: bool, /*  child_fpos points to Z-block */
     ) -> bool {
+        if key.is_none() {
+            return true;
+        }
+
+        let key = key.as_ref().unwrap();
         let mut size = Self::ENTRY_HEADER;
         size += self.encode_key(key);
         size += self.compute_next_offset();
 
         match self {
-            MBlock::Encode { i_block, .. } => {
+            MBlock::Encode {
+                i_block, first_key, ..
+            } => {
                 if (i_block.len() + size) < i_block.capacity() {
-                    self.encode_entry(child_fpos, zblock);
+                    first_key.get_or_insert(key.clone());
+                    self.encode_entry(child_fpos, true /*zblock*/);
                     true
                 } else {
                     false
@@ -452,7 +468,56 @@ impl MBlock {
         }
     }
 
-    fn encode_key<K: Serialize>(&mut self, key: &K) -> usize {
+    pub(crate) fn insertm(
+        &mut self,
+        key: &Option<K>, /* first key of child node */
+        child_fpos: u64,
+    ) -> bool {
+        if key.is_none() {
+            return true;
+        }
+        let key = key.as_ref().unwrap();
+        let mut size = Self::ENTRY_HEADER;
+        size += self.encode_key(&key);
+        size += self.compute_next_offset();
+
+        match self {
+            MBlock::Encode {
+                i_block, first_key, ..
+            } => {
+                if (i_block.len() + size) < i_block.capacity() {
+                    first_key.get_or_insert(key.clone());
+                    self.encode_entry(child_fpos, false /*zblock*/);
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    pub(crate) fn first_key(&self) -> Option<K> {
+        match self {
+            MBlock::Encode { first_key, .. } => first_key.clone(),
+        }
+    }
+
+    pub(crate) fn flush(
+        &mut self,
+        indx_tx: &mpsc::SyncSender<Vec<u8>>, /* only flushing into index file */
+    ) -> usize {
+        match self {
+            MBlock::Encode {
+                i_block, config, ..
+            } => {
+                i_block.resize(config.m_blocksize, 0);
+                indx_tx.send(i_block.clone());
+                config.m_blocksize
+            }
+        }
+    }
+
+    fn encode_key(&mut self, key: &K) -> usize {
         match self {
             MBlock::Encode { k_buf, .. } => {
                 k_buf.truncate(0);
@@ -482,13 +547,8 @@ impl MBlock {
     ) {
         self.start_encode_entry();
 
-        let (i_block, k_buf, config) = match self {
-            MBlock::Encode {
-                i_block,
-                k_buf,
-                config,
-                ..
-            } => (i_block, k_buf, config),
+        let (i_block, k_buf) = match self {
+            MBlock::Encode { i_block, k_buf, .. } => (i_block, k_buf),
         };
 
         // header

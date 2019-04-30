@@ -1,40 +1,27 @@
 use lazy_static::lazy_static;
 use std::sync::mpsc::{Receiver, SyncSender};
-use std::{cmp, ffi, fs, io::Write, marker, path, sync::mpsc, thread};
+use std::{ffi, fs, io::Write, path, sync::mpsc, thread};
 
-use crate::bubt;
-use crate::core::{AsDelta, AsEntry, Diff, Serialize};
+use crate::bubt_indx::{MBlock, ZBlock};
+use crate::core::{self, Diff, Serialize};
 use crate::error::BognError;
 
-#[derive(Default)]
-pub struct Stats {
-    n_count: usize,
-    n_deleted: usize,
-    paddingmem: usize,
-    n_zbytes: usize,
-    n_mbytes: usize,
-    n_vbytes: usize,
-    n_abytes: usize,
-    maxseqno: u64,
-    keymem: usize,
-    valmem: usize,
-}
-
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Config {
     pub dir: String,
     pub m_blocksize: usize,
     pub z_blocksize: usize,
     pub v_blocksize: usize,
     pub tomb_purge: Option<u64>,
+    pub vlog_ok: bool,
     pub vlog_file: Option<ffi::OsString>,
     pub value_in_vlog: bool,
 }
 
 impl Config {
     pub fn new(dir: String) -> Config {
-        let config = Default::default();
-        config.dir = dir
+        let mut config: Config = Default::default();
+        config.dir = dir;
         config
     }
 
@@ -45,176 +32,224 @@ impl Config {
         self
     }
 
-    pub fn set_vlog(&mut self, file: ffi::OsString, vin: bool) -> &mut Config {
-        self.vlog_file = Some(vlog_file);
-        self.value_in_vlog = vin;
-        self
-    }
-
     pub fn set_tombstone_purge(&mut self, before: u64) -> &mut Config {
         self.tomb_purge = Some(before);
         self
     }
 
+    pub fn set_vlog(
+        &mut self,
+        vlog_file: Option<ffi::OsString>, /* if file is None, generate vlog file */
+        value_in_vlog: bool,
+    ) -> &mut Config {
+        self.vlog_ok = true;
+        self.vlog_file = vlog_file;
+        self.value_in_vlog = value_in_vlog;
+        self
+    }
+
     fn index_file(&self, name: &str) -> ffi::OsString {
-        let mut index_file = path::PathBuf::from(self.dir);
+        let mut index_file = path::PathBuf::from(&self.dir);
         index_file.push(format!("bubt-{}.indx", name));
         index_file.into_os_string()
     }
 
     fn vlog_file(&self, name: &str) -> ffi::OsString {
-        let mut vlog_file = path::PathBuf::from(self.dir);
+        let mut vlog_file = path::PathBuf::from(&self.dir);
         vlog_file.push(format!("bubt-{}.vlog", name));
         vlog_file.into_os_string()
     }
-
 }
 
-pub struct Builder<K, V>
-where
-    K: marker::Send,
-{
+pub struct Builder {
     name: String,
     config: Config,
-
-    md_ok: bool,
     indx_tx: mpsc::SyncSender<Vec<u8>>,
     vlog_tx: Option<mpsc::SyncSender<Vec<u8>>>,
-
     stats: Stats,
-
-    phantom_key: marker::PhantomData<K>,
-    phantom_val: marker::PhantomData<V>,
 }
 
 // TODO: Let us try not send K or V, just binary blocks
 
-impl<K, V> Builder<K, V>
-where
-    K: Clone + Ord + marker::Send,
-    V: Default + Clone + Diff + Serialize,
-{
-    fn initial(name: String, config: Config) -> Result<Builder<K, V>, BognError> {
-        let file = conf.index_file(&name);
+impl Builder {
+    fn initial(name: String, config: Config) -> Result<Builder, BognError> {
+        let file = config.index_file(&name);
         let (indx_tx, _n_abytes) = Self::start_flusher(file, false /*append*/)?;
 
-        let vlog_tx = if conf.vlog_file.is_some() {
-            let file = conf.vlog_file(&name);
+        let vlog_tx = if config.vlog_ok {
+            let file = match &config.vlog_file {
+                Some(file) => file.clone(),
+                None => config.vlog_file(&name),
+            };
             let (vlog_tx, _n_abytes) = Self::start_flusher(file, false)?;
             Some(vlog_tx)
         } else {
             None
-        }
+        };
 
-        Ok(Builder{
+        Ok(Builder {
             name,
             config,
-            incremental: false,
-            md_ok: false,
             indx_tx,
             vlog_tx,
             stats: Default::default(),
-            phantom_key: marker::PhantomData,
-            phantom_val: marker::PhantomData,
         })
     }
 
-    fn incremental(name: String, c: Config) -> Result<Builder<K, V>, BognError> {
-        // create flushers
-        let file = c.index_file(&name);
+    fn incremental(name: String, config: Config) -> Result<Builder, BognError> {
+        let file = config.index_file(&name);
         let (indx_tx, _n_abytes) = Self::start_flusher(file, false /*append*/)?;
-        let (vlog_tx, n_abytes) = match c.value_file {
-            Some(value_file) => Self::start_flusher(value_file, true)?,
-            None => panic!("set value_file for incremental build"),
-        }
 
-        Ok(Builder{
+        let (vlog_tx, n_abytes) = if config.vlog_ok {
+            let file = match &config.vlog_file {
+                Some(file) => file.clone(),
+                None => config.vlog_file(&name),
+            };
+            let (vlog_tx, n_abytes) = Self::start_flusher(file, true)?;
+            (Some(vlog_tx), n_abytes)
+        } else {
+            (None, Default::default())
+        };
+
+        let mut builder = Builder {
             name,
             config,
-            incremental: true,
-            md_ok: false,
             indx_tx,
-            vlog_tx: Some(vlog_tx),
+            vlog_tx,
             stats: Default::default(),
-            phantom_key: marker::PhantomData,
-            phantom_val: marker::PhantomData,
-        })
+        };
+        builder.stats.n_abytes = n_abytes as usize;
+        Ok(builder)
     }
 
     fn start_flusher(
         file: ffi::OsString,
         append: bool,
     ) -> Result<(mpsc::SyncSender<Vec<u8>>, u64), BognError> {
-        let (flusher, tx, rx) = Flusher::new(file.clone(), append)?;
-
-        let size = if append { fs::metadata(file)?.len() } else { 0 };
-
+        let fd = Self::open_file(file.clone(), append)?;
+        let (flusher, tx, rx) = Flusher::new(file.clone(), fd);
+        let size = if append {
+            fs::metadata(file)?.len()
+        } else {
+            Default::default()
+        };
         thread::spawn(move || flusher.run(rx));
         Ok((tx, size))
     }
 
-    //pub fn build<I,E>(&mut self, iter: I, metadata: Vec<u8> /* appended to indx file */) -> Result<(), BognError> {
-    //where
-    //    I: Iterator<Item=Result<E, BognError>>,
-    //    E: AsEntry<K, V>,
-    //{
-    //    self.build_blocks(iter, metadata)
-    //}
+    fn open_file(
+        file: ffi::OsString, /* path, if not exist, shall be created */
+        append: bool,
+    ) -> Result<fs::File, BognError> {
+        let p = path::Path::new(&file);
+        let parent = p.parent().ok_or(BognError::InvalidFile(file.clone()))?;
+        fs::create_dir_all(parent)?;
 
-    //pub fn build_blocks<I,E>(&mut self, iter: I, metadata: Vec<u8>) -> Result<(), BognError> {
-    //where
-    //    I: Iterator<Item=Result<E, BognError>>,
-    //    E: AsEntry<K, V>,
-    //{
-    //    let iter = BuildIter::new(iter);
-    //    let mut mstack: Vec<MBlock> = vec![];
-    //    mstack.push(MBlock::new());
-    //    let mut z = ZBlock::new();
+        let mut opts = fs::OpenOptions::new();
+        Ok(match append {
+            false => opts.append(true).create_new(true).open(p)?,
+            true => opts.append(true).open(p)?,
+        })
+    }
 
-    //    while let Some(entry) = match iter.next() {
-    //        let entry = entry?;
-    //        if self.skip_entry(&entry) {
-    //            continue
-    //        }
-    //        if z.insert(&entry)? == false { // overflow
-    //            z.flush()?;
-    //            let mut m = mstack.pop();
-    //            if m.insertz(&z)? == false {// overflow
-    //                m.flush()?;
-    //                mstack = Self::m_insertm(mstack, &m)?;
-    //                m.reset();
-    //                m.insertz(&z)?;
-    //            }
-    //            mstack.push(m)
-    //            z.reset();
-    //        }
-    //    }
-    //    Ok(())
-    //}
-
-    //fn m_insertm(mut mstack: Vec<MBlock>, m1: &MBlock /* next block */) -> Result<Vec<Block>, BognError> {
-    //    if mstack.len() == 0 {
-    //        let mut m0 = MBlock::new();
-    //        m0.insertm(&m1)?;
-    //        mstack.push(m0);
-    //    } else {
-    //        let mut m0 = mstack.pop();
-    //        if m0.insertm(&m1)? == false { // overflow
-    //            m0.flush()?;
-    //            mstack = Self::m_insertm(mstack, &m0)?;
-    //            m0.reset();
-    //            m0.insertm(&m1)?;
-    //        }
-    //        mstack.push(m0)
-    //    }
-    //    mstack
-    //}
-
-    fn skip_entry<D>(&self, entry: &bubt::Entry<K, V, D>) -> bool
+    pub fn build<I, K, V>(
+        &mut self,
+        mut iter: I,
+        metadata: Vec<u8>, /* appended to index file */
+    ) -> Result<(), BognError>
     where
-        D: Clone + AsDelta<V>,
+        I: Iterator<Item = Result<core::Entry<K, V>, BognError>>,
+        K: Ord + Clone + Serialize,
+        V: Default + Clone + Diff + Serialize,
     {
-        entry.is_deleted && self.tomb_purge
+        let mut vlog_fpos = self.stats.n_abytes as u64;
+        let mut z = ZBlock::new_encode(vlog_fpos, self.config.clone());
+
+        let mut mstack: Vec<MBlock<K>> = vec![];
+        mstack.push(MBlock::new_encode(self.config.clone()));
+
+        let mut indx_fpos = 0;
+
+        while let Some(entry) = iter.next() {
+            let mut entry = entry?;
+            if self.purge_values(&mut entry) {
+                continue; // if true, purge the entire entry.
+            }
+
+            if z.insert(&entry) == false {
+                let first_key = z.first_key();
+                let vlog_tx = self.vlog_tx.as_ref().unwrap();
+                let (zbytes, vbytes) = z.flush(&self.indx_tx, vlog_tx);
+                vlog_fpos += vbytes as u64;
+                let mut m = mstack.pop().unwrap();
+                if m.insertz(&first_key, indx_fpos) == false {
+                    let mbytes = m.flush(&self.indx_tx);
+                    let rc = self.insertms(
+                        mstack,
+                        &m,
+                        indx_fpos + (zbytes as u64),
+                        indx_fpos + (zbytes as u64) + (mbytes as u64),
+                    );
+                    mstack = rc.0;
+                    indx_fpos = rc.1;
+                    m.reset();
+                    if m.insertz(&first_key, indx_fpos) == false {
+                        panic!("impossible situation");
+                    }
+                }
+                mstack.push(m);
+                z.reset(vlog_fpos);
+                if z.insert(&entry) == false {
+                    panic!("impossible situation");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn insertms<K>(
+        &mut self,
+        mut mstack: Vec<MBlock<K>>,
+        m1: &MBlock<K>,
+        child_fpos: u64,
+        mut fpos: u64,
+    ) -> (Vec<MBlock<K>>, u64)
+    where
+        K: Ord + Clone + Serialize,
+    {
+        let first_key = m1.first_key();
+        let (mut m0, overflow) = if mstack.len() == 0 {
+            let mut m0 = MBlock::new_encode(self.config.clone());
+            let overflow = m0.insertm(&first_key, child_fpos) == false;
+            (m0, overflow)
+        } else {
+            let mut m0 = mstack.pop().unwrap();
+            let overflow = m0.insertm(&first_key, child_fpos) == false;
+            (m0, overflow)
+        };
+        if overflow {
+            let mbytes = m0.flush(&self.indx_tx) as u64;
+            let rc = self.insertms(mstack, &m0, fpos, fpos + mbytes);
+            mstack = rc.0;
+            fpos = rc.1;
+            m0.reset();
+            if m0.insertm(&first_key, child_fpos) == false {
+                panic!("impossible situation");
+            }
+        }
+        mstack.push(m0);
+        (mstack, fpos)
+    }
+
+    fn purge_values<K, V>(&self, entry: &mut core::Entry<K, V>) -> bool
+    where
+        K: Ord + Clone + Serialize,
+        V: Default + Clone + Diff + Serialize,
+    {
+        match self.config.tomb_purge {
+            Some(before) => entry.purge(before),
+            _ => false,
+        }
     }
 }
 
@@ -236,21 +271,11 @@ impl Flusher {
     const MARKER_BYTE: u8 = 0xAB;
 
     fn new(
-        file: ffi::OsString,
-        append: bool,
-    ) -> Result<(Flusher, SyncSender<Vec<u8>>, Receiver<Vec<u8>>), BognError> {
-        let p = path::Path::new(&file);
-        let parent = p.parent().ok_or(BognError::InvalidFile(file.clone()))?;
-        fs::create_dir_all(parent)?;
-
-        let mut opts = fs::OpenOptions::new();
-        let fd = match append {
-            false => opts.append(true).create_new(true).open(p)?,
-            true => opts.append(true).open(p)?,
-        };
-
+        file: ffi::OsString, /* for logging purpose */
+        fd: fs::File,
+    ) -> (Flusher, SyncSender<Vec<u8>>, Receiver<Vec<u8>>) {
         let (tx, rx) = mpsc::sync_channel(16); // TODO: No magic number
-        Ok((Flusher { file, fd }, tx, rx))
+        (Flusher { file, fd }, tx, rx)
     }
 
     fn run(mut self, rx: mpsc::Receiver<Vec<u8>>) {
@@ -282,49 +307,16 @@ impl Flusher {
     }
 }
 
-struct BuildIter<I, E, K, V>
-where
-    I: Iterator<Item = Result<E, BognError>>,
-    E: AsEntry<K, V>,
-    K: Clone + Ord,
-    V: Default + Clone + Diff + Serialize,
-{
-    iter: I,
-
-    phantom_key: marker::PhantomData<K>,
-    phantom_val: marker::PhantomData<V>,
-}
-
-impl<I, E, K, V> BuildIter<I, E, K, V>
-where
-    I: Iterator<Item = Result<E, BognError>>,
-    E: AsEntry<K, V>,
-    K: Clone + Ord,
-    V: Default + Clone + Diff + Serialize,
-{
-    fn new(iter: I) -> BuildIter<I, E, K, V> {
-        BuildIter {
-            iter,
-            phantom_key: marker::PhantomData,
-            phantom_val: marker::PhantomData,
-        }
-    }
-}
-
-impl<I, E, K, V> Iterator for BuildIter<I, E, K, V>
-where
-    I: Iterator<Item = Result<E, BognError>>,
-    E: AsEntry<K, V>,
-    K: Clone + Ord,
-    V: Default + Clone + Diff + Serialize,
-{
-    type Item = Result<bubt::Entry<K, V, <E as AsEntry<K, V>>::Delta>, BognError>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self.iter.next() {
-            Some(Ok(entry)) => Some(Ok(bubt::Entry::new(entry))),
-            Some(Err(err)) => Some(Err(err)),
-            None => None,
-        }
-    }
+#[derive(Default)]
+pub struct Stats {
+    n_count: usize,
+    n_deleted: usize,
+    paddingmem: usize,
+    n_zbytes: usize,
+    n_mbytes: usize,
+    n_vbytes: usize,
+    n_abytes: usize,
+    maxseqno: u64,
+    keymem: usize,
+    valmem: usize,
 }

@@ -371,7 +371,7 @@ where
             (
                 Some(Mvcc::walkuprot_23(new_node, reclaim)),
                 Some(n),
-                Some(entry
+                Some(entry)
             )
         };
 

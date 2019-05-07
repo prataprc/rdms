@@ -1,8 +1,9 @@
 use std::{marker, mem, sync::mpsc};
 
-use crate::bubt_build::Config;
+use crate::bubt_build::{self, Config};
 use crate::core::{self, Diff, Serialize};
 use crate::vlog;
+use crate::error::BognError;
 
 // Binary format (ZDelta):
 //
@@ -138,23 +139,26 @@ where
         }
     }
 
-    pub(crate) fn insert(&mut self, entry: &core::Entry<K, V>) -> bool {
+    pub(crate) fn insert(&mut self, entry: &core::Entry<K, V>, stats: &mut bubt_build::Stats) -> Result<(), BognError> {
         let mut size = Self::ENTRY_HEADER;
-        size += self.encode_key(entry);
-        size += self.try_encode_value(entry);
-        size += self.try_encode_deltas(entry);
-        size += self.compute_next_offset();
+        let kmem = self.encode_key(entry);
+        let (vmem1, vmem2) = self.try_encode_value(entry);
+        let (dmem1, dmem2) = self.try_encode_deltas(entry);
+        size += kmem + vmem1 + dmem1 + self.compute_next_offset();
+        stats.keymem += kmem;
+        stats.valmem += vmem2 + dmem2;
 
         match self {
             ZBlock::Encode {
                 i_block, first_key, ..
             } => {
-                if (i_block.len() + size) < i_block.capacity() {
+                let (req, cap) = ((i_block.len() + size), i_block.capacity());
+                if req < cap {
                     first_key.get_or_insert(entry.key());
                     self.encode_entry(entry);
-                    true
+                    Ok(())
                 } else {
-                    false
+                    Err(BognError::ZBlockOverflow(req - cap))
                 }
             }
         }
@@ -170,6 +174,7 @@ where
         &mut self,
         indx_tx: &mpsc::SyncSender<Vec<u8>>,
         vlog_tx: &mpsc::SyncSender<Vec<u8>>,
+        stats: &mut bubt_build::Stats,
     ) -> (usize, usize) {
         match self {
             ZBlock::Encode {
@@ -181,6 +186,8 @@ where
                 i_block.resize(config.z_blocksize, 0);
                 indx_tx.send(i_block.clone());
                 vlog_tx.send(v_block.clone());
+                stats.z_bytes += config.z_blocksize;
+                stats.v_bytes += v_block.len();
                 (config.z_blocksize, v_block.len())
             }
         }
@@ -196,10 +203,16 @@ where
         }
     }
 
-    fn try_encode_value(&mut self, entry: &core::Entry<K, V>) -> usize {
+    fn try_encode_value(&mut self, entry: &core::Entry<K, V>) -> (usize, usize) {
         match self {
-            ZBlock::Encode { config, .. } if !config.value_in_vlog => 8,
-            ZBlock::Encode { v_buf, .. } => Self::encode_value(v_buf, entry),
+            ZBlock::Encode { v_buf, config, .. } if config.value_in_vlog => {
+                let vmem = Self::encode_value(v_buf, entry);
+                (8, vmem)
+            },
+            ZBlock::Encode { v_buf, .. } => {
+                let vmem = Self::encode_value(v_buf, entry);
+                (vmem, vmem)
+            }
         }
     }
 
@@ -217,9 +230,9 @@ where
         v_buf.len()
     }
 
-    fn try_encode_deltas(&mut self, entry: &core::Entry<K, V>) -> usize {
+    fn try_encode_deltas(&mut self, entry: &core::Entry<K, V>) -> (usize, usize) {
         match self {
-            ZBlock::Encode { config, .. } if config.vlog_file.is_none() => 0,
+            ZBlock::Encode { config, .. } if config.vlog_file.is_none() => (0, 0),
             ZBlock::Encode { d_bufs, .. } => Self::encode_deltas(d_bufs, entry),
         }
     }
@@ -227,8 +240,9 @@ where
     fn encode_deltas(
         d_bufs: &mut Vec<Vec<u8>>, /* list of buffers for delta encoding */
         entry: &core::Entry<K, V>,
-    ) -> usize {
+    ) -> (usize, usize) {
         let mut entry_size = 0;
+        let mut dmem = 0;
         d_bufs.truncate(0);
         for (i, delta) in entry.deltas_ref().iter().enumerate() {
             d_bufs[i].truncate(0);
@@ -238,9 +252,10 @@ where
                 vlog::Delta::Backup { .. } => panic!("impossible situation"),
             };
             d.encode(&mut d_bufs[i]);
+            dmem += d_bufs[i].len();
             entry_size += Self::DELTA_HEADER;
         }
-        entry_size
+        (entry_size, dmem)
     }
 
     fn compute_next_offset(&self) -> usize {
@@ -291,6 +306,7 @@ where
         } else {
             i_block.extend_from_slice(v_buf);
         }
+
         // deltas
         if config.vlog_file.is_some() {
             let deltas = entry.deltas_ref();
@@ -443,9 +459,9 @@ where
         &mut self,
         key: &Option<K>, /* first key of child node */
         child_fpos: u64,
-    ) -> bool {
+    ) -> Result<bool, BognError> {
         if key.is_none() {
-            return true;
+            return Ok(true);
         }
 
         let key = key.as_ref().unwrap();
@@ -457,12 +473,13 @@ where
             MBlock::Encode {
                 i_block, first_key, ..
             } => {
-                if (i_block.len() + size) < i_block.capacity() {
+                let (req, cap) = ((i_block.len() + size), i_block.capacity());
+                if req < cap {
                     first_key.get_or_insert(key.clone());
                     self.encode_entry(child_fpos, true /*zblock*/);
-                    true
+                    Ok(true)
                 } else {
-                    false
+                    Err(BognError::ZBlockOverflow(req - cap))
                 }
             }
         }
@@ -505,6 +522,7 @@ where
     pub(crate) fn flush(
         &mut self,
         indx_tx: &mpsc::SyncSender<Vec<u8>>, /* only flushing into index file */
+        stats: &mut bubt_build::Stats,
     ) -> usize {
         match self {
             MBlock::Encode {
@@ -512,6 +530,7 @@ where
             } => {
                 i_block.resize(config.m_blocksize, 0);
                 indx_tx.send(i_block.clone());
+                stats.m_bytes += config.m_blocksize;
                 config.m_blocksize
             }
         }

@@ -1,6 +1,6 @@
 use lazy_static::lazy_static;
 use std::sync::mpsc::{Receiver, SyncSender};
-use std::{ffi, fs, io::Write, path, sync::mpsc, thread};
+use std::{ffi, cmp, fs, io::Write, path, sync::mpsc, thread};
 
 use crate::bubt_indx::{MBlock, ZBlock};
 use crate::core::{self, Diff, Serialize};
@@ -172,37 +172,37 @@ impl Builder {
 
         while let Some(entry) = iter.next() {
             let mut entry = entry?;
-            if self.purge_values(&mut entry) {
-                continue; // if true, purge the entire entry.
+            if self.preprocess_entry(&mut entry) {
+                continue; // if true, this entry and all its versions purged
             }
-
-            if z.insert(&entry) == false {
-                let first_key = z.first_key();
-                let vlog_tx = self.vlog_tx.as_ref().unwrap();
-                let (zbytes, vbytes) = z.flush(&self.indx_tx, vlog_tx);
-                vlog_fpos += vbytes as u64;
-                let mut m = mstack.pop().unwrap();
-                if m.insertz(&first_key, indx_fpos) == false {
-                    let mbytes = m.flush(&self.indx_tx);
-                    let rc = self.insertms(
-                        mstack,
-                        &m,
-                        indx_fpos + (zbytes as u64),
-                        indx_fpos + (zbytes as u64) + (mbytes as u64),
-                    );
-                    mstack = rc.0;
-                    indx_fpos = rc.1;
-                    m.reset();
-                    if m.insertz(&first_key, indx_fpos) == false {
-                        panic!("impossible situation");
+            match z.insert(&entry, &mut self.stats) {
+                Ok(_) => (),
+                Err(BognError::ZBlockOverflow(_)) => {
+                    let first_key = z.first_key();
+                    let vlog_tx = self.vlog_tx.as_ref().unwrap();
+                    let (zbytes, vbytes) = z.flush(&self.indx_tx, vlog_tx, &mut self.stats);
+                    vlog_fpos += vbytes as u64;
+                    let mut m = mstack.pop().unwrap();
+                    if let Err(_) = m.insertz(&first_key, indx_fpos) {
+                        let mbytes = m.flush(&self.indx_tx, &mut self.stats);
+                        let rc = self.insertms(
+                            mstack,
+                            &m,
+                            indx_fpos + (zbytes as u64),
+                            indx_fpos + (zbytes as u64) + (mbytes as u64),
+                        );
+                        mstack = rc.0;
+                        indx_fpos = rc.1;
+                        m.reset();
+                        m.insertz(&first_key, indx_fpos).unwrap();
                     }
-                }
-                mstack.push(m);
-                z.reset(vlog_fpos);
-                if z.insert(&entry) == false {
-                    panic!("impossible situation");
-                }
-            }
+                    mstack.push(m);
+                    z.reset(vlog_fpos);
+                    z.insert(&entry, &mut self.stats).unwrap();
+                },
+                Err(_) => unreachable!(),
+            };
+            self.postprocess_entry(&mut entry);
         }
         Ok(())
     }
@@ -220,15 +220,17 @@ impl Builder {
         let first_key = m1.first_key();
         let (mut m0, overflow) = if mstack.len() == 0 {
             let mut m0 = MBlock::new_encode(self.config.clone());
-            let overflow = m0.insertm(&first_key, child_fpos) == false;
-            (m0, overflow)
+            if m0.insertm(&first_key, child_fpos) == false {
+                panic!("impossible situation");
+            }
+            (m0, false)
         } else {
             let mut m0 = mstack.pop().unwrap();
             let overflow = m0.insertm(&first_key, child_fpos) == false;
             (m0, overflow)
         };
         if overflow {
-            let mbytes = m0.flush(&self.indx_tx) as u64;
+            let mbytes = m0.flush(&self.indx_tx, &mut self.stats) as u64;
             let rc = self.insertms(mstack, &m0, fpos, fpos + mbytes);
             mstack = rc.0;
             fpos = rc.1;
@@ -239,6 +241,26 @@ impl Builder {
         }
         mstack.push(m0);
         (mstack, fpos)
+    }
+
+    fn preprocess_entry<K,V>(&mut self, entry: &mut core::Entry<K,V>) -> bool
+    where
+        K: Ord + Clone + Serialize,
+        V: Default + Clone + Diff + Serialize,
+    {
+        self.stats.maxseqno = cmp::max(self.stats.maxseqno, entry.seqno());
+        self.purge_values(entry)
+    }
+
+    fn postprocess_entry<K,V>(&mut self, entry: &mut core::Entry<K,V>)
+    where
+        K: Ord + Clone + Serialize,
+        V: Default + Clone + Diff + Serialize,
+    {
+        self.stats.n_count += 1;
+        if entry.is_deleted() {
+            self.stats.n_deleted += 1;
+        }
     }
 
     fn purge_values<K, V>(&self, entry: &mut core::Entry<K, V>) -> bool
@@ -309,14 +331,13 @@ impl Flusher {
 
 #[derive(Default)]
 pub struct Stats {
-    n_count: usize,
-    n_deleted: usize,
-    paddingmem: usize,
-    n_zbytes: usize,
-    n_mbytes: usize,
-    n_vbytes: usize,
-    n_abytes: usize,
-    maxseqno: u64,
-    keymem: usize,
-    valmem: usize,
+    pub(crate) n_count: usize,
+    pub(crate) n_deleted: usize,
+    pub(crate) maxseqno: u64,
+    pub(crate) n_abytes: usize,
+    pub(crate) keymem: usize,
+    pub(crate) valmem: usize,
+    pub(crate) z_bytes: usize,
+    pub(crate) v_bytes: usize,
+    pub(crate) m_bytes: usize,
 }

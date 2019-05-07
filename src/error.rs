@@ -4,6 +4,7 @@ use std::{ffi, io};
 
 /// BognError enumerates over all possible errors that this package
 /// shall return.
+#[derive(Debug)]
 pub enum BognError {
     /// Can be returned by set_cas() API when:
     /// * In non-lsm mode, requested entry is missing but specified
@@ -37,6 +38,7 @@ pub enum BognError {
     PartialRead(usize, usize),
     PartialWrite(usize, usize),
     ValueDecode(Vec<u8>),
+    ZBlockOverflow(usize),
 }
 
 impl From<io::Error> for BognError {
@@ -57,3 +59,16 @@ impl PartialEq for BognError {
         }
     }
 }
+
+//impl PartialEq for BognError {
+//    fn eq(&self, other: &BognError) -> bool {
+//        use BognError::{ConsecutiveReds, DirtyNode, InvalidCAS};
+//
+//        match (self, other) {
+//            (InvalidCAS, InvalidCAS) => true,
+//            (ConsecutiveReds, ConsecutiveReds) => true,
+//            (DirtyNode, DirtyNode) => true,
+//            _ => false,
+//        }
+//    }
+//}

@@ -22,7 +22,6 @@
 #![feature(rc_into_raw_non_null)]
 
 mod bubt_build;
-mod bubt_indx;
 mod core;
 mod error;
 mod llrb;
@@ -43,6 +42,7 @@ pub use crate::error::BognError;
 pub use crate::llrb::Llrb;
 pub use crate::llrb_util::Stats;
 pub use crate::mvcc::Mvcc;
+pub use crate::bubt_build::Builder;
 pub use crate::type_empty::Empty; // TODO: proper nomenclature.
 
 #[cfg(test)]

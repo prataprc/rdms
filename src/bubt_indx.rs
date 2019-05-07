@@ -1,9 +1,4 @@
-use std::{marker, mem, sync::mpsc};
-
-use crate::bubt_build::{self, Config};
-use crate::core::{self, Diff, Serialize};
-use crate::vlog;
-use crate::error::BognError;
+// TODO: flush put blocks into tx channel. Right now we simply unwrap()
 
 // Binary format (ZDelta):
 //
@@ -72,7 +67,7 @@ use crate::error::BognError;
 // |                ZEntry-n                  |
 // *------------------------------------------*
 
-pub(crate) enum ZBlock<K, V>
+enum ZBlock<K, V>
 where
     K: Clone + Ord + Serialize,
     V: Default + Clone + Diff + Serialize,
@@ -90,7 +85,7 @@ where
         d_bufs: Vec<Vec<u8>>,
         config: Config,
 
-        phantomValue: marker::PhantomData<V>,
+        phantom_val: marker::PhantomData<V>,
     },
 }
 
@@ -103,7 +98,7 @@ where
     const ENTRY_HEADER: usize = 8 + 8 + 8 + 8;
     const FLAGS_VLOG: u64 = 0x1000000000000000;
 
-    pub(crate) fn new_encode(vpos: u64, config: Config) -> ZBlock<K, V> {
+    fn new_encode(vpos: u64, config: Config) -> ZBlock<K, V> {
         ZBlock::Encode {
             i_block: Vec::with_capacity(config.z_blocksize),
             v_block: Vec::with_capacity(config.v_blocksize),
@@ -116,11 +111,11 @@ where
             v_buf: Default::default(),
             d_bufs: Default::default(),
             config,
-            phantomValue: marker::PhantomData,
+            phantom_val: marker::PhantomData,
         }
     }
 
-    pub(crate) fn reset(&mut self, vpos: u64) {
+    fn reset(&mut self, vpos: u64) {
         match self {
             ZBlock::Encode {
                 i_block,
@@ -139,7 +134,7 @@ where
         }
     }
 
-    pub(crate) fn insert(&mut self, entry: &core::Entry<K, V>, stats: &mut bubt_build::Stats) -> Result<(), BognError> {
+    fn insert(&mut self, entry: &core::Entry<K, V>, stats: &mut Stats) -> Result<(), BognError> {
         let mut size = Self::ENTRY_HEADER;
         let kmem = self.encode_key(entry);
         let (vmem1, vmem2) = self.try_encode_value(entry);
@@ -164,18 +159,13 @@ where
         }
     }
 
-    pub(crate) fn first_key(&self) -> Option<K> {
+    fn first_key(&self) -> Option<K> {
         match self {
             ZBlock::Encode { first_key, .. } => first_key.clone(),
         }
     }
 
-    pub(crate) fn flush(
-        &mut self,
-        indx_tx: &mpsc::SyncSender<Vec<u8>>,
-        vlog_tx: &mpsc::SyncSender<Vec<u8>>,
-        stats: &mut bubt_build::Stats,
-    ) -> (usize, usize) {
+    fn finalize(&mut self, stats: &mut Stats) -> (usize, usize) {
         match self {
             ZBlock::Encode {
                 i_block,
@@ -183,12 +173,28 @@ where
                 config,
                 ..
             } => {
+                stats.padding += i_block.capacity() - i_block.len();
                 i_block.resize(config.z_blocksize, 0);
-                indx_tx.send(i_block.clone());
-                vlog_tx.send(v_block.clone());
                 stats.z_bytes += config.z_blocksize;
                 stats.v_bytes += v_block.len();
                 (config.z_blocksize, v_block.len())
+            }
+        }
+    }
+
+    fn flush(
+        &mut self,
+        indx_tx: &mpsc::SyncSender<Vec<u8>>,
+        vlog_tx: &mpsc::SyncSender<Vec<u8>>,
+    ) {
+        match self {
+            ZBlock::Encode {
+                i_block,
+                v_block,
+                ..
+            } => {
+                indx_tx.send(i_block.clone()).unwrap();
+                vlog_tx.send(v_block.clone()).unwrap();
             }
         }
     }
@@ -407,7 +413,7 @@ where
 // |                MEntry-n                  |
 // *------------------------------------------*
 
-pub(crate) enum MBlock<K>
+enum MBlock<K>
 where
     K: Clone + Ord + Serialize,
 {
@@ -429,7 +435,7 @@ where
     const ENTRY_HEADER: usize = 8 + 8;
     const FLAGS_ZBLOCK: u64 = 0x1000000000000000;
 
-    pub(crate) fn new_encode(config: Config) -> MBlock<K> {
+    fn new_encode(config: Config) -> MBlock<K> {
         MBlock::Encode {
             i_block: Vec::with_capacity(config.m_blocksize),
             num_entries: Default::default(),
@@ -440,7 +446,7 @@ where
         }
     }
 
-    pub(crate) fn reset(&mut self) {
+    fn reset(&mut self) {
         match self {
             MBlock::Encode {
                 i_block,
@@ -455,7 +461,7 @@ where
         }
     }
 
-    pub(crate) fn insertz(
+    fn insertz(
         &mut self,
         key: &Option<K>, /* first key of child node */
         child_fpos: u64,
@@ -485,7 +491,7 @@ where
         }
     }
 
-    pub(crate) fn insertm(
+    fn insertm(
         &mut self,
         key: &Option<K>, /* first key of child node */
         child_fpos: u64,
@@ -513,25 +519,33 @@ where
         }
     }
 
-    pub(crate) fn first_key(&self) -> Option<K> {
+    fn first_key(&self) -> Option<K> {
         match self {
             MBlock::Encode { first_key, .. } => first_key.clone(),
         }
     }
 
-    pub(crate) fn flush(
-        &mut self,
-        indx_tx: &mpsc::SyncSender<Vec<u8>>, /* only flushing into index file */
-        stats: &mut bubt_build::Stats,
-    ) -> usize {
+    fn finalize(&mut self, stats: &mut Stats) -> usize {
         match self {
             MBlock::Encode {
-                i_block, config, ..
+                i_block,
+                config,
+                ..
             } => {
+                stats.padding += i_block.capacity() - i_block.len();
                 i_block.resize(config.m_blocksize, 0);
-                indx_tx.send(i_block.clone());
                 stats.m_bytes += config.m_blocksize;
                 config.m_blocksize
+            }
+        }
+    }
+
+    fn flush(&mut self, indx_tx: &mpsc::SyncSender<Vec<u8>>) {
+        match self {
+            MBlock::Encode {
+                i_block, ..
+            } => {
+                indx_tx.send(i_block.clone()).unwrap();
             }
         }
     }

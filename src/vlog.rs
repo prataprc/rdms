@@ -64,11 +64,7 @@ where
         }
     }
 
-    pub(crate) fn flush(
-        self,
-        fd: &mut fs::File,
-        buf: &mut Vec<u8>, /* reuse buffer */
-    ) -> Result<Value<V>, BognError> {
+    pub(crate) fn flush(self, fd: &mut fs::File, buf: &mut Vec<u8>) -> Result<Value<V>, BognError> {
         match self {
             Value::Native { value } => Self::append(value, fd, buf),
             obj @ Value::Reference { .. } => Ok(obj),
@@ -133,7 +129,7 @@ where
         length: u64,
     },
     Backup {
-        file: String, // must be a vlog file name, with full path
+        file: ffi::OsString, // must be a vlog file name, with full path
         fpos: u64,
         length: u64,
     }, // points to entry on disk.
@@ -149,6 +145,10 @@ where
 
     pub(crate) fn new_reference(fpos: u64, length: u64) -> Delta<V> {
         Delta::Reference { fpos, length }
+    }
+
+    pub(crate) fn new_backup(file: ffi::OsString, fpos: u64, length: u64) -> Delta<V> {
+        Delta::Backup { file, fpos, length }
     }
 
     //pub fn fetch(self, fd: &mut fs::File) -> Result<Delta<V>, BognError> {
@@ -195,6 +195,66 @@ where
             }
             obj @ Delta::Reference { .. } => Ok(obj),
             Delta::Backup { .. } => panic!("impossible situation"),
+        }
+    }
+
+    pub(crate) fn to_native(self, fd: Option<&mut fs::File>) -> Result<Delta<V>, BognError> {
+        match (self, fd) {
+            (obj @ Delta::Native { .. }, _) => Ok(obj),
+            (Delta::Reference { fpos, length }, Some(fd)) => Self::read(fd, fpos, length as usize),
+            (Delta::Reference { .. }, None) => panic!("invalid call !!"),
+            (Delta::Backup { fpos, length, .. }, Some(fd)) => Self::read(fd, fpos, length as usize),
+            (Delta::Backup { file, fpos, length }, None) => {
+                let mut fd = fs::OpenOptions::new().read(true).open(file)?;
+                Self::read(&mut fd, fpos, length as usize)
+            }
+        }
+    }
+
+    pub(crate) fn flush(self, fd: &mut fs::File, buf: &mut Vec<u8>) -> Result<Delta<V>, BognError> {
+        match self {
+            Delta::Native { delta } => Self::append(delta, fd, buf),
+            obj @ Delta::Reference { .. } => Ok(obj),
+            Delta::Backup { .. } => panic!("impossible situation"),
+        }
+    }
+
+    fn read(fd: &mut fs::File, fpos: u64, ln: usize) -> Result<Delta<V>, BognError> {
+        let mut buf = Vec::with_capacity(ln);
+        buf.resize(ln, 0);
+        fd.seek(io::SeekFrom::Start(fpos + 8))?;
+        let n = fd.read(&mut buf)?;
+        if n == ln {
+            let mut delta: <V as Diff>::D = Default::default();
+            delta.decode(&buf)?;
+            Ok(Delta::Native { delta })
+        } else {
+            Err(BognError::PartialRead(ln, n))
+        }
+    }
+
+    fn append(
+        delta: <V as Diff>::D,
+        fd: &mut fs::File,
+        buf: &mut Vec<u8>,
+    ) -> Result<Delta<V>, BognError> {
+        let fpos = fd.metadata()?.len();
+        buf.resize(0, 0);
+        delta.encode(buf);
+        let length = buf.len();
+        let scratch = (length as u64).to_be_bytes();
+        let total_len = length + scratch.len();
+
+        // TODO: can we avoid 2 writes ?
+        let mut n = fd.write(&scratch)?;
+        n += fd.write(buf)?;
+        if n != total_len {
+            Err(BognError::PartialWrite(total_len, n))
+        } else {
+            Ok(Delta::Reference {
+                fpos,
+                length: length as u64,
+            })
         }
     }
 }

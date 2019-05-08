@@ -26,7 +26,7 @@ pub trait Diff {
 pub trait Serialize: Sized {
     fn encode(&self, buf: &mut Vec<u8>);
 
-    fn decode(&mut self, buf: &[u8]) -> Result<(), BognError>;
+    fn decode(&mut self, buf: &[u8]) -> Result<()>;
 }
 
 #[derive(Clone)]
@@ -143,10 +143,6 @@ where
         }
     }
 
-    pub(crate) fn vlog_value_ref(&self) -> &vlog::Value<V> {
-        &self.value
-    }
-
     pub(crate) fn purge(&mut self, before: u64) -> bool {
         if self.seqno < before {
             // purge everything
@@ -168,6 +164,10 @@ where
 
     pub fn key_ref(&self) -> &K {
         &self.key
+    }
+
+    pub(crate) fn vlog_value_ref(&self) -> &vlog::Value<V> {
+        &self.value
     }
 
     pub fn value(&self) -> V {
@@ -202,3 +202,5 @@ where
         &self.deltas
     }
 }
+
+pub type Result<T> = std::result::Result<T, BognError>;

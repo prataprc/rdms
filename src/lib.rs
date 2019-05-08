@@ -20,6 +20,7 @@
 //! [LSM]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
 
 #![feature(rc_into_raw_non_null)]
+#![feature(copy_within)]
 
 mod bubt_build;
 mod core;
@@ -37,12 +38,12 @@ mod type_i64;
 mod vlog;
 
 //pub use crate::bubt_build::Builder;
-pub use crate::core::{Diff, Serialize};
+pub use crate::bubt_build::Builder;
+pub use crate::core::{Diff, Result, Serialize};
 pub use crate::error::BognError;
 pub use crate::llrb::Llrb;
 pub use crate::llrb_util::Stats;
 pub use crate::mvcc::Mvcc;
-pub use crate::bubt_build::Builder;
 pub use crate::type_empty::Empty; // TODO: proper nomenclature.
 
 #[cfg(test)]

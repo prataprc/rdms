@@ -1,6 +1,7 @@
 Symbols used to describe rest of this writeup.
 
 M  : Memory index, whose life time equal the life time of bogn-index.
+     Applicable only in "memory" and "backup" configuration.
 Mw : Transient memory index, to handles all write operation. It is a
      ephimeral index that will become "Mf" index when it reaches a
      certian size or when "flush-time" elapses. Applicable only in
@@ -8,14 +9,14 @@ Mw : Transient memory index, to handles all write operation. It is a
 Mf : Transient memory index, that was "Mw" in previous cycle. It is a
      read-only index that will be merged/flushed to disk and forgotten.
      Applicable only in "random-dgm" and "working-set-dgm" configuration.
-Mc : Memory index, used to cache read operations from disk. It cases only
+Mc : Memory index, used to cache read operations from disk. It caches only
      the latest value for an entry. Applicable only in "working-set-dgm"
      configuration.
 Dz : Last disk snapshot, typically the last level. Do not preserve deltas
      in "non-delta" mode.
 D1 : First of the two disk snapshot used in compaction.
 D2 : Second of the two disk snapshot used in compaction.
-Dm : Target level for disk snapshot.
+Dm : Target level for disk snapshot during compaction.
 Da : A new disk snapshot, typically one level before the first "active-level".
 D  : The "only-snapshot" on disk. Do not preserve deltas in "non-delta" mode.
 Vm : Value in Memory.
@@ -184,7 +185,7 @@ Backup : "backup"
 * Delta variants, disk index:
 
 Native    : For APIs asking for previous versions of a value.
-Reference : constructed during lambda-merge, when re-using vlog file.
+Reference : Constructed during lambda-merge, when re-using vlog file.
 
 * Value variants, memory index, for different configurations:
 
@@ -193,4 +194,6 @@ Backup    : "backup"
 
 * Value variants, disk index:
 
-Native    : For all cases
+Native    : "memory", "backup", "random-dgm", "working-set-dgm"
+Reference : "working-set-dgm", while constructing lambda-merge
+            between cached entry in the latest disksnapshot.

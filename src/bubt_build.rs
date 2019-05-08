@@ -1,18 +1,20 @@
+// TODO: flush put blocks into tx channel. Right now we simply unwrap()
+
 use lazy_static::lazy_static;
 use std::sync::mpsc::{self, Receiver, SyncSender};
-use std::{ffi, marker, mem, cmp, fs, io::Write, path, thread};
+use std::{cmp, ffi, fs, io::Write, marker, mem, path, thread, time};
 
 use crate::core::{self, Diff, Serialize};
-use crate::vlog;
 use crate::error::BognError;
+use crate::vlog;
 
 include!("./bubt_indx.rs");
 
 #[derive(Default, Clone)]
 pub struct Config {
     pub dir: String,
-    pub m_blocksize: usize,
     pub z_blocksize: usize,
+    pub m_blocksize: usize,
     pub v_blocksize: usize,
     pub tomb_purge: Option<u64>,
     pub vlog_ok: bool,
@@ -41,7 +43,7 @@ impl Config {
 
     pub fn set_vlog(
         &mut self,
-        vlog_file: Option<ffi::OsString>, /* if file is None, generate vlog file */
+        vlog_file: Option<ffi::OsString>, /* if None, generate vlog file */
         value_in_vlog: bool,
     ) -> &mut Config {
         self.vlog_ok = true;
@@ -63,15 +65,15 @@ impl Config {
     }
 }
 
-pub struct Builder<K,V>
+pub struct Builder<K, V>
 where
     K: Ord + Clone + Serialize,
     V: Default + Clone + Diff + Serialize,
 {
     name: String,
     config: Config,
-    indx_tx: mpsc::SyncSender<Vec<u8>>,
-    vlog_tx: Option<mpsc::SyncSender<Vec<u8>>>,
+    indx_tx: FlushClient,
+    vlog_tx: Option<FlushClient>,
     stats: Stats,
 
     phantom_key: marker::PhantomData<K>,
@@ -80,12 +82,12 @@ where
 
 // TODO: Let us try not send K or V, just binary blocks
 
-impl<K,V> Builder<K,V>
+impl<K, V> Builder<K, V>
 where
     K: Ord + Clone + Serialize,
     V: Default + Clone + Diff + Serialize,
 {
-    pub fn initial(name: String, config: Config) -> Result<Builder<K,V>, BognError> {
+    pub fn initial(name: String, config: Config) -> Result<Builder<K, V>, BognError> {
         let file = config.index_file(&name);
         let (indx_tx, _n_abytes) = Self::start_flusher(file, false /*append*/)?;
 
@@ -111,7 +113,7 @@ where
         })
     }
 
-    pub fn incremental(name: String, config: Config) -> Result<Builder<K,V>, BognError> {
+    pub fn incremental(name: String, config: Config) -> Result<Builder<K, V>, BognError> {
         let file = config.index_file(&name);
         let (indx_tx, _n_abytes) = Self::start_flusher(file, false /*append*/)?;
 
@@ -139,10 +141,7 @@ where
         Ok(builder)
     }
 
-    fn start_flusher(
-        file: ffi::OsString,
-        append: bool,
-    ) -> Result<(mpsc::SyncSender<Vec<u8>>, u64), BognError> {
+    fn start_flusher(file: ffi::OsString, append: bool) -> Result<(FlushClient, u64), BognError> {
         let fd = Self::open_file(file.clone(), append)?;
         let (flusher, tx, rx) = Flusher::new(file.clone(), fd);
         let size = if append {
@@ -150,8 +149,8 @@ where
         } else {
             Default::default()
         };
-        thread::spawn(move || flusher.run(rx));
-        Ok((tx, size))
+        let handle = thread::spawn(move || flusher.run(rx));
+        Ok((FlushClient { tx, handle }, size))
     }
 
     fn open_file(
@@ -170,13 +169,15 @@ where
     }
 
     pub fn build<I>(
-        &mut self,
+        mut self,
         mut iter: I,
         metadata: Vec<u8>, /* appended to index file */
     ) -> Result<(), BognError>
     where
         I: Iterator<Item = Result<core::Entry<K, V>, BognError>>,
     {
+        let start = time::SystemTime::now();
+
         let mut b = BuildData::new(self.stats.n_abytes, self.config.clone());
         while let Some(entry) = iter.next() {
             let mut entry = entry?;
@@ -189,12 +190,12 @@ where
                 Err(BognError::ZBlockOverflow(_)) => {
                     let first_key = b.z.first_key();
                     let (zbytes, vbytes) = b.z.finalize(&mut self.stats);
-                    b.z.flush(&self.indx_tx, self.vlog_tx.as_ref().unwrap());
+                    b.z.flush(&mut self.indx_tx, self.vlog_tx.as_mut());
                     b.update_z_flush(zbytes, vbytes);
                     let mut m = b.mstack.pop().unwrap();
                     if let Err(_) = m.insertz(&first_key, b.z_fpos) {
                         let mbytes = m.finalize(&mut self.stats);
-                        m.flush(&self.indx_tx);
+                        m.flush(&mut self.indx_tx);
                         b.update_m_flush(mbytes);
                         self.insertms(m.first_key(), &mut b);
                         m.reset();
@@ -203,7 +204,7 @@ where
                     b.mstack.push(m);
                     b.reset();
                     b.z.insert(&entry, &mut self.stats).unwrap();
-                },
+                }
                 Err(_) => unreachable!(),
             };
             self.postprocess_entry(&mut entry);
@@ -213,21 +214,64 @@ where
         if self.stats.n_count > 0 {
             let first_key = b.z.first_key();
             let (zbytes, vbytes) = b.z.finalize(&mut self.stats);
-            b.z.flush(&self.indx_tx, self.vlog_tx.as_ref().unwrap());
+            b.z.flush(&mut self.indx_tx, self.vlog_tx.as_mut());
             b.update_z_flush(zbytes, vbytes);
 
             self.finalize1(&mut b, first_key); // flush zblock and its parents
             self.finalize2(&mut b); // flush mblocks
         }
 
+        let elapsed = start.elapsed();
+        let epoch = time::UNIX_EPOCH.elapsed().unwrap().as_nanos();
+        let attributes: Vec<String> = vec![
+            format!(r#""name": {}"#, self.name),
+            format!(r#""zblocksize": {}"#, self.config.z_blocksize),
+            format!(r#""mblocksize": {}"#, self.config.m_blocksize),
+            format!(r#""vblocksize": {}"#, self.config.v_blocksize),
+            format!(r#""buildtime":  "{}""#, elapsed.unwrap().as_nanos()),
+            format!(r#""epoch": {}"#, epoch),
+            format!(r#""seqno": {}"#, self.stats.maxseqno),
+            format!(r#""keymem": {}"#, self.stats.keymem),
+            format!(r#""valmem": {}"#, self.stats.valmem),
+            format!(r#""paddingmem": {}"#, self.stats.padding),
+            format!(r#""z_bytes": {}"#, self.stats.z_bytes),
+            format!(r#""m_bytes": {}"#, self.stats.m_bytes),
+            format!(r#""v_bytes": {}"#, self.stats.v_bytes),
+            format!(r#""n_abytes": {}"#, self.stats.n_abytes),
+            format!(r#""n_count": {}"#, self.stats.n_count),
+            format!(r#""n_deleted": {}"#, self.stats.n_deleted),
+        ];
+        let stats = "{ ".to_owned() + &attributes.join(",") + " }";
+        if (stats.len() + 8) > self.config.m_blocksize {
+            panic!("impossible case");
+        }
+        let mut block: Vec<u8> = Vec::with_capacity(self.config.m_blocksize);
+        block.extend_from_slice(&(stats.len() as u64).to_be_bytes());
+        block.extend_from_slice(stats.as_bytes());
+        self.indx_tx.send(block);
+
+        // flush metadata
+        let blocks = ((metadata.len() + 8) / self.config.m_blocksize) + 1;
+        let mut data: Vec<u8> = Vec::with_capacity(blocks * self.config.m_blocksize);
+        let scratch = (metadata.len() as u64).to_be_bytes();
+        data.extend_from_slice(&metadata);
+        data.resize(blocks * self.config.m_blocksize, 0);
+        let loc = data.len() - 8;
+        data[loc..].copy_from_slice(&scratch);
+        self.indx_tx.send(data);
+
+        // flush marker block and close
+        self.indx_tx.close_wait();
+        self.vlog_tx.take().map(|x| x.close_wait());
+
         Ok(())
     }
 
-    fn finalize1(&mut self, b: &mut BuildData<K,V>, first_key: Option<K>) {
+    fn finalize1(&mut self, b: &mut BuildData<K, V>, first_key: Option<K>) {
         let mut m = b.mstack.pop().unwrap();
         if let Err(_) = m.insertz(&first_key, b.z_fpos) {
             let mbytes = m.finalize(&mut self.stats);
-            m.flush(&self.indx_tx);
+            m.flush(&mut self.indx_tx);
             b.update_m_flush(mbytes);
             self.insertms(m.first_key(), b);
             m.reset();
@@ -237,22 +281,22 @@ where
         }
     }
 
-    fn finalize2(&mut self, b: &mut  BuildData<K,V>) {
+    fn finalize2(&mut self, b: &mut BuildData<K, V>) {
         while let Some(mut m) = b.mstack.pop() {
             let mbytes = m.finalize(&mut self.stats);
-            m.flush(&self.indx_tx);
+            m.flush(&mut self.indx_tx);
             b.update_m_flush(mbytes);
             self.insertms(m.first_key(), b);
             b.reset();
         }
     }
 
-    fn insertms( &mut self, first_key: Option<K>, b: &mut BuildData<K,V>) {
+    fn insertms(&mut self, first_key: Option<K>, b: &mut BuildData<K, V>) {
         let (mut m0, overflow, m_fpos) = match b.mstack.pop() {
             Some(mut m0) => {
                 let overflow = m0.insertm(&first_key, b.m_fpos) == false;
                 (m0, overflow, b.m_fpos)
-            },
+            }
             None => {
                 let mut m0 = MBlock::new_encode(self.config.clone());
                 if m0.insertm(&first_key, b.m_fpos) == false {
@@ -263,7 +307,7 @@ where
         };
         if overflow {
             let mbytes = m0.finalize(&mut self.stats);
-            m0.flush(&self.indx_tx);
+            m0.flush(&mut self.indx_tx);
             b.update_m_flush(mbytes);
             self.insertms(m0.first_key(), b);
             m0.reset();
@@ -274,12 +318,12 @@ where
         b.mstack.push(m0);
     }
 
-    fn preprocess_entry(&mut self, entry: &mut core::Entry<K,V>) -> bool {
+    fn preprocess_entry(&mut self, entry: &mut core::Entry<K, V>) -> bool {
         self.stats.maxseqno = cmp::max(self.stats.maxseqno, entry.seqno());
         self.purge_values(entry)
     }
 
-    fn postprocess_entry(&mut self, entry: &mut core::Entry<K,V>) {
+    fn postprocess_entry(&mut self, entry: &mut core::Entry<K, V>) {
         self.stats.n_count += 1;
         if entry.is_deleted() {
             self.stats.n_deleted += 1;
@@ -348,6 +392,22 @@ impl Flusher {
     }
 }
 
+struct FlushClient {
+    tx: mpsc::SyncSender<Vec<u8>>,
+    handle: thread::JoinHandle<()>,
+}
+
+impl FlushClient {
+    fn send(&mut self, block: Vec<u8>) {
+        self.tx.send(block).unwrap();
+    }
+
+    fn close_wait(self) {
+        mem::drop(self.tx);
+        self.handle.join().unwrap();
+    }
+}
+
 #[derive(Default)]
 pub struct Stats {
     n_count: usize,
@@ -362,7 +422,7 @@ pub struct Stats {
     padding: usize,
 }
 
-pub struct BuildData<K,V>
+pub struct BuildData<K, V>
 where
     K: Clone + Ord + Serialize,
     V: Default + Clone + Diff + Serialize,
@@ -375,14 +435,14 @@ where
     vlog_fpos: u64,
 }
 
-impl<K,V> BuildData<K,V>
+impl<K, V> BuildData<K, V>
 where
     K: Clone + Ord + Serialize,
     V: Default + Clone + Diff + Serialize,
 {
-    fn new(n_abytes: usize, config: Config) -> BuildData<K,V> {
+    fn new(n_abytes: usize, config: Config) -> BuildData<K, V> {
         let vlog_fpos = n_abytes as u64;
-        let mut obj  =  BuildData{
+        let mut obj = BuildData {
             z: ZBlock::new_encode(vlog_fpos, config.clone()),
             mstack: vec![],
             z_fpos: 0,

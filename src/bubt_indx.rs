@@ -182,19 +182,15 @@ where
         }
     }
 
-    fn flush(
-        &mut self,
-        indx_tx: &mpsc::SyncSender<Vec<u8>>,
-        vlog_tx: &mpsc::SyncSender<Vec<u8>>,
-    ) {
+    fn flush(&mut self, indx_tx: &mut FlushClient, vlog_tx: Option<&mut FlushClient>) {
         match self {
             ZBlock::Encode {
-                i_block,
-                v_block,
-                ..
+                i_block, v_block, ..
             } => {
-                indx_tx.send(i_block.clone()).unwrap();
-                vlog_tx.send(v_block.clone()).unwrap();
+                indx_tx.send(i_block.clone());
+                if let Some(vlog_tx) = vlog_tx {
+                    vlog_tx.send(v_block.clone());
+                }
             }
         }
     }
@@ -214,7 +210,7 @@ where
             ZBlock::Encode { v_buf, config, .. } if config.value_in_vlog => {
                 let vmem = Self::encode_value(v_buf, entry);
                 (8, vmem)
-            },
+            }
             ZBlock::Encode { v_buf, .. } => {
                 let vmem = Self::encode_value(v_buf, entry);
                 (vmem, vmem)
@@ -528,9 +524,7 @@ where
     fn finalize(&mut self, stats: &mut Stats) -> usize {
         match self {
             MBlock::Encode {
-                i_block,
-                config,
-                ..
+                i_block, config, ..
             } => {
                 stats.padding += i_block.capacity() - i_block.len();
                 i_block.resize(config.m_blocksize, 0);
@@ -540,12 +534,10 @@ where
         }
     }
 
-    fn flush(&mut self, indx_tx: &mpsc::SyncSender<Vec<u8>>) {
+    fn flush(&mut self, indx_tx: &mut FlushClient) {
         match self {
-            MBlock::Encode {
-                i_block, ..
-            } => {
-                indx_tx.send(i_block.clone()).unwrap();
+            MBlock::Encode { i_block, .. } => {
+                indx_tx.send(i_block.clone());
             }
         }
     }

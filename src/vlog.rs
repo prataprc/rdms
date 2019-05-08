@@ -1,4 +1,7 @@
-use std::{fs, io::Write};
+use std::{
+    ffi, fs,
+    io::{self, Read, Seek, Write},
+};
 
 use crate::core::{Diff, Serialize};
 use crate::error::BognError;
@@ -24,7 +27,7 @@ where
         length: u64,
     },
     Backup {
-        file: String, // must be either be a vlog or index filename with path
+        file: ffi::OsString, // must be either be a vlog or index filename with path
         fpos: u64,
         length: u64,
     }, // points to entry on disk.
@@ -44,50 +47,67 @@ where
         Value::Reference { fpos, length }
     }
 
-    //pub fn fetch(self, fd: &mut fs::File) -> Result<Value<V>, BognError> {
-    //    match self {
-    //        Value::Reference { fpos, length } => {
-    //            let offset = fpos + 8;
-    //            let mut buf = Vec::with_capacity(length as usize);
-    //            buf.resize(length as usize, 0);
-    //            fd.seek(io::SeekFrom::Start(offset))?;
-    //            let n = fd.read(&mut buf)?;
-    //            if (n as u64) == length {
-    //                let mut value: V = Default::default();
-    //                value.decode(&buf)?;
-    //                Ok(Value::Native { value })
-    //            } else {
-    //                Err(BognError::PartialRead(length as usize, n))
-    //            }
-    //        }
-    //        obj @ Value::Native { value: _ } => Ok(obj),
-    //    }
-    //}
+    pub(crate) fn new_backup(file: ffi::OsString, fpos: u64, length: u64) -> Value<V> {
+        Value::Backup { file, fpos, length }
+    }
 
-    pub(crate) fn append_to(
+    pub(crate) fn to_native(self, fd: Option<&mut fs::File>) -> Result<Value<V>, BognError> {
+        match (self, fd) {
+            (obj @ Value::Native { .. }, _) => Ok(obj),
+            (Value::Reference { fpos, length }, Some(fd)) => Self::read(fd, fpos, length as usize),
+            (Value::Reference { .. }, None) => panic!("invalid call !!"),
+            (Value::Backup { fpos, length, .. }, Some(fd)) => Self::read(fd, fpos, length as usize),
+            (Value::Backup { file, fpos, length }, None) => {
+                let mut fd = fs::OpenOptions::new().read(true).open(file)?;
+                Self::read(&mut fd, fpos, length as usize)
+            }
+        }
+    }
+
+    pub(crate) fn flush(
         self,
         fd: &mut fs::File,
         buf: &mut Vec<u8>, /* reuse buffer */
     ) -> Result<Value<V>, BognError> {
         match self {
-            Value::Native { value } => {
-                let fpos = fd.metadata()?.len();
-                buf.resize(0, 0);
-                value.encode(buf);
-                let length = buf.len() as u64;
-                let scratch = (length | Self::VALUE_FLAG).to_be_bytes();
-
-                let total_len = length + (scratch.len() as u64);
-                let mut n = fd.write(&scratch)?;
-                n += fd.write(buf)?;
-                if (n as u64) != total_len {
-                    Err(BognError::PartialWrite(total_len as usize, n))
-                } else {
-                    Ok(Value::Reference { fpos, length })
-                }
-            }
+            Value::Native { value } => Self::append(value, fd, buf),
             obj @ Value::Reference { .. } => Ok(obj),
             Value::Backup { .. } => panic!("impossible situation"),
+        }
+    }
+
+    fn read(fd: &mut fs::File, fpos: u64, ln: usize) -> Result<Value<V>, BognError> {
+        let mut buf = Vec::with_capacity(ln);
+        buf.resize(ln, 0);
+        fd.seek(io::SeekFrom::Start(fpos + 8))?;
+        let n = fd.read(&mut buf)?;
+        if n == ln {
+            let mut value: V = Default::default();
+            value.decode(&buf)?;
+            Ok(Value::Native { value })
+        } else {
+            Err(BognError::PartialRead(ln, n))
+        }
+    }
+
+    fn append(value: V, fd: &mut fs::File, buf: &mut Vec<u8>) -> Result<Value<V>, BognError> {
+        let fpos = fd.metadata()?.len();
+        buf.resize(0, 0);
+        value.encode(buf);
+        let length = buf.len();
+        let scratch = ((length as u64) | Self::VALUE_FLAG).to_be_bytes();
+        let total_len = length + scratch.len();
+
+        // TODO: can we avoid 2 writes ?
+        let mut n = fd.write(&scratch)?;
+        n += fd.write(buf)?;
+        if n != total_len {
+            Err(BognError::PartialWrite(total_len, n))
+        } else {
+            Ok(Value::Reference {
+                fpos,
+                length: length as u64,
+            })
         }
     }
 }

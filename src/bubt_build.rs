@@ -153,7 +153,6 @@ where
         I: Iterator<Item = Result<Entry<K, V>>>,
     {
         let start = time::SystemTime::now();
-
         let mut b = BuildData::new(self.stats.n_abytes, self.config.clone());
         while let Some(entry) = iter.next() {
             let mut entry = entry?;
@@ -175,11 +174,11 @@ where
                         b.update_m_flush(mbytes);
                         self.insertms(m.first_key(), &mut b)?;
                         m.reset();
-                        m.insertz(first_key.as_ref().unwrap(), b.z_fpos).unwrap();
+                        m.insertz(first_key.as_ref().unwrap(), b.z_fpos)?;
                     }
                     b.mstack.push(m);
                     b.reset();
-                    b.z.insert(&entry, &mut self.stats).unwrap();
+                    b.z.insert(&entry, &mut self.stats)?;
                 }
                 Err(_) => unreachable!(),
             };
@@ -188,12 +187,7 @@ where
 
         // flush final set partial blocks
         if self.stats.n_count > 0 {
-            let first_key = b.z.first_key();
-            let (zbytes, vbytes) = b.z.finalize(&mut self.stats);
-            b.z.flush(&mut self.i_flusher, self.v_flusher.as_mut());
-            b.update_z_flush(zbytes, vbytes);
-
-            self.finalize1(&mut b, first_key.as_ref().unwrap()); // flush zblock and its parents
+            self.finalize1(&mut b); // flush zblock
             self.finalize2(&mut b); // flush mblocks
         }
 
@@ -243,32 +237,6 @@ where
         Ok(())
     }
 
-    fn finalize1(&mut self, b: &mut BuildData<K, V>, first_key: &K) -> Result<()> {
-        let mut m = b.mstack.pop().unwrap();
-        if let Err(_) = m.insertz(first_key, b.z_fpos) {
-            let mbytes = m.finalize(&mut self.stats);
-            m.flush(&mut self.i_flusher);
-            b.update_m_flush(mbytes);
-            self.insertms(m.first_key(), b)?;
-            m.reset();
-            m.insertz(first_key, b.z_fpos).unwrap();
-            b.mstack.push(m);
-            b.reset();
-        }
-        Ok(())
-    }
-
-    fn finalize2(&mut self, b: &mut BuildData<K, V>) -> Result<()> {
-        while let Some(mut m) = b.mstack.pop() {
-            let mbytes = m.finalize(&mut self.stats);
-            m.flush(&mut self.i_flusher);
-            b.update_m_flush(mbytes);
-            self.insertms(m.first_key(), b)?;
-            b.reset();
-        }
-        Ok(())
-    }
-
     fn insertms(&mut self, first_key: Option<K>, b: &mut BuildData<K, V>) -> Result<()> {
         let first_key = first_key.as_ref().unwrap();
         let (mut m0, overflow, m_fpos) = match b.mstack.pop() {
@@ -291,6 +259,41 @@ where
             m0.insertm(first_key, m_fpos)?;
         }
         b.mstack.push(m0);
+        Ok(())
+    }
+
+    fn finalize1(&mut self, b: &mut BuildData<K, V>) -> Result<()> {
+        if let Some(first_key) = b.z.first_key() {
+            let (zbytes, vbytes) = b.z.finalize(&mut self.stats);
+            b.z.flush(&mut self.i_flusher, self.v_flusher.as_mut());
+            b.update_z_flush(zbytes, vbytes);
+            let mut m = b.mstack.pop().unwrap();
+            if let Err(_) = m.insertz(&first_key, b.z_fpos) {
+                let mbytes = m.finalize(&mut self.stats);
+                m.flush(&mut self.i_flusher);
+                b.update_m_flush(mbytes);
+                self.insertms(m.first_key(), b)?;
+
+                m.reset();
+                m.insertz(&first_key, b.z_fpos)?;
+                b.reset();
+            }
+            b.mstack.push(m);
+        };
+        Ok(())
+    }
+
+    fn finalize2(&mut self, b: &mut BuildData<K, V>) -> Result<()> {
+        while let Some(mut m) = b.mstack.pop() {
+            if let Some(first_key) = m.first_key() {
+                let mbytes = m.finalize(&mut self.stats);
+                m.flush(&mut self.i_flusher);
+                b.update_m_flush(mbytes);
+                self.insertms(Some(first_key), b)?;
+
+                b.reset();
+            }
+        }
         Ok(())
     }
 

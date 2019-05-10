@@ -4,86 +4,13 @@ use lazy_static::lazy_static;
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::{cmp, ffi, fs, io::Write, marker, mem, path, thread, time};
 
+use crate::bubt_config::{Config, MetaItem};
+use crate::bubt_stats::Stats;
 use crate::core::{Diff, Entry, Result, Serialize};
 use crate::error::BognError;
 use crate::vlog;
 
 include!("./bubt_indx.rs");
-
-#[derive(Default, Clone)]
-pub struct Config {
-    pub dir: String,
-    pub z_blocksize: usize,
-    pub m_blocksize: usize,
-    pub v_blocksize: usize,
-    pub tomb_purge: Option<u64>,
-    pub vlog_ok: bool,
-    pub vlog_file: Option<ffi::OsString>,
-    pub value_in_vlog: bool,
-}
-
-impl Config {
-    const ZBLOCKSIZE: usize = 4 * 1024;
-    const MBLOCKSIZE: usize = 4 * 1024;
-    const VBLOCKSIZE: usize = 4 * 1024;
-
-    // New default configuration:
-    // * With ZBLOCKSIZE, MBLOCKSIZE, VBLOCKSIZE.
-    // * Without a separate vlog-file for value.
-    // * Without tombstone purge for deleted values.
-    pub fn new(dir: String) -> Config {
-        Config {
-            dir,
-            z_blocksize: Self::ZBLOCKSIZE,
-            v_blocksize: Self::VBLOCKSIZE,
-            m_blocksize: Self::MBLOCKSIZE,
-            tomb_purge: Default::default(),
-            vlog_ok: Default::default(),
-            vlog_file: Default::default(),
-            value_in_vlog: Default::default(),
-        }
-    }
-
-    pub fn set_blocksize(mut self, m: usize, z: usize, v: usize) -> Config {
-        self.m_blocksize = m;
-        self.z_blocksize = z;
-        self.v_blocksize = v;
-        self
-    }
-
-    pub fn set_tombstone_purge(mut self, before: u64) -> Config {
-        self.tomb_purge = Some(before);
-        self
-    }
-
-    pub fn set_vlog(
-        mut self,
-        vlog_file: Option<ffi::OsString>, /* if None, generate vlog file */
-        value_in_vlog: bool,
-    ) -> Config {
-        self.vlog_ok = true;
-        self.vlog_file = vlog_file;
-        self.value_in_vlog = value_in_vlog;
-        self
-    }
-
-    fn index_file(&self, name: &str) -> ffi::OsString {
-        let mut index_file = path::PathBuf::from(&self.dir);
-        index_file.push(format!("bubt-{}.indx", name));
-        index_file.into_os_string()
-    }
-
-    fn vlog_file(&self, name: &str) -> ffi::OsString {
-        match &self.vlog_file {
-            Some(vlog_file) => vlog_file.clone(),
-            None => {
-                let mut vlog_file = path::PathBuf::from(&self.dir);
-                vlog_file.push(format!("bubt-{}.vlog", name));
-                vlog_file.into_os_string()
-            }
-        }
-    }
-}
 
 pub struct Builder<K, V>
 where
@@ -113,12 +40,15 @@ where
             None
         };
 
+        let mut stats: Stats = From::from(config.clone());
+        stats.name = name.clone();
+
         Ok(Builder {
             name,
             config,
             i_flusher,
             v_flusher,
-            stats: Default::default(),
+            stats,
             phantom_key: marker::PhantomData,
             phantom_val: marker::PhantomData,
         })
@@ -132,20 +62,21 @@ where
             None
         };
 
-        let mut builder = Builder {
-            name,
-            config,
-            i_flusher,
-            v_flusher,
-            stats: Default::default(),
-            phantom_key: marker::PhantomData,
-            phantom_val: marker::PhantomData,
-        };
-        builder.stats.n_abytes = builder
-            .v_flusher
+        let mut stats: Stats = From::from(config.clone());
+        stats.name = name.clone();
+        stats.n_abytes = v_flusher
             .as_ref()
             .map_or(Default::default(), |x| x.fpos as usize);
-        Ok(builder)
+
+        Ok(Builder {
+            name,
+            config: config.clone(),
+            i_flusher,
+            v_flusher,
+            stats: From::from(config),
+            phantom_key: marker::PhantomData,
+            phantom_val: marker::PhantomData,
+        })
     }
 
     pub fn build<I>(mut self, mut iter: I, metadata: Vec<u8>) -> Result<()>
@@ -191,44 +122,22 @@ where
             self.finalize2(&mut b); // flush mblocks
         }
 
-        let elapsed = start.elapsed();
-        let epoch = time::UNIX_EPOCH.elapsed().unwrap().as_nanos();
-        let attributes: Vec<String> = vec![
-            format!(r#""name": {}"#, self.name),
-            format!(r#""zblocksize": {}"#, self.config.z_blocksize),
-            format!(r#""mblocksize": {}"#, self.config.m_blocksize),
-            format!(r#""vblocksize": {}"#, self.config.v_blocksize),
-            format!(r#""buildtime":  "{}""#, elapsed.unwrap().as_nanos()),
-            format!(r#""epoch": {}"#, epoch),
-            format!(r#""seqno": {}"#, self.stats.maxseqno),
-            format!(r#""keymem": {}"#, self.stats.keymem),
-            format!(r#""valmem": {}"#, self.stats.valmem),
-            format!(r#""paddingmem": {}"#, self.stats.padding),
-            format!(r#""z_bytes": {}"#, self.stats.z_bytes),
-            format!(r#""m_bytes": {}"#, self.stats.m_bytes),
-            format!(r#""v_bytes": {}"#, self.stats.v_bytes),
-            format!(r#""n_abytes": {}"#, self.stats.n_abytes),
-            format!(r#""n_count": {}"#, self.stats.n_count),
-            format!(r#""n_deleted": {}"#, self.stats.n_deleted),
-        ];
-        let stats = "{ ".to_owned() + &attributes.join(",") + " }";
+        // start building metadata items for index files
+        let mut meta_items: Vec<MetaItem> = vec![];
+
+        // meta-stats
+        self.stats.buildtime = start.elapsed().unwrap().as_nanos() as u64;
+        self.stats.epoch = time::UNIX_EPOCH.elapsed().unwrap().as_nanos() as i128;
+        let stats = self.stats.to_string();
         if (stats.len() + 8) > self.config.m_blocksize {
             panic!("impossible case");
         }
-        let mut block: Vec<u8> = Vec::with_capacity(self.config.m_blocksize);
-        block.extend_from_slice(&(stats.len() as u64).to_be_bytes());
-        block.extend_from_slice(stats.as_bytes());
-        self.i_flusher.send(block);
-
-        // flush metadata
-        let blocks = ((metadata.len() + 8) / self.config.m_blocksize) + 1;
-        let mut data: Vec<u8> = Vec::with_capacity(blocks * self.config.m_blocksize);
-        let scratch = (metadata.len() as u64).to_be_bytes();
-        data.extend_from_slice(&metadata);
-        data.resize(blocks * self.config.m_blocksize, 0);
-        let loc = data.len() - 8;
-        data[loc..].copy_from_slice(&scratch);
-        self.i_flusher.send(data);
+        meta_items.push(MetaItem::Stats(stats));
+        // metadata
+        meta_items.push(MetaItem::Metadata(metadata));
+        // flush them down
+        self.config
+            .write_meta_items(meta_items, &mut self.i_flusher);
 
         // flush marker block and close
         self.i_flusher.close_wait();
@@ -325,20 +234,6 @@ lazy_static! {
     };
 }
 
-#[derive(Default)]
-pub struct Stats {
-    n_count: usize,
-    n_deleted: usize,
-    maxseqno: u64,
-    n_abytes: usize,
-    keymem: usize,
-    valmem: usize,
-    z_bytes: usize,
-    v_bytes: usize,
-    m_bytes: usize,
-    padding: usize,
-}
-
 pub struct BuildData<K, V>
 where
     K: Clone + Ord + Serialize,
@@ -388,7 +283,7 @@ where
     }
 }
 
-struct FlushClient {
+pub(crate) struct FlushClient {
     tx: mpsc::SyncSender<Vec<u8>>,
     handle: thread::JoinHandle<()>,
     fpos: u64,
@@ -407,7 +302,7 @@ impl FlushClient {
         Ok(FlushClient { tx, handle, fpos })
     }
 
-    fn send(&mut self, block: Vec<u8>) {
+    pub(crate) fn send(&mut self, block: Vec<u8>) {
         self.tx.send(block).unwrap();
     }
 

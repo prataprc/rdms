@@ -22,7 +22,11 @@
 #![feature(rc_into_raw_non_null)]
 #![feature(copy_within)]
 
+extern crate jsondata;
+
 mod bubt_build;
+mod bubt_config;
+mod bubt_stats;
 mod core;
 mod error;
 mod llrb;
@@ -39,6 +43,7 @@ mod vlog;
 
 //pub use crate::bubt_build::Builder;
 pub use crate::bubt_build::Builder;
+pub use crate::bubt_config::Config;
 pub use crate::core::{Diff, Result, Serialize};
 pub use crate::error::BognError;
 pub use crate::llrb::Llrb;

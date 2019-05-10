@@ -1,5 +1,7 @@
 use std::{ffi, io};
 
+use crate::jsondata;
+
 // TODO: check unused error variants and double check error arguments.
 
 /// BognError enumerates over all possible errors that this package
@@ -39,11 +41,18 @@ pub enum BognError {
     PartialWrite(usize, usize),
     ValueDecode(Vec<u8>),
     ZBlockOverflow(usize),
+    JsonError(jsondata::Error),
 }
 
 impl From<io::Error> for BognError {
     fn from(err: io::Error) -> BognError {
         BognError::IoError(err)
+    }
+}
+
+impl From<jsondata::Error> for BognError {
+    fn from(err: jsondata::Error) -> BognError {
+        BognError::JsonError(err)
     }
 }
 

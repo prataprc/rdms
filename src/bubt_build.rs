@@ -1,10 +1,9 @@
 // TODO: flush put blocks into tx channel. Right now we simply unwrap()
 
-use lazy_static::lazy_static;
 use std::sync::mpsc::{self, Receiver, SyncSender};
-use std::{cmp, ffi, fs, io::Write, marker, mem, path, thread, time};
+use std::{cmp, fs, io::Write, marker, mem, thread, time};
 
-use crate::bubt_config::{Config, MetaItem};
+use crate::bubt_config::{Config, MetaItem, MARKER_BLOCK};
 use crate::bubt_stats::Stats;
 use crate::core::{Diff, Entry, Result, Serialize};
 use crate::error::BognError;
@@ -33,9 +32,12 @@ where
     V: Default + Clone + Diff + Serialize,
 {
     pub fn initial(name: String, config: Config) -> Result<Builder<K, V>> {
-        let i_flusher = FlushClient::new(config.index_file(&name), false)?;
+        let i_flusher = FlushClient::new(Config::index_file(&config.dir, &name), false)?;
         let v_flusher = if config.vlog_ok {
-            Some(FlushClient::new(config.vlog_file(&name), false)?)
+            Some(FlushClient::new(
+                config.vlog_file_w(&config.dir, &name),
+                false,
+            )?)
         } else {
             None
         };
@@ -55,9 +57,12 @@ where
     }
 
     pub fn incremental(name: String, config: Config) -> Result<Builder<K, V>> {
-        let i_flusher = FlushClient::new(config.index_file(&name), false)?;
+        let i_flusher = FlushClient::new(Config::index_file(&config.dir, &name), false)?;
         let v_flusher = if config.vlog_ok {
-            Some(FlushClient::new(config.vlog_file(&name), true)?)
+            Some(FlushClient::new(
+                config.vlog_file_w(&config.dir, &name),
+                true,
+            )?)
         } else {
             None
         };
@@ -73,7 +78,7 @@ where
             config: config.clone(),
             i_flusher,
             v_flusher,
-            stats: From::from(config),
+            stats,
             phantom_key: marker::PhantomData,
             phantom_val: marker::PhantomData,
         })
@@ -135,6 +140,8 @@ where
         meta_items.push(MetaItem::Stats(stats));
         // metadata
         meta_items.push(MetaItem::Metadata(metadata));
+        // marker
+        meta_items.push(MetaItem::Marker(MARKER_BLOCK.clone()));
         // flush them down
         self.config
             .write_meta_items(meta_items, &mut self.i_flusher);
@@ -226,14 +233,6 @@ where
     }
 }
 
-lazy_static! {
-    pub static ref MARKER_BLOCK: Vec<u8> = {
-        let mut block: Vec<u8> = Vec::with_capacity(Flusher::MARKER_BLOCK_SIZE);
-        block.resize(Flusher::MARKER_BLOCK_SIZE, Flusher::MARKER_BYTE);
-        block
-    };
-}
-
 pub struct BuildData<K, V>
 where
     K: Clone + Ord + Serialize,
@@ -290,8 +289,8 @@ pub(crate) struct FlushClient {
 }
 
 impl FlushClient {
-    fn new(file: ffi::OsString, append: bool) -> Result<FlushClient> {
-        let fd = Self::open_file(file.clone(), append)?;
+    fn new(file: String, append: bool) -> Result<FlushClient> {
+        let fd = Config::open_file(&file, true /*write*/, append)?;
         let (flusher, tx, rx) = Flusher::new(file.clone(), fd);
         let fpos = if append {
             fs::metadata(file)?.len()
@@ -310,31 +309,16 @@ impl FlushClient {
         mem::drop(self.tx);
         self.handle.join().unwrap();
     }
-
-    fn open_file(file: ffi::OsString, append: bool) -> Result<fs::File> {
-        let p = path::Path::new(&file);
-        let parent = p.parent().ok_or(BognError::InvalidFile(file.clone()))?;
-        fs::create_dir_all(parent)?;
-
-        let mut opts = fs::OpenOptions::new();
-        Ok(match append {
-            false => opts.append(true).create_new(true).open(p)?,
-            true => opts.append(true).open(p)?,
-        })
-    }
 }
 
 struct Flusher {
-    file: ffi::OsString,
+    file: String,
     fd: fs::File,
 }
 
 impl Flusher {
-    const MARKER_BLOCK_SIZE: usize = 1024 * 4;
-    const MARKER_BYTE: u8 = 0xAB;
-
     fn new(
-        file: ffi::OsString, /* for logging purpose */
+        file: String, /* for logging purpose */
         fd: fs::File,
     ) -> (Flusher, SyncSender<Vec<u8>>, Receiver<Vec<u8>>) {
         let (tx, rx) = mpsc::sync_channel(16); // TODO: No magic number
@@ -344,11 +328,9 @@ impl Flusher {
     fn run(mut self, rx: mpsc::Receiver<Vec<u8>>) {
         for data in rx.iter() {
             if !self.write_data(&data) {
-                // file descriptor and receiver channel shall be dropped.
-                return;
+                break;
             }
         }
-        self.write_data(&MARKER_BLOCK);
         // file descriptor and receiver channel shall be dropped.
     }
 

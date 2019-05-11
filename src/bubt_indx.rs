@@ -197,13 +197,10 @@ where
 
     fn try_encode_deltas(&mut self, entry: &Entry<K, V>) -> (usize, usize) {
         match self {
-            ZBlock::Encode { d_bufs, config, .. } => {
-                if config.vlog_file.is_none() {
-                    (0, 0)
-                } else {
-                    Self::encode_deltas(d_bufs, entry)
-                }
-            }
+            ZBlock::Encode { d_bufs, config, .. } => match config.vlog_file {
+                None => (0, 0),
+                Some(_) => Self::encode_deltas(d_bufs, entry),
+            },
         }
     }
 

@@ -4,13 +4,14 @@ use crate::bubt_config::Config;
 use crate::error::BognError;
 use crate::jsondata::{Json, Property};
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Stats {
     pub name: String,
     pub zblocksize: usize,
     pub mblocksize: usize,
     pub vblocksize: usize,
     pub vlog_ok: bool,
+    pub vlog_file: Option<String>,
     pub value_in_vlog: bool,
 
     pub n_count: usize,
@@ -36,6 +37,7 @@ impl From<Config> for Stats {
             mblocksize: config.m_blocksize,
             vblocksize: config.v_blocksize,
             vlog_ok: config.vlog_ok,
+            vlog_file: config.vlog_file,
             value_in_vlog: config.value_in_vlog,
 
             n_count: Default::default(),
@@ -66,6 +68,7 @@ impl FromStr for Stats {
             mblocksize: js.get("/mblocksize")?.integer().unwrap() as usize,
             vblocksize: js.get("/vblocksize")?.integer().unwrap() as usize,
             vlog_ok: js.get("/vlog_ok")?.boolean().unwrap(),
+            vlog_file: Some(js.get("/vlog_file")?.string().unwrap()),
             value_in_vlog: js.get("/value_in_vlog")?.boolean().unwrap(),
 
             n_count: js.get("/n_count")?.integer().unwrap() as usize,
@@ -93,6 +96,10 @@ impl Display for Stats {
         js.set("/mblocksize", Json::new(self.mblocksize as i128));
         js.set("/vblocksize", Json::new(self.vblocksize as i128));
         js.set("/vlog_ok", Json::new(self.vlog_ok));
+        js.set(
+            "/vlog_file",
+            Json::new(self.vlog_file.clone().map_or("".to_string(), From::from)),
+        );
         js.set("/value_in_vlog", Json::new(self.value_in_vlog));
 
         js.set("/n_count", Json::new(self.n_count as i128));

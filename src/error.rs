@@ -1,4 +1,4 @@
-use std::{ffi, io};
+use std::io;
 
 use crate::jsondata;
 
@@ -35,13 +35,15 @@ pub enum BognError {
     /// MVCC algorithm uses dirty node marker for newly created nodes
     /// in its mutation path.
     DirtyNode,
-    InvalidFile(ffi::OsString),
+    InvalidFile(String),
     IoError(io::Error),
     PartialRead(usize, usize),
     PartialWrite(usize, usize),
     ValueDecode(Vec<u8>),
     ZBlockOverflow(usize),
     JsonError(jsondata::Error),
+    InvalidSnapshot(String),
+    Utf8Error(std::str::Utf8Error),
 }
 
 impl From<io::Error> for BognError {
@@ -53,6 +55,12 @@ impl From<io::Error> for BognError {
 impl From<jsondata::Error> for BognError {
     fn from(err: jsondata::Error) -> BognError {
         BognError::JsonError(err)
+    }
+}
+
+impl From<std::str::Utf8Error> for BognError {
+    fn from(err: std::str::Utf8Error) -> BognError {
+        BognError::Utf8Error(err)
     }
 }
 

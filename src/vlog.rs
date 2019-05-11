@@ -1,5 +1,5 @@
 use std::{
-    ffi, fs,
+    fs,
     io::{self, Read, Seek, Write},
 };
 
@@ -27,8 +27,8 @@ where
         length: u64,
     },
     Backup {
-        file: ffi::OsString, // must be a vlog or index filename with path
-        fpos: u64,           // point to payload in index-file or vlog-file
+        file: String, // must be a vlog or index filename with path
+        fpos: u64,    // point to payload in index-file or vlog-file
         length: u64,
     }, // points to entry on disk.
 }
@@ -47,7 +47,7 @@ where
         Value::Reference { fpos, length }
     }
 
-    pub(crate) fn new_backup(file: ffi::OsString, fpos: u64, length: u64) -> Value<V> {
+    pub(crate) fn new_backup(file: String, fpos: u64, length: u64) -> Value<V> {
         Value::Backup { file, fpos, length }
     }
 
@@ -136,8 +136,8 @@ where
         length: u64,
     },
     Backup {
-        file: ffi::OsString, // must be a vlog file name, with full path
-        fpos: u64,           // point to value payload in vlog-file
+        file: String, // must be a vlog file name, with full path
+        fpos: u64,    // point to value payload in vlog-file
         length: u64,
     }, // points to entry on disk.
 }
@@ -154,7 +154,7 @@ where
         Delta::Reference { fpos, length }
     }
 
-    pub(crate) fn new_backup(file: ffi::OsString, fpos: u64, length: u64) -> Delta<V> {
+    pub(crate) fn new_backup(file: String, fpos: u64, length: u64) -> Delta<V> {
         Delta::Backup { file, fpos, length }
     }
 

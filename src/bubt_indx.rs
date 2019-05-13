@@ -1,5 +1,20 @@
 // TODO: flush put blocks into tx channel. Right now we simply unwrap()
 
+use std::{
+    convert::{TryFrom, TryInto},
+    fs,
+    io::{self, Read, Seek},
+    marker,
+    ops::Bound,
+};
+
+use crate::bubt_build::FlushClient;
+use crate::bubt_config::Config;
+use crate::bubt_stats::Stats;
+use crate::core::{self, Diff, Result, Serialize};
+use crate::error::BognError;
+use crate::vlog;
+
 // Binary format (ZDelta):
 //
 // *-----*------------------------------------*
@@ -67,9 +82,9 @@
 // |                ZEntry-n                  |
 // *------------------------------------------*
 
-enum ZBlock<K, V>
+pub enum ZBlock<K, V>
 where
-    K: Clone + Ord + Serialize,
+    K: Default + Clone + Ord + Serialize,
     V: Default + Clone + Diff + Serialize,
 {
     Encode {
@@ -86,18 +101,26 @@ where
 
         phantom_val: marker::PhantomData<V>,
     },
+    Decode {
+        count: usize,
+        adjust: usize,
+        offsets: Vec<u8>,
+        entries: Vec<u8>,
+    },
 }
 
 impl<K, V> ZBlock<K, V>
 where
-    K: Clone + Ord + Serialize,
+    K: Default + Clone + Ord + Serialize,
     V: Default + Clone + Diff + Serialize,
 {
     const DELTA_HEADER: usize = 8 + 8 + 8 + 8;
     const ENTRY_HEADER: usize = 8 + 8 + 8 + 8;
     const FLAGS_VLOG: u64 = 0x1000000000000000;
+    const FLAGS_VLEN: u64 = 0xF000000000000000;
+    const FLAGS_DLEN: u64 = 0xF000000000000000;
 
-    fn new_encode(vpos: u64, config: Config) -> ZBlock<K, V> {
+    pub(crate) fn new_encode(vpos: u64, config: Config) -> ZBlock<K, V> {
         ZBlock::Encode {
             i_block: Vec::with_capacity(config.z_blocksize),
             v_block: Vec::with_capacity(config.v_blocksize),
@@ -113,7 +136,7 @@ where
         }
     }
 
-    fn reset(&mut self, vpos: u64) {
+    pub(crate) fn reset(&mut self, vpos: u64) {
         match self {
             ZBlock::Encode {
                 i_block,
@@ -129,16 +152,18 @@ where
                 *vpos_ref = vpos;
                 *first_key = None;
             }
+            ZBlock::Decode { .. } => unreachable!(),
         }
     }
 
-    fn first_key(&self) -> Option<K> {
+    pub(crate) fn first_key(&self) -> Option<K> {
         match self {
             ZBlock::Encode { first_key, .. } => first_key.clone(),
+            ZBlock::Decode { .. } => unreachable!(),
         }
     }
 
-    fn insert(&mut self, entry: &Entry<K, V>, stats: &mut Stats) -> Result<()> {
+    pub(crate) fn insert(&mut self, entry: &core::Entry<K, V>, stats: &mut Stats) -> Result<()> {
         let mut size = Self::ENTRY_HEADER;
         let kmem = self.encode_key(entry);
         let (vmem1, vmem2) = self.try_encode_value(entry);
@@ -160,30 +185,33 @@ where
                     Err(BognError::ZBlockOverflow(req - cap))
                 }
             }
+            ZBlock::Decode { .. } => unreachable!(),
         }
     }
 
-    fn encode_key(&mut self, entry: &Entry<K, V>) -> usize {
+    fn encode_key(&mut self, entry: &core::Entry<K, V>) -> usize {
         match self {
             ZBlock::Encode { k_buf, .. } => {
                 k_buf.truncate(0);
                 entry.key_ref().encode(k_buf);
                 k_buf.len()
             }
+            ZBlock::Decode { .. } => unreachable!(),
         }
     }
 
-    fn try_encode_value(&mut self, entry: &Entry<K, V>) -> (usize, usize) {
+    fn try_encode_value(&mut self, entry: &core::Entry<K, V>) -> (usize, usize) {
         match self {
             ZBlock::Encode { v_buf, config, .. } => {
                 let vmem = Self::encode_value(v_buf, entry);
                 let hmem = if config.value_in_vlog { 8 } else { vmem };
                 (hmem, vmem)
             }
+            ZBlock::Decode { .. } => unreachable!(),
         }
     }
 
-    fn encode_value(v_buf: &mut Vec<u8>, entry: &Entry<K, V>) -> usize {
+    fn encode_value(v_buf: &mut Vec<u8>, entry: &core::Entry<K, V>) -> usize {
         v_buf.truncate(0);
         match entry.vlog_value_ref() {
             vlog::Value::Native { value } => {
@@ -195,18 +223,19 @@ where
         }
     }
 
-    fn try_encode_deltas(&mut self, entry: &Entry<K, V>) -> (usize, usize) {
+    fn try_encode_deltas(&mut self, entry: &core::Entry<K, V>) -> (usize, usize) {
         match self {
             ZBlock::Encode { d_bufs, config, .. } => match config.vlog_file {
                 None => (0, 0),
                 Some(_) => Self::encode_deltas(d_bufs, entry),
             },
+            ZBlock::Decode { .. } => unreachable!(),
         }
     }
 
     fn encode_deltas(
         d_bufs: &mut Vec<Vec<u8>>, /* list of buffers for delta encoding */
-        entry: &Entry<K, V>,
+        entry: &core::Entry<K, V>,
     ) -> (usize, usize) {
         let (mut entry_size, mut dmem) = (0, 0);
         d_bufs.truncate(0);
@@ -229,10 +258,11 @@ where
     fn compute_next_offset(&self) -> usize {
         match self {
             ZBlock::Encode { offsets, .. } => 4 + ((offsets.len() + 1) * 4),
+            ZBlock::Decode { .. } => unreachable!(),
         }
     }
 
-    fn encode_entry(&mut self, entry: &Entry<K, V>, vlen: u64) {
+    fn encode_entry(&mut self, entry: &core::Entry<K, V>, vlen: u64) {
         self.start_encode_entry();
 
         let (i_block, v_block, vpos, k_buf, v_buf, d_bufs, config) = match self {
@@ -246,6 +276,7 @@ where
                 config,
                 ..
             } => (i_block, v_block, vpos, k_buf, v_buf, d_bufs, config),
+            ZBlock::Decode { .. } => unreachable!(),
         };
 
         // header
@@ -313,6 +344,7 @@ where
             } => {
                 offsets.push(i_block.len() as u32); // adjust this in finalize
             }
+            ZBlock::Decode { .. } => unreachable!(),
         }
     }
 
@@ -321,7 +353,7 @@ where
         klen: u64,
         num_deltas: u64,
         vlen: u64,
-        entry: &Entry<K, V>,
+        entry: &core::Entry<K, V>,
         config: &Config,
     ) {
         // key header field, klen and number-of-deltas
@@ -340,7 +372,7 @@ where
         i_block.extend_from_slice(&entry.dead_seqno().unwrap_or(0).to_be_bytes());
     }
 
-    fn finalize(&mut self, stats: &mut Stats) -> (usize, usize) {
+    pub(crate) fn finalize(&mut self, stats: &mut Stats) -> (usize, usize) {
         match self {
             ZBlock::Encode {
                 i_block,
@@ -367,10 +399,15 @@ where
                 stats.v_bytes += v_block.len();
                 (config.z_blocksize, v_block.len())
             }
+            ZBlock::Decode { .. } => unreachable!(),
         }
     }
 
-    fn flush(&mut self, i_flusher: &mut FlushClient, v_flusher: Option<&mut FlushClient>) {
+    pub(crate) fn flush(
+        &mut self,
+        i_flusher: &mut FlushClient,
+        v_flusher: Option<&mut FlushClient>,
+    ) {
         match self {
             ZBlock::Encode {
                 i_block, v_block, ..
@@ -378,7 +415,175 @@ where
                 i_flusher.send(i_block.clone());
                 v_flusher.map(|x| x.send(v_block.clone()));
             }
+            ZBlock::Decode { .. } => unreachable!(),
         }
+    }
+}
+
+impl<K, V> ZBlock<K, V>
+where
+    K: Default + Clone + Ord + Serialize,
+    V: Default + Clone + Diff + Serialize,
+{
+    fn new_decode(fd: &mut fs::File, fpos: u64, config: Config) -> Result<ZBlock<K, V>> {
+        let mut block: Vec<u8> = Vec::with_capacity(config.z_blocksize);
+        block.resize(block.capacity(), 0);
+        fd.seek(io::SeekFrom::Start(fpos))?;
+        let n = fd.read(&mut block)?;
+        if n != block.len() {
+            return Err(BognError::PartialRead(block.len(), n));
+        }
+        let count = u32::from_be_bytes(block[..4].try_into().unwrap());
+        let adjust = 4 + (count * 4) as usize;
+        Ok(ZBlock::Decode {
+            count: count as usize,
+            adjust,
+            offsets: block[4..adjust].to_vec(),
+            entries: block[adjust..].to_vec(), // TODO: Avoid copy ?
+        })
+    }
+
+    fn find(
+        &self,
+        key: &K,
+        from: Bound<usize>,
+        to: Bound<usize>,
+    ) -> Result<(usize, core::Entry<K, V>)> {
+        let pivot = self.find_pivot(from, to)?;
+        match (pivot, from) {
+            (-1, Bound::Included(f)) => self.entry_at(f + 1), // exact match not found
+            (0, Bound::Included(f)) => self.entry_at(f),
+            (n, _) => {
+                if key.lt(&(self.key_at(n as usize)?)) {
+                    self.find(key, from, Bound::Excluded(pivot as usize))
+                } else {
+                    self.find(key, Bound::Included(pivot as usize), to)
+                }
+            }
+        }
+    }
+
+    fn find_pivot(&self, from: Bound<usize>, to: Bound<usize>) -> Result<isize> {
+        let count = match self {
+            ZBlock::Decode { count, .. } => count,
+            _ => unreachable!(),
+        };
+        let to = match to {
+            Bound::Excluded(to) => to as usize,
+            Bound::Unbounded => *count,
+            Bound::Included(_) => unreachable!(),
+        };
+        let from = match from {
+            Bound::Included(from) | Bound::Excluded(from) => from,
+            _ => unreachable!(),
+        };
+        match to - from {
+            n if n < 0 => unreachable!(),
+            0 => Ok(-1),
+            1 => Ok(0),
+            n => Ok(isize::try_from(n).unwrap() / 2),
+        }
+    }
+
+    fn entry_at(&self, index: usize) -> Result<(usize, core::Entry<K, V>)> {
+        let (count, adjust, offsets, entries) = match self {
+            ZBlock::Decode {
+                count,
+                adjust,
+                offsets,
+                entries,
+            } => (*count, *adjust, offsets, entries),
+            _ => unreachable!(),
+        };
+        if index < count {
+            let offset = u32::from_be_bytes(offsets[index..index + 4].try_into().unwrap()) as usize;
+            let entry = &entries[offset - adjust..];
+            let mut n = 0;
+            let a = u64::from_be_bytes(entry[n..n + 8].try_into().unwrap());
+            let n_deltas = a & 0xFFFFFFFF;
+            let klen = (a >> 32) as usize;
+            n += 8;
+
+            let vlen = u64::from_be_bytes(entry[n..n + 8].try_into().unwrap());
+            n += 8;
+            let vref = (vlen & Self::FLAGS_VLEN) == Self::FLAGS_VLEN;
+            let vlen: usize = (vlen & (!Self::FLAGS_VLEN)).try_into().unwrap();
+
+            let seqno = u64::from_be_bytes(entry[n..n + 8].try_into().unwrap());
+            n += 8;
+
+            let deleted = match u64::from_be_bytes(entry[n..n + 8].try_into().unwrap()) {
+                0 => None,
+                n => Some(n),
+            };
+            n += 8;
+
+            let mut key: K = Default::default();
+            key.decode(&entry[n..n + klen])?;
+            n += klen;
+
+            let value = if vref {
+                let fpos = u64::from_be_bytes(entry[n..n + 8].try_into().unwrap());
+                n += 8;
+                vlog::Value::Reference {
+                    fpos,
+                    length: vlen as u64,
+                }
+            } else {
+                let mut value: V = Default::default();
+                value.decode(&entry[n..n + vlen])?;
+                n += vlen;
+                vlog::Value::Native { value }
+            };
+
+            let mut deltas: Vec<core::Delta<V>> = vec![];
+            for _i in 0..n_deltas {
+                let mut dlen = u64::from_be_bytes(entry[n..n + 8].try_into().unwrap());
+                dlen = dlen & (!Self::FLAGS_DLEN);
+                n += 8;
+
+                let seqno = u64::from_be_bytes(entry[n..n + 8].try_into().unwrap());
+                n += 8;
+
+                let deleted = match u64::from_be_bytes(entry[n..n + 8].try_into().unwrap()) {
+                    0 => None,
+                    n => Some(n),
+                };
+                n += 8;
+
+                let fpos = u64::from_be_bytes(entry[n..n + 8].try_into().unwrap());
+                n += 8;
+
+                let delta = vlog::Delta::Reference { fpos, length: dlen };
+                deltas.push(core::Delta::new(delta, seqno, deleted));
+            }
+            Ok((index, core::Entry::new(key, value, seqno, deleted, deltas)))
+        } else {
+            Err(BognError::ZBlockExhausted)
+        }
+    }
+
+    fn key_at(&self, index: usize) -> Result<K> {
+        let (adjust, offsets, entries) = match self {
+            ZBlock::Decode {
+                adjust,
+                offsets,
+                entries,
+                ..
+            } => (*adjust, offsets, entries),
+            _ => unreachable!(),
+        };
+        let offset = u32::from_be_bytes(offsets[index..index + 4].try_into().unwrap()) as usize;
+        let entry = &entries[offset - adjust..];
+        let mut n = 0;
+        let klen = (u64::from_be_bytes(entry[n..n + 8].try_into().unwrap()) >> 32) as usize;
+        n += 8;
+
+        n += 8 + 8 + 8;
+
+        let mut key: K = Default::default();
+        key.decode(&entry[n..n + klen])?;
+        Ok(key)
     }
 }
 
@@ -416,9 +621,10 @@ where
 // |                MEntry-n                  |
 // *------------------------------------------*
 
-enum MBlock<K>
+pub enum MBlock<K, V>
 where
-    K: Clone + Ord + Serialize,
+    K: Default + Clone + Ord + Serialize,
+    V: Default + Clone + Diff + Serialize,
 {
     Encode {
         i_block: Vec<u8>,
@@ -428,16 +634,24 @@ where
         k_buf: Vec<u8>,
         config: Config,
     },
+    Decode {
+        count: usize,
+        adjust: usize,
+        offsets: Vec<u8>,
+        entries: Vec<u8>,
+        phantom_val: marker::PhantomData<V>,
+    },
 }
 
-impl<K> MBlock<K>
+impl<K, V> MBlock<K, V>
 where
-    K: Clone + Ord + Serialize,
+    K: Default + Clone + Ord + Serialize,
+    V: Default + Clone + Diff + Serialize,
 {
     const ENTRY_HEADER: usize = 8 + 8;
     const FLAGS_ZBLOCK: u64 = 0x1000000000000000;
 
-    fn new_encode(config: Config) -> MBlock<K> {
+    pub(crate) fn new_encode(config: Config) -> MBlock<K, V> {
         MBlock::Encode {
             i_block: Vec::with_capacity(config.m_blocksize),
             offsets: Default::default(),
@@ -447,7 +661,7 @@ where
         }
     }
 
-    fn reset(&mut self) {
+    pub(crate) fn reset(&mut self) {
         match self {
             MBlock::Encode {
                 i_block,
@@ -459,16 +673,18 @@ where
                 offsets.truncate(0);
                 *first_key = None;
             }
+            MBlock::Decode { .. } => unreachable!(),
         }
     }
 
-    fn first_key(&self) -> Option<K> {
+    pub(crate) fn first_key(&self) -> Option<K> {
         match self {
             MBlock::Encode { first_key, .. } => first_key.clone(),
+            MBlock::Decode { .. } => unreachable!(),
         }
     }
 
-    fn insertz(&mut self, key: &K, child_fpos: u64) -> Result<bool> {
+    pub(crate) fn insertz(&mut self, key: &K, child_fpos: u64) -> Result<bool> {
         let mut size = Self::ENTRY_HEADER;
         size += self.encode_key(key);
         size += self.compute_next_offset();
@@ -486,10 +702,11 @@ where
                     Err(BognError::ZBlockOverflow(req - cap))
                 }
             }
+            MBlock::Decode { .. } => unreachable!(),
         }
     }
 
-    fn insertm(&mut self, key: &K, child_fpos: u64) -> Result<bool> {
+    pub(crate) fn insertm(&mut self, key: &K, child_fpos: u64) -> Result<bool> {
         let mut size = Self::ENTRY_HEADER;
         size += self.encode_key(&key);
         size += self.compute_next_offset();
@@ -507,6 +724,7 @@ where
                     Err(BognError::ZBlockOverflow(req - cap))
                 }
             }
+            MBlock::Decode { .. } => unreachable!(),
         }
     }
 
@@ -517,12 +735,14 @@ where
                 key.encode(k_buf);
                 k_buf.len()
             }
+            MBlock::Decode { .. } => unreachable!(),
         }
     }
 
     fn compute_next_offset(&self) -> usize {
         match self {
             MBlock::Encode { offsets, .. } => 4 + ((offsets.len() + 1) * 4),
+            MBlock::Decode { .. } => unreachable!(),
         }
     }
 
@@ -546,6 +766,7 @@ where
                 i_block.extend_from_slice(&child_fpos.to_be_bytes());
                 i_block.extend_from_slice(k_buf);
             }
+            MBlock::Decode { .. } => unreachable!(),
         };
     }
 
@@ -556,10 +777,11 @@ where
             } => {
                 offsets.push(i_block.len() as u32); // adjust this during finalize
             }
+            MBlock::Decode { .. } => unreachable!(),
         }
     }
 
-    fn finalize(&mut self, stats: &mut Stats) -> usize {
+    pub(crate) fn finalize(&mut self, stats: &mut Stats) -> usize {
         match self {
             MBlock::Encode {
                 i_block,
@@ -585,14 +807,143 @@ where
                 stats.m_bytes += config.m_blocksize;
                 config.m_blocksize
             }
+            MBlock::Decode { .. } => unreachable!(),
         }
     }
 
-    fn flush(&mut self, i_flusher: &mut FlushClient) {
+    pub(crate) fn flush(&mut self, i_flusher: &mut FlushClient) {
         match self {
             MBlock::Encode { i_block, .. } => {
                 i_flusher.send(i_block.clone());
             }
+            MBlock::Decode { .. } => unreachable!(),
         }
+    }
+}
+
+impl<K, V> MBlock<K, V>
+where
+    K: Default + Clone + Ord + Serialize,
+    V: Default + Clone + Diff + Serialize,
+{
+    fn new_decode(fd: &mut fs::File, fpos: u64, config: Config) -> Result<MBlock<K, V>> {
+        let mut block: Vec<u8> = Vec::with_capacity(config.m_blocksize);
+        block.resize(block.capacity(), 0);
+        fd.seek(io::SeekFrom::Start(fpos))?;
+        let n = fd.read(&mut block)?;
+        if n != block.len() {
+            return Err(BognError::PartialRead(block.len(), n));
+        }
+        let count = u32::from_be_bytes(block[..4].try_into().unwrap());
+        let adjust = (4 + (count * 4)) as usize;
+        Ok(MBlock::Decode {
+            count: count as usize,
+            adjust,
+            offsets: block[4..adjust].to_vec(),
+            entries: block[adjust..].to_vec(), // TODO: Avoid copy ?
+            phantom_val: marker::PhantomData,
+        })
+    }
+
+    fn find(
+        &self,
+        key: &K,
+        from: Bound<usize>,
+        to: Bound<usize>,
+    ) -> Result<(usize, bool, core::Entry<K, V>)> {
+        let pivot = self.find_pivot(from, to)?;
+        match (pivot, from) {
+            (-1, Bound::Included(f)) => self.entry_at(f + 1), // exact match not found
+            (0, Bound::Included(f)) => self.entry_at(f),
+            (n, _) => {
+                if key.lt(&(self.key_at(n as usize)?)) {
+                    self.find(key, from, Bound::Excluded(pivot as usize))
+                } else {
+                    self.find(key, Bound::Included(pivot as usize), to)
+                }
+            }
+        }
+    }
+
+    fn find_pivot(&self, from: Bound<usize>, to: Bound<usize>) -> Result<isize> {
+        let count = match self {
+            MBlock::Decode { count, .. } => *count,
+            _ => unreachable!(),
+        };
+        let to = match to {
+            Bound::Excluded(to) => to,
+            Bound::Unbounded => count,
+            Bound::Included(_) => unreachable!(),
+        };
+        let from = match from {
+            Bound::Included(from) | Bound::Excluded(from) => from,
+            _ => unreachable!(),
+        };
+        match to - from {
+            n if n < 0 => unreachable!(),
+            0 => Ok(-1),
+            1 => Ok(0),
+            n => Ok((n / 2).try_into().unwrap()),
+        }
+    }
+
+    fn entry_at(&self, index: usize) -> Result<(usize, bool, core::Entry<K, V>)> {
+        let (count, adjust, offsets, entries) = match self {
+            MBlock::Decode {
+                count,
+                adjust,
+                offsets,
+                entries,
+                ..
+            } => (*count, *adjust, offsets, entries),
+            _ => unreachable!(),
+        };
+        if index < count {
+            let offset = u32::from_be_bytes(offsets[index..index + 4].try_into().unwrap()) as usize;
+            let entry = &entries[offset - adjust..];
+            let mut n = 0;
+            let a = u64::from_be_bytes(entry[n..n + 8].try_into().unwrap());
+            let zchild = (a & Self::FLAGS_ZBLOCK) == Self::FLAGS_ZBLOCK;
+            let klen = (a >> 32) as usize;
+            n += 8;
+
+            let fpos = u64::from_be_bytes(entry[n..n + 8].try_into().unwrap());
+            n += 8;
+
+            let mut key: K = Default::default();
+            key.decode(&entry[n..n + klen])?;
+
+            let value = vlog::Value::Reference { fpos, length: 0 };
+            Ok((
+                index,
+                zchild,
+                core::Entry::new(key, value, Default::default(), None, vec![]),
+            ))
+        } else {
+            Err(BognError::MBlockExhausted)
+        }
+    }
+
+    fn key_at(&self, index: usize) -> Result<K> {
+        let (adjust, offsets, entries) = match self {
+            MBlock::Decode {
+                adjust,
+                offsets,
+                entries,
+                ..
+            } => (*adjust, offsets, entries),
+            _ => unreachable!(),
+        };
+        let offset = u32::from_be_bytes(offsets[index..index + 4].try_into().unwrap()) as usize;
+        let entry = &entries[offset - adjust..];
+        let mut n = 0;
+        let klen = (u64::from_be_bytes(entry[n..n + 8].try_into().unwrap()) >> 32) as usize;
+        n += 8;
+
+        n += 8;
+
+        let mut key: K = Default::default();
+        key.decode(&entry[n..n + klen])?;
+        Ok(key)
     }
 }

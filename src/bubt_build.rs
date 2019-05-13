@@ -4,16 +4,14 @@ use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::{cmp, fs, io::Write, marker, mem, thread, time};
 
 use crate::bubt_config::{Config, MetaItem, MARKER_BLOCK};
+use crate::bubt_indx::{MBlock, ZBlock};
 use crate::bubt_stats::Stats;
 use crate::core::{Diff, Entry, Result, Serialize};
 use crate::error::BognError;
-use crate::vlog;
-
-include!("./bubt_indx.rs");
 
 pub struct Builder<K, V>
 where
-    K: Ord + Clone + Serialize,
+    K: Default + Ord + Clone + Serialize,
     V: Default + Clone + Diff + Serialize,
 {
     name: String,
@@ -28,7 +26,7 @@ where
 
 impl<K, V> Builder<K, V>
 where
-    K: Ord + Clone + Serialize,
+    K: Default + Ord + Clone + Serialize,
     V: Default + Clone + Diff + Serialize,
 {
     pub fn initial(name: String, config: Config) -> Result<Builder<K, V>> {
@@ -123,8 +121,8 @@ where
 
         // flush final set partial blocks
         if self.stats.n_count > 0 {
-            self.finalize1(&mut b); // flush zblock
-            self.finalize2(&mut b); // flush mblocks
+            self.finalize1(&mut b)?; // flush zblock
+            self.finalize2(&mut b)?; // flush mblocks
         }
 
         // start building metadata items for index files
@@ -235,11 +233,11 @@ where
 
 pub struct BuildData<K, V>
 where
-    K: Clone + Ord + Serialize,
+    K: Default + Clone + Ord + Serialize,
     V: Default + Clone + Diff + Serialize,
 {
     z: ZBlock<K, V>,
-    mstack: Vec<MBlock<K>>,
+    mstack: Vec<MBlock<K, V>>,
     fpos: u64,
     z_fpos: u64,
     m_fpos: u64,
@@ -248,7 +246,7 @@ where
 
 impl<K, V> BuildData<K, V>
 where
-    K: Clone + Ord + Serialize,
+    K: Default + Clone + Ord + Serialize,
     V: Default + Clone + Diff + Serialize,
 {
     fn new(n_abytes: usize, config: Config) -> BuildData<K, V> {

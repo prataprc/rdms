@@ -44,6 +44,8 @@ pub enum BognError {
     JsonError(jsondata::Error),
     InvalidSnapshot(String),
     Utf8Error(std::str::Utf8Error),
+    ZBlockExhausted,
+    MBlockExhausted,
 }
 
 impl From<io::Error> for BognError {

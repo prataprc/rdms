@@ -1,3 +1,9 @@
+// TODO: Try  to remove Default trait constraint from K anv V
+// parameters
+// TODO: Replace (as ..) type conversions with into() and try_into()
+// conversions
+// TODO: Check all the places where try_into() is used.
+
 use crate::error::BognError;
 use crate::vlog;
 
@@ -43,7 +49,15 @@ impl<V> Delta<V>
 where
     V: Default + Clone + Diff + Serialize,
 {
-    fn new(delta: <V as Diff>::D, seqno: u64, deleted: Option<u64>) -> Delta<V> {
+    pub(crate) fn new(delta: vlog::Delta<V>, seqno: u64, deleted: Option<u64>) -> Delta<V> {
+        Delta {
+            delta,
+            seqno,
+            deleted,
+        }
+    }
+
+    fn new_native(delta: <V as Diff>::D, seqno: u64, deleted: Option<u64>) -> Delta<V> {
         Delta {
             delta: vlog::Delta::new_native(delta),
             seqno,
@@ -100,7 +114,23 @@ where
     K: Ord + Clone + Serialize,
     V: Default + Clone + Diff + Serialize,
 {
-    pub(crate) fn new(key: K, value: V, seqno: u64) -> Entry<K, V> {
+    pub(crate) fn new(
+        key: K,
+        value: vlog::Value<V>,
+        seqno: u64,
+        deleted: Option<u64>,
+        deltas: Vec<Delta<V>>,
+    ) -> Entry<K, V> {
+        Entry {
+            key,
+            value,
+            seqno,
+            deleted: deleted,
+            deltas: deltas,
+        }
+    }
+
+    pub(crate) fn new_native(key: K, value: V, seqno: u64) -> Entry<K, V> {
         Entry {
             key,
             value: vlog::Value::new_native(value),
@@ -115,7 +145,7 @@ where
             match &self.value {
                 vlog::Value::Native { value: old_value } => {
                     let d = value.diff(old_value);
-                    let delta = Delta::new(d, self.seqno, self.deleted);
+                    let delta = Delta::new_native(d, self.seqno, self.deleted);
                     self.deltas.insert(0, delta);
                     self.value = vlog::Value::new_native(value);
                     self.seqno = seqno;

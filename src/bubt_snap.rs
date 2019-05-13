@@ -5,7 +5,7 @@ use std::{marker, path};
 
 use crate::bubt_config::{Config, MetaItem};
 use crate::bubt_stats::Stats;
-use crate::core::{Diff, Entry, Result, Serialize};
+use crate::core::{Diff, Result, Serialize};
 use crate::error::BognError;
 
 pub struct Snapshot<K, V>

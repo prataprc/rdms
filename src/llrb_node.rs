@@ -25,7 +25,7 @@ where
     // CREATE operation
     pub(crate) fn new(k: K, v: V, seqno: u64, black: bool) -> Box<Node<K, V>> {
         let node = Box::new(Node {
-            entry: core::Entry::new(k, v, seqno),
+            entry: core::Entry::new_native(k, v, seqno),
             black,
             dirty: true,
             left: None,

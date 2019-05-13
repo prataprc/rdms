@@ -26,6 +26,7 @@ extern crate jsondata;
 
 mod bubt_build;
 mod bubt_config;
+mod bubt_indx;
 mod bubt_snap;
 mod bubt_stats;
 mod core;

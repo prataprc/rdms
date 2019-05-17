@@ -1,5 +1,5 @@
 //! Bogn provide a collection of algorithms for indexing data either
-//! in memory or in disk or in both. Bogn indexes are defined for
+//! in memory or in disk or in both. Bogn indexes are optimized for
 //! document databases and bigdata. This means:
 //!
 //! Each index will carry a sequence-number as the count of mutations

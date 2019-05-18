@@ -1,4 +1,4 @@
 *.swp
 target
 Cargo.lock
-.vim_session
+.vimsession

@@ -104,12 +104,12 @@ where
                 return Err(BognError::InvalidSnapshot(err));
             }
         };
-
+        // make sure nothing is left !!
         if let Some(item) = iter.next() {
             let err = format!("expected eof, found {}", item);
             return Err(BognError::InvalidSnapshot(err));
         }
-
+        // Okey dockey
         Ok(snap)
     }
 }

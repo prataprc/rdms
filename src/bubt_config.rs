@@ -1,6 +1,6 @@
 use std::{
     convert::TryInto,
-    fs,
+    fmt, fs,
     io::{self, Read, Seek},
     path,
 };
@@ -245,4 +245,15 @@ pub(crate) enum MetaItem {
     Metadata(Vec<u8>),
     Stats(String),
     Root(u64),
+}
+
+impl fmt::Display for MetaItem {
+    fn fmt(&self, f: &mut fmt::Formatter) -> std::result::Result<(), fmt::Error> {
+        match self {
+            MetaItem::Marker(_) => write!(f, "MetaItem::Marker"),
+            MetaItem::Metadata(_) => write!(f, "MetaItem::Metadata"),
+            MetaItem::Stats(_) => write!(f, "MetaItem::Stats"),
+            MetaItem::Root(_) => write!(f, "MetaItem::Root"),
+        }
+    }
 }

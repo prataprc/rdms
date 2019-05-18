@@ -14,9 +14,9 @@ where
     V: Default + Clone + Diff + Serialize,
 {
     name: String,
-    config: Config,
     metadata: Vec<u8>,
     stats: Stats,
+    config: Config,
     root: u64,
 
     phantom_key: marker::PhantomData<K>,
@@ -31,9 +31,9 @@ where
     pub fn open(dir: &str, name: &str) -> Result<Snapshot<K, V>> {
         let mut snap = Snapshot {
             name: name.to_string(),
-            config: Default::default(),
             metadata: Default::default(),
             stats: Default::default(),
+            config: Default::default(),
             root: Default::default(),
 
             phantom_key: marker::PhantomData,
@@ -41,47 +41,75 @@ where
         };
 
         let mut iter = Config::open_index(dir, name)?.into_iter();
-        if let Some(MetaItem::Marker(_)) = iter.next() {
-            if let Some(MetaItem::Metadata(_)) = iter.next() {
-                // DO nothing
-            } else {
-                return Err(BognError::InvalidSnapshot("expected metadata".to_string()));
+        // read and discard marker
+        match iter.next() {
+            Some(MetaItem::Marker(_)) => (),
+            Some(item) => {
+                let err = format!("expected marker, found {}", item);
+                return Err(BognError::InvalidSnapshot(err));
             }
-
-            if let Some(MetaItem::Stats(stats)) = iter.next() {
-                snap.stats = stats.parse()?;
-                let mut config: Config = snap.stats.clone().into();
-                config.dir = dir.to_string();
-                config.vlog_file = match config.vlog_file.clone() {
-                    None => None,
-                    Some(vlog_file) => {
-                        let mut file = path::PathBuf::new();
-                        let ifile = Config::index_file(&dir, &name);
-                        file.push(path::Path::new(&ifile).parent().unwrap());
-                        file.push(path::Path::new(&vlog_file).file_name().unwrap());
-                        Some(file.to_str().unwrap().to_string())
-                    }
-                };
-            } else {
-                return Err(BognError::InvalidSnapshot(
-                    "expected statistics".to_string(),
-                ));
+            None => {
+                let err = "expected marker, eof".to_string();
+                return Err(BognError::InvalidSnapshot(err));
             }
-
-            if let Some(MetaItem::Root(root)) = iter.next() {
-                snap.root = root;
-            } else {
-                return Err(BognError::InvalidSnapshot("expected root".to_string()));
-            }
-
-            if iter.next().is_some() {
-                return Err(BognError::InvalidSnapshot(
-                    "unexpected meta item".to_string(),
-                ));
-            }
-        } else {
-            return Err(BognError::InvalidSnapshot("expected marker".to_string()));
         }
+        // read metadata
+        snap.metadata = match iter.next() {
+            Some(MetaItem::Metadata(metadata)) => metadata,
+            Some(item) => {
+                let err = format!("expected metadata, found {}", item);
+                return Err(BognError::InvalidSnapshot(err));
+            }
+            None => {
+                let err = "expected metadata, eof".to_string();
+                return Err(BognError::InvalidSnapshot(err));
+            }
+        };
+        // read the statistics and information for this snapshot.
+        snap.stats = match iter.next() {
+            Some(MetaItem::Stats(stats)) => stats.parse()?,
+            Some(item) => {
+                let err = format!("expected metadata, found {}", item);
+                return Err(BognError::InvalidSnapshot(err));
+            }
+            None => {
+                let err = "expected statistics".to_string();
+                return Err(BognError::InvalidSnapshot(err));
+            }
+        };
+        snap.config = snap.stats.clone().into();
+        snap.config.dir = dir.to_string();
+        snap.config.vlog_file = match snap.config.vlog_file.clone() {
+            None => None,
+            Some(vlog_file_1) => {
+                let f = path::Path::new(&vlog_file_1).file_name().unwrap();
+                let ifile = Config::index_file(&dir, &name);
+                let mut file = path::PathBuf::new();
+                file.push(path::Path::new(&ifile).parent().unwrap());
+                file.push(f);
+                let vlog_file_2 = file.to_str().unwrap().to_string();
+                // TODO: verify whether both the file names are equal.
+                Some(vlog_file_2)
+            }
+        };
+        // read root
+        snap.root = match iter.next() {
+            Some(MetaItem::Root(root)) => root,
+            Some(item) => {
+                let err = format!("expected metadata, found {}", item);
+                return Err(BognError::InvalidSnapshot(err));
+            }
+            None => {
+                let err = "expected statistics".to_string();
+                return Err(BognError::InvalidSnapshot(err));
+            }
+        };
+
+        if let Some(item) = iter.next() {
+            let err = format!("expected eof, found {}", item);
+            return Err(BognError::InvalidSnapshot(err));
+        }
+
         Ok(snap)
     }
 }

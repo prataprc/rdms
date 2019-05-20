@@ -41,6 +41,7 @@ mod type_bytes;
 mod type_empty;
 mod type_i32;
 mod type_i64;
+mod util;
 mod vlog;
 
 //pub use crate::bubt_build::Builder;

@@ -11,6 +11,7 @@ use crate::bubt_build::FlushClient;
 use crate::bubt_stats::Stats;
 use crate::core::Result;
 use crate::error::BognError;
+use crate::util;
 
 lazy_static! {
     pub static ref MARKER_BLOCK: Vec<u8> = {
@@ -20,15 +21,33 @@ lazy_static! {
     };
 }
 
+/// Configuration to build bottoms up btree.
 #[derive(Default, Clone)]
 pub struct Config {
+    /// Directory where index file(s) shall be stored.
     pub dir: String,
+    /// Name of the index file(s) under `dir`.
+    pub name: String,
+    /// Leaf block size in btree index.
     pub z_blocksize: usize,
+    /// Intemediate block size in btree index.
     pub m_blocksize: usize,
+    /// If deltas are indexed and/or value to be stored in separate log file.
     pub v_blocksize: usize,
+    /// Tombstone purge. For LSM based index older entries can quickly bloat
+    /// system. To avoid this, it is a good idea to purge older versions of
+    /// an entry which doesn't matter any more. When configured with
+    /// `Some(seqno)`, all iterated entries, whose seqno is older than
+    /// configured seqno, shall be ignored.
     pub tomb_purge: Option<u64>,
+    /// Values and/or deltas are stored in separate log file.
     pub vlog_ok: bool,
+    /// Optional name for value log file. If not supplied, but `vlog_ok` is
+    /// true, then value log file name will be computed based on `name`
+    /// configuration.
     pub vlog_file: Option<String>,
+    /// If true, then value shall be persisted in value log file. Otherwise
+    /// value shall be saved in the index' leaf node.
     pub value_in_vlog: bool,
 }
 
@@ -43,9 +62,10 @@ impl Config {
     // * With ZBLOCKSIZE, MBLOCKSIZE, VBLOCKSIZE.
     // * Without a separate vlog-file for value.
     // * Without tombstone purge for deleted values.
-    pub fn new(dir: &str) -> Config {
+    pub fn new(dir: &str, name: &str) -> Config {
         Config {
             dir: dir.to_string(),
+            name: name.to_string(),
             z_blocksize: Self::ZBLOCKSIZE,
             v_blocksize: Self::VBLOCKSIZE,
             m_blocksize: Self::MBLOCKSIZE,
@@ -91,137 +111,11 @@ impl Config {
         vlog_file.to_str().unwrap().to_string()
     }
 
-    pub(crate) fn open_file(file: &str, write: bool, append: bool) -> Result<fs::File> {
-        let p = path::Path::new(&file);
-        let parent = p.parent().ok_or(BognError::InvalidFile(file.to_string()))?;
-        if write {
-            fs::create_dir_all(parent)?;
-
-            let mut opts = fs::OpenOptions::new();
-            Ok(match append {
-                false => opts.append(true).create_new(true).open(p)?,
-                true => opts.append(true).open(p)?,
-            })
-        } else {
-            let mut opts = fs::OpenOptions::new();
-            Ok(opts.read(true).create_new(true).open(p)?)
-        }
-    }
-
     pub(crate) fn vlog_file_w(&self, dir: &str, name: &str) -> String {
         match &self.vlog_file {
             Some(vlog_file) => vlog_file.clone(),
             None => Config::vlog_file(dir, name),
         }
-    }
-
-    pub(crate) fn write_meta_items(&self, meta_items: Vec<MetaItem>, i_flusher: &mut FlushClient) {
-        let mut iter = meta_items.into_iter();
-        // metaitem - stats
-        if let Some(MetaItem::Stats(stats)) = iter.next() {
-            let mut block: Vec<u8> = Vec::with_capacity(Self::MARKER_BLOCK_SIZE);
-            block.resize(0, 0);
-            let scratch = (stats.len() as u64).to_be_bytes();
-            block.extend_from_slice(&scratch);
-            block.extend_from_slice(stats.as_bytes());
-            i_flusher.send(block);
-        } else {
-            unreachable!()
-        }
-        // metaitem - metadata
-        if let Some(MetaItem::Metadata(metadata)) = iter.next() {
-            let n = ((metadata.len() + 8) / Self::MARKER_BLOCK_SIZE) + 1;
-            let mut blocks: Vec<u8> = Vec::with_capacity(n * Self::MARKER_BLOCK_SIZE);
-            blocks.extend_from_slice(&metadata);
-
-            blocks.resize(blocks.capacity(), 0);
-
-            let loc = blocks.len() - 8;
-            let scratch = (metadata.len() as u64).to_be_bytes();
-            blocks[loc..].copy_from_slice(&scratch);
-            i_flusher.send(blocks);
-        } else {
-            unreachable!();
-        }
-        // metaitem -  marker
-        if let Some(MetaItem::Marker(block)) = iter.next() {
-            i_flusher.send(block);
-        }
-
-        if iter.next().is_some() {
-            unreachable!();
-        }
-    }
-
-    pub(crate) fn open_index(dir: &str, name: &str) -> Result<Vec<MetaItem>> {
-        let index_file = Config::index_file(dir, name);
-        let mut fd = Self::open_file(&index_file, false /*write*/, false /*append*/)?;
-
-        let mut fpos = fs::metadata(index_file)?.len();
-        let mut metaitems: Vec<MetaItem> = vec![];
-
-        // read marker block
-        fpos -= Self::MARKER_BLOCK_SIZE as u64;
-        fd.seek(io::SeekFrom::Start(fpos))?;
-
-        let mut block = Vec::with_capacity(Self::MARKER_BLOCK_SIZE);
-        block.resize(block.capacity(), 0);
-        let n = fd.read(&mut block)?;
-        let marker = if n != block.len() {
-            Err(BognError::PartialRead(block.len(), n))
-        } else {
-            Ok(MetaItem::Marker(block))
-        }?;
-        metaitems.push(marker);
-
-        // read metadata blocks
-        fd.seek(io::SeekFrom::Start(fpos - 8))?;
-
-        let mut scratch = [0_u8; 8];
-        let n = fd.read(&mut scratch)?;
-        let metadata = if n != scratch.len() {
-            Err(BognError::PartialRead(scratch.len(), n))
-        } else {
-            let mdlen = u64::from_be_bytes(scratch) as usize;
-            let n_blocks = ((mdlen + 8) / Self::MARKER_BLOCK_SIZE) + 1;
-            let n = n_blocks * Self::MARKER_BLOCK_SIZE;
-            fpos -= n as u64;
-            fd.seek(io::SeekFrom::Start(fpos))?;
-
-            let mut blocks: Vec<u8> = Vec::with_capacity(n);
-            blocks.resize(blocks.capacity(), 0);
-            let n = fd.read(&mut blocks)?;
-            if n != blocks.len() {
-                Err(BognError::PartialRead(scratch.len(), n))
-            } else {
-                blocks.resize(mdlen, 0);
-                Ok(MetaItem::Metadata(blocks))
-            }
-        }?;
-        metaitems.push(metadata);
-
-        // read stats block
-        fpos -= Self::MARKER_BLOCK_SIZE as u64;
-        fd.seek(io::SeekFrom::Start(fpos))?;
-
-        let mut block: Vec<u8> = Vec::with_capacity(Self::MARKER_BLOCK_SIZE);
-        block.resize(block.capacity(), 0);
-        let n = fd.read(&mut block)?;
-        let stats = if n != block.len() {
-            Err(BognError::PartialRead(scratch.len(), n))
-        } else {
-            let ln = u64::from_be_bytes(block[..8].try_into().unwrap()) as usize;
-            Ok(MetaItem::Stats(
-                std::str::from_utf8(&block[8..8 + ln])?.to_string(),
-            ))
-        }?;
-        metaitems.push(stats);
-
-        // root item
-        fpos -= Self::MARKER_BLOCK_SIZE as u64;
-        metaitems.push(MetaItem::Root(fpos));
-
-        Ok(metaitems)
     }
 }
 
@@ -229,6 +123,7 @@ impl From<Stats> for Config {
     fn from(stats: Stats) -> Config {
         Config {
             dir: Default::default(),
+            name: stats.name,
             z_blocksize: stats.zblocksize,
             m_blocksize: stats.mblocksize,
             v_blocksize: stats.vblocksize,
@@ -256,4 +151,114 @@ impl fmt::Display for MetaItem {
             MetaItem::Root(_) => write!(f, "MetaItem::Root"),
         }
     }
+}
+
+pub(crate) fn write_meta_items(items: Vec<MetaItem>, flusher: &mut FlushClient) {
+    let mut iter = items.into_iter();
+    // metaitem - stats
+    if let Some(MetaItem::Stats(stats)) = iter.next() {
+        let mut block: Vec<u8> = Vec::with_capacity(Config::MARKER_BLOCK_SIZE);
+        block.resize(0, 0);
+        let scratch = (stats.len() as u64).to_be_bytes();
+        block.extend_from_slice(&scratch);
+        block.extend_from_slice(stats.as_bytes());
+        flusher.send(block);
+    } else {
+        unreachable!()
+    }
+    // metaitem - metadata
+    if let Some(MetaItem::Metadata(metadata)) = iter.next() {
+        let n = ((metadata.len() + 8) / Config::MARKER_BLOCK_SIZE) + 1;
+        let n = n * Config::MARKER_BLOCK_SIZE;
+        let mut blocks: Vec<u8> = Vec::with_capacity(n);
+        blocks.extend_from_slice(&metadata);
+
+        blocks.resize(blocks.capacity(), 0);
+
+        let loc = blocks.len() - 8;
+        let scratch = (metadata.len() as u64).to_be_bytes();
+        blocks[loc..].copy_from_slice(&scratch);
+        flusher.send(blocks);
+    } else {
+        unreachable!();
+    }
+    // metaitem -  marker
+    if let Some(MetaItem::Marker(block)) = iter.next() {
+        flusher.send(block);
+    }
+
+    if iter.next().is_some() {
+        unreachable!();
+    }
+}
+
+pub(crate) fn read_meta_items(dir: &str, name: &str) -> Result<Vec<MetaItem>> {
+    let index_file = Config::index_file(dir, name);
+    let mut fd = util::open_file_r(&index_file, false /*append*/)?;
+
+    let mut fpos = fs::metadata(index_file)?.len();
+    let mut metaitems: Vec<MetaItem> = vec![];
+
+    // read marker block
+    fpos -= Config::MARKER_BLOCK_SIZE as u64;
+    fd.seek(io::SeekFrom::Start(fpos))?;
+
+    let mut block = Vec::with_capacity(Config::MARKER_BLOCK_SIZE);
+    block.resize(block.capacity(), 0);
+    let n = fd.read(&mut block)?;
+    let marker = if n != block.len() {
+        Err(BognError::PartialRead(block.len(), n))
+    } else {
+        Ok(MetaItem::Marker(block))
+    }?;
+    metaitems.push(marker);
+
+    // read metadata blocks
+    fd.seek(io::SeekFrom::Start(fpos - 8))?;
+
+    let mut scratch = [0_u8; 8];
+    let n = fd.read(&mut scratch)?;
+    let metadata = if n != scratch.len() {
+        Err(BognError::PartialRead(scratch.len(), n))
+    } else {
+        let mdlen = u64::from_be_bytes(scratch) as usize;
+        let n_blocks = ((mdlen + 8) / Config::MARKER_BLOCK_SIZE) + 1;
+        let n = n_blocks * Config::MARKER_BLOCK_SIZE;
+        fpos -= n as u64;
+        fd.seek(io::SeekFrom::Start(fpos))?;
+
+        let mut blocks: Vec<u8> = Vec::with_capacity(n);
+        blocks.resize(blocks.capacity(), 0);
+        let n = fd.read(&mut blocks)?;
+        if n != blocks.len() {
+            Err(BognError::PartialRead(scratch.len(), n))
+        } else {
+            blocks.resize(mdlen, 0);
+            Ok(MetaItem::Metadata(blocks))
+        }
+    }?;
+    metaitems.push(metadata);
+
+    // read stats block
+    fpos -= Config::MARKER_BLOCK_SIZE as u64;
+    fd.seek(io::SeekFrom::Start(fpos))?;
+
+    let mut block: Vec<u8> = Vec::with_capacity(Config::MARKER_BLOCK_SIZE);
+    block.resize(block.capacity(), 0);
+    let n = fd.read(&mut block)?;
+    let stats = if n != block.len() {
+        Err(BognError::PartialRead(scratch.len(), n))
+    } else {
+        let ln = u64::from_be_bytes(block[..8].try_into().unwrap()) as usize;
+        Ok(MetaItem::Stats(
+            std::str::from_utf8(&block[8..8 + ln])?.to_string(),
+        ))
+    }?;
+    metaitems.push(stats);
+
+    // root item
+    fpos -= Config::MARKER_BLOCK_SIZE as u64;
+    metaitems.push(MetaItem::Root(fpos));
+
+    Ok(metaitems)
 }

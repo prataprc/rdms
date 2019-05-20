@@ -1,9 +1,10 @@
 // TODO: review resize() calls
 // TODO: review "as type conversions" for llrb-index jsondata
+// TODO: implement log() and validate() API.
 
 use std::{marker, path};
 
-use crate::bubt_config::{Config, MetaItem};
+use crate::bubt_config::{self, Config, MetaItem};
 use crate::bubt_stats::Stats;
 use crate::core::{Diff, Result, Serialize};
 use crate::error::BognError;
@@ -13,10 +14,9 @@ where
     K: Ord + Clone + Serialize,
     V: Default + Clone + Diff + Serialize,
 {
-    name: String,
-    metadata: Vec<u8>,
-    stats: Stats,
     config: Config,
+    stats: Stats,
+    metadata: Vec<u8>,
     root: u64,
 
     phantom_key: marker::PhantomData<K>,
@@ -30,7 +30,6 @@ where
 {
     pub fn open(dir: &str, name: &str) -> Result<Snapshot<K, V>> {
         let mut snap = Snapshot {
-            name: name.to_string(),
             metadata: Default::default(),
             stats: Default::default(),
             config: Default::default(),
@@ -40,7 +39,7 @@ where
             phantom_val: marker::PhantomData,
         };
 
-        let mut iter = Config::open_index(dir, name)?.into_iter();
+        let mut iter = bubt_config::read_meta_items(dir, name)?.into_iter();
         // read and discard marker
         match iter.next() {
             Some(MetaItem::Marker(_)) => (),
@@ -109,7 +108,46 @@ where
             let err = format!("expected eof, found {}", item);
             return Err(BognError::InvalidSnapshot(err));
         }
+        // validate snapshot
+        if snap.stats.name != name {
+            let err = format!("name mistmatch {} != {}", snap.stats.name, name);
+            return Err(BognError::InvalidSnapshot(err));
+        }
         // Okey dockey
         Ok(snap)
     }
+
+    pub fn purge(&mut self) {
+        panic!("to-be-implemented")
+    }
+
+    pub fn count(&self) -> u64 {
+        panic!("to-be-implemented")
+    }
+
+    pub fn footprint(&self) -> u64 {
+        panic!("to-be-implemented")
+    }
+
+    pub fn get_seqno(&self) -> u64 {
+        panic!("to-be-implemented")
+    }
+
+    pub fn metadata(&self) -> Vec<u8> {
+        panic!("to-be-implemented")
+    }
+
+    pub fn stats(&self) -> Stats {
+        panic!("to-be-implemented")
+    }
+
+    pub fn close(self) {
+        // TODO: can be implemented via Drop.
+        panic!("to-be-implemented")
+    }
+
+    // get
+    // id
+    // iter
+    // range
 }

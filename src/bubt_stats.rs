@@ -14,7 +14,7 @@ pub struct Stats {
     pub vlog_file: Option<String>,
     pub value_in_vlog: bool,
 
-    pub n_count: usize,
+    pub n_count: u64,
     pub n_deleted: usize,
     pub maxseqno: u64,
     pub keymem: usize,
@@ -32,7 +32,7 @@ pub struct Stats {
 impl From<Config> for Stats {
     fn from(config: Config) -> Stats {
         Stats {
-            name: Default::default(),
+            name: config.name,
             zblocksize: config.z_blocksize,
             mblocksize: config.m_blocksize,
             vblocksize: config.v_blocksize,
@@ -71,7 +71,7 @@ impl FromStr for Stats {
             vlog_file: Some(js.get("/vlog_file")?.string().unwrap()),
             value_in_vlog: js.get("/value_in_vlog")?.boolean().unwrap(),
 
-            n_count: js.get("/n_count")?.integer().unwrap() as usize,
+            n_count: js.get("/n_count")?.integer().unwrap() as u64,
             n_deleted: js.get("/n_deleted")?.integer().unwrap() as usize,
             maxseqno: js.get("/maxseqno")?.integer().unwrap() as u64,
             keymem: js.get("/keymem")?.integer().unwrap() as usize,

@@ -3,18 +3,18 @@
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::{cmp, fs, io::Write, marker, mem, thread, time};
 
-use crate::bubt_config::{Config, MetaItem, MARKER_BLOCK};
+use crate::bubt_config::{self, Config, MetaItem, MARKER_BLOCK};
 use crate::bubt_indx::{MBlock, ZBlock};
 use crate::bubt_stats::Stats;
 use crate::core::{Diff, Entry, Result, Serialize};
 use crate::error::BognError;
+use crate::util;
 
 pub struct Builder<K, V>
 where
     K: Default + Ord + Clone + Serialize,
     V: Default + Clone + Diff + Serialize,
 {
-    name: String,
     config: Config,
     i_flusher: FlushClient,
     v_flusher: Option<FlushClient>,
@@ -29,11 +29,12 @@ where
     K: Default + Ord + Clone + Serialize,
     V: Default + Clone + Diff + Serialize,
 {
-    pub fn initial(name: String, config: Config) -> Result<Builder<K, V>> {
-        let i_flusher = FlushClient::new(Config::index_file(&config.dir, &name), false)?;
+    pub fn initial(config: Config) -> Result<Builder<K, V>> {
+        let index_file = Config::index_file(&config.dir, &config.name);
+        let i_flusher = FlushClient::new(index_file, false)?;
         let v_flusher = if config.vlog_ok {
             Some(FlushClient::new(
-                config.vlog_file_w(&config.dir, &name),
+                config.vlog_file_w(&config.dir, &config.name),
                 false,
             )?)
         } else {
@@ -41,10 +42,8 @@ where
         };
 
         let mut stats: Stats = From::from(config.clone());
-        stats.name = name.clone();
 
         Ok(Builder {
-            name,
             config,
             i_flusher,
             v_flusher,
@@ -54,11 +53,12 @@ where
         })
     }
 
-    pub fn incremental(name: String, config: Config) -> Result<Builder<K, V>> {
-        let i_flusher = FlushClient::new(Config::index_file(&config.dir, &name), false)?;
+    pub fn incremental(config: Config) -> Result<Builder<K, V>> {
+        let index_file = Config::index_file(&config.dir, &config.name);
+        let i_flusher = FlushClient::new(index_file, false)?;
         let v_flusher = if config.vlog_ok {
             Some(FlushClient::new(
-                config.vlog_file_w(&config.dir, &name),
+                config.vlog_file_w(&config.dir, &config.name),
                 true,
             )?)
         } else {
@@ -66,13 +66,11 @@ where
         };
 
         let mut stats: Stats = From::from(config.clone());
-        stats.name = name.clone();
         stats.n_abytes = v_flusher
             .as_ref()
             .map_or(Default::default(), |x| x.fpos as usize);
 
         Ok(Builder {
-            name,
             config: config.clone(),
             i_flusher,
             v_flusher,
@@ -141,8 +139,7 @@ where
         // marker
         meta_items.push(MetaItem::Marker(MARKER_BLOCK.clone()));
         // flush them down
-        self.config
-            .write_meta_items(meta_items, &mut self.i_flusher);
+        bubt_config::write_meta_items(meta_items, &mut self.i_flusher);
 
         // flush marker block and close
         self.i_flusher.close_wait();
@@ -288,7 +285,7 @@ pub(crate) struct FlushClient {
 
 impl FlushClient {
     fn new(file: String, append: bool) -> Result<FlushClient> {
-        let fd = Config::open_file(&file, true /*write*/, append)?;
+        let fd = util::open_file_w(&file, append)?;
         let (flusher, tx, rx) = Flusher::new(file.clone(), fd);
         let fpos = if append {
             fs::metadata(file)?.len()

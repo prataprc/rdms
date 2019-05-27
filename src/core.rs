@@ -1,7 +1,7 @@
-// TODO: Try  to remove Default trait constraint from K anv V
-// parameters
+// TODO: Try to remove Default trait constraint from K and V
+// parameters.
 // TODO: Replace (as ..) type conversions with into() and try_into()
-// conversions
+// conversions.
 // TODO: Check all the places where try_into() is used.
 
 use crate::error::BognError;
@@ -16,7 +16,7 @@ use crate::vlog;
 /// Then,
 ///
 /// D = N - O (diff operation)
-/// O = N - D (merge operation)
+/// O = N - D (merge operation, to get old value)
 pub trait Diff {
     type D: Default + Clone + Serialize;
 
@@ -29,12 +29,18 @@ pub trait Diff {
     fn merge(&self, delta: &Self::D) -> Self;
 }
 
+/// Serialize types and values to binary sequence of bytes.
 pub trait Serialize: Sized {
+    /// Convert this value into binary equivalent.
     fn encode(&self, buf: &mut Vec<u8>);
 
+    /// Reverse process of encode, given the binary equivalent, `buf`,
+    /// of a value, construct self.
     fn decode(&mut self, buf: &[u8]) -> Result<()>;
 }
 
+/// Delta maintains the older version of value, with necessary fields for
+/// log-structured-merge.
 #[derive(Clone)]
 pub struct Delta<V>
 where
@@ -45,11 +51,16 @@ where
     deleted: Option<u64>,  // for lsm, deleted can be > 0
 }
 
+// Delta construction methods.
 impl<V> Delta<V>
 where
     V: Default + Clone + Diff + Serialize,
 {
-    pub(crate) fn new(delta: vlog::Delta<V>, seqno: u64, deleted: Option<u64>) -> Delta<V> {
+    pub(crate) fn new(
+        delta: vlog::Delta<V>, // one of the variants
+        seqno: u64,
+        deleted: Option<u64>,
+    ) -> Delta<V> {
         Delta {
             delta,
             seqno,
@@ -57,45 +68,66 @@ where
         }
     }
 
-    fn new_native(delta: <V as Diff>::D, seqno: u64, deleted: Option<u64>) -> Delta<V> {
+    /// Use facing values of Delta must constructed using this API.
+    fn new_native(
+        delta: <V as Diff>::D, // native representation of diff
+        seqno: u64,
+        deleted: Option<u64>,
+    ) -> Delta<V> {
         Delta {
             delta: vlog::Delta::new_native(delta),
             seqno,
             deleted,
         }
     }
+}
 
+/// Read methods.
+impl<V> Delta<V>
+where
+    V: Default + Clone + Diff + Serialize,
+{
     pub(crate) fn vlog_delta_ref(&self) -> &vlog::Delta<V> {
         &self.delta
     }
 
+    /// Return the diff between older value and new value.
     pub fn delta(&self) -> <V as Diff>::D {
         match &self.delta {
             vlog::Delta::Native { delta } => delta.clone(),
-            vlog::Delta::Reference { fpos: _, length: _ } => {
-                panic!("impossible situation, call the programmer")
+            vlog::Delta::Reference { .. } | vlog::Delta::Backup { .. } => {
+                panic!("impossible situation, call the programmer!")
             }
-            vlog::Delta::Backup { .. } => panic!("impossible situation"),
         }
     }
 
+    /// Return the seqno at which this delta was modified,
+    /// which includes Create and Delete operations.
+    /// To differentiate between Create and Delete operations
+    /// use born_seqno() and dead_seqno() methods respectively.
     pub fn seqno(&self) -> u64 {
         self.deleted.unwrap_or(self.seqno)
     }
 
+    /// Return the seqno at which this delta was created.
     pub fn born_seqno(&self) -> u64 {
         self.seqno
     }
 
+    /// Return the seqno at which this delta was deleted.
     pub fn dead_seqno(&self) -> Option<u64> {
         self.deleted
     }
 
+    /// Return whether this delta was deleted.
     pub fn is_deleted(&self) -> bool {
         self.deleted.is_some()
     }
 }
 
+/// Entry, the covering structure for a {Key, value} pair
+/// indexed by bogn. It is a user facing structure and also
+/// used in stitching different components of Bogn together.
 #[derive(Clone)]
 pub struct Entry<K, V>
 where
@@ -109,6 +141,9 @@ where
     deltas: Vec<Delta<V>>,
 }
 
+// Entry construction methods.
+// NOTE: user-facing entry values must be constructed with
+// native value and native deltas.
 impl<K, V> Entry<K, V>
 where
     K: Ord + Clone + Serialize,
@@ -139,7 +174,14 @@ where
             deltas: vec![],
         }
     }
+}
 
+// Write methods.
+impl<K, V> Entry<K, V>
+where
+    K: Ord + Clone + Serialize,
+    V: Default + Clone + Diff + Serialize,
+{
     pub(crate) fn prepend_version(&mut self, value: V, seqno: u64, lsm: bool) {
         if lsm {
             match &self.value {
@@ -187,49 +229,75 @@ where
             false
         }
     }
+}
 
-    pub fn key(&self) -> K {
-        self.key.clone()
-    }
-
-    pub fn key_ref(&self) -> &K {
-        &self.key
-    }
-
+// Read methods.
+impl<K, V> Entry<K, V>
+where
+    K: Ord + Clone + Serialize,
+    V: Default + Clone + Diff + Serialize,
+{
+    #[inline]
     pub(crate) fn vlog_value_ref(&self) -> &vlog::Value<V> {
         &self.value
     }
 
+    #[inline]
+    pub(crate) fn deltas_ref(&self) -> &Vec<Delta<V>> {
+        &self.deltas
+    }
+
+    /// Return ownership of key.
+    #[inline]
+    pub fn key(self) -> K {
+        self.key
+    }
+
+    /// Return a reference to key.
+    #[inline]
+    pub fn key_ref(&self) -> &K {
+        &self.key
+    }
+
+    /// Return value.
     pub fn value(&self) -> V {
         match &self.value {
             vlog::Value::Native { value } => value.clone(),
-            vlog::Value::Reference { .. } => panic!("impossible situation"),
-            vlog::Value::Backup { .. } => panic!("impossible situation"),
+            vlog::Value::Reference { .. } | vlog::Value::Backup { .. } => {
+                panic!("impossible situation")
+            }
         }
     }
 
+    /// Return the latest seqno that created/updated/deleted this entry.
+    #[inline]
     pub fn seqno(&self) -> u64 {
         self.deleted.unwrap_or(self.seqno)
     }
 
+    /// Return the seqno that created or updated the latest value for this
+    /// entry.
+    #[inline]
     pub fn born_seqno(&self) -> u64 {
         self.seqno
     }
 
+    /// Return the seqno that deleted the latest value for this entry.
+    #[inline]
     pub fn dead_seqno(&self) -> Option<u64> {
         self.deleted
     }
 
+    /// Return whether the entry is deleted.
+    #[inline]
     pub fn is_deleted(&self) -> bool {
         self.deleted.is_some()
     }
 
+    /// Return the previous versions of this entry as Deltas.
+    #[inline]
     pub fn deltas(&self) -> Vec<Delta<V>> {
         self.deltas.clone()
-    }
-
-    pub fn deltas_ref(&self) -> &Vec<Delta<V>> {
-        &self.deltas
     }
 }
 

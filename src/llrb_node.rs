@@ -98,23 +98,23 @@ where
         self.black
     }
 
-    pub fn key(&self) -> K {
-        self.entry.key()
+    pub(crate) fn key(&self) -> K {
+        self.entry.key_ref().clone()
     }
 
-    pub fn key_ref(&self) -> &K {
+    pub(crate) fn key_ref(&self) -> &K {
         &self.entry.key_ref()
     }
 
-    pub fn seqno(&self) -> u64 {
+    pub(crate) fn seqno(&self) -> u64 {
         self.entry.seqno()
     }
 
-    pub fn is_deleted(&self) -> bool {
+    pub(crate) fn is_deleted(&self) -> bool {
         self.entry.is_deleted()
     }
 
-    pub fn deltas(&self) -> Vec<core::Delta<V>> {
+    pub(crate) fn deltas(&self) -> Vec<core::Delta<V>> {
         self.entry.deltas()
     }
 }

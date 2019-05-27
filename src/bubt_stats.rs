@@ -16,7 +16,7 @@ pub struct Stats {
 
     pub n_count: u64,
     pub n_deleted: usize,
-    pub maxseqno: u64,
+    pub seqno: u64,
     pub keymem: usize,
     pub valmem: usize,
     pub z_bytes: usize,
@@ -42,7 +42,7 @@ impl From<Config> for Stats {
 
             n_count: Default::default(),
             n_deleted: Default::default(),
-            maxseqno: Default::default(),
+            seqno: Default::default(),
             keymem: Default::default(),
             valmem: Default::default(),
             z_bytes: Default::default(),
@@ -73,7 +73,7 @@ impl FromStr for Stats {
 
             n_count: js.get("/n_count")?.integer().unwrap() as u64,
             n_deleted: js.get("/n_deleted")?.integer().unwrap() as usize,
-            maxseqno: js.get("/maxseqno")?.integer().unwrap() as u64,
+            seqno: js.get("/seqno")?.integer().unwrap() as u64,
             keymem: js.get("/keymem")?.integer().unwrap() as usize,
             valmem: js.get("/valmem")?.integer().unwrap() as usize,
             z_bytes: js.get("/z_bytes")?.integer().unwrap() as usize,
@@ -104,7 +104,7 @@ impl Display for Stats {
 
         js.set("/n_count", Json::new(self.n_count as i128));
         js.set("/n_deleted", Json::new(self.n_deleted as i128));
-        js.set("/maxseqno", Json::new(self.maxseqno as i128));
+        js.set("/seqno", Json::new(self.seqno as i128));
         js.set("/keymem", Json::new(self.keymem as i128));
         js.set("/valmem", Json::new(self.valmem as i128));
         js.set("/z_bytes", Json::new(self.z_bytes as i128));

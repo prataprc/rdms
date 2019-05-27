@@ -178,7 +178,7 @@ where
             } => {
                 let (req, cap) = ((i_block.len() + size), i_block.capacity());
                 if req < cap {
-                    first_key.get_or_insert(entry.key());
+                    first_key.get_or_insert(entry.key_ref().clone());
                     self.encode_entry(entry, vmem2 as u64);
                     Ok(())
                 } else {

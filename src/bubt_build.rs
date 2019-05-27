@@ -41,13 +41,11 @@ where
             None
         };
 
-        let mut stats: Stats = From::from(config.clone());
-
         Ok(Builder {
-            config,
+            config: config.clone(),
             i_flusher,
             v_flusher,
-            stats,
+            stats: From::from(config),
             phantom_key: marker::PhantomData,
             phantom_val: marker::PhantomData,
         })
@@ -209,7 +207,7 @@ where
     }
 
     fn preprocess_entry(&mut self, entry: &mut Entry<K, V>) -> bool {
-        self.stats.maxseqno = cmp::max(self.stats.maxseqno, entry.seqno());
+        self.stats.seqno = cmp::max(self.stats.seqno, entry.seqno());
         self.purge_values(entry)
     }
 

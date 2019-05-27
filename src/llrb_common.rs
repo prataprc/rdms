@@ -156,7 +156,9 @@ where
             None => {
                 let mut acc: Vec<Entry<K, V>> = Vec::with_capacity(self.limit);
                 self.batch_scan(self.get_root(), &mut acc);
-                self.after_key = acc.last().map(|x| Bound::Excluded(x.key()));
+                self.after_key = acc
+                    .last()
+                    .map(|entry| Bound::Excluded(entry.key_ref().clone()));
                 self.iter = acc.into_iter();
                 self.iter.next()
             }
@@ -247,7 +249,9 @@ where
             None if self.low.is_some() => {
                 let mut acc: Vec<Entry<K, V>> = Vec::with_capacity(self.limit);
                 self.batch_scan(self.get_root(), &mut acc);
-                self.low = acc.last().map(|x| Bound::Excluded(x.key()));
+                self.low = acc
+                    .last()
+                    .map(|entry| Bound::Excluded(entry.key_ref().clone()));
                 self.iter = acc.into_iter();
                 self.iter.next()
             }
@@ -341,7 +345,9 @@ where
             None if self.high.is_some() => {
                 let mut acc: Vec<Entry<K, V>> = Vec::with_capacity(self.limit);
                 self.batch_scan(self.get_root(), &mut acc);
-                self.high = acc.last().map(|x| Bound::Excluded(x.key()));
+                self.high = acc
+                    .last()
+                    .map(|entry| Bound::Excluded(entry.key_ref().clone()));
                 self.iter = acc.into_iter();
                 self.iter.next()
             }

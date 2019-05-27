@@ -194,7 +194,7 @@ pub(crate) fn write_meta_items(items: Vec<MetaItem>, flusher: &mut FlushClient) 
 
 pub(crate) fn read_meta_items(dir: &str, name: &str) -> Result<Vec<MetaItem>> {
     let index_file = Config::index_file(dir, name);
-    let mut fd = util::open_file_r(&index_file, false /*append*/)?;
+    let mut fd = util::open_file_r(&index_file)?;
 
     let mut fpos = fs::metadata(index_file)?.len();
     let mut metaitems: Vec<MetaItem> = vec![];

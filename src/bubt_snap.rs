@@ -2,7 +2,7 @@
 // TODO: review "as type conversions" for llrb-index jsondata
 // TODO: implement log() and validate() API.
 
-use std::{marker, path};
+use std::{fs, marker, path};
 
 use crate::bubt_config::{self, Config, MetaItem};
 use crate::bubt_stats::Stats;
@@ -122,23 +122,28 @@ where
     }
 
     pub fn count(&self) -> u64 {
-        panic!("to-be-implemented")
+        self.stats.n_count
     }
 
     pub fn footprint(&self) -> u64 {
-        panic!("to-be-implemented")
+        let index_file = Config::index_file(&self.config.dir, &self.config.name);
+        let mut footprint = fs::metadata(index_file).unwrap().len();
+
+        let vlog_file = Config::vlog_file(&self.config.dir, &self.config.name);
+        footprint += fs::metadata(vlog_file).unwrap().len();
+        footprint
     }
 
     pub fn get_seqno(&self) -> u64 {
-        panic!("to-be-implemented")
+        self.stats.seqno
     }
 
     pub fn metadata(&self) -> Vec<u8> {
-        panic!("to-be-implemented")
+        self.metadata.clone()
     }
 
     pub fn stats(&self) -> Stats {
-        panic!("to-be-implemented")
+        self.stats.clone()
     }
 
     pub fn close(self) {
@@ -147,7 +152,6 @@ where
     }
 
     // get
-    // id
     // iter
     // range
 }

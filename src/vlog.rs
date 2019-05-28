@@ -81,7 +81,7 @@ where
 
     fn read(fd: &mut fs::File, fpos: u64, ln: usize) -> Result<Value<V>> {
         let mut buf = Vec::with_capacity(ln);
-        buf.resize(ln, 0);
+        buf.resize(buf.capacity(), 0);
         fd.seek(io::SeekFrom::Start(fpos + 8))?;
         let n = fd.read(&mut buf)?;
         if n == ln {
@@ -208,15 +208,15 @@ where
 
     fn read(fd: &mut fs::File, fpos: u64, ln: usize) -> Result<Delta<V>> {
         let mut buf = Vec::with_capacity(ln);
-        buf.resize(ln, 0);
+        buf.resize(buf.capacity(), 0);
         fd.seek(io::SeekFrom::Start(fpos + 8))?;
         let n = fd.read(&mut buf)?;
-        if n == ln {
+        if n == buf.len() {
             let mut delta: <V as Diff>::D = Default::default();
             delta.decode(&buf)?;
             Ok(Delta::Native { delta })
         } else {
-            Err(BognError::PartialRead(ln, n))
+            Err(BognError::PartialRead(buf.len(), n))
         }
     }
 

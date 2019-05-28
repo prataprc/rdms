@@ -1,3 +1,6 @@
+// TODO: Review all error messages. Sometimes better to consolidate
+// error variants and describe the different error-out with messages.
+
 use std::{
     convert::TryInto,
     fmt, fs,
@@ -158,7 +161,6 @@ pub(crate) fn write_meta_items(items: Vec<MetaItem>, flusher: &mut FlushClient) 
     // metaitem - stats
     if let Some(MetaItem::Stats(stats)) = iter.next() {
         let mut block: Vec<u8> = Vec::with_capacity(Config::MARKER_BLOCK_SIZE);
-        block.resize(0, 0);
         let scratch = (stats.len() as u64).to_be_bytes();
         block.extend_from_slice(&scratch);
         block.extend_from_slice(stats.as_bytes());

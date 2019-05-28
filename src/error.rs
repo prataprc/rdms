@@ -35,6 +35,7 @@ pub enum BognError {
     /// MVCC algorithm uses dirty node marker for newly created nodes
     /// in its mutation path.
     DirtyNode,
+    KeyNotFound,
     InvalidFile(String),
     IoError(io::Error),
     PartialRead(usize, usize),

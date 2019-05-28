@@ -195,7 +195,7 @@ where
     /// Get the latest version for key.
     pub fn get<Q>(&self, key: &Q) -> Option<core::Entry<K, V>>
     where
-        K: Borrow<Q> + Debug + Serialize,
+        K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
         get(self.root.as_ref().map(Deref::deref), key)
@@ -549,7 +549,7 @@ where
 
     // return [node, old_node]
     fn delete_min(
-        node: Option<Box<Node<K, V>>> // root node
+        node: Option<Box<Node<K, V>>>, // root node
     ) -> (Option<Box<Node<K, V>>>, Option<Node<K, V>>) {
         if node.is_none() {
             return (None, None);

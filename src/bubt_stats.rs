@@ -91,30 +91,38 @@ impl FromStr for Stats {
 impl Display for Stats {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         let mut js = Json::new::<Vec<Property>>(vec![]);
-        js.set("/name", Json::new(self.name.clone()));
-        js.set("/zblocksize", Json::new(self.zblocksize as i128));
-        js.set("/mblocksize", Json::new(self.mblocksize as i128));
-        js.set("/vblocksize", Json::new(self.vblocksize as i128));
-        js.set("/vlog_ok", Json::new(self.vlog_ok));
+        js.set("/name", Json::new(self.name.clone())).unwrap();
+        js.set("/zblocksize", Json::new(self.zblocksize as i128))
+            .unwrap();
+        js.set("/mblocksize", Json::new(self.mblocksize as i128))
+            .unwrap();
+        js.set("/vblocksize", Json::new(self.vblocksize as i128))
+            .unwrap();
+        js.set("/vlog_ok", Json::new(self.vlog_ok)).unwrap();
         js.set(
             "/vlog_file",
             Json::new(self.vlog_file.clone().map_or("".to_string(), From::from)),
-        );
-        js.set("/value_in_vlog", Json::new(self.value_in_vlog));
+        )
+        .unwrap();
+        js.set("/value_in_vlog", Json::new(self.value_in_vlog))
+            .unwrap();
 
-        js.set("/n_count", Json::new(self.n_count as i128));
-        js.set("/n_deleted", Json::new(self.n_deleted as i128));
-        js.set("/seqno", Json::new(self.seqno as i128));
-        js.set("/keymem", Json::new(self.keymem as i128));
-        js.set("/valmem", Json::new(self.valmem as i128));
-        js.set("/z_bytes", Json::new(self.z_bytes as i128));
-        js.set("/v_bytes", Json::new(self.v_bytes as i128));
-        js.set("/m_bytes", Json::new(self.m_bytes as i128));
-        js.set("/padding", Json::new(self.padding as i128));
-        js.set("/n_abytes", Json::new(self.n_abytes as i128));
+        js.set("/n_count", Json::new(self.n_count as i128)).unwrap();
+        js.set("/n_deleted", Json::new(self.n_deleted as i128))
+            .unwrap();
+        js.set("/seqno", Json::new(self.seqno as i128)).unwrap();
+        js.set("/keymem", Json::new(self.keymem as i128)).unwrap();
+        js.set("/valmem", Json::new(self.valmem as i128)).unwrap();
+        js.set("/z_bytes", Json::new(self.z_bytes as i128)).unwrap();
+        js.set("/v_bytes", Json::new(self.v_bytes as i128)).unwrap();
+        js.set("/m_bytes", Json::new(self.m_bytes as i128)).unwrap();
+        js.set("/padding", Json::new(self.padding as i128)).unwrap();
+        js.set("/n_abytes", Json::new(self.n_abytes as i128))
+            .unwrap();
 
-        js.set("/buildtime", Json::new(self.buildtime as i128));
-        js.set("/epoch", Json::new(self.epoch));
+        js.set("/buildtime", Json::new(self.buildtime as i128))
+            .unwrap();
+        js.set("/epoch", Json::new(self.epoch)).unwrap();
 
         write!(f, "{}", js.to_string())
     }

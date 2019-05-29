@@ -287,16 +287,12 @@ where
     }
 
     // return (index-to-child-block, child-is-zblock, Entry)
-    pub(crate) fn find<Q>(
+    pub(crate) fn find(
         &self,
-        key: &Q,
+        key: &K,
         from: Bound<usize>,
         to: Bound<usize>,
-    ) -> Result<(usize, bool, Entry<K, V>)>
-    where
-        K: Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
+    ) -> Result<(usize, bool, Entry<K, V>)> {
         let pivot = self.find_pivot(from, to)?;
         match (pivot, from) {
             (0, Bound::Included(f)) => self.entry_at(f),
@@ -325,7 +321,6 @@ where
             Bound::Unbounded => 0,
         };
         match to - from {
-            n if n < 0 => unreachable!(),
             1 => Ok(0),
             n => Ok((n / 2).try_into().unwrap()),
         }
@@ -675,7 +670,8 @@ where
             vlog::Value::Native { .. } if config.value_in_vlog => {
                 let scratch = (*vpos + (v_block.len() as u64)).to_be_bytes();
                 i_block.extend_from_slice(&scratch);
-                v_block.extend_from_slice(&(v_buf.len() as u64).to_be_bytes());
+                let vhdr = (v_buf.len() as u64) | vlog::VALUE_FLAG;
+                v_block.extend_from_slice(&vhdr.to_be_bytes());
                 v_block.extend_from_slice(v_buf);
             }
             vlog::Value::Native { .. } => {
@@ -840,16 +836,12 @@ where
     }
 
     // return (index-to-entry, Entry)
-    pub(crate) fn find<Q>(
+    pub(crate) fn find(
         &self,
-        key: &Q,
+        key: &K,
         from: Bound<usize>,
         to: Bound<usize>,
-    ) -> Result<(usize, Entry<K, V>)>
-    where
-        K: Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
+    ) -> Result<(usize, Entry<K, V>)> {
         let pivot = self.find_pivot(from, to)?;
         match (pivot, from) {
             (0, Bound::Included(f)) => self.entry_at(f),
@@ -878,7 +870,6 @@ where
             Bound::Unbounded => 0,
         };
         match to - from {
-            n if n < 0 => unreachable!(),
             1 => Ok(0),
             n => Ok(isize::try_from(n).unwrap() / 2),
         }
@@ -894,7 +885,7 @@ where
             } => (*count, *adjust, offsets, entries),
             _ => unreachable!(),
         };
-        if 0 <= index && index < count {
+        if index < count {
             let offset = &offsets[index..index + 4];
             let offset = u32::from_be_bytes(offset.try_into().unwrap()) as usize;
             let entry = &entries[offset - adjust..];

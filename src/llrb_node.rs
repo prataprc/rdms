@@ -98,10 +98,6 @@ where
         self.black
     }
 
-    pub(crate) fn key(&self) -> K {
-        self.entry.key_ref().clone()
-    }
-
     pub(crate) fn key_ref(&self) -> &K {
         &self.entry.key_ref()
     }
@@ -112,10 +108,6 @@ where
 
     pub(crate) fn is_deleted(&self) -> bool {
         self.entry.is_deleted()
-    }
-
-    pub(crate) fn deltas(&self) -> Vec<core::Delta<V>> {
-        self.entry.deltas()
     }
 }
 

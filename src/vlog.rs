@@ -1,10 +1,6 @@
-use std::{
-    fs,
-    io::{self, Read, Seek, Write},
-};
+use crate::core::{Diff, Serialize};
 
-use crate::core::{Diff, Result, Serialize};
-use crate::error::BognError;
+pub(crate) const VALUE_FLAG: u64 = 0x1000000000000000;
 
 // *-----*------------------------------------*
 // |flags|        60-bit length               |
@@ -44,16 +40,16 @@ impl<V> Value<V>
 where
     V: Default + Serialize,
 {
-    const VALUE_FLAG: u64 = 0x1000000000000000;
-
     pub(crate) fn new_native(value: V) -> Value<V> {
         Value::Native { value }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn new_reference(fpos: u64, length: u64) -> Value<V> {
         Value::Reference { fpos, length }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn new_backup(file: &str, fpos: u64, length: u64) -> Value<V> {
         Value::Backup {
             file: file.to_string(),
@@ -105,10 +101,12 @@ where
         Delta::Native { delta }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn new_reference(fpos: u64, length: u64) -> Delta<V> {
         Delta::Reference { fpos, length }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn new_backup(file: String, fpos: u64, length: u64) -> Delta<V> {
         Delta::Backup { file, fpos, length }
     }

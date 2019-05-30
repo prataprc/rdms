@@ -3,7 +3,7 @@ use crate::error::BognError;
 
 /// Empty value, can be used for indexing entries that have a
 /// key but no value.
-#[derive(Copy, Clone, Default, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub struct Empty;
 
 impl Diff for Empty {

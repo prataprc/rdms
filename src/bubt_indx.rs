@@ -14,6 +14,7 @@ use crate::bubt_config::Config;
 use crate::bubt_stats::Stats;
 use crate::core::{Delta, Diff, Entry, Result, Serialize};
 use crate::error::BognError;
+use crate::type_empty::Empty;
 use crate::vlog;
 
 // Binary format (MEntry):
@@ -670,7 +671,7 @@ where
             vlog::Value::Native { .. } if config.value_in_vlog => {
                 let scratch = (*vpos + (v_block.len() as u64)).to_be_bytes();
                 i_block.extend_from_slice(&scratch);
-                let vhdr = (v_buf.len() as u64) | vlog::VALUE_FLAG;
+                let vhdr = (v_buf.len() as u64) | vlog::Value::<Empty>::VALUE_FLAG;
                 v_block.extend_from_slice(&vhdr.to_be_bytes());
                 v_block.extend_from_slice(v_buf);
             }

@@ -1,6 +1,6 @@
-use crate::core::{Diff, Serialize};
+// TODO: There are dead code meant for future use case.
 
-pub(crate) const VALUE_FLAG: u64 = 0x1000000000000000;
+use crate::core::{Diff, Serialize};
 
 // *-----*------------------------------------*
 // |flags|        60-bit length               |
@@ -40,6 +40,8 @@ impl<V> Value<V>
 where
     V: Default + Serialize,
 {
+    pub(crate) const VALUE_FLAG: u64 = 0x1000000000000000;
+
     pub(crate) fn new_native(value: V) -> Value<V> {
         Value::Native { value }
     }

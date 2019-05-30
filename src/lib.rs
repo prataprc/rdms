@@ -19,6 +19,9 @@
 //!
 //! [LSM]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
 
+// TODO: Document work. Mvcc does not allow concurrent write access.
+// and doing so will panic.
+
 #![feature(rc_into_raw_non_null)]
 #![feature(copy_within)]
 
@@ -59,3 +62,9 @@ pub use crate::type_empty::Empty; // TODO: proper nomenclature.
 mod llrb_test;
 #[cfg(test)]
 mod mvcc_test;
+#[cfg(test)]
+mod type_bytes_test;
+#[cfg(test)]
+mod type_empty_test;
+#[cfg(test)]
+mod util_test;

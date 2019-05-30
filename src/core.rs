@@ -1,8 +1,4 @@
-// TODO: Try to remove Default trait constraint from K and V
-// parameters.
-// TODO: Replace (as ..) type conversions with into() and try_into()
-// conversions.
-// TODO: Check all the places where try_into() is used.
+// TODO: Try to remove Default trait constraint from K and V parameters.
 
 use crate::error::BognError;
 use crate::vlog;
@@ -57,7 +53,7 @@ where
     V: Default + Clone + Diff + Serialize,
 {
     pub(crate) fn new(
-        delta: vlog::Delta<V>, // one of the variants
+        delta: vlog::Delta<V>, // construct with any variant
         seqno: u64,
         deleted: Option<u64>,
     ) -> Delta<V> {
@@ -69,8 +65,8 @@ where
     }
 
     /// Use facing values of Delta must constructed using this API.
-    fn new_native(
-        delta: <V as Diff>::D, // native representation of diff
+    fn new_delta(
+        delta: <V as Diff>::D, // construct with native value.
         seqno: u64,
         deleted: Option<u64>,
     ) -> Delta<V> {
@@ -91,8 +87,8 @@ where
         &self.delta
     }
 
-    /// Return the diff between older value and new value.
-    pub fn delta(&self) -> <V as Diff>::D {
+    /// Return the underlying `difference` value for this delta.
+    pub fn diff(&self) -> <V as Diff>::D {
         match &self.delta {
             vlog::Delta::Native { delta } => delta.clone(),
             vlog::Delta::Reference { .. } | vlog::Delta::Backup { .. } => {
@@ -127,7 +123,7 @@ where
 
 /// Entry, the covering structure for a {Key, value} pair
 /// indexed by bogn. It is a user facing structure and also
-/// used in stitching different components of Bogn together.
+/// used in stitching together different components of Bogn.
 #[derive(Clone)]
 pub struct Entry<K, V>
 where
@@ -141,9 +137,9 @@ where
     deltas: Vec<Delta<V>>,
 }
 
-// Entry construction methods.
 // NOTE: user-facing entry values must be constructed with
 // native value and native deltas.
+// Entry construction methods.
 impl<K, V> Entry<K, V>
 where
     K: Ord + Clone + Serialize,
@@ -165,7 +161,7 @@ where
         }
     }
 
-    pub(crate) fn new_native(key: K, value: V, seqno: u64) -> Entry<K, V> {
+    pub(crate) fn new_entry(key: K, value: V, seqno: u64) -> Entry<K, V> {
         Entry {
             key,
             value: vlog::Value::new_native(value),
@@ -182,33 +178,44 @@ where
     K: Ord + Clone + Serialize,
     V: Default + Clone + Diff + Serialize,
 {
+    // Prepend a new version, also the lates version, for this entry.
+    // In non-lsm mode this is equivalent to over-writing previous value.
     pub(crate) fn prepend_version(&mut self, value: V, seqno: u64, lsm: bool) {
         if lsm {
-            match &self.value {
-                vlog::Value::Native { value: old_value } => {
-                    let d = value.diff(old_value);
-                    let delta = Delta::new_native(d, self.seqno, self.deleted);
-                    self.deltas.insert(0, delta);
-                    self.value = vlog::Value::new_native(value);
-                    self.seqno = seqno;
-                    self.deleted = None;
-                }
-                vlog::Value::Backup { /* file, fpos, length */ .. } => {
-                    // TODO: Figure out a way to use {file, fpos, length} to
-                    // get the entry details from disk. Note that disk index
-                    // can have different formats based on configuration.
-                    // Take that into account.
-                    panic!("TBD")
-                }
-                vlog::Value::Reference { .. } => panic!("impossible situation"),
-            }
+            self.prepend_version_lsm(value, seqno)
         } else {
-            self.value = vlog::Value::new_native(value);
-            self.seqno = seqno;
-            self.deleted = None;
+            self.prepend_version_nolsm(value, seqno)
         }
     }
 
+    fn prepend_version_lsm(&mut self, value: V, seqno: u64) {
+        match &self.value {
+            vlog::Value::Native { value: old_value } => {
+                let d = value.diff(old_value);
+                let delta = Delta::new_delta(d, self.seqno, self.deleted);
+                self.deltas.insert(0, delta);
+                self.value = vlog::Value::new_native(value);
+                self.seqno = seqno;
+                self.deleted = None;
+            }
+            vlog::Value::Backup { .. } => {
+                // TODO: Figure out a way to use {file, fpos, length} to
+                // get the entry details from disk. Note that disk index
+                // can have different formats based on configuration.
+                // Take that into account.
+                panic!("TBD")
+            }
+            vlog::Value::Reference { .. } => panic!("impossible situation"),
+        }
+    }
+
+    fn prepend_version_nolsm(&mut self, value: V, seqno: u64) {
+        self.value = vlog::Value::new_native(value);
+        self.seqno = seqno;
+        self.deleted = None;
+    }
+
+    // if entry is already deleted, this call becomes a no-op.
     pub(crate) fn delete(&mut self, seqno: u64) {
         if self.deleted.is_none() {
             self.deleted = Some(seqno)
@@ -222,7 +229,7 @@ where
         } else {
             for i in 0..self.deltas.len() {
                 if self.deltas[i].seqno < before {
-                    self.deltas.truncate(i); // purge everything after `i`
+                    self.deltas.truncate(i); // purge everything from i..len
                     break;
                 }
             }
@@ -243,7 +250,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn deltas_ref(&self) -> &Vec<Delta<V>> {
+    pub(crate) fn deltas_ref(&self) -> &[Delta<V>] {
         &self.deltas
     }
 
@@ -264,7 +271,7 @@ where
         match &self.value {
             vlog::Value::Native { value } => value.clone(),
             vlog::Value::Reference { .. } | vlog::Value::Backup { .. } => {
-                panic!("impossible situation")
+                panic!("impossible situation, call the programmer")
             }
         }
     }

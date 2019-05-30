@@ -1,6 +1,18 @@
 0.1.0
 =====
 
+Code Review checklist
+=====================
+
+* [ ] Review and check for un-necessary copy, and allocations.
+* [ ] Review resize calls on `Vec`.
+* [ ] Review (as ...) type casting, to panic on data loss.
+* [ ] Reduce trait constraints for Type parameters on public APIs.
+* [ ] Public APIs can be as generic as possible. Check whether there
+      is a scope for `AsRef` or `Borrow` constraints.
+* [ ] Document error variants.
+* [ ] Check for dangling links in rustdoc.
+
 Release Checklist
 =================
 

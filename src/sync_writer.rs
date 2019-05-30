@@ -5,18 +5,18 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// cause panic. It is better to deligate all write operations to
 /// single thread as opposed to serializing the write operations from
 /// multiple threads.
-pub struct SyncWriter {
+pub(crate) struct SyncWriter {
     writers: AtomicU64,
 }
 
 impl SyncWriter {
-    pub fn new() -> SyncWriter {
+    pub(crate) fn new() -> SyncWriter {
         SyncWriter {
             writers: AtomicU64::new(0),
         }
     }
 
-    pub fn lock<'a>(&'a self) -> Fence<'a> {
+    pub(crate) fn lock<'a>(&'a self) -> Fence<'a> {
         if self.writers.compare_and_swap(0, 1, Ordering::Relaxed) != 0 {
             panic!("Mvcc cannot have concurrent writers");
         }
@@ -24,7 +24,7 @@ impl SyncWriter {
     }
 }
 
-pub struct Fence<'a> {
+pub(crate) struct Fence<'a> {
     fence: &'a SyncWriter,
 }
 

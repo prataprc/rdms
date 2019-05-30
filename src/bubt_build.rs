@@ -31,11 +31,11 @@ where
 {
     pub fn initial(config: Config) -> Result<Builder<K, V>> {
         let index_file = Config::index_file(&config.dir, &config.name);
-        let i_flusher = FlushClient::new(index_file, false)?;
+        let i_flusher = FlushClient::new(index_file, false /*reuse*/)?;
         let v_flusher = if config.vlog_ok {
             Some(FlushClient::new(
                 config.vlog_file_w(&config.dir, &config.name),
-                false,
+                false, /*reuse*/
             )?)
         } else {
             None
@@ -53,11 +53,11 @@ where
 
     pub fn incremental(config: Config) -> Result<Builder<K, V>> {
         let index_file = Config::index_file(&config.dir, &config.name);
-        let i_flusher = FlushClient::new(index_file, false)?;
+        let i_flusher = FlushClient::new(index_file, false /*reuse*/)?;
         let v_flusher = if config.vlog_ok {
             Some(FlushClient::new(
                 config.vlog_file_w(&config.dir, &config.name),
-                true,
+                true, /*reuse*/
             )?)
         } else {
             None
@@ -282,10 +282,10 @@ pub(crate) struct FlushClient {
 }
 
 impl FlushClient {
-    fn new(file: String, append: bool) -> Result<FlushClient> {
-        let fd = util::open_file_w(&file, append)?;
+    fn new(file: String, reuse: bool) -> Result<FlushClient> {
+        let fd = util::open_file_w(&file, reuse)?;
         let (flusher, tx, rx) = Flusher::new(file.clone(), fd);
-        let fpos = if append {
+        let fpos = if reuse {
             fs::metadata(file)?.len()
         } else {
             Default::default()

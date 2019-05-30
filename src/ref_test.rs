@@ -1,5 +1,4 @@
 use crate::core::{Diff, Entry};
-use crate::vlog;
 
 #[derive(Clone, Default, Debug)]
 struct RefValue {
@@ -251,7 +250,7 @@ fn check_node(entry: Option<Entry<i64, i64>>, refn: Option<RefNode>) -> bool {
     for (i, dlt) in entry.deltas().into_iter().enumerate() {
         //println!("..... {} {:?}", dlt.seqno(), refn.versions);
         let ver = &refn.versions[i + 1];
-        let delta = dlt.delta();
+        let delta = dlt.diff();
         let prev_value = curr_value.merge(&delta);
         assert_eq!(prev_value, ver.value, "key {} i {}", refn.key, i);
         curr_value = prev_value;

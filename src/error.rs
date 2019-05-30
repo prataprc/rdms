@@ -69,26 +69,15 @@ impl From<std::str::Utf8Error> for BognError {
 
 impl PartialEq for BognError {
     fn eq(&self, other: &BognError) -> bool {
+        use BognError::InvalidFile;
         use BognError::{ConsecutiveReds, DirtyNode, InvalidCAS};
 
         match (self, other) {
             (InvalidCAS, InvalidCAS) => true,
             (ConsecutiveReds, ConsecutiveReds) => true,
             (DirtyNode, DirtyNode) => true,
+            (InvalidFile(s1), InvalidFile(s2)) => s1 == s2,
             _ => false,
         }
     }
 }
-
-//impl PartialEq for BognError {
-//    fn eq(&self, other: &BognError) -> bool {
-//        use BognError::{ConsecutiveReds, DirtyNode, InvalidCAS};
-//
-//        match (self, other) {
-//            (InvalidCAS, InvalidCAS) => true,
-//            (ConsecutiveReds, ConsecutiveReds) => true,
-//            (DirtyNode, DirtyNode) => true,
-//            _ => false,
-//        }
-//    }
-//}

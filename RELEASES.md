@@ -29,6 +29,7 @@ Release Checklist
   * cargo +nightly bench
   * cargo +nightly benchcmp <old> <new>
   * cargo fix --edition --all-targets
+* Cargo test `ixtest` and `ixperf`
 * Create a git-tag for the new version.
 * Cargo publish the new version.
 * Badges

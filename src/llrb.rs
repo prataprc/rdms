@@ -1,13 +1,13 @@
 use std::borrow::Borrow;
 use std::cmp::{Ord, Ordering};
 use std::fmt::Debug;
-use std::ops::{Bound, Deref, DerefMut};
+use std::ops::{Bound, Deref, DerefMut, RangeBounds};
 use std::sync::Arc;
+use std::{marker, mem};
 
-use crate::core::{self, Diff, Serialize};
+use crate::core::{Diff, Entry, Serialize};
 use crate::error::BognError;
-use crate::llrb_node::Node;
-use crate::llrb_util::Stats;
+use crate::llrb_node::{LlrbStats, Node};
 use crate::mvcc::MvccRoot;
 
 include!("llrb_common.rs");
@@ -91,7 +91,7 @@ where
     /// `iter`. Note that iterator shall return Entry items.
     pub fn load_from<S>(
         name: S,
-        iter: impl Iterator<Item = core::Entry<K, V>>,
+        iter: impl Iterator<Item = Entry<K, V>>,
         lsm: bool,
     ) -> Result<Llrb<K, V>, BognError>
     where
@@ -110,7 +110,7 @@ where
 
     fn load_entry(
         node: Option<Box<Node<K, V>>>,
-        entry: core::Entry<K, V>,
+        entry: Entry<K, V>,
     ) -> Result<Box<Node<K, V>>, BognError> {
         let key = entry.key_ref();
         match node {
@@ -193,7 +193,7 @@ where
     V: Default + Clone + Diff + Serialize,
 {
     /// Get the latest version for key.
-    pub fn get<Q>(&self, key: &Q) -> Option<core::Entry<K, V>>
+    pub fn get<Q>(&self, key: &Q) -> Option<Entry<K, V>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -203,24 +203,53 @@ where
 
     /// Return an iterator over all entries in this instance.
     pub fn iter(&self) -> Iter<K, V> {
+        let node = self.root.as_ref().map(Deref::deref);
         Iter {
             arc: Default::default(),
-            root: self.root.as_ref().map(Deref::deref),
-            iter: vec![].into_iter(),
-            after_key: Some(Bound::Unbounded),
-            limit: ITER_LIMIT,
+            paths: Some(build_iter(IFlag::Left, node, vec![])),
         }
     }
 
     /// Range over all entries from low to high.
-    pub fn range(&self, low: Bound<K>, high: Bound<K>) -> Range<K, V> {
+    pub fn range<R, Q>(&self, range: R) -> Range<K, V, R, Q>
+    where
+        K: Borrow<Q>,
+        R: RangeBounds<Q>,
+        Q: Ord + ?Sized,
+    {
+        let root = self.root.as_ref().map(Deref::deref);
+        let paths = match range.start_bound() {
+            Bound::Unbounded => Some(build_iter(IFlag::Left, root, vec![])),
+            Bound::Included(low) => Some(find_start(root, low, true, vec![])),
+            Bound::Excluded(low) => Some(find_start(root, low, false, vec![])),
+        };
         Range {
             arc: Default::default(),
-            root: self.root.as_ref().map(Deref::deref),
-            iter: vec![].into_iter(),
-            low: Some(low),
-            high,
-            limit: ITER_LIMIT,
+            range,
+            paths,
+            high: marker::PhantomData,
+        }
+    }
+
+    /// Reverse range over all entries from high to low.
+    pub fn reverse<R, Q>(&self, range: R) -> Reverse<K, V, R, Q>
+    where
+        K: Borrow<Q>,
+        R: RangeBounds<Q>,
+        Q: Ord + ?Sized,
+    {
+        let root = self.root.as_ref().map(Deref::deref);
+        let paths = match range.end_bound() {
+            Bound::Unbounded => Some(build_iter(IFlag::Right, root, vec![])),
+            Bound::Included(high) => Some(find_end(root, high, true, vec![])),
+            Bound::Excluded(high) => Some(find_end(root, high, false, vec![])),
+        };
+        let low = marker::PhantomData;
+        Reverse {
+            arc: Default::default(),
+            range,
+            paths,
+            low,
         }
     }
 
@@ -230,7 +259,7 @@ where
     ///
     /// If an entry already exist for the, return the old-entry will all its
     /// versions.
-    pub fn set(&mut self, key: K, value: V) -> Option<core::Entry<K, V>> {
+    pub fn set(&mut self, key: K, value: V) -> Option<Entry<K, V>> {
         let seqno = self.seqno + 1;
         let root = self.root.take();
 
@@ -257,7 +286,7 @@ where
         key: K,
         value: V,
         cas: u64,
-    ) -> Result<Option<core::Entry<K, V>>, BognError> {
+    ) -> Result<Option<Entry<K, V>>, BognError> {
         let seqno = self.seqno + 1;
         let root = self.root.take();
 
@@ -282,12 +311,14 @@ where
     /// Delete the given key from non-mvcc intance, in LSM mode it simply marks
     /// the version as deleted. Note that back-to-back delete for the same
     /// key shall collapse into a single delete.
-    pub fn delete<Q>(&mut self, key: &Q) -> Option<core::Entry<K, V>>
+    ///
+    /// NOTE: K should be borrowable as &Q and Q must be converted to owned K.
+    /// This is require in lsm mode, where owned K must be inserted into the
+    /// tree.
+    pub fn delete<Q>(&mut self, key: &Q) -> Option<Entry<K, V>>
     where
-        // TODO: From<Q> and Clone will fail if V=String and Q=str
-        // TODO: Test case for back-to-back delete.
-        K: Borrow<Q> + From<Q> + Debug + Serialize,
-        Q: Clone + Ord + ?Sized,
+        K: Borrow<Q> + Debug + Serialize,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
     {
         let seqno = self.seqno + 1;
 
@@ -330,11 +361,11 @@ where
     /// * Number of blacks should be same on under left child and right child.
     /// * Make sure that keys are in sorted order.
     ///
-    /// Additionally return full statistics on the tree. Refer to [`Stats`]
+    /// Additionally return full statistics on the tree. Refer to [`LlrbStats`]
     /// for more information.
-    pub fn validate(&self) -> Result<Stats, BognError> {
+    pub fn validate(&self) -> Result<LlrbStats, BognError> {
         let node_size = std::mem::size_of::<Node<K, V>>();
-        let mut stats = Stats::new(self.n_count, node_size);
+        let mut stats = LlrbStats::new(self.n_count, node_size);
         stats.set_depths(Default::default());
 
         let root = self.root.as_ref().map(Deref::deref);
@@ -342,6 +373,12 @@ where
         let blacks = validate_tree(root, red, nb, d, &mut stats)?;
         stats.set_blacks(blacks);
         Ok(stats)
+    }
+
+    /// Return quickly with basic statisics, only entries() method is valid
+    /// with this statisics. TODO: implement the same for MVCC.
+    pub fn stats(&self) -> LlrbStats {
+        LlrbStats::new(self.n_count, mem::size_of::<Node<K, V>>())
     }
 }
 
@@ -356,7 +393,7 @@ where
         value: V,
         seqno: u64,
         lsm: bool,
-    ) -> (Option<Box<Node<K, V>>>, Option<core::Entry<K, V>>) {
+    ) -> (Option<Box<Node<K, V>>>, Option<Entry<K, V>>) {
         if node.is_none() {
             let mut node = Node::new(key, value, seqno, false /*black*/);
             node.dirty = false;
@@ -396,7 +433,7 @@ where
         lsm: bool,
     ) -> (
         Option<Box<Node<K, V>>>,
-        Option<core::Entry<K, V>>,
+        Option<Entry<K, V>>,
         Option<BognError>,
     ) {
         if node.is_none() && cas > 0 {
@@ -443,14 +480,14 @@ where
         node: Option<Box<Node<K, V>>>,
         key: &Q,
         seqno: u64,
-    ) -> (Option<Box<Node<K, V>>>, Option<core::Entry<K, V>>)
+    ) -> (Option<Box<Node<K, V>>>, Option<Entry<K, V>>)
     where
-        K: Borrow<Q> + From<Q> + Debug + Serialize,
-        Q: Clone + Ord + ?Sized,
+        K: Borrow<Q> + Debug + Serialize,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
     {
         if node.is_none() {
             // insert and mark as delete
-            let (key, black) = (key.clone().into(), false);
+            let (key, black) = (key.to_owned(), false);
             let mut node = Node::new(key, Default::default(), seqno, black);
             node.dirty = false;
             node.delete(seqno);
@@ -489,7 +526,7 @@ where
     fn do_delete<Q>(
         node: Option<Box<Node<K, V>>>,
         key: &Q,
-    ) -> (Option<Box<Node<K, V>>>, Option<core::Entry<K, V>>)
+    ) -> (Option<Box<Node<K, V>>>, Option<Entry<K, V>>)
     where
         K: Borrow<Q> + Debug + Serialize,
         Q: Ord + ?Sized,

@@ -172,7 +172,7 @@ where
     }
 }
 
-// Write methods.
+// write/update methods.
 impl<K, V> Entry<K, V>
 where
     K: Ord + Clone + Serialize,
@@ -238,7 +238,7 @@ where
     }
 }
 
-// Read methods.
+// read methods.
 impl<K, V> Entry<K, V>
 where
     K: Ord + Clone + Serialize,

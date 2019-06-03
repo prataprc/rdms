@@ -1,7 +1,4 @@
-const ITER_LIMIT: usize = 100;
-
-type Entry<K, V> = core::Entry<K, V>;
-
+#[inline]
 fn is_red<K, V>(node: Option<&Node<K, V>>) -> bool
 where
     K: Ord + Clone + Debug + Serialize,
@@ -10,6 +7,7 @@ where
     node.map_or(false, |node| !node.is_black())
 }
 
+#[inline]
 fn is_black<K, V>(node: Option<&Node<K, V>>) -> bool
 where
     K: Ord + Clone + Debug + Serialize,
@@ -18,17 +16,14 @@ where
     node.map_or(true, |node| node.is_black())
 }
 
-fn get<K, V, Q>(
-    mut node: Option<&Node<K, V>>, // root node
-    key: &Q,
-) -> Option<Entry<K, V>>
+/// Get the latest version for key.
+fn get<K, V, Q>(mut node: Option<&Node<K, V>>, key: &Q) -> Option<Entry<K, V>>
 where
-    K: Ord + Clone + Borrow<Q> + Debug + Serialize,
+    K: Clone + Ord + Borrow<Q> + Debug + Serialize,
     V: Default + Clone + Diff + Serialize,
     Q: Ord + ?Sized,
 {
-    while node.is_some() {
-        let nref = node.unwrap();
+    while let Some(nref) = node {
         node = match nref.key_ref().borrow().cmp(key) {
             Ordering::Less => nref.right_deref(),
             Ordering::Greater => nref.left_deref(),
@@ -43,7 +38,7 @@ fn validate_tree<K, V>(
     fromred: bool,
     mut nb: usize,
     depth: usize,
-    stats: &mut Stats,
+    stats: &mut LlrbStats,
 ) -> Result<usize, BognError>
 where
     K: Ord + Clone + Debug + Serialize,
@@ -86,62 +81,24 @@ where
     }
 }
 
+fn drop_tree<K, V>(mut node: Box<Node<K, V>>)
+where
+    K: Ord + Clone + Debug + Serialize,
+    V: Default + Clone + Diff + Serialize,
+{
+    //println!("drop_tree - node {:p}", node);
+    node.left.take().map(|left| drop_tree(left));
+    node.right.take().map(|right| drop_tree(right));
+}
+
+#[allow(dead_code)]
 pub struct Iter<'a, K, V>
 where
     K: Ord + Clone + Debug + Serialize,
     V: Default + Clone + Diff + Serialize,
 {
     arc: Arc<MvccRoot<K, V>>,
-    root: Option<&'a Node<K, V>>,
-    iter: std::vec::IntoIter<Entry<K, V>>,
-    after_key: Option<Bound<K>>,
-    limit: usize,
-}
-
-impl<'a, K, V> Iter<'a, K, V>
-where
-    K: Ord + Clone + Debug + Serialize,
-    V: Default + Clone + Diff + Serialize,
-{
-    fn get_root(&self) -> Option<&Node<K, V>> {
-        match self.root {
-            root @ Some(_) => root,
-            None => self.arc.as_ref().root_ref(),
-        }
-    }
-
-    fn batch_scan(
-        &self,
-        node: Option<&Node<K, V>>,
-        acc: &mut Vec<Entry<K, V>>, // batch of entries
-    ) -> bool {
-        if node.is_none() {
-            return true;
-        }
-        let node = node.unwrap();
-
-        let (left, right) = (node.left_deref(), node.right_deref());
-        match &self.after_key {
-            None => return false,
-            Some(Bound::Included(akey)) | Some(Bound::Excluded(akey)) => {
-                if node.key_ref().borrow().le(akey) {
-                    return self.batch_scan(right, acc);
-                }
-            }
-            Some(Bound::Unbounded) => (),
-        }
-
-        if !self.batch_scan(left, acc) {
-            return false;
-        }
-
-        acc.push(node.entry.clone());
-        if acc.len() >= self.limit {
-            return false;
-        }
-
-        return self.batch_scan(right, acc);
-    }
+    paths: Option<Vec<Fragment<'a, K, V>>>,
 }
 
 impl<'a, K, V> Iterator for Iter<'a, K, V>
@@ -152,230 +109,283 @@ where
     type Item = Entry<K, V>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match self.iter.next() {
-            None => {
-                let mut acc: Vec<Entry<K, V>> = Vec::with_capacity(self.limit);
-                self.batch_scan(self.get_root(), &mut acc);
-                self.after_key = acc
-                    .last()
-                    .map(|entry| Bound::Excluded(entry.key_ref().clone()));
-                self.iter = acc.into_iter();
-                self.iter.next()
-            }
-            item @ Some(_) => item,
-        }
-    }
-}
-
-pub struct Range<'a, K, V>
-where
-    K: Ord + Clone + Debug + Serialize,
-    V: Default + Clone + Diff + Serialize,
-{
-    arc: Arc<MvccRoot<K, V>>,
-    root: Option<&'a Node<K, V>>,
-    iter: std::vec::IntoIter<Entry<K, V>>,
-    low: Option<Bound<K>>,
-    high: Bound<K>,
-    limit: usize,
-}
-
-impl<'a, K, V> Range<'a, K, V>
-where
-    K: Ord + Clone + Debug + Serialize,
-    V: Default + Clone + Diff + Serialize,
-{
-    fn get_root(&self) -> Option<&Node<K, V>> {
-        match self.root {
-            root @ Some(_) => root,
-            None => self.arc.as_ref().root_ref(), // Arc<MvccRoot>
-        }
-    }
-
-    pub fn rev(self) -> Reverse<'a, K, V> {
-        Reverse {
-            arc: self.arc,
-            root: self.root,
-            iter: vec![].into_iter(),
-            high: Some(self.high),
-            low: self.low.unwrap(),
-            limit: self.limit,
-        }
-    }
-
-    fn batch_scan(
-        &self,
-        node: Option<&Node<K, V>>,
-        acc: &mut Vec<Entry<K, V>>, // batch of entries
-    ) -> bool {
-        if node.is_none() {
-            return true;
-        }
-        let node = node.unwrap();
-
-        let (left, right) = (node.left_deref(), node.right_deref());
-        match &self.low {
-            Some(Bound::Included(qow)) if node.key_ref().lt(qow) => {
-                return self.batch_scan(right, acc);
-            }
-            Some(Bound::Excluded(qow)) if node.key_ref().le(qow) => {
-                return self.batch_scan(right, acc);
-            }
-            _ => (),
-        }
-
-        if !self.batch_scan(left, acc) {
-            return false;
-        }
-
-        acc.push(node.entry.clone());
-        if acc.len() >= self.limit {
-            return false;
-        }
-
-        self.batch_scan(right, acc)
-    }
-}
-
-impl<'a, K, V> Iterator for Range<'a, K, V>
-where
-    K: Ord + Clone + Debug + Serialize,
-    V: Default + Clone + Diff + Serialize,
-{
-    type Item = Entry<K, V>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let item = match self.iter.next() {
-            None if self.low.is_some() => {
-                let mut acc: Vec<Entry<K, V>> = Vec::with_capacity(self.limit);
-                self.batch_scan(self.get_root(), &mut acc);
-                self.low = acc
-                    .last()
-                    .map(|entry| Bound::Excluded(entry.key_ref().clone()));
-                self.iter = acc.into_iter();
-                self.iter.next()
-            }
-            None => None,
-            item @ Some(_) => item,
+        let mut paths = match self.paths.take() {
+            Some(paths) => paths,
+            None => return None,
         };
-        // check for lower bound
-        match item {
+        match paths.pop() {
             None => None,
-            Some(item) => match &self.high {
-                Bound::Unbounded => Some(item),
-                Bound::Included(qigh) if item.key_ref().le(qigh) => Some(item),
-                Bound::Excluded(qigh) if item.key_ref().lt(qigh) => Some(item),
-                _ => {
-                    self.low = None;
-                    None
+            Some(mut path) => match (path.flag, path.nref) {
+                (IFlag::Left, nref) => {
+                    path.flag = IFlag::Center;
+                    paths.push(path);
+                    self.paths = Some(paths);
+                    Some(nref.entry.clone())
+                }
+                (IFlag::Center, nref) => {
+                    path.flag = IFlag::Right;
+                    paths.push(path);
+                    let rnref = nref.right_deref();
+                    self.paths = Some(build_iter(IFlag::Left, rnref, paths));
+                    self.next()
+                }
+                (_, _) => {
+                    self.paths = Some(paths);
+                    self.next()
                 }
             },
         }
     }
 }
 
-pub struct Reverse<'a, K, V>
+#[allow(dead_code)]
+pub struct Range<'a, K, V, R, Q>
 where
-    K: Ord + Clone + Debug + Serialize,
+    K: Ord + Clone + Borrow<Q> + Debug + Serialize,
     V: Default + Clone + Diff + Serialize,
+    R: RangeBounds<Q>,
+    Q: Ord + ?Sized,
 {
     arc: Arc<MvccRoot<K, V>>,
-    root: Option<&'a Node<K, V>>,
-    iter: std::vec::IntoIter<Entry<K, V>>,
-    high: Option<Bound<K>>,
-    low: Bound<K>,
-    limit: usize,
+    range: R,
+    paths: Option<Vec<Fragment<'a, K, V>>>,
+    high: marker::PhantomData<Q>,
 }
 
-impl<'a, K, V> Reverse<'a, K, V>
+impl<'a, K, V, R, Q> Iterator for Range<'a, K, V, R, Q>
 where
-    K: Ord + Clone + Debug + Serialize,
+    K: Ord + Clone + Borrow<Q> + Debug + Serialize,
     V: Default + Clone + Diff + Serialize,
-{
-    fn get_root(&self) -> Option<&Node<K, V>> {
-        match self.root {
-            root @ Some(_) => root,
-            None => self.arc.as_ref().root_ref(),
-        }
-    }
-
-    fn batch_scan(
-        &self,
-        node: Option<&Node<K, V>>,
-        acc: &mut Vec<Entry<K, V>>, // batch of entries
-    ) -> bool {
-        if node.is_none() {
-            return true;
-        }
-        let node = node.unwrap();
-
-        let (left, right) = (node.left_deref(), node.right_deref());
-        match &self.high {
-            Some(Bound::Included(qigh)) if node.key_ref().gt(qigh) => {
-                return self.batch_scan(left, acc);
-            }
-            Some(Bound::Excluded(qigh)) if node.key_ref().ge(qigh) => {
-                return self.batch_scan(left, acc);
-            }
-            _ => (),
-        }
-
-        if !self.batch_scan(right, acc) {
-            return false;
-        }
-
-        acc.push(node.entry.clone());
-        if acc.len() >= self.limit {
-            return false;
-        }
-
-        return self.batch_scan(left, acc);
-    }
-}
-
-impl<'a, K, V> Iterator for Reverse<'a, K, V>
-where
-    K: Ord + Clone + Debug + Serialize,
-    V: Default + Clone + Diff + Serialize,
+    R: RangeBounds<Q>,
+    Q: Ord + ?Sized,
 {
     type Item = Entry<K, V>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let item = match self.iter.next() {
-            None if self.high.is_some() => {
-                let mut acc: Vec<Entry<K, V>> = Vec::with_capacity(self.limit);
-                self.batch_scan(self.get_root(), &mut acc);
-                self.high = acc
-                    .last()
-                    .map(|entry| Bound::Excluded(entry.key_ref().clone()));
-                self.iter = acc.into_iter();
-                self.iter.next()
-            }
-            None => None,
-            item @ Some(_) => item,
+        let mut paths = match self.paths.take() {
+            Some(paths) => paths,
+            None => return None,
         };
-        // check for lower bound
-        match item {
+
+        let item = match paths.pop() {
             None => None,
-            Some(item) => match &self.low {
-                Bound::Unbounded => Some(item),
-                Bound::Included(qow) if item.key_ref().ge(qow) => Some(item),
-                Bound::Excluded(qow) if item.key_ref().gt(qow) => Some(item),
-                _ => {
-                    self.high = None;
-                    None
+            Some(mut path) => match (path.flag, path.nref) {
+                (IFlag::Left, nref) => {
+                    path.flag = IFlag::Center;
+                    paths.push(path);
+                    self.paths = Some(paths);
+                    Some(nref.entry.clone())
+                }
+                (IFlag::Center, nref) => {
+                    path.flag = IFlag::Right;
+                    paths.push(path);
+                    let rnref = nref.right_deref();
+                    self.paths = Some(build_iter(IFlag::Left, rnref, paths));
+                    self.next()
+                }
+                (_, _) => {
+                    self.paths = Some(paths);
+                    self.next()
                 }
             },
+        };
+        match item {
+            None => None,
+            Some(entry) => {
+                let qey = entry.key_ref().borrow();
+                match self.range.end_bound() {
+                    Bound::Included(high) if qey.le(high) => Some(entry),
+                    Bound::Excluded(high) if qey.lt(high) => Some(entry),
+                    Bound::Unbounded => Some(entry),
+                    Bound::Included(_) | Bound::Excluded(_) => {
+                        self.paths.take();
+                        None
+                    }
+                }
+            }
         }
     }
 }
 
-fn drop_tree<K, V>(mut node: Box<Node<K, V>>)
+#[allow(dead_code)]
+pub struct Reverse<'a, K, V, R, Q>
+where
+    K: Ord + Clone + Debug + Serialize,
+    V: Default + Clone + Diff + Serialize,
+    R: RangeBounds<Q>,
+    Q: Ord + ?Sized,
+{
+    arc: Arc<MvccRoot<K, V>>,
+    range: R,
+    paths: Option<Vec<Fragment<'a, K, V>>>,
+    low: marker::PhantomData<Q>,
+}
+
+impl<'a, K, V, R, Q> Iterator for Reverse<'a, K, V, R, Q>
+where
+    K: Ord + Clone + Borrow<Q> + Debug + Serialize,
+    V: Default + Clone + Diff + Serialize,
+    R: RangeBounds<Q>,
+    Q: Ord + ?Sized,
+{
+    type Item = Entry<K, V>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut paths = match self.paths.take() {
+            Some(paths) => paths,
+            None => return None,
+        };
+
+        let item = match paths.pop() {
+            None => None,
+            Some(mut path) => match (path.flag, path.nref) {
+                (IFlag::Right, nref) => {
+                    path.flag = IFlag::Center;
+                    paths.push(path);
+                    self.paths = Some(paths);
+                    Some(nref.entry.clone())
+                }
+                (IFlag::Center, nref) => {
+                    path.flag = IFlag::Left;
+                    paths.push(path);
+                    let rnref = nref.left_deref();
+                    self.paths = Some(build_iter(IFlag::Right, rnref, paths));
+                    self.next()
+                }
+                (_, _) => {
+                    self.paths = Some(paths);
+                    self.next()
+                }
+            },
+        };
+        match item {
+            None => None,
+            Some(entry) => {
+                let qey = entry.key_ref().borrow();
+                match self.range.start_bound() {
+                    Bound::Included(low) if qey.ge(low) => Some(entry),
+                    Bound::Excluded(low) if qey.gt(low) => Some(entry),
+                    Bound::Unbounded => Some(entry),
+                    Bound::Included(_) | Bound::Excluded(_) => {
+                        self.paths.take();
+                        None
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
+enum IFlag {
+    Left,
+    Center,
+    Right,
+}
+
+struct Fragment<'a, K, V>
 where
     K: Ord + Clone + Debug + Serialize,
     V: Default + Clone + Diff + Serialize,
 {
-    //println!("drop_tree - node {:p}", node);
-    node.left.take().map(|left| drop_tree(left));
-    node.right.take().map(|right| drop_tree(right));
+    flag: IFlag,
+    nref: &'a Node<K, V>,
+}
+
+fn build_iter<'a, K, V>(
+    flag: IFlag,
+    nref: Option<&'a Node<K, V>>, // subtree
+    mut paths: Vec<Fragment<'a, K, V>>,
+) -> Vec<Fragment<'a, K, V>>
+where
+    K: Ord + Clone + Debug + Serialize,
+    V: Default + Clone + Diff + Serialize,
+{
+    match nref {
+        None => paths,
+        Some(nref) => {
+            let item = Fragment { flag, nref };
+            let nref = match flag {
+                IFlag::Left => nref.left_deref(),
+                IFlag::Right => nref.right_deref(),
+                IFlag::Center => unreachable!(),
+            };
+            paths.push(item);
+            build_iter(flag, nref, paths)
+        }
+    }
+}
+
+fn find_start<'a, K, V, Q>(
+    nref: Option<&'a Node<K, V>>,
+    low: &Q,
+    incl: bool,
+    mut paths: Vec<Fragment<'a, K, V>>,
+) -> Vec<Fragment<'a, K, V>>
+where
+    K: Ord + Clone + Borrow<Q> + Debug + Serialize,
+    V: Default + Clone + Diff + Serialize,
+    Q: Ord + ?Sized,
+{
+    match nref {
+        None => paths,
+        Some(nref) => {
+            let cmp = nref.key_ref().borrow().cmp(low);
+            let flag = match cmp {
+                Ordering::Less => IFlag::Right,
+                Ordering::Equal if incl => IFlag::Left,
+                Ordering::Equal => IFlag::Center,
+                Ordering::Greater => IFlag::Left,
+            };
+            paths.push(Fragment { flag, nref });
+            match cmp {
+                Ordering::Less => {
+                    let nref = nref.right_deref();
+                    find_start(nref, low, incl, paths)
+                }
+                Ordering::Equal => paths,
+                Ordering::Greater => {
+                    let nref = nref.left_deref();
+                    find_start(nref, low, incl, paths)
+                }
+            }
+        }
+    }
+}
+
+fn find_end<'a, K, V, Q>(
+    nref: Option<&'a Node<K, V>>,
+    high: &Q,
+    incl: bool,
+    mut paths: Vec<Fragment<'a, K, V>>,
+) -> Vec<Fragment<'a, K, V>>
+where
+    K: Ord + Clone + Borrow<Q> + Debug + Serialize,
+    V: Default + Clone + Diff + Serialize,
+    Q: Ord + ?Sized,
+{
+    match nref {
+        None => paths,
+        Some(nref) => {
+            let cmp = nref.key_ref().borrow().cmp(high);
+            let flag = match cmp {
+                Ordering::Less => IFlag::Right,
+                Ordering::Equal if incl => IFlag::Right,
+                Ordering::Equal => IFlag::Center,
+                Ordering::Greater => IFlag::Left,
+            };
+            paths.push(Fragment { flag, nref });
+            match cmp {
+                Ordering::Less => {
+                    let nref = nref.right_deref();
+                    find_end(nref, high, incl, paths)
+                }
+                Ordering::Equal => paths,
+                Ordering::Greater => {
+                    let nref = nref.left_deref();
+                    find_end(nref, high, incl, paths)
+                }
+            }
+        }
+    }
 }

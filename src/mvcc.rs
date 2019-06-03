@@ -1,17 +1,17 @@
 use std::borrow::Borrow;
 use std::cmp::{Ord, Ordering};
 use std::fmt::Debug;
-use std::ops::{Bound, Deref, DerefMut};
+use std::marker;
+use std::ops::{Bound, Deref, DerefMut, RangeBounds};
 use std::sync::{
     atomic::{AtomicPtr, Ordering::Relaxed},
     Arc,
 };
 
-use crate::core::{self, Diff, Serialize};
+use crate::core::{Diff, Entry, Serialize};
 use crate::error::BognError;
 use crate::llrb::Llrb;
-use crate::llrb_node::Node;
-use crate::llrb_util::Stats;
+use crate::llrb_node::{LlrbStats, Node};
 use crate::sync_writer::SyncWriter;
 
 const RECLAIM_CAP: usize = 128;
@@ -155,37 +155,79 @@ where
     V: Default + Clone + Diff + Serialize,
 {
     /// Get the latest version for key.
-    pub fn get<Q>(&self, key: &Q) -> Option<core::Entry<K, V>>
+    pub fn get<Q>(&self, key: &Q) -> Option<Entry<K, V>>
     where
         K: Borrow<Q> + Debug + Serialize,
         Q: Ord + ?Sized,
     {
-        let arc_mvcc = Snapshot::clone(&self.snapshot);
-        get(arc_mvcc.root_ref(), key)
+        get(Snapshot::clone(&self.snapshot).root_ref(), key)
     }
 
     pub fn iter(&self) -> Iter<K, V> {
-        Iter {
+        let mut iter = Iter {
             arc: Snapshot::clone(&self.snapshot),
-            root: None,
-            iter: vec![].into_iter(),
-            after_key: Some(Bound::Unbounded),
-            limit: ITER_LIMIT,
-        }
+            paths: Default::default(),
+        };
+        let root = iter
+            .arc
+            .as_ref()
+            .root_duplicate()
+            .map(|n| Box::leak(n) as &Node<K, V>);
+        iter.paths = Some(build_iter(IFlag::Left, root, vec![]));
+        iter
     }
 
-    pub fn range(&self, low: Bound<K>, high: Bound<K>) -> Range<K, V> {
-        Range {
+    pub fn range<R, Q>(&self, range: R) -> Range<K, V, R, Q>
+    where
+        K: Borrow<Q>,
+        R: RangeBounds<Q>,
+        Q: Ord + ?Sized,
+    {
+        let mut r = Range {
             arc: Snapshot::clone(&self.snapshot),
-            root: None,
-            iter: vec![].into_iter(),
-            low: Some(low),
-            high,
-            limit: ITER_LIMIT,
-        }
+            range,
+            paths: Default::default(),
+            high: marker::PhantomData,
+        };
+        let root = r
+            .arc
+            .as_ref()
+            .root_duplicate()
+            .map(|n| Box::leak(n) as &Node<K, V>);
+        r.paths = match r.range.start_bound() {
+            Bound::Unbounded => Some(build_iter(IFlag::Left, root, vec![])),
+            Bound::Included(low) => Some(find_start(root, low, true, vec![])),
+            Bound::Excluded(low) => Some(find_start(root, low, false, vec![])),
+        };
+        r
     }
 
-    pub fn set(&self, key: K, value: V) -> Option<core::Entry<K, V>> {
+    pub fn reverse<R, Q>(&self, range: R) -> Reverse<K, V, R, Q>
+    where
+        K: Borrow<Q>,
+        R: RangeBounds<Q>,
+        Q: Ord + ?Sized,
+    {
+        let mut r = Reverse {
+            arc: Snapshot::clone(&self.snapshot),
+            range,
+            paths: Default::default(),
+            low: marker::PhantomData,
+        };
+        let root = r
+            .arc
+            .as_ref()
+            .root_duplicate()
+            .map(|n| Box::leak(n) as &Node<K, V>);
+        r.paths = match r.range.end_bound() {
+            Bound::Unbounded => Some(build_iter(IFlag::Right, root, vec![])),
+            Bound::Included(high) => Some(find_end(root, high, true, vec![])),
+            Bound::Excluded(high) => Some(find_end(root, high, false, vec![])),
+        };
+        r
+    }
+
+    pub fn set(&self, key: K, value: V) -> Option<Entry<K, V>> {
         let _lock = self.fencer.lock();
 
         let lsm = self.lsm;
@@ -211,12 +253,7 @@ where
         }
     }
 
-    pub fn set_cas(
-        &self,
-        key: K,
-        value: V,
-        cas: u64,
-    ) -> Result<Option<core::Entry<K, V>>, BognError> {
+    pub fn set_cas(&self, key: K, value: V, cas: u64) -> Result<Option<Entry<K, V>>, BognError> {
         let _lock = self.fencer.lock();
 
         let lsm = self.lsm;
@@ -251,7 +288,7 @@ where
         entry
     }
 
-    pub fn delete<Q>(&self, key: &Q) -> Option<core::Entry<K, V>>
+    pub fn delete<Q>(&self, key: &Q) -> Option<Entry<K, V>>
     where
         // TODO: From<Q> and Clone will fail if V=String and Q=str
         K: Borrow<Q> + From<Q> + Debug + Serialize,
@@ -307,14 +344,14 @@ where
     /// * Number of blacks should be same on under left child and right child.
     /// * Make sure that keys are in sorted order.
     ///
-    /// Additionally return full statistics on the tree. Refer to [`Stats`]
+    /// Additionally return full statistics on the tree. Refer to [`LlrbStats`]
     /// for more information.
-    pub fn validate(&self) -> Result<Stats, BognError> {
+    pub fn validate(&self) -> Result<LlrbStats, BognError> {
         let arc_mvcc = Snapshot::clone(&self.snapshot);
 
         let n_count = arc_mvcc.n_count;
         let node_size = std::mem::size_of::<Node<K, V>>();
-        let mut stats = Stats::new(n_count, node_size);
+        let mut stats = LlrbStats::new(n_count, node_size);
         stats.set_depths(Default::default());
 
         let root = arc_mvcc.root_ref();
@@ -340,7 +377,7 @@ where
     ) -> (
         Option<Box<Node<K, V>>>,
         Option<Box<Node<K, V>>>,
-        Option<core::Entry<K, V>>,
+        Option<Entry<K, V>>,
     ) {
         if node.is_none() {
             let node = Node::new(key, value, seqno, false /*black*/);
@@ -371,7 +408,7 @@ where
             (
                 Some(Mvcc::walkuprot_23(new_node, reclaim)),
                 Some(n),
-                Some(entry)
+                Some(entry),
             )
         };
 
@@ -390,7 +427,7 @@ where
     ) -> (
         Option<Box<Node<K, V>>>, // mvcc-path
         Option<Box<Node<K, V>>>, // new_node
-        Option<core::Entry<K, V>>,
+        Option<Entry<K, V>>,
         Option<BognError>,
     ) {
         if node.is_none() && cas > 0 {
@@ -448,7 +485,7 @@ where
     ) -> (
         Option<Box<Node<K, V>>>,
         Option<Box<Node<K, V>>>,
-        Option<core::Entry<K, V>>,
+        Option<Entry<K, V>>,
     )
     where
         K: Borrow<Q> + From<Q> + Debug + Serialize,
@@ -498,7 +535,7 @@ where
         node: Option<Box<Node<K, V>>>,
         key: &Q,
         reclaim: &mut Vec<Box<Node<K, V>>>,
-    ) -> (Option<Box<Node<K, V>>>, Option<core::Entry<K, V>>)
+    ) -> (Option<Box<Node<K, V>>>, Option<Entry<K, V>>)
     where
         K: Borrow<Q> + Debug + Serialize,
         Q: Ord + ?Sized,

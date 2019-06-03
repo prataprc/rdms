@@ -286,7 +286,7 @@ fn test_range() {
     for _ in 0..1_000 {
         let (low, high) = random_low_high(llrb.len());
 
-        let mut iter = llrb.range(low, high);
+        let mut iter = llrb.range((low, high));
         let mut iter_ref = refns.range(low, high);
         loop {
             match (iter.next(), iter_ref.next()) {
@@ -298,7 +298,7 @@ fn test_range() {
         assert!(iter.next().is_none());
         assert!(iter.next().is_none());
 
-        let mut iter = llrb.range(low, high).rev();
+        let mut iter = llrb.reverse((low, high));
         let mut iter_ref = refns.reverse(low, high);
         loop {
             match (iter.next(), iter_ref.next()) {
@@ -331,7 +331,8 @@ fn test_crud() {
                 false
             }
             1 => {
-                let refn = &refns.entries[key as usize];
+                let off: usize = key.try_into().unwrap();
+                let refn = &refns.entries[off];
                 let cas = if refn.versions.len() > 0 {
                     refn.get_seqno()
                 } else {
@@ -370,7 +371,7 @@ fn test_crud() {
         let (low, high) = random_low_high(size);
         //println!("test loop {:?} {:?}", low, high);
 
-        let mut iter = llrb.range(low, high);
+        let mut iter = llrb.range((low, high));
         let mut iter_ref = refns.range(low, high);
         loop {
             if check_node(iter.next(), iter_ref.next().cloned()) == false {
@@ -378,7 +379,7 @@ fn test_crud() {
             }
         }
 
-        let mut iter = llrb.range(low, high).rev();
+        let mut iter = llrb.reverse((low, high));
         let mut iter_ref = refns.reverse(low, high);
         loop {
             if check_node(iter.next(), iter_ref.next().cloned()) == false {
@@ -407,7 +408,8 @@ fn test_crud_lsm() {
                 false
             }
             1 => {
-                let refn = &refns.entries[key as usize];
+                let off: usize = key.try_into().unwrap();
+                let refn = &refns.entries[off];
                 let cas = if refn.versions.len() > 0 {
                     refn.get_seqno()
                 } else {
@@ -447,7 +449,7 @@ fn test_crud_lsm() {
         let (low, high) = random_low_high(size as usize);
         //println!("test loop {:?} {:?}", low, high);
 
-        let mut iter = llrb.range(low, high);
+        let mut iter = llrb.range((low, high));
         let mut iter_ref = refns.range(low, high);
         loop {
             if check_node(iter.next(), iter_ref.next().cloned()) == false {
@@ -455,7 +457,7 @@ fn test_crud_lsm() {
             }
         }
 
-        let mut iter = llrb.range(low, high).rev();
+        let mut iter = llrb.reverse((low, high));
         let mut iter_ref = refns.reverse(low, high);
         loop {
             if check_node(iter.next(), iter_ref.next().cloned()) == false {

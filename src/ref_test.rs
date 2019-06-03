@@ -1,3 +1,5 @@
+use std::convert::TryInto;
+
 use crate::core::{Diff, Entry};
 
 #[derive(Clone, Default, Debug)]
@@ -59,7 +61,8 @@ impl RefNodes {
     }
 
     fn get(&self, key: i64) -> Option<RefNode> {
-        let entry = self.entries[key as usize].clone();
+        let off: usize = key.try_into().unwrap();
+        let entry = self.entries[off].clone();
         if entry.versions.len() == 0 {
             None
         } else {
@@ -77,13 +80,13 @@ impl RefNodes {
         high: Bound<i64>,
     ) -> Box<dyn Iterator<Item = &'a RefNode> + 'a> {
         let low = match low {
-            Bound::Included(low) => low as usize,
-            Bound::Excluded(low) => (low + 1) as usize,
+            Bound::Included(low) => low.try_into().unwrap(),
+            Bound::Excluded(low) => (low + 1).try_into().unwrap(),
             Bound::Unbounded => 0,
         };
         let high = match high {
-            Bound::Included(high) => (high + 1) as usize,
-            Bound::Excluded(high) => high as usize,
+            Bound::Included(high) => (high + 1).try_into().unwrap(),
+            Bound::Excluded(high) => high.try_into().unwrap(),
             Bound::Unbounded => self.entries.len(),
         };
         //println!("range ref compute low high {} {}", low, high);
@@ -106,13 +109,13 @@ impl RefNodes {
         high: Bound<i64>,
     ) -> Box<dyn Iterator<Item = &'a RefNode> + 'a> {
         let low = match low {
-            Bound::Included(low) => low as usize,
-            Bound::Excluded(low) => (low + 1) as usize,
+            Bound::Included(low) => low.try_into().unwrap(),
+            Bound::Excluded(low) => (low + 1).try_into().unwrap(),
             Bound::Unbounded => 0,
         };
         let high = match high {
-            Bound::Included(high) => (high + 1) as usize,
-            Bound::Excluded(high) => high as usize,
+            Bound::Included(high) => (high + 1).try_into().unwrap(),
+            Bound::Excluded(high) => high.try_into().unwrap(),
             Bound::Unbounded => self.entries.len(),
         };
         //println!("reverse ref compute low high {} {}", low, high);
@@ -135,7 +138,8 @@ impl RefNodes {
             seqno: self.seqno + 1,
             deleted: None,
         };
-        let entry = &mut self.entries[key as usize];
+        let off: usize = key.try_into().unwrap();
+        let entry = &mut self.entries[off];
         let refn = if entry.versions.len() > 0 {
             Some(entry.clone())
         } else {
@@ -157,7 +161,8 @@ impl RefNodes {
             seqno: self.seqno + 1,
             deleted: None,
         };
-        let entry = &mut self.entries[key as usize];
+        let off: usize = key.try_into().unwrap();
+        let entry = &mut self.entries[off];
         let ok = entry.versions.len() == 0 && cas == 0;
         if ok || (cas == entry.versions[0].seqno) {
             let refn = if entry.versions.len() > 0 {
@@ -180,7 +185,8 @@ impl RefNodes {
     }
 
     fn delete(&mut self, key: i64) -> Option<RefNode> {
-        let entry = &mut self.entries[key as usize];
+        let off: usize = key.try_into().unwrap();
+        let entry = &mut self.entries[off];
 
         if entry.is_present() {
             if self.lsm && entry.versions[0].deleted.is_none() {
@@ -269,9 +275,9 @@ fn check_node(entry: Option<Entry<i64, i64>>, refn: Option<RefNode>) -> bool {
 }
 
 fn random_low_high(size: usize) -> (Bound<i64>, Bound<i64>) {
-    let size = size as u64;
-    let low = (random::<u64>() % size) as i64;
-    let high = (random::<u64>() % size) as i64;
+    let size: u64 = size.try_into().unwrap();
+    let low: i64 = (random::<u64>() % size) as i64;
+    let high: i64 = (random::<u64>() % size) as i64;
     let low = match random::<u8>() % 3 {
         0 => Bound::Included(low),
         1 => Bound::Excluded(low),

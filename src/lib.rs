@@ -35,9 +35,7 @@ mod bubt_stats;
 mod core;
 mod error;
 mod llrb;
-mod llrb_depth;
 mod llrb_node;
-mod llrb_util;
 mod mvcc;
 mod sync_writer;
 mod type_bytes;
@@ -54,7 +52,7 @@ pub use crate::bubt_snap::Snapshot;
 pub use crate::core::{Diff, Result, Serialize};
 pub use crate::error::BognError;
 pub use crate::llrb::Llrb;
-pub use crate::llrb_util::Stats;
+pub use crate::llrb_node::LlrbStats;
 pub use crate::mvcc::Mvcc;
 pub use crate::type_empty::Empty; // TODO: proper nomenclature.
 

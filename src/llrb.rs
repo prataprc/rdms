@@ -5,7 +5,7 @@ use std::ops::{Bound, Deref, DerefMut, RangeBounds};
 use std::sync::Arc;
 use std::{marker, mem};
 
-use crate::core::{Diff, Entry, Serialize};
+use crate::core::{Diff, Entry};
 use crate::error::BognError;
 use crate::llrb_node::{LlrbStats, Node};
 use crate::mvcc::MvccRoot;
@@ -28,8 +28,8 @@ include!("llrb_common.rs");
 /// [LSM mode]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
 pub struct Llrb<K, V>
 where
-    K: Clone + Ord + Debug + Serialize,
-    V: Default + Clone + Diff + Serialize,
+    K: Clone + Ord + Debug,
+    V: Clone + Diff,
 {
     name: String,
     lsm: bool,
@@ -40,8 +40,8 @@ where
 
 impl<K, V> Drop for Llrb<K, V>
 where
-    K: Clone + Ord + Debug + Serialize,
-    V: Default + Clone + Diff + Serialize,
+    K: Clone + Ord + Debug,
+    V: Clone + Diff,
 {
     fn drop(&mut self) {
         self.root.take().map(drop_tree);
@@ -50,8 +50,8 @@ where
 
 impl<K, V> Clone for Llrb<K, V>
 where
-    K: Clone + Ord + Debug + Serialize,
-    V: Default + Clone + Diff + Serialize,
+    K: Clone + Ord + Debug,
+    V: Clone + Diff,
 {
     fn clone(&self) -> Llrb<K, V> {
         Llrb {
@@ -67,8 +67,8 @@ where
 /// Different ways to construct a new Llrb instance.
 impl<K, V> Llrb<K, V>
 where
-    K: Clone + Ord + Debug + Serialize,
-    V: Default + Clone + Diff + Serialize,
+    K: Clone + Ord + Debug,
+    V: Clone + Diff,
 {
     /// Create an empty instance of Llrb, identified by `name`.
     /// Applications can choose unique names. When `lsm` is true, mutations
@@ -141,8 +141,8 @@ where
 /// Maintanence API.
 impl<K, V> Llrb<K, V>
 where
-    K: Clone + Ord + Debug + Serialize,
-    V: Default + Clone + Diff + Serialize,
+    K: Clone + Ord + Debug,
+    V: Clone + Diff,
 {
     /// Identify this instance. Applications can choose unique names while
     /// creating Llrb instances.
@@ -189,8 +189,8 @@ where
 /// CRUD operations on Llrb instance.
 impl<K, V> Llrb<K, V>
 where
-    K: Clone + Ord + Debug + Serialize,
-    V: Default + Clone + Diff + Serialize,
+    K: Clone + Ord + Debug,
+    V: Clone + Diff,
 {
     /// Get the latest version for key.
     pub fn get<Q>(&self, key: &Q) -> Option<Entry<K, V>>
@@ -317,7 +317,7 @@ where
     /// tree.
     pub fn delete<Q>(&mut self, key: &Q) -> Option<Entry<K, V>>
     where
-        K: Borrow<Q> + Debug + Serialize,
+        K: Borrow<Q> + Debug,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
     {
         let seqno = self.seqno + 1;
@@ -384,8 +384,8 @@ where
 
 impl<K, V> Llrb<K, V>
 where
-    K: Clone + Ord + Debug + Serialize,
-    V: Default + Clone + Diff + Serialize,
+    K: Clone + Ord + Debug,
+    V: Clone + Diff,
 {
     fn upsert(
         node: Option<Box<Node<K, V>>>,
@@ -395,7 +395,7 @@ where
         lsm: bool,
     ) -> (Option<Box<Node<K, V>>>, Option<Entry<K, V>>) {
         if node.is_none() {
-            let mut node = Node::new(key, value, seqno, false /*black*/);
+            let mut node = Node::new(key, Some(value), seqno, false /*black*/);
             node.dirty = false;
             return (Some(node), None);
         }
@@ -427,7 +427,7 @@ where
     fn upsert_cas(
         node: Option<Box<Node<K, V>>>,
         key: K,
-        val: V,
+        value: V,
         cas: u64,
         seqno: u64,
         lsm: bool,
@@ -439,7 +439,7 @@ where
         if node.is_none() && cas > 0 {
             return (None, None, Some(BognError::InvalidCAS));
         } else if node.is_none() {
-            let mut node = Node::new(key, val, seqno, false /*black*/);
+            let mut node = Node::new(key, Some(value), seqno, false /*black*/);
             node.dirty = false;
             return (Some(node), None, None);
         }
@@ -448,13 +448,13 @@ where
         node = Llrb::walkdown_rot23(node);
         let (entry, err) = match node.key_ref().cmp(&key) {
             Ordering::Greater => {
-                let (k, v, left) = (key, val, node.left.take());
+                let (k, v, left) = (key, value, node.left.take());
                 let (l, entry, e) = Llrb::upsert_cas(left, k, v, cas, seqno, lsm);
                 node.left = l;
                 (entry, e)
             }
             Ordering::Less => {
-                let (k, v, r) = (key, val, node.right.take());
+                let (k, v, r) = (key, value, node.right.take());
                 let (r, entry, e) = Llrb::upsert_cas(r, k, v, cas, seqno, lsm);
                 node.right = r;
                 (entry, e)
@@ -466,7 +466,7 @@ where
                     (None, Some(BognError::InvalidCAS))
                 } else {
                     let entry = node.entry.clone();
-                    node.prepend_version(val, seqno, lsm);
+                    node.prepend_version(value, seqno, lsm);
                     (Some(entry), None)
                 }
             }
@@ -482,13 +482,13 @@ where
         seqno: u64,
     ) -> (Option<Box<Node<K, V>>>, Option<Entry<K, V>>)
     where
-        K: Borrow<Q> + Debug + Serialize,
+        K: Borrow<Q> + Debug,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
     {
         if node.is_none() {
             // insert and mark as delete
             let (key, black) = (key.to_owned(), false);
-            let mut node = Node::new(key, Default::default(), seqno, black);
+            let mut node = Node::new(key, None, seqno, black);
             node.dirty = false;
             node.delete(seqno);
             return (Some(node), None);
@@ -528,7 +528,7 @@ where
         key: &Q,
     ) -> (Option<Box<Node<K, V>>>, Option<Entry<K, V>>)
     where
-        K: Borrow<Q> + Debug + Serialize,
+        K: Borrow<Q> + Debug,
         Q: Ord + ?Sized,
     {
         let mut node = match node {

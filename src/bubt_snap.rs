@@ -18,6 +18,7 @@ pub struct Snapshot<K, V>
 where
     K: Default + Ord + Clone + Serialize,
     V: Default + Clone + Diff + Serialize,
+    <V as Diff>::D: Default + Clone + Serialize,
 {
     config: Config,
     stats: Stats,
@@ -35,6 +36,7 @@ impl<K, V> Snapshot<K, V>
 where
     K: Default + Ord + Clone + Serialize,
     V: Default + Clone + Diff + Serialize,
+    <V as Diff>::D: Default + Clone + Serialize,
 {
     pub fn open(dir: &str, name: &str) -> Result<Snapshot<K, V>> {
         let index_fd = util::open_file_r(&Config::index_file(dir, name))?;
@@ -141,6 +143,7 @@ impl<K, V> Snapshot<K, V>
 where
     K: Default + Ord + Clone + Serialize,
     V: Default + Clone + Diff + Serialize,
+    <V as Diff>::D: Default + Clone + Serialize,
 {
     pub fn purge(&mut self) {
         panic!("to-be-implemented")
@@ -181,6 +184,7 @@ impl<K, V> Snapshot<K, V>
 where
     K: Default + Ord + Clone + Serialize,
     V: Default + Clone + Diff + Serialize,
+    <V as Diff>::D: Default + Clone + Serialize,
 {
     pub fn get(&mut self, key: &K) -> Result<Entry<K, V>> {
         let mut fpos = self.root;
@@ -475,6 +479,7 @@ pub struct Iter<'a, K, V>
 where
     K: Default + Ord + Clone + Serialize,
     V: Default + Clone + Diff + Serialize,
+    <V as Diff>::D: Default + Clone + Serialize,
 {
     snap: &'a mut Snapshot<K, V>,
     mzs: Vec<MZ<K, V>>,
@@ -484,6 +489,7 @@ impl<'a, K, V> Iterator for Iter<'a, K, V>
 where
     K: Default + Ord + Clone + Serialize,
     V: Default + Clone + Diff + Serialize,
+    <V as Diff>::D: Default + Clone + Serialize,
 {
     type Item = Result<Entry<K, V>>;
 
@@ -508,6 +514,7 @@ pub struct Range<'a, K, V>
 where
     K: Default + Ord + Clone + Serialize,
     V: Default + Clone + Diff + Serialize,
+    <V as Diff>::D: Default + Clone + Serialize,
 {
     snap: &'a mut Snapshot<K, V>,
     mzs: Vec<MZ<K, V>>,
@@ -518,6 +525,7 @@ impl<'a, K, V> Range<'a, K, V>
 where
     K: Default + Ord + Clone + Serialize,
     V: Default + Clone + Diff + Serialize,
+    <V as Diff>::D: Default + Clone + Serialize,
 {
     fn till_ok(&self, entry: &Entry<K, V>) -> bool {
         match &self.high {
@@ -532,6 +540,7 @@ impl<'a, K, V> Iterator for Range<'a, K, V>
 where
     K: Default + Ord + Clone + Serialize,
     V: Default + Clone + Diff + Serialize,
+    <V as Diff>::D: Default + Clone + Serialize,
 {
     type Item = Result<Entry<K, V>>;
 
@@ -561,6 +570,7 @@ pub struct Reverse<'a, K, V>
 where
     K: Default + Ord + Clone + Serialize,
     V: Default + Clone + Diff + Serialize,
+    <V as Diff>::D: Default + Clone + Serialize,
 {
     snap: &'a mut Snapshot<K, V>,
     mzs: Vec<MZ<K, V>>,
@@ -571,6 +581,7 @@ impl<'a, K, V> Reverse<'a, K, V>
 where
     K: Default + Ord + Clone + Serialize,
     V: Default + Clone + Diff + Serialize,
+    <V as Diff>::D: Default + Clone + Serialize,
 {
     fn till_ok(&self, entry: &Entry<K, V>) -> bool {
         match &self.low {
@@ -585,6 +596,7 @@ impl<'a, K, V> Iterator for Reverse<'a, K, V>
 where
     K: Default + Ord + Clone + Serialize,
     V: Default + Clone + Diff + Serialize,
+    <V as Diff>::D: Default + Clone + Serialize,
 {
     type Item = Result<Entry<K, V>>;
 
@@ -614,6 +626,7 @@ enum MZ<K, V>
 where
     K: Default + Ord + Clone + Serialize,
     V: Default + Clone + Diff + Serialize,
+    <V as Diff>::D: Default + Clone + Serialize,
 {
     M { fpos: u64, index: usize },
     Z { zblock: ZBlock<K, V>, index: usize },
@@ -623,6 +636,7 @@ impl<K, V> Iterator for MZ<K, V>
 where
     K: Default + Ord + Clone + Serialize,
     V: Default + Clone + Diff + Serialize,
+    <V as Diff>::D: Default + Clone + Serialize,
 {
     type Item = Entry<K, V>;
 
@@ -645,6 +659,7 @@ impl<K, V> DoubleEndedIterator for MZ<K, V>
 where
     K: Default + Ord + Clone + Serialize,
     V: Default + Clone + Diff + Serialize,
+    <V as Diff>::D: Default + Clone + Serialize,
 {
     fn next_back(&mut self) -> Option<Entry<K, V>> {
         match self {

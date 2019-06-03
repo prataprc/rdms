@@ -1,6 +1,6 @@
 use std::ops::Deref;
 
-use crate::core::{Diff, Entry, Serialize};
+use crate::core::{Diff, Entry};
 #[allow(unused_imports)]
 use crate::{Llrb, Mvcc};
 
@@ -8,8 +8,8 @@ use crate::{Llrb, Mvcc};
 #[derive(Clone)]
 pub struct Node<K, V>
 where
-    K: Clone + Ord + Serialize,
-    V: Default + Clone + Diff + Serialize,
+    K: Clone + Ord,
+    V: Clone + Diff,
 {
     pub(crate) entry: Entry<K, V>,
     pub(crate) black: bool,                    // store: black or red
@@ -21,11 +21,16 @@ where
 // construct node values.
 impl<K, V> Node<K, V>
 where
-    K: Clone + Ord + Serialize,
-    V: Default + Clone + Diff + Serialize,
+    K: Clone + Ord,
+    V: Clone + Diff,
 {
     // CREATE operation
-    pub(crate) fn new(k: K, v: V, seqno: u64, black: bool) -> Box<Node<K, V>> {
+    pub(crate) fn new(
+        k: K,
+        v: Option<V>, // in case of delete None
+        seqno: u64,
+        black: bool,
+    ) -> Box<Node<K, V>> {
         let node = Box::new(Node {
             entry: Entry::new_entry(k, v, seqno),
             black,
@@ -80,8 +85,8 @@ where
 // write/update methods
 impl<K, V> Node<K, V>
 where
-    K: Clone + Ord + Serialize,
-    V: Default + Clone + Diff + Serialize,
+    K: Clone + Ord,
+    V: Clone + Diff,
 {
     // prepend operation, equivalent to SET / INSERT / UPDATE
     pub(crate) fn prepend_version(&mut self, value: V, seqno: u64, lsm: bool) {
@@ -113,8 +118,8 @@ where
 // read methods
 impl<K, V> Node<K, V>
 where
-    K: Clone + Ord + Serialize,
-    V: Default + Clone + Diff + Serialize,
+    K: Clone + Ord,
+    V: Clone + Diff,
 {
     #[inline]
     pub(crate) fn left_deref(&self) -> Option<&Node<K, V>> {
@@ -147,8 +152,8 @@ where
 // fence recursive drops
 impl<K, V> Drop for Node<K, V>
 where
-    K: Clone + Ord + Serialize,
-    V: Default + Clone + Diff + Serialize,
+    K: Clone + Ord,
+    V: Clone + Diff,
 {
     fn drop(&mut self) {
         self.left.take().map(Box::leak);
@@ -158,8 +163,8 @@ where
 
 impl<K, V> From<Entry<K, V>> for Node<K, V>
 where
-    K: Clone + Ord + Serialize,
-    V: Default + Clone + Diff + Serialize,
+    K: Clone + Ord,
+    V: Clone + Diff,
 {
     fn from(entry: Entry<K, V>) -> Node<K, V> {
         Node {

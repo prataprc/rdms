@@ -8,7 +8,7 @@ use std::sync::{
     Arc,
 };
 
-use crate::core::{Diff, Entry, Serialize};
+use crate::core::{Diff, Entry};
 use crate::error::BognError;
 use crate::llrb::Llrb;
 use crate::llrb_node::{LlrbStats, Node};
@@ -20,8 +20,8 @@ include!("llrb_common.rs");
 
 pub struct Mvcc<K, V>
 where
-    K: Clone + Ord + Debug + Serialize,
-    V: Default + Clone + Diff + Serialize,
+    K: Clone + Ord + Debug,
+    V: Clone + Diff,
 {
     name: String,
     lsm: bool,
@@ -31,8 +31,8 @@ where
 
 impl<K, V> Clone for Mvcc<K, V>
 where
-    K: Clone + Ord + Debug + Serialize,
-    V: Default + Clone + Diff + Serialize,
+    K: Clone + Ord + Debug,
+    V: Clone + Diff,
 {
     fn clone(&self) -> Mvcc<K, V> {
         let mvcc = Mvcc {
@@ -55,8 +55,8 @@ where
 
 impl<K, V> Drop for Mvcc<K, V>
 where
-    K: Clone + Ord + Debug + Serialize,
-    V: Default + Clone + Diff + Serialize,
+    K: Clone + Ord + Debug,
+    V: Clone + Diff,
 {
     fn drop(&mut self) {
         // NOTE: Means all references to mvcc are gone and ownership is going out
@@ -82,8 +82,8 @@ where
 
 impl<K, V> From<Llrb<K, V>> for Mvcc<K, V>
 where
-    K: Clone + Ord + Debug + Serialize,
-    V: Default + Clone + Diff + Serialize,
+    K: Clone + Ord + Debug,
+    V: Clone + Diff,
 {
     fn from(mut llrb: Llrb<K, V>) -> Mvcc<K, V> {
         let mvcc = Mvcc::new(llrb.id(), llrb.is_lsm());
@@ -96,8 +96,8 @@ where
 
 impl<K, V> Mvcc<K, V>
 where
-    K: Clone + Ord + Debug + Serialize,
-    V: Default + Clone + Diff + Serialize,
+    K: Clone + Ord + Debug,
+    V: Clone + Diff,
 {
     pub fn new<S>(name: S, lsm: bool) -> Mvcc<K, V>
     where
@@ -115,8 +115,8 @@ where
 /// Maintanence API.
 impl<K, V> Mvcc<K, V>
 where
-    K: Clone + Ord + Debug + Serialize,
-    V: Default + Clone + Diff + Serialize,
+    K: Clone + Ord + Debug,
+    V: Clone + Diff,
 {
     /// Identify this instance. Applications can choose unique names while
     /// creating Mvcc instances.
@@ -151,13 +151,13 @@ where
 
 impl<K, V> Mvcc<K, V>
 where
-    K: Clone + Ord + Debug + Serialize,
-    V: Default + Clone + Diff + Serialize,
+    K: Clone + Ord + Debug,
+    V: Clone + Diff,
 {
     /// Get the latest version for key.
     pub fn get<Q>(&self, key: &Q) -> Option<Entry<K, V>>
     where
-        K: Borrow<Q> + Debug + Serialize,
+        K: Borrow<Q> + Debug,
         Q: Ord + ?Sized,
     {
         get(Snapshot::clone(&self.snapshot).root_ref(), key)
@@ -291,7 +291,7 @@ where
     pub fn delete<Q>(&self, key: &Q) -> Option<Entry<K, V>>
     where
         // TODO: From<Q> and Clone will fail if V=String and Q=str
-        K: Borrow<Q> + From<Q> + Debug + Serialize,
+        K: Borrow<Q> + From<Q> + Debug,
         Q: Clone + Ord + ?Sized,
     {
         let _lock = self.fencer.lock();
@@ -364,8 +364,8 @@ where
 
 impl<K, V> Mvcc<K, V>
 where
-    K: Clone + Ord + Debug + Serialize,
-    V: Default + Clone + Diff + Serialize,
+    K: Clone + Ord + Debug,
+    V: Clone + Diff,
 {
     fn upsert(
         node: Option<Box<Node<K, V>>>,
@@ -380,7 +380,7 @@ where
         Option<Entry<K, V>>,
     ) {
         if node.is_none() {
-            let node = Node::new(key, value, seqno, false /*black*/);
+            let node = Node::new(key, Some(value), seqno, false /*black*/);
             let n = node.duplicate();
             return (Some(node), Some(n), None);
         }
@@ -419,7 +419,7 @@ where
     fn upsert_cas(
         node: Option<Box<Node<K, V>>>,
         key: K,
-        val: V,
+        value: V,
         cas: u64,
         seqno: u64,
         lsm: bool,
@@ -433,7 +433,7 @@ where
         if node.is_none() && cas > 0 {
             return (None, None, None, Some(BognError::InvalidCAS));
         } else if node.is_none() {
-            let node = Node::new(key, val, seqno, false /*black*/);
+            let node = Node::new(key, Some(value), seqno, false /*black*/);
             let n = node.duplicate();
             return (Some(node), Some(n), None, None);
         }
@@ -445,13 +445,13 @@ where
         let cmp = new_node.key_ref().cmp(&key);
         let (new_node, n, entry, err) = if cmp == Ordering::Greater {
             let left = new_node.left.take();
-            let s = Mvcc::upsert_cas(left, key, val, cas, seqno, lsm, reclaim);
+            let s = Mvcc::upsert_cas(left, key, value, cas, seqno, lsm, reclaim);
             let (left, n, entry, e) = s;
             new_node.left = left;
             (Some(Mvcc::walkuprot_23(new_node, reclaim)), n, entry, e)
         } else if cmp == Ordering::Less {
             let right = new_node.right.take();
-            let s = Mvcc::upsert_cas(right, key, val, cas, seqno, lsm, reclaim);
+            let s = Mvcc::upsert_cas(right, key, value, cas, seqno, lsm, reclaim);
             let (rh, n, entry, e) = s;
             new_node.right = rh;
             (Some(Mvcc::walkuprot_23(new_node, reclaim)), n, entry, e)
@@ -462,7 +462,7 @@ where
             (Some(new_node), None, None, Some(BognError::InvalidCAS))
         } else {
             let entry = Some(node.entry.clone());
-            new_node.prepend_version(val, seqno, lsm);
+            new_node.prepend_version(value, seqno, lsm);
             new_node.dirty = true;
             let n = new_node.duplicate();
             (
@@ -488,12 +488,12 @@ where
         Option<Entry<K, V>>,
     )
     where
-        K: Borrow<Q> + From<Q> + Debug + Serialize,
+        K: Borrow<Q> + From<Q> + Debug,
         Q: Clone + Ord + ?Sized,
     {
         if node.is_none() {
             let (key, black) = (key.clone().into(), false);
-            let mut node = Node::new(key, Default::default(), seqno, black);
+            let mut node = Node::new(key, None, seqno, black);
             node.delete(seqno);
             let n = node.duplicate();
             return (Some(node), Some(n), None);
@@ -537,7 +537,7 @@ where
         reclaim: &mut Vec<Box<Node<K, V>>>,
     ) -> (Option<Box<Node<K, V>>>, Option<Entry<K, V>>)
     where
-        K: Borrow<Q> + Debug + Serialize,
+        K: Borrow<Q> + Debug,
         Q: Ord + ?Sized,
     {
         if node.is_none() {
@@ -797,16 +797,16 @@ where
 #[derive(Default)]
 struct Snapshot<K, V>
 where
-    K: Clone + Ord + Debug + Serialize,
-    V: Default + Clone + Diff + Serialize,
+    K: Clone + Ord + Debug,
+    V: Clone + Diff,
 {
     value: AtomicPtr<Arc<MvccRoot<K, V>>>,
 }
 
 impl<K, V> Snapshot<K, V>
 where
-    K: Clone + Ord + Debug + Serialize,
-    V: Default + Clone + Diff + Serialize,
+    K: Clone + Ord + Debug,
+    V: Clone + Diff,
 {
     fn new() -> Snapshot<K, V> {
         let next = Some(Arc::new(MvccRoot::new(None)));
@@ -858,8 +858,8 @@ where
 
 pub struct MvccRoot<K, V>
 where
-    K: Clone + Ord + Debug + Serialize,
-    V: Default + Clone + Diff + Serialize,
+    K: Clone + Ord + Debug,
+    V: Clone + Diff,
 {
     root: Option<Box<Node<K, V>>>,
     reclaim: Vec<Box<Node<K, V>>>,
@@ -870,8 +870,8 @@ where
 
 impl<K, V> MvccRoot<K, V>
 where
-    K: Clone + Ord + Debug + Serialize,
-    V: Default + Clone + Diff + Serialize,
+    K: Clone + Ord + Debug,
+    V: Clone + Diff,
 {
     fn new(next: Option<Arc<MvccRoot<K, V>>>) -> MvccRoot<K, V> {
         //println!("new mvcc-root {:p}", mvcc_root);
@@ -897,8 +897,8 @@ where
 
 impl<K, V> Drop for MvccRoot<K, V>
 where
-    K: Clone + Ord + Debug + Serialize,
-    V: Default + Clone + Diff + Serialize,
+    K: Clone + Ord + Debug,
+    V: Clone + Diff,
 {
     fn drop(&mut self) {
         // NOTE: `root` will be leaked, so that the tree is intact.
@@ -916,8 +916,8 @@ where
 
 impl<K, V> Default for MvccRoot<K, V>
 where
-    K: Clone + Ord + Debug + Serialize,
-    V: Default + Clone + Diff + Serialize,
+    K: Clone + Ord + Debug,
+    V: Clone + Diff,
 {
     fn default() -> MvccRoot<K, V> {
         MvccRoot {
@@ -933,8 +933,8 @@ where
 #[allow(dead_code)]
 fn print_reclaim<K, V>(prefix: &str, reclaim: &Vec<Box<Node<K, V>>>)
 where
-    K: Clone + Ord + Serialize,
-    V: Default + Clone + Diff + Serialize,
+    K: Clone + Ord,
+    V: Clone + Diff,
 {
     print!("{}reclaim ", prefix);
     reclaim.iter().for_each(|item| print!("{:p} ", *item));

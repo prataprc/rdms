@@ -55,6 +55,7 @@ pub enum MBlock<K, V>
 where
     K: Default + Clone + Ord + Serialize,
     V: Default + Clone + Diff + Serialize,
+    <V as Diff>::D: Default + Clone + Serialize,
 {
     Encode {
         i_block: Vec<u8>,
@@ -77,6 +78,7 @@ impl<K, V> MBlock<K, V>
 where
     K: Default + Clone + Ord + Serialize,
     V: Default + Clone + Diff + Serialize,
+    <V as Diff>::D: Default + Clone + Serialize,
 {
     const ENTRY_HEADER: usize = 8 + 8;
     const FLAGS_ZBLOCK: u64 = 0x1000000000000000;
@@ -256,6 +258,7 @@ impl<K, V> MBlock<K, V>
 where
     K: Default + Clone + Ord + Serialize,
     V: Default + Clone + Diff + Serialize,
+    <V as Diff>::D: Default + Clone + Serialize,
 {
     pub(crate) fn new_decode(
         fd: &mut fs::File,
@@ -358,7 +361,7 @@ where
             Ok((
                 index,
                 zchild,
-                Entry::new(key, value, Default::default(), None, vec![]),
+                Entry::new(key, Some(value), Default::default(), None, vec![]),
             ))
         } else {
             Err(BognError::MBlockExhausted)
@@ -462,6 +465,7 @@ pub enum ZBlock<K, V>
 where
     K: Default + Clone + Ord + Serialize,
     V: Default + Clone + Diff + Serialize,
+    <V as Diff>::D: Default + Clone + Serialize,
 {
     Encode {
         i_block: Vec<u8>, // buffer for z_block
@@ -489,6 +493,7 @@ impl<K, V> ZBlock<K, V>
 where
     K: Default + Clone + Ord + Serialize,
     V: Default + Clone + Diff + Serialize,
+    <V as Diff>::D: Default + Clone + Serialize,
 {
     const DELTA_HEADER: usize = 8 + 8 + 8 + 8;
     const ENTRY_HEADER: usize = 8 + 8 + 8 + 8;
@@ -806,6 +811,7 @@ impl<K, V> ZBlock<K, V>
 where
     K: Default + Clone + Ord + Serialize,
     V: Default + Clone + Diff + Serialize,
+    <V as Diff>::D: Default + Clone + Serialize,
 {
     pub(crate) fn new_decode(
         fd: &mut fs::File,
@@ -955,7 +961,7 @@ where
                 let delta = vlog::Delta::Reference { fpos, length: dlen };
                 deltas.push(Delta::new(delta, seqno, deleted));
             }
-            Ok((index, Entry::new(key, value, seqno, deleted, deltas)))
+            Ok((index, Entry::new(key, Some(value), seqno, deleted, deltas)))
         } else {
             Err(BognError::ZBlockExhausted)
         }

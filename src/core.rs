@@ -1,5 +1,3 @@
-// TODO: Try to remove Default trait constraint from K and V parameters.
-
 use crate::error::BognError;
 use crate::vlog;
 
@@ -14,7 +12,7 @@ use crate::vlog;
 /// D = N - O (diff operation)
 /// O = N - D (merge operation, to get old value)
 pub trait Diff {
-    type D: Default + Clone + Serialize;
+    type D: Clone;
 
     /// Return the delta between two version of value.
     /// D = N - O
@@ -40,7 +38,7 @@ pub trait Serialize: Sized {
 #[derive(Clone)]
 pub struct Delta<V>
 where
-    V: Default + Clone + Diff + Serialize,
+    V: Clone + Diff,
 {
     delta: vlog::Delta<V>, // actual value
     seqno: u64,            // when this version mutated
@@ -50,7 +48,7 @@ where
 // Delta construction methods.
 impl<V> Delta<V>
 where
-    V: Default + Clone + Diff + Serialize,
+    V: Clone + Diff,
 {
     pub(crate) fn new(
         delta: vlog::Delta<V>, // construct with any variant
@@ -81,7 +79,7 @@ where
 /// Read methods.
 impl<V> Delta<V>
 where
-    V: Default + Clone + Diff + Serialize,
+    V: Clone + Diff,
 {
     pub(crate) fn vlog_delta_ref(&self) -> &vlog::Delta<V> {
         &self.delta
@@ -127,11 +125,11 @@ where
 #[derive(Clone)]
 pub struct Entry<K, V>
 where
-    K: Ord + Clone + Serialize,
-    V: Default + Clone + Diff + Serialize,
+    K: Ord + Clone,
+    V: Clone + Diff,
 {
     key: K,
-    value: vlog::Value<V>,
+    value: Option<vlog::Value<V>>,
     seqno: u64,
     deleted: Option<u64>,
     deltas: Vec<Delta<V>>,
@@ -142,12 +140,12 @@ where
 // Entry construction methods.
 impl<K, V> Entry<K, V>
 where
-    K: Ord + Clone + Serialize,
-    V: Default + Clone + Diff + Serialize,
+    K: Ord + Clone,
+    V: Clone + Diff,
 {
     pub(crate) fn new(
         key: K,
-        value: vlog::Value<V>,
+        value: Option<vlog::Value<V>>,
         seqno: u64,
         deleted: Option<u64>,
         deltas: Vec<Delta<V>>,
@@ -161,10 +159,10 @@ where
         }
     }
 
-    pub(crate) fn new_entry(key: K, value: V, seqno: u64) -> Entry<K, V> {
+    pub(crate) fn new_entry(key: K, value: Option<V>, seqno: u64) -> Entry<K, V> {
         Entry {
             key,
-            value: vlog::Value::new_native(value),
+            value: value.map(vlog::Value::new_native),
             seqno,
             deleted: None,
             deltas: vec![],
@@ -175,8 +173,8 @@ where
 // write/update methods.
 impl<K, V> Entry<K, V>
 where
-    K: Ord + Clone + Serialize,
-    V: Default + Clone + Diff + Serialize,
+    K: Ord + Clone,
+    V: Clone + Diff,
 {
     // Prepend a new version, also the lates version, for this entry.
     // In non-lsm mode this is equivalent to over-writing previous value.
@@ -189,12 +187,18 @@ where
     }
 
     fn prepend_version_lsm(&mut self, value: V, seqno: u64) {
-        match &self.value {
+        let old_value = match &self.value {
+            None => {
+                return self.prepend_version_nolsm(value, seqno);
+            }
+            Some(old_value) => old_value,
+        };
+        match old_value {
             vlog::Value::Native { value: old_value } => {
                 let d = value.diff(old_value);
                 let delta = Delta::new_delta(d, self.seqno, self.deleted);
                 self.deltas.insert(0, delta);
-                self.value = vlog::Value::new_native(value);
+                self.value = Some(vlog::Value::new_native(value));
                 self.seqno = seqno;
                 self.deleted = None;
             }
@@ -210,7 +214,7 @@ where
     }
 
     fn prepend_version_nolsm(&mut self, value: V, seqno: u64) {
-        self.value = vlog::Value::new_native(value);
+        self.value = Some(vlog::Value::new_native(value));
         self.seqno = seqno;
         self.deleted = None;
     }
@@ -241,12 +245,12 @@ where
 // read methods.
 impl<K, V> Entry<K, V>
 where
-    K: Ord + Clone + Serialize,
-    V: Default + Clone + Diff + Serialize,
+    K: Ord + Clone,
+    V: Clone + Diff,
 {
     #[inline]
     pub(crate) fn vlog_value_ref(&self) -> &vlog::Value<V> {
-        &self.value
+        self.value.as_ref().unwrap() // TODO: is this ok ? panic ?
     }
 
     #[inline]
@@ -268,9 +272,11 @@ where
 
     /// Return value.
     pub fn value(&self) -> V {
+        use vlog::Value::{Backup, Reference};
+
         match &self.value {
-            vlog::Value::Native { value } => value.clone(),
-            vlog::Value::Reference { .. } | vlog::Value::Backup { .. } => {
+            Some(vlog::Value::Native { value }) => value.clone(),
+            Some(Reference { .. }) | Some(Backup { .. }) | None => {
                 panic!("impossible situation, call the programmer")
             }
         }

@@ -1,6 +1,6 @@
 // TODO: There are dead code meant for future use case.
 
-use crate::core::{Diff, Serialize};
+use crate::core::Diff;
 
 // *-----*------------------------------------*
 // |flags|        60-bit length               |
@@ -15,10 +15,7 @@ use crate::core::{Diff, Serialize};
 // * bit 63 reserved
 
 #[derive(Clone)]
-pub(crate) enum Value<V>
-where
-    V: Default + Serialize,
-{
+pub(crate) enum Value<V> {
     // Native value, already de-serialized.
     Native {
         value: V,
@@ -36,10 +33,7 @@ where
     },
 }
 
-impl<V> Value<V>
-where
-    V: Default + Serialize,
-{
+impl<V> Value<V> {
     pub(crate) const VALUE_FLAG: u64 = 0x1000000000000000;
 
     pub(crate) fn new_native(value: V) -> Value<V> {
@@ -76,7 +70,7 @@ where
 #[derive(Clone)]
 pub(crate) enum Delta<V>
 where
-    V: Default + Diff,
+    V: Diff,
 {
     // Native delta, already de-serialized.
     Native {
@@ -97,7 +91,7 @@ where
 
 impl<V> Delta<V>
 where
-    V: Default + Diff,
+    V: Diff,
 {
     pub(crate) fn new_native(delta: <V as Diff>::D) -> Delta<V> {
         Delta::Native { delta }

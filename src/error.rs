@@ -3,6 +3,9 @@ use std::io;
 use crate::jsondata;
 
 // TODO: check unused error variants and double check error arguments.
+// TODO: Rename BognError to Error
+// TODO: Generic but meaningful error messages.
+// TODO: Document error variants.
 
 /// BognError enumerates over all possible errors that this package
 /// shall return.

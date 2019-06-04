@@ -1,7 +1,7 @@
 #[inline]
 fn is_red<K, V>(node: Option<&Node<K, V>>) -> bool
 where
-    K: Ord + Clone + Debug,
+    K: Ord + Clone,
     V: Clone + Diff,
 {
     node.map_or(false, |node| !node.is_black())
@@ -10,7 +10,7 @@ where
 #[inline]
 fn is_black<K, V>(node: Option<&Node<K, V>>) -> bool
 where
-    K: Ord + Clone + Debug,
+    K: Ord + Clone,
     V: Clone + Diff,
 {
     node.map_or(true, |node| node.is_black())
@@ -19,7 +19,7 @@ where
 /// Get the latest version for key.
 fn get<K, V, Q>(mut node: Option<&Node<K, V>>, key: &Q) -> Option<Entry<K, V>>
 where
-    K: Clone + Ord + Borrow<Q> + Debug,
+    K: Clone + Ord + Borrow<Q>,
     V: Clone + Diff,
     Q: Ord + ?Sized,
 {
@@ -84,7 +84,7 @@ where
 // by default dropping a node does not drop its children.
 fn drop_tree<K, V>(mut node: Box<Node<K, V>>)
 where
-    K: Ord + Clone + Debug,
+    K: Ord + Clone,
     V: Clone + Diff,
 {
     //println!("drop_tree - node {:p}", node);
@@ -98,7 +98,7 @@ where
 #[allow(dead_code)]
 pub struct Iter<'a, K, V>
 where
-    K: Ord + Clone + Debug,
+    K: Ord + Clone,
     V: Clone + Diff,
 {
     arc: Arc<MvccRoot<K, V>>,
@@ -107,7 +107,7 @@ where
 
 impl<'a, K, V> Iterator for Iter<'a, K, V>
 where
-    K: Ord + Clone + Debug,
+    K: Ord + Clone,
     V: Clone + Diff,
 {
     type Item = Entry<K, V>;
@@ -145,7 +145,7 @@ where
 #[allow(dead_code)]
 pub struct Range<'a, K, V, R, Q>
 where
-    K: Ord + Clone + Borrow<Q> + Debug,
+    K: Ord + Clone + Borrow<Q>,
     V: Clone + Diff,
     R: RangeBounds<Q>,
     Q: Ord + ?Sized,
@@ -158,7 +158,7 @@ where
 
 impl<'a, K, V, R, Q> Iterator for Range<'a, K, V, R, Q>
 where
-    K: Ord + Clone + Borrow<Q> + Debug,
+    K: Ord + Clone + Borrow<Q>,
     V: Clone + Diff,
     R: RangeBounds<Q>,
     Q: Ord + ?Sized,
@@ -214,7 +214,7 @@ where
 #[allow(dead_code)]
 pub struct Reverse<'a, K, V, R, Q>
 where
-    K: Ord + Clone + Debug,
+    K: Ord + Clone,
     V: Clone + Diff,
     R: RangeBounds<Q>,
     Q: Ord + ?Sized,
@@ -227,7 +227,7 @@ where
 
 impl<'a, K, V, R, Q> Iterator for Reverse<'a, K, V, R, Q>
 where
-    K: Ord + Clone + Borrow<Q> + Debug,
+    K: Ord + Clone + Borrow<Q>,
     V: Clone + Diff,
     R: RangeBounds<Q>,
     Q: Ord + ?Sized,
@@ -289,7 +289,7 @@ enum IFlag {
 
 struct Fragment<'a, K, V>
 where
-    K: Ord + Clone + Debug,
+    K: Ord + Clone,
     V: Clone + Diff,
 {
     flag: IFlag,
@@ -302,7 +302,7 @@ fn build_iter<'a, K, V>(
     mut paths: Vec<Fragment<'a, K, V>>,
 ) -> Vec<Fragment<'a, K, V>>
 where
-    K: Ord + Clone + Debug,
+    K: Ord + Clone,
     V: Clone + Diff,
 {
     match nref {
@@ -327,7 +327,7 @@ fn find_start<'a, K, V, Q>(
     mut paths: Vec<Fragment<'a, K, V>>,
 ) -> Vec<Fragment<'a, K, V>>
 where
-    K: Ord + Clone + Borrow<Q> + Debug,
+    K: Ord + Clone + Borrow<Q>,
     V: Clone + Diff,
     Q: Ord + ?Sized,
 {
@@ -364,7 +364,7 @@ fn find_end<'a, K, V, Q>(
     mut paths: Vec<Fragment<'a, K, V>>,
 ) -> Vec<Fragment<'a, K, V>>
 where
-    K: Ord + Clone + Borrow<Q> + Debug,
+    K: Ord + Clone + Borrow<Q>,
     V: Clone + Diff,
     Q: Ord + ?Sized,
 {

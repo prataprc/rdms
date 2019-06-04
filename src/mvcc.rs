@@ -20,7 +20,7 @@ include!("llrb_common.rs");
 
 pub struct Mvcc<K, V>
 where
-    K: Clone + Ord + Debug,
+    K: Clone + Ord,
     V: Clone + Diff,
 {
     name: String,
@@ -31,7 +31,7 @@ where
 
 impl<K, V> Clone for Mvcc<K, V>
 where
-    K: Clone + Ord + Debug,
+    K: Clone + Ord,
     V: Clone + Diff,
 {
     fn clone(&self) -> Mvcc<K, V> {
@@ -55,7 +55,7 @@ where
 
 impl<K, V> Drop for Mvcc<K, V>
 where
-    K: Clone + Ord + Debug,
+    K: Clone + Ord,
     V: Clone + Diff,
 {
     fn drop(&mut self) {
@@ -82,7 +82,7 @@ where
 
 impl<K, V> From<Llrb<K, V>> for Mvcc<K, V>
 where
-    K: Clone + Ord + Debug,
+    K: Clone + Ord,
     V: Clone + Diff,
 {
     fn from(mut llrb: Llrb<K, V>) -> Mvcc<K, V> {
@@ -96,7 +96,7 @@ where
 
 impl<K, V> Mvcc<K, V>
 where
-    K: Clone + Ord + Debug,
+    K: Clone + Ord,
     V: Clone + Diff,
 {
     pub fn new<S>(name: S, lsm: bool) -> Mvcc<K, V>
@@ -115,7 +115,7 @@ where
 /// Maintanence API.
 impl<K, V> Mvcc<K, V>
 where
-    K: Clone + Ord + Debug,
+    K: Clone + Ord,
     V: Clone + Diff,
 {
     /// Identify this instance. Applications can choose unique names while
@@ -151,13 +151,13 @@ where
 
 impl<K, V> Mvcc<K, V>
 where
-    K: Clone + Ord + Debug,
+    K: Clone + Ord,
     V: Clone + Diff,
 {
     /// Get the latest version for key.
     pub fn get<Q>(&self, key: &Q) -> Option<Entry<K, V>>
     where
-        K: Borrow<Q> + Debug,
+        K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
         get(Snapshot::clone(&self.snapshot).root_ref(), key)
@@ -291,7 +291,7 @@ where
     pub fn delete<Q>(&self, key: &Q) -> Option<Entry<K, V>>
     where
         // TODO: From<Q> and Clone will fail if V=String and Q=str
-        K: Borrow<Q> + From<Q> + Debug,
+        K: Borrow<Q> + From<Q>,
         Q: Clone + Ord + ?Sized,
     {
         let _lock = self.fencer.lock();
@@ -337,7 +337,13 @@ where
         self.snapshot.shift_snapshot(root, seqno, n_count, reclm);
         entry
     }
+}
 
+impl<K, V> Mvcc<K, V>
+where
+    K: Clone + Ord + Debug,
+    V: Clone + Diff,
+{
     /// Validate LLRB tree with following rules:
     ///
     /// * From root to any leaf, no consecutive reds allowed in its path.
@@ -364,7 +370,7 @@ where
 
 impl<K, V> Mvcc<K, V>
 where
-    K: Clone + Ord + Debug,
+    K: Clone + Ord,
     V: Clone + Diff,
 {
     fn upsert(
@@ -488,7 +494,7 @@ where
         Option<Entry<K, V>>,
     )
     where
-        K: Borrow<Q> + From<Q> + Debug,
+        K: Borrow<Q> + From<Q>,
         Q: Clone + Ord + ?Sized,
     {
         if node.is_none() {
@@ -537,7 +543,7 @@ where
         reclaim: &mut Vec<Box<Node<K, V>>>,
     ) -> (Option<Box<Node<K, V>>>, Option<Entry<K, V>>)
     where
-        K: Borrow<Q> + Debug,
+        K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
         if node.is_none() {
@@ -797,7 +803,7 @@ where
 #[derive(Default)]
 struct Snapshot<K, V>
 where
-    K: Clone + Ord + Debug,
+    K: Clone + Ord,
     V: Clone + Diff,
 {
     value: AtomicPtr<Arc<MvccRoot<K, V>>>,
@@ -805,7 +811,7 @@ where
 
 impl<K, V> Snapshot<K, V>
 where
-    K: Clone + Ord + Debug,
+    K: Clone + Ord,
     V: Clone + Diff,
 {
     fn new() -> Snapshot<K, V> {
@@ -858,7 +864,7 @@ where
 
 pub struct MvccRoot<K, V>
 where
-    K: Clone + Ord + Debug,
+    K: Clone + Ord,
     V: Clone + Diff,
 {
     root: Option<Box<Node<K, V>>>,
@@ -870,7 +876,7 @@ where
 
 impl<K, V> MvccRoot<K, V>
 where
-    K: Clone + Ord + Debug,
+    K: Clone + Ord,
     V: Clone + Diff,
 {
     fn new(next: Option<Arc<MvccRoot<K, V>>>) -> MvccRoot<K, V> {
@@ -897,7 +903,7 @@ where
 
 impl<K, V> Drop for MvccRoot<K, V>
 where
-    K: Clone + Ord + Debug,
+    K: Clone + Ord,
     V: Clone + Diff,
 {
     fn drop(&mut self) {
@@ -916,7 +922,7 @@ where
 
 impl<K, V> Default for MvccRoot<K, V>
 where
-    K: Clone + Ord + Debug,
+    K: Clone + Ord,
     V: Clone + Diff,
 {
     fn default() -> MvccRoot<K, V> {

@@ -28,7 +28,7 @@ include!("llrb_common.rs");
 /// [LSM mode]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
 pub struct Llrb<K, V>
 where
-    K: Clone + Ord + Debug,
+    K: Clone + Ord,
     V: Clone + Diff,
 {
     name: String,
@@ -40,7 +40,7 @@ where
 
 impl<K, V> Drop for Llrb<K, V>
 where
-    K: Clone + Ord + Debug,
+    K: Clone + Ord,
     V: Clone + Diff,
 {
     fn drop(&mut self) {
@@ -50,7 +50,7 @@ where
 
 impl<K, V> Clone for Llrb<K, V>
 where
-    K: Clone + Ord + Debug,
+    K: Clone + Ord,
     V: Clone + Diff,
 {
     fn clone(&self) -> Llrb<K, V> {
@@ -64,10 +64,10 @@ where
     }
 }
 
-/// Different ways to construct a new Llrb instance.
+/// Construct a new instance of Llrb.
 impl<K, V> Llrb<K, V>
 where
-    K: Clone + Ord + Debug,
+    K: Clone + Ord,
     V: Clone + Diff,
 {
     /// Create an empty instance of Llrb, identified by `name`.
@@ -86,7 +86,14 @@ where
             n_count: 0,
         }
     }
+}
 
+/// Load a new instance of Llrb, with an iterator.
+impl<K, V> Llrb<K, V>
+where
+    K: Clone + Ord + Debug,
+    V: Clone + Diff,
+{
     /// Create a new instance of Llrb tree and load it with entries from
     /// `iter`. Note that iterator shall return Entry items.
     pub fn load_from<S>(
@@ -141,7 +148,7 @@ where
 /// Maintanence API.
 impl<K, V> Llrb<K, V>
 where
-    K: Clone + Ord + Debug,
+    K: Clone + Ord,
     V: Clone + Diff,
 {
     /// Identify this instance. Applications can choose unique names while
@@ -189,7 +196,7 @@ where
 /// CRUD operations on Llrb instance.
 impl<K, V> Llrb<K, V>
 where
-    K: Clone + Ord + Debug,
+    K: Clone + Ord,
     V: Clone + Diff,
 {
     /// Get the latest version for key.
@@ -317,7 +324,7 @@ where
     /// tree.
     pub fn delete<Q>(&mut self, key: &Q) -> Option<Entry<K, V>>
     where
-        K: Borrow<Q> + Debug,
+        K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
     {
         let seqno = self.seqno + 1;
@@ -354,7 +361,14 @@ where
         self.seqno = seqno;
         entry
     }
+}
 
+/// Deep walk validate of Llrb instance.
+impl<K, V> Llrb<K, V>
+where
+    K: Clone + Ord + Debug,
+    V: Clone + Diff,
+{
     /// Validate LLRB tree with following rules:
     ///
     /// * From root to any leaf, no consecutive reds allowed in its path.
@@ -384,7 +398,7 @@ where
 
 impl<K, V> Llrb<K, V>
 where
-    K: Clone + Ord + Debug,
+    K: Clone + Ord,
     V: Clone + Diff,
 {
     fn upsert(
@@ -482,7 +496,7 @@ where
         seqno: u64,
     ) -> (Option<Box<Node<K, V>>>, Option<Entry<K, V>>)
     where
-        K: Borrow<Q> + Debug,
+        K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
     {
         if node.is_none() {
@@ -528,7 +542,7 @@ where
         key: &Q,
     ) -> (Option<Box<Node<K, V>>>, Option<Entry<K, V>>)
     where
-        K: Borrow<Q> + Debug,
+        K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
         let mut node = match node {

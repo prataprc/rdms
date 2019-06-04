@@ -10,7 +10,7 @@ use crate::bubt_config::{self, Config, MetaItem};
 use crate::bubt_indx::{MBlock, ZBlock};
 use crate::bubt_stats::Stats;
 use crate::core::{Diff, Entry, Result, Serialize};
-use crate::error::BognError;
+use crate::error::Error;
 use crate::util;
 use crate::vlog;
 
@@ -59,11 +59,11 @@ where
             Some(MetaItem::Marker(_)) => (),
             Some(item) => {
                 let err = format!("expected marker, found {}", item);
-                return Err(BognError::InvalidSnapshot(err));
+                return Err(Error::InvalidSnapshot(err));
             }
             None => {
                 let err = "expected marker, eof".to_string();
-                return Err(BognError::InvalidSnapshot(err));
+                return Err(Error::InvalidSnapshot(err));
             }
         }
         // read metadata
@@ -71,11 +71,11 @@ where
             Some(MetaItem::Metadata(metadata)) => metadata,
             Some(item) => {
                 let err = format!("expected metadata, found {}", item);
-                return Err(BognError::InvalidSnapshot(err));
+                return Err(Error::InvalidSnapshot(err));
             }
             None => {
                 let err = "expected metadata, eof".to_string();
-                return Err(BognError::InvalidSnapshot(err));
+                return Err(Error::InvalidSnapshot(err));
             }
         };
         // read the statistics and information for this snapshot.
@@ -83,11 +83,11 @@ where
             Some(MetaItem::Stats(stats)) => stats.parse()?,
             Some(item) => {
                 let err = format!("expected metadata, found {}", item);
-                return Err(BognError::InvalidSnapshot(err));
+                return Err(Error::InvalidSnapshot(err));
             }
             None => {
                 let err = "expected statistics".to_string();
-                return Err(BognError::InvalidSnapshot(err));
+                return Err(Error::InvalidSnapshot(err));
             }
         };
         snap.config = snap.stats.clone().into();
@@ -116,22 +116,22 @@ where
             Some(MetaItem::Root(root)) => root,
             Some(item) => {
                 let err = format!("expected metadata, found {}", item);
-                return Err(BognError::InvalidSnapshot(err));
+                return Err(Error::InvalidSnapshot(err));
             }
             None => {
                 let err = "expected statistics".to_string();
-                return Err(BognError::InvalidSnapshot(err));
+                return Err(Error::InvalidSnapshot(err));
             }
         };
         // make sure nothing is left !!
         if let Some(item) = iter.next() {
             let err = format!("expected eof, found {}", item);
-            return Err(BognError::InvalidSnapshot(err));
+            return Err(Error::InvalidSnapshot(err));
         }
         // validate snapshot
         if snap.stats.name != name {
             let err = format!("name mistmatch {} != {}", snap.stats.name, name);
-            return Err(BognError::InvalidSnapshot(err));
+            return Err(Error::InvalidSnapshot(err));
         }
         // Okey dockey
         Ok(snap)
@@ -209,7 +209,7 @@ where
         if entry.key_ref().borrow().eq(key) {
             Ok(entry)
         } else {
-            Err(BognError::KeyNotFound)
+            Err(Error::KeyNotFound)
         }
     }
 
@@ -422,7 +422,7 @@ where
                         self.build_fwd(mzs, fpos)?;
                         Ok(())
                     }
-                    Err(BognError::ZBlockExhausted) => self.rebuild_fwd(mzs),
+                    Err(Error::ZBlockExhausted) => self.rebuild_fwd(mzs),
                     _ => unreachable!(),
                 }
             }
@@ -643,7 +643,7 @@ where
     fn next(&mut self) -> Option<Entry<K, V>> {
         match self {
             MZ::Z { zblock, index } => match zblock.entry_at(*index) {
-                Err(BognError::ZBlockExhausted) => None,
+                Err(Error::ZBlockExhausted) => None,
                 Ok((_, entry)) => {
                     *index += 1;
                     Some(entry)

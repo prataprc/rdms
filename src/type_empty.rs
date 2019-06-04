@@ -1,5 +1,5 @@
 use crate::core::{Diff, Serialize};
-use crate::error::BognError;
+use crate::error::Error;
 
 /// Empty value, can be used for indexing entries that have a
 /// key but no value.
@@ -25,7 +25,7 @@ impl Serialize for Empty {
         ()
     }
 
-    fn decode(&mut self, _buf: &[u8]) -> Result<(), BognError> {
+    fn decode(&mut self, _buf: &[u8]) -> Result<(), Error> {
         Ok(())
     }
 }

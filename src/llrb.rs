@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::{marker, mem};
 
 use crate::core::{Diff, Entry};
-use crate::error::BognError;
+use crate::error::Error;
 use crate::llrb_node::{LlrbStats, Node};
 use crate::mvcc::MvccRoot;
 
@@ -100,7 +100,7 @@ where
         name: S,
         iter: impl Iterator<Item = Entry<K, V>>,
         lsm: bool,
-    ) -> Result<Llrb<K, V>, BognError>
+    ) -> Result<Llrb<K, V>, Error>
     where
         S: AsRef<str>,
     {
@@ -118,7 +118,7 @@ where
     fn load_entry(
         node: Option<Box<Node<K, V>>>,
         entry: Entry<K, V>,
-    ) -> Result<Box<Node<K, V>>, BognError> {
+    ) -> Result<Box<Node<K, V>>, Error> {
         let key = entry.key_ref();
         match node {
             None => Ok(Box::new(From::from(entry))),
@@ -137,7 +137,7 @@ where
                     }
                     Ordering::Equal => {
                         let arg = format!("{:?}", key);
-                        Err(BognError::DuplicateKey(arg))
+                        Err(Error::DuplicateKey(arg))
                     }
                 }
             }
@@ -288,12 +288,7 @@ where
     /// the supplied CAS. Use CAS == 0 to enforce a create operation. If key is
     /// already present, return the previous entry. In LSM mode, this will add
     /// a new version for the key.
-    pub fn set_cas(
-        &mut self,
-        key: K,
-        value: V,
-        cas: u64,
-    ) -> Result<Option<Entry<K, V>>, BognError> {
+    pub fn set_cas(&mut self, key: K, value: V, cas: u64) -> Result<Option<Entry<K, V>>, Error> {
         let seqno = self.seqno + 1;
         let root = self.root.take();
 
@@ -377,7 +372,7 @@ where
     ///
     /// Additionally return full statistics on the tree. Refer to [`LlrbStats`]
     /// for more information.
-    pub fn validate(&self) -> Result<LlrbStats, BognError> {
+    pub fn validate(&self) -> Result<LlrbStats, Error> {
         let node_size = std::mem::size_of::<Node<K, V>>();
         let mut stats = LlrbStats::new(self.n_count, node_size);
         stats.set_depths(Default::default());
@@ -445,13 +440,9 @@ where
         cas: u64,
         seqno: u64,
         lsm: bool,
-    ) -> (
-        Option<Box<Node<K, V>>>,
-        Option<Entry<K, V>>,
-        Option<BognError>,
-    ) {
+    ) -> (Option<Box<Node<K, V>>>, Option<Entry<K, V>>, Option<Error>) {
         if node.is_none() && cas > 0 {
-            return (None, None, Some(BognError::InvalidCAS));
+            return (None, None, Some(Error::InvalidCAS));
         } else if node.is_none() {
             let mut node = Node::new(key, Some(value), seqno, false /*black*/);
             node.dirty = false;
@@ -475,9 +466,9 @@ where
             }
             Ordering::Equal => {
                 if node.is_deleted() && cas != 0 && cas != node.seqno() {
-                    (None, Some(BognError::InvalidCAS))
+                    (None, Some(Error::InvalidCAS))
                 } else if !node.is_deleted() && cas != node.seqno() {
-                    (None, Some(BognError::InvalidCAS))
+                    (None, Some(Error::InvalidCAS))
                 } else {
                     let entry = node.entry.clone();
                     node.prepend_version(value, seqno, lsm);

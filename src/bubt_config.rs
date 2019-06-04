@@ -13,7 +13,7 @@ use lazy_static::lazy_static;
 use crate::bubt_build::FlushClient;
 use crate::bubt_stats::Stats;
 use crate::core::Result;
-use crate::error::BognError;
+use crate::error::Error;
 use crate::util;
 
 lazy_static! {
@@ -209,7 +209,7 @@ pub(crate) fn read_meta_items(dir: &str, name: &str) -> Result<Vec<MetaItem>> {
     block.resize(block.capacity(), 0);
     let n = fd.read(&mut block)?;
     let marker = if n != block.len() {
-        Err(BognError::PartialRead(block.len(), n))
+        Err(Error::PartialRead(block.len(), n))
     } else {
         Ok(MetaItem::Marker(block))
     }?;
@@ -221,7 +221,7 @@ pub(crate) fn read_meta_items(dir: &str, name: &str) -> Result<Vec<MetaItem>> {
     let mut scratch = [0_u8; 8];
     let n = fd.read(&mut scratch)?;
     let metadata = if n != scratch.len() {
-        Err(BognError::PartialRead(scratch.len(), n))
+        Err(Error::PartialRead(scratch.len(), n))
     } else {
         let mdlen = u64::from_be_bytes(scratch) as usize;
         let n_blocks = ((mdlen + 8) / Config::MARKER_BLOCK_SIZE) + 1;
@@ -233,7 +233,7 @@ pub(crate) fn read_meta_items(dir: &str, name: &str) -> Result<Vec<MetaItem>> {
         blocks.resize(blocks.capacity(), 0);
         let n = fd.read(&mut blocks)?;
         if n != blocks.len() {
-            Err(BognError::PartialRead(scratch.len(), n))
+            Err(Error::PartialRead(scratch.len(), n))
         } else {
             blocks.resize(mdlen, 0);
             Ok(MetaItem::Metadata(blocks))
@@ -249,7 +249,7 @@ pub(crate) fn read_meta_items(dir: &str, name: &str) -> Result<Vec<MetaItem>> {
     block.resize(block.capacity(), 0);
     let n = fd.read(&mut block)?;
     let stats = if n != block.len() {
-        Err(BognError::PartialRead(scratch.len(), n))
+        Err(Error::PartialRead(scratch.len(), n))
     } else {
         let ln = u64::from_be_bytes(block[..8].try_into().unwrap()) as usize;
         Ok(MetaItem::Stats(

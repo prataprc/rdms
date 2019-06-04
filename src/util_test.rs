@@ -4,7 +4,7 @@ use std::{
     path::PathBuf,
 };
 
-use crate::error::BognError;
+use crate::error::Error;
 use crate::util;
 
 #[test]
@@ -13,14 +13,14 @@ fn test_open_file_rw() {
     let dir = PathBuf::new();
     let fd = util::open_file_w(dir.to_str().unwrap(), false);
     let err = fd.expect_err("expected invalid-file");
-    assert_eq!(err, BognError::InvalidFile("".to_string()));
+    assert_eq!(err, Error::InvalidFile("".to_string()));
 
     // case 2: try to create root dir as file.
     let mut dir = PathBuf::new();
     dir.push("/");
     let fd = util::open_file_w(dir.to_str().unwrap(), false);
     let err = fd.expect_err("expected invalid-file");
-    assert_eq!(err, BognError::InvalidFile("/".to_string()));
+    assert_eq!(err, Error::InvalidFile("/".to_string()));
 
     // case 3: with valid file, reuse: false
     let mut dir = std::env::temp_dir();

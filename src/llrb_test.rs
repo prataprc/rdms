@@ -2,7 +2,7 @@ use std::ops::Bound;
 
 use rand::prelude::random;
 
-use crate::error::BognError;
+use crate::error::Error;
 use crate::llrb::Llrb;
 use crate::type_empty::Empty;
 
@@ -134,9 +134,9 @@ fn test_cas_lsm() {
     assert!(llrb.set_cas(10, 100, 0).ok().unwrap().is_none());
     assert!(refns.set_cas(10, 100, 0).is_none());
     // error create
-    assert!(llrb.set_cas(10, 100, 0).err() == Some(BognError::InvalidCAS));
+    assert!(llrb.set_cas(10, 100, 0).err() == Some(Error::InvalidCAS));
     // error insert
-    assert!(llrb.set_cas(9, 400, 14).err() == Some(BognError::InvalidCAS));
+    assert!(llrb.set_cas(9, 400, 14).err() == Some(Error::InvalidCAS));
 
     assert_eq!(llrb.len(), 11);
     assert!(llrb.validate().is_ok());

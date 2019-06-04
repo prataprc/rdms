@@ -1,7 +1,7 @@
 use std::{fmt, fmt::Display, str::FromStr};
 
 use crate::bubt_config::Config;
-use crate::error::BognError;
+use crate::error::Error;
 use crate::jsondata::{Json, Property};
 
 #[derive(Clone, Default)]
@@ -58,9 +58,9 @@ impl From<Config> for Stats {
 }
 
 impl FromStr for Stats {
-    type Err = BognError;
+    type Err = Error;
 
-    fn from_str(s: &str) -> Result<Stats, BognError> {
+    fn from_str(s: &str) -> Result<Stats, Error> {
         let js: Json = s.parse()?;
         Ok(Stats {
             name: js.get("/name")?.string().unwrap(),

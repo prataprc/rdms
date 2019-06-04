@@ -9,7 +9,7 @@ use std::sync::{
 };
 
 use crate::core::{Diff, Entry};
-use crate::error::BognError;
+use crate::error::Error;
 use crate::llrb::Llrb;
 use crate::llrb_node::{LlrbStats, Node};
 use crate::sync_writer::SyncWriter;
@@ -253,7 +253,7 @@ where
         }
     }
 
-    pub fn set_cas(&self, key: K, value: V, cas: u64) -> Result<Option<Entry<K, V>>, BognError> {
+    pub fn set_cas(&self, key: K, value: V, cas: u64) -> Result<Option<Entry<K, V>>, Error> {
         let _lock = self.fencer.lock();
 
         let lsm = self.lsm;
@@ -352,7 +352,7 @@ where
     ///
     /// Additionally return full statistics on the tree. Refer to [`LlrbStats`]
     /// for more information.
-    pub fn validate(&self) -> Result<LlrbStats, BognError> {
+    pub fn validate(&self) -> Result<LlrbStats, Error> {
         let arc_mvcc = Snapshot::clone(&self.snapshot);
 
         let n_count = arc_mvcc.n_count;
@@ -434,10 +434,10 @@ where
         Option<Box<Node<K, V>>>, // mvcc-path
         Option<Box<Node<K, V>>>, // new_node
         Option<Entry<K, V>>,
-        Option<BognError>,
+        Option<Error>,
     ) {
         if node.is_none() && cas > 0 {
-            return (None, None, None, Some(BognError::InvalidCAS));
+            return (None, None, None, Some(Error::InvalidCAS));
         } else if node.is_none() {
             let node = Node::new(key, Some(value), seqno, false /*black*/);
             let n = node.duplicate();
@@ -463,9 +463,9 @@ where
             (Some(Mvcc::walkuprot_23(new_node, reclaim)), n, entry, e)
         } else if new_node.is_deleted() && cas != 0 && cas != new_node.seqno() {
             // TODO: should we have the cas != new_node.seqno() predicate ??
-            (Some(new_node), None, None, Some(BognError::InvalidCAS))
+            (Some(new_node), None, None, Some(Error::InvalidCAS))
         } else if !new_node.is_deleted() && cas != new_node.seqno() {
-            (Some(new_node), None, None, Some(BognError::InvalidCAS))
+            (Some(new_node), None, None, Some(Error::InvalidCAS))
         } else {
             let entry = Some(node.entry.clone());
             new_node.prepend_version(value, seqno, lsm);

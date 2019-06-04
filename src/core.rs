@@ -1,4 +1,4 @@
-use crate::error::BognError;
+use crate::error::Error;
 use crate::vlog;
 
 /// Diffable values.
@@ -314,4 +314,4 @@ where
     }
 }
 
-pub type Result<T> = std::result::Result<T, BognError>;
+pub type Result<T> = std::result::Result<T, Error>;

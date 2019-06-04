@@ -1,5 +1,5 @@
 use crate::core::{Diff, Serialize};
-use crate::error::BognError;
+use crate::error::Error;
 
 impl Diff for i64 {
     type D = i64;
@@ -21,7 +21,7 @@ impl Serialize for i64 {
         buf.copy_from_slice(&self.to_be_bytes()[..8]);
     }
 
-    fn decode(&mut self, buf: &[u8]) -> Result<(), BognError> {
+    fn decode(&mut self, buf: &[u8]) -> Result<(), Error> {
         let mut scratch = [0_u8; 8];
         scratch.copy_from_slice(&buf[..8]);
         *self = i64::from_be_bytes(scratch);

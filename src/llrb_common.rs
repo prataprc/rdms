@@ -39,15 +39,15 @@ fn validate_tree<K, V>(
     mut nb: usize,
     depth: usize,
     stats: &mut LlrbStats,
-) -> Result<usize, BognError>
+) -> Result<usize, Error>
 where
     K: Ord + Clone + Debug,
     V: Clone + Diff,
 {
     let red = is_red(node);
     match node {
-        Some(node) if node.dirty => Err(BognError::DirtyNode),
-        Some(_node) if fromred && red => Err(BognError::ConsecutiveReds),
+        Some(node) if node.dirty => Err(Error::DirtyNode),
+        Some(_node) if fromred && red => Err(Error::ConsecutiveReds),
         Some(node) => {
             if !red {
                 nb += 1;
@@ -56,20 +56,20 @@ where
             let l = validate_tree(left, red, nb, depth + 1, stats)?;
             let r = validate_tree(right, red, nb, depth + 1, stats)?;
             if l != r {
-                return Err(BognError::UnbalancedBlacks(l, r));
+                return Err(Error::UnbalancedBlacks(l, r));
             }
             if let Some(left) = left {
                 if left.key_ref().ge(node.key_ref()) {
                     let left = format!("{:?}", left.key_ref());
                     let parent = format!("{:?}", node.key_ref());
-                    return Err(BognError::SortError(left, parent));
+                    return Err(Error::SortError(left, parent));
                 }
             }
             if let Some(right) = right {
                 if right.key_ref().le(node.key_ref()) {
                     let parent = format!("{:?}", node.key_ref());
                     let right = format!("{:?}", right.key_ref());
-                    return Err(BognError::SortError(parent, right));
+                    return Err(Error::SortError(parent, right));
                 }
             }
             Ok(l)

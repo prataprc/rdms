@@ -3,14 +3,13 @@ use std::io;
 use crate::jsondata;
 
 // TODO: check unused error variants and double check error arguments.
-// TODO: Rename BognError to Error
 // TODO: Generic but meaningful error messages.
 // TODO: Document error variants.
 
-/// BognError enumerates over all possible errors that this package
+/// Error enumerates over all possible errors that this package
 /// shall return.
 #[derive(Debug)]
-pub enum BognError {
+pub enum Error {
     /// Can be returned by set_cas() API when:
     /// * In non-lsm mode, requested entry is missing but specified
     ///   CAS is not ZERO. Note that this combination is an alias for
@@ -52,28 +51,28 @@ pub enum BognError {
     MBlockExhausted,
 }
 
-impl From<io::Error> for BognError {
-    fn from(err: io::Error) -> BognError {
-        BognError::IoError(err)
+impl From<io::Error> for Error {
+    fn from(err: io::Error) -> Error {
+        Error::IoError(err)
     }
 }
 
-impl From<jsondata::Error> for BognError {
-    fn from(err: jsondata::Error) -> BognError {
-        BognError::JsonError(err)
+impl From<jsondata::Error> for Error {
+    fn from(err: jsondata::Error) -> Error {
+        Error::JsonError(err)
     }
 }
 
-impl From<std::str::Utf8Error> for BognError {
-    fn from(err: std::str::Utf8Error) -> BognError {
-        BognError::Utf8Error(err)
+impl From<std::str::Utf8Error> for Error {
+    fn from(err: std::str::Utf8Error) -> Error {
+        Error::Utf8Error(err)
     }
 }
 
-impl PartialEq for BognError {
-    fn eq(&self, other: &BognError) -> bool {
-        use BognError::InvalidFile;
-        use BognError::{ConsecutiveReds, DirtyNode, InvalidCAS};
+impl PartialEq for Error {
+    fn eq(&self, other: &Error) -> bool {
+        use Error::InvalidFile;
+        use Error::{ConsecutiveReds, DirtyNode, InvalidCAS};
 
         match (self, other) {
             (InvalidCAS, InvalidCAS) => true,

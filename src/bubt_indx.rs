@@ -13,7 +13,7 @@ use crate::bubt_build::FlushClient;
 use crate::bubt_config::Config;
 use crate::bubt_stats::Stats;
 use crate::core::{Delta, Diff, Entry, Result, Serialize};
-use crate::error::BognError;
+use crate::error::Error;
 use crate::type_empty::Empty;
 use crate::vlog;
 
@@ -131,7 +131,7 @@ where
                     self.encode_entry(child_fpos, true /*zblock*/);
                     Ok(true)
                 } else {
-                    Err(BognError::ZBlockOverflow(req - cap))
+                    Err(Error::ZBlockOverflow(req - cap))
                 }
             }
             MBlock::Decode { .. } => unreachable!(),
@@ -153,7 +153,7 @@ where
                     self.encode_entry(child_fpos, false /*zblock*/);
                     Ok(true)
                 } else {
-                    Err(BognError::ZBlockOverflow(req - cap))
+                    Err(Error::ZBlockOverflow(req - cap))
                 }
             }
             MBlock::Decode { .. } => unreachable!(),
@@ -270,7 +270,7 @@ where
         fd.seek(io::SeekFrom::Start(fpos))?;
         let n = fd.read(&mut block)?;
         if n != block.len() {
-            return Err(BognError::PartialRead(block.len(), n));
+            return Err(Error::PartialRead(block.len(), n));
         }
         let count = u32::from_be_bytes(block[..4].try_into().unwrap());
         let adjust = (4 + (count * 4)) as usize;
@@ -364,7 +364,7 @@ where
                 Entry::new(key, Some(value), Default::default(), None, vec![]),
             ))
         } else {
-            Err(BognError::MBlockExhausted)
+            Err(Error::MBlockExhausted)
         }
     }
 
@@ -567,7 +567,7 @@ where
                     self.encode_entry(entry, vmem2 as u64);
                     Ok(())
                 } else {
-                    Err(BognError::ZBlockOverflow(req - cap))
+                    Err(Error::ZBlockOverflow(req - cap))
                 }
             }
             ZBlock::Decode { .. } => unreachable!(),
@@ -823,7 +823,7 @@ where
         fd.seek(io::SeekFrom::Start(fpos))?;
         let n = fd.read(&mut block)?;
         if n != block.len() {
-            return Err(BognError::PartialRead(block.len(), n));
+            return Err(Error::PartialRead(block.len(), n));
         }
         let count = u32::from_be_bytes(block[..4].try_into().unwrap());
         let adjust = 4 + (count * 4) as usize;
@@ -963,7 +963,7 @@ where
             }
             Ok((index, Entry::new(key, Some(value), seqno, deleted, deltas)))
         } else {
-            Err(BognError::ZBlockExhausted)
+            Err(Error::ZBlockExhausted)
         }
     }
 

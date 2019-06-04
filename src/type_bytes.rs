@@ -1,5 +1,5 @@
 use crate::core::{Diff, Serialize};
-use crate::error::BognError;
+use crate::error::Error;
 
 impl Diff for Vec<u8> {
     type D = Vec<u8>;
@@ -21,7 +21,7 @@ impl Serialize for Vec<u8> {
         buf.copy_from_slice(self);
     }
 
-    fn decode(&mut self, buf: &[u8]) -> Result<(), BognError> {
+    fn decode(&mut self, buf: &[u8]) -> Result<(), Error> {
         self.resize(buf.len(), 0);
         self.copy_from_slice(buf);
         Ok(())

@@ -2,7 +2,7 @@ use std::ops::Bound;
 
 use rand::prelude::random;
 
-use crate::error::BognError;
+use crate::error::Error;
 use crate::mvcc::Mvcc;
 use crate::type_empty::Empty;
 
@@ -135,9 +135,9 @@ fn test_cas_lsm() {
     assert!(mvcc.set_cas(10, 100, 0).ok().unwrap().is_none());
     assert!(refns.set_cas(10, 100, 0).is_none());
     // error create
-    assert!(mvcc.set_cas(10, 100, 0).err() == Some(BognError::InvalidCAS));
+    assert!(mvcc.set_cas(10, 100, 0).err() == Some(Error::InvalidCAS));
     // error insert
-    assert!(mvcc.set_cas(9, 400, 14).err() == Some(BognError::InvalidCAS));
+    assert!(mvcc.set_cas(9, 400, 14).err() == Some(Error::InvalidCAS));
 
     assert_eq!(mvcc.len(), 11);
     assert!(mvcc.validate().is_ok());

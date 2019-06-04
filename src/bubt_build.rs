@@ -7,7 +7,7 @@ use crate::bubt_config::{self, Config, MetaItem, MARKER_BLOCK};
 use crate::bubt_indx::{MBlock, ZBlock};
 use crate::bubt_stats::Stats;
 use crate::core::{Diff, Entry, Result, Serialize};
-use crate::error::BognError;
+use crate::error::Error;
 use crate::util;
 
 pub struct Builder<K, V>
@@ -94,7 +94,7 @@ where
 
             match b.z.insert(&entry, &mut self.stats) {
                 Ok(_) => (),
-                Err(BognError::ZBlockOverflow(_)) => {
+                Err(Error::ZBlockOverflow(_)) => {
                     let first_key = b.z.first_key();
                     let (zbytes, vbytes) = b.z.finalize(&mut self.stats);
                     b.z.flush(&mut self.i_flusher, self.v_flusher.as_mut());

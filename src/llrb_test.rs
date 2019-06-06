@@ -12,13 +12,13 @@ include!("./ref_test.rs");
 
 #[test]
 fn test_id() {
-    let llrb: Llrb<i32, Empty> = Llrb::new("test-llrb", false);
+    let llrb: Llrb<i32, Empty> = Llrb::new("test-llrb");
     assert_eq!(llrb.id(), "test-llrb".to_string());
 }
 
 #[test]
 fn test_seqno() {
-    let mut llrb: Llrb<i32, Empty> = Llrb::new("test-llrb", false);
+    let mut llrb: Llrb<i32, Empty> = Llrb::new("test-llrb");
     assert_eq!(llrb.get_seqno(), 0);
     llrb.set_seqno(1234);
     assert_eq!(llrb.get_seqno(), 1234);
@@ -26,13 +26,13 @@ fn test_seqno() {
 
 #[test]
 fn test_len() {
-    let llrb: Llrb<i32, Empty> = Llrb::new("test-llrb", false);
+    let llrb: Llrb<i32, Empty> = Llrb::new("test-llrb");
     assert_eq!(llrb.len(), 0);
 }
 
 #[test]
 fn test_set() {
-    let mut llrb: Llrb<i64, i64> = Llrb::new("test-llrb", false /*lsm*/);
+    let mut llrb: Llrb<i64, i64> = Llrb::new("test-llrb");
     let mut refns = RefNodes::new(false /*lsm*/, 10);
 
     assert!(llrb.set(2, 10).is_none());
@@ -76,7 +76,7 @@ fn test_set() {
 
 #[test]
 fn test_cas_lsm() {
-    let mut llrb: Llrb<i64, i64> = Llrb::new("test-llrb", true /*lsm*/);
+    let mut llrb: Llrb<i64, i64> = Llrb::new_lsm("test-llrb");
     let mut refns = RefNodes::new(true /*lsm*/, 11);
 
     assert!(llrb.set(2, 100).is_none());
@@ -158,7 +158,7 @@ fn test_cas_lsm() {
 
 #[test]
 fn test_delete() {
-    let mut llrb: Llrb<i64, i64> = Llrb::new("test-llrb", false);
+    let mut llrb: Llrb<i64, i64> = Llrb::new("test-llrb");
     let mut refns = RefNodes::new(false /*lsm*/, 11);
 
     assert!(llrb.set(2, 100).is_none());
@@ -213,7 +213,7 @@ fn test_delete() {
 
 #[test]
 fn test_iter() {
-    let mut llrb: Llrb<i64, i64> = Llrb::new("test-llrb", false /*lsm*/);
+    let mut llrb: Llrb<i64, i64> = Llrb::new("test-llrb");
     let mut refns = RefNodes::new(false /*lsm*/, 10);
 
     assert!(llrb.set(2, 10).is_none());
@@ -255,7 +255,7 @@ fn test_iter() {
 
 #[test]
 fn test_range() {
-    let mut llrb: Llrb<i64, i64> = Llrb::new("test-llrb", false /*lsm*/);
+    let mut llrb: Llrb<i64, i64> = Llrb::new("test-llrb");
     let mut refns = RefNodes::new(false /*lsm*/, 10);
 
     assert!(llrb.set(2, 10).is_none());
@@ -315,7 +315,7 @@ fn test_range() {
 #[test]
 fn test_crud() {
     let size = 1000;
-    let mut llrb: Llrb<i64, i64> = Llrb::new("test-llrb", false /*lsm*/);
+    let mut llrb: Llrb<i64, i64> = Llrb::new("test-llrb");
     let mut refns = RefNodes::new(false /*lsm*/, size);
 
     for _ in 0..100000 {
@@ -392,7 +392,7 @@ fn test_crud() {
 #[test]
 fn test_crud_lsm() {
     let size = 1000;
-    let mut llrb: Llrb<i64, i64> = Llrb::new("test-llrb", true /*lsm*/);
+    let mut llrb: Llrb<i64, i64> = Llrb::new_lsm("test-llrb");
     let mut refns = RefNodes::new(true /*lsm*/, size as usize);
 
     for _i in 0..20000 {

@@ -86,7 +86,7 @@ where
     }
 
     /// Return the underlying `difference` value for this delta.
-    pub fn diff(&self) -> <V as Diff>::D {
+    pub fn into_diff(self) -> <V as Diff>::D {
         match &self.delta {
             vlog::Delta::Native { delta } => delta.clone(),
             vlog::Delta::Reference { .. } | vlog::Delta::Backup { .. } => {
@@ -311,6 +311,65 @@ where
     #[inline]
     pub fn deltas(&self) -> Vec<Delta<V>> {
         self.deltas.clone()
+    }
+
+    /// Return an iterator of previous versions.
+    pub fn versions(&self) -> VersionIter<V> {
+        let value = match &self.value {
+            Some(value) => match value {
+                vlog::Value::Native { value } => Some(value.clone()),
+                vlog::Value::Reference { .. } => panic!("TODO: TBD"),
+                vlog::Value::Backup { .. } => panic!("TODO: TBD"),
+            },
+            None => None,
+        };
+        VersionIter {
+            deltas: self.deltas(),
+            value,
+            offset: None,
+        }
+    }
+}
+
+pub struct VersionIter<V>
+where
+    V: Clone + Diff,
+{
+    deltas: Vec<Delta<V>>,
+    value: Option<V>,
+    offset: Option<usize>,
+}
+
+impl<V> Iterator for VersionIter<V>
+where
+    V: Clone + Diff,
+{
+    type Item = V;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let curr_value = match &self.value {
+            None => return None,
+            Some(value) => value,
+        };
+
+        let (value, item) = match self.offset {
+            None => {
+                self.offset = Some(0);
+                (Some(curr_value.clone()), Some(curr_value.clone()))
+            }
+            Some(n) if n < self.deltas.len() => match &self.deltas[n].delta {
+                vlog::Delta::Native { delta } => {
+                    let nvalue = curr_value.merge(&delta);
+                    self.offset = Some(n + 1);
+                    (Some(nvalue.clone()), Some(nvalue))
+                }
+                vlog::Delta::Reference { .. } => panic!("TODO: TBD"),
+                vlog::Delta::Backup { .. } => panic!("TODO: TBD"),
+            },
+            _ => (None, None),
+        };
+        self.value = value;
+        item
     }
 }
 

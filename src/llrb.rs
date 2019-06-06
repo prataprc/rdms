@@ -64,23 +64,38 @@ where
     }
 }
 
-/// Construct a new instance of Llrb.
+/// Construct new instance of Llrb.
 impl<K, V> Llrb<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff,
 {
     /// Create an empty instance of Llrb, identified by `name`.
-    /// Applications can choose unique names. When `lsm` is true, mutations
-    /// are added as log for each key, instead of over-writing previous
-    /// mutation.
-    pub fn new<S>(name: S, lsm: bool) -> Llrb<K, V>
+    /// Applications can choose unique names.
+    pub fn new<S>(name: S) -> Llrb<K, V>
     where
         S: AsRef<str>,
     {
         Llrb {
             name: name.as_ref().to_string(),
-            lsm,
+            lsm: false,
+            root: None,
+            seqno: 0,
+            n_count: 0,
+        }
+    }
+
+    /// Create a new instance of Llrb in lsm mode. In lsm mode, mutations
+    /// are added as log for each key, instead of over-writing previous
+    /// mutation. Note that, in case of back-to-back delete, first delete
+    /// shall be applied and subsequent deletes shall be ignored.
+    pub fn new_lsm<S>(name: S) -> Llrb<K, V>
+    where
+        S: AsRef<str>,
+    {
+        Llrb {
+            name: name.as_ref().to_string(),
+            lsm: true,
             root: None,
             seqno: 0,
             n_count: 0,
@@ -88,6 +103,7 @@ where
     }
 }
 
+// TODO: refactor this into Extend trait.
 /// Load a new instance of Llrb, with an iterator.
 impl<K, V> Llrb<K, V>
 where
@@ -96,15 +112,17 @@ where
 {
     /// Create a new instance of Llrb tree and load it with entries from
     /// `iter`. Note that iterator shall return Entry items.
-    pub fn load_from<S>(
-        name: S,
-        iter: impl Iterator<Item = Entry<K, V>>,
-        lsm: bool,
-    ) -> Result<Llrb<K, V>, Error>
+    pub fn load_from<S, I>(name: S, iter: I, lsm: bool) -> Result<Llrb<K, V>, Error>
     where
+        I: Iterator<Item = Entry<K, V>>,
         S: AsRef<str>,
     {
-        let mut llrb = Llrb::new(name.as_ref().to_string(), lsm);
+        let mut llrb = if lsm {
+            Llrb::new_lsm(name.as_ref().to_string())
+        } else {
+            Llrb::new(name.as_ref().to_string())
+        };
+
         for entry in iter {
             llrb.seqno = std::cmp::max(llrb.seqno, entry.seqno());
             let mut node = Llrb::load_entry(llrb.root.take(), entry)?;
@@ -151,31 +169,6 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    /// Identify this instance. Applications can choose unique names while
-    /// creating Llrb instances.
-    #[inline]
-    pub fn id(&self) -> String {
-        self.name.clone()
-    }
-
-    /// Return number of entries in this instance.
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.n_count
-    }
-
-    /// Set current seqno.
-    #[inline]
-    pub fn set_seqno(&mut self, seqno: u64) {
-        self.seqno = seqno
-    }
-
-    /// Return current seqno.
-    #[inline]
-    pub fn get_seqno(&self) -> u64 {
-        self.seqno
-    }
-
     /// Return whether this instance support lsm mode.
     #[inline]
     pub(crate) fn is_lsm(&self) -> bool {
@@ -191,81 +184,46 @@ where
         self.lsm = false;
         (self.root.take(), seqno, n_count)
     }
+
+    /// Set current seqno. Use this API iff you are totaly sure
+    /// about what you are doing.
+    #[inline]
+    #[allow(dead_code)] // TODO: remove this once bogn is weaved-up.
+    pub(crate) fn set_seqno(&mut self, seqno: u64) {
+        self.seqno = seqno
+    }
+
+    /// Identify this instance. Applications can choose unique names while
+    /// creating Llrb instances.
+    #[inline]
+    pub fn id(&self) -> String {
+        self.name.clone()
+    }
+
+    /// Return number of entries in this instance.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.n_count
+    }
+
+    /// Return current seqno.
+    #[inline]
+    pub fn get_seqno(&self) -> u64 {
+        self.seqno
+    }
 }
 
-/// CRUD operations on Llrb instance.
+/// Create/Update/Delete operations on Llrb instance.
 impl<K, V> Llrb<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    /// Get the latest version for key.
-    pub fn get<Q>(&self, key: &Q) -> Option<Entry<K, V>>
-    where
-        K: Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
-        get(self.root.as_ref().map(Deref::deref), key)
-    }
-
-    /// Return an iterator over all entries in this instance.
-    pub fn iter(&self) -> Iter<K, V> {
-        let node = self.root.as_ref().map(Deref::deref);
-        Iter {
-            arc: Default::default(),
-            paths: Some(build_iter(IFlag::Left, node, vec![])),
-        }
-    }
-
-    /// Range over all entries from low to high.
-    pub fn range<R, Q>(&self, range: R) -> Range<K, V, R, Q>
-    where
-        K: Borrow<Q>,
-        R: RangeBounds<Q>,
-        Q: Ord + ?Sized,
-    {
-        let root = self.root.as_ref().map(Deref::deref);
-        let paths = match range.start_bound() {
-            Bound::Unbounded => Some(build_iter(IFlag::Left, root, vec![])),
-            Bound::Included(low) => Some(find_start(root, low, true, vec![])),
-            Bound::Excluded(low) => Some(find_start(root, low, false, vec![])),
-        };
-        Range {
-            arc: Default::default(),
-            range,
-            paths,
-            high: marker::PhantomData,
-        }
-    }
-
-    /// Reverse range over all entries from high to low.
-    pub fn reverse<R, Q>(&self, range: R) -> Reverse<K, V, R, Q>
-    where
-        K: Borrow<Q>,
-        R: RangeBounds<Q>,
-        Q: Ord + ?Sized,
-    {
-        let root = self.root.as_ref().map(Deref::deref);
-        let paths = match range.end_bound() {
-            Bound::Unbounded => Some(build_iter(IFlag::Right, root, vec![])),
-            Bound::Included(high) => Some(find_end(root, high, true, vec![])),
-            Bound::Excluded(high) => Some(find_end(root, high, false, vec![])),
-        };
-        let low = marker::PhantomData;
-        Reverse {
-            arc: Default::default(),
-            range,
-            paths,
-            low,
-        }
-    }
-
-    /// Set operation for non-mvcc instance. If key is already
-    /// present, return the previous entry. In LSM mode, this will
-    /// add a new version for the key.
+    /// Set {key, value} pair into index. If key is already
+    /// present, update the value and return the previous entry, else
+    /// create a new entry.
     ///
-    /// If an entry already exist for the, return the old-entry will all its
-    /// versions.
+    /// LSM mode: Add a new version for the key, perserving the old value.
     pub fn set(&mut self, key: K, value: V) -> Option<Entry<K, V>> {
         let seqno = self.seqno + 1;
         let root = self.root.take();
@@ -356,46 +314,7 @@ where
         self.seqno = seqno;
         entry
     }
-}
 
-/// Deep walk validate of Llrb instance.
-impl<K, V> Llrb<K, V>
-where
-    K: Clone + Ord + Debug,
-    V: Clone + Diff,
-{
-    /// Validate LLRB tree with following rules:
-    ///
-    /// * From root to any leaf, no consecutive reds allowed in its path.
-    /// * Number of blacks should be same on under left child and right child.
-    /// * Make sure that keys are in sorted order.
-    ///
-    /// Additionally return full statistics on the tree. Refer to [`LlrbStats`]
-    /// for more information.
-    pub fn validate(&self) -> Result<LlrbStats, Error> {
-        let node_size = std::mem::size_of::<Node<K, V>>();
-        let mut stats = LlrbStats::new(self.n_count, node_size);
-        stats.set_depths(Default::default());
-
-        let root = self.root.as_ref().map(Deref::deref);
-        let (red, nb, d) = (is_red(root), 0, 0);
-        let blacks = validate_tree(root, red, nb, d, &mut stats)?;
-        stats.set_blacks(blacks);
-        Ok(stats)
-    }
-
-    /// Return quickly with basic statisics, only entries() method is valid
-    /// with this statisics. TODO: implement the same for MVCC.
-    pub fn stats(&self) -> LlrbStats {
-        LlrbStats::new(self.n_count, mem::size_of::<Node<K, V>>())
-    }
-}
-
-impl<K, V> Llrb<K, V>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-{
     fn upsert(
         node: Option<Box<Node<K, V>>>,
         key: K,
@@ -609,6 +528,106 @@ where
         (Some(Llrb::fixup(node)), old_node)
     }
 
+    /// Get the latest version for key.
+    pub fn get<Q>(&self, key: &Q) -> Option<Entry<K, V>>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        get(self.root.as_ref().map(Deref::deref), key)
+    }
+
+    /// Return an iterator over all entries in this instance.
+    pub fn iter(&self) -> Iter<K, V> {
+        let node = self.root.as_ref().map(Deref::deref);
+        Iter {
+            arc: Default::default(),
+            paths: Some(build_iter(IFlag::Left, node, vec![])),
+        }
+    }
+
+    /// Range over all entries from low to high.
+    pub fn range<R, Q>(&self, range: R) -> Range<K, V, R, Q>
+    where
+        K: Borrow<Q>,
+        R: RangeBounds<Q>,
+        Q: Ord + ?Sized,
+    {
+        let root = self.root.as_ref().map(Deref::deref);
+        let paths = match range.start_bound() {
+            Bound::Unbounded => Some(build_iter(IFlag::Left, root, vec![])),
+            Bound::Included(low) => Some(find_start(root, low, true, vec![])),
+            Bound::Excluded(low) => Some(find_start(root, low, false, vec![])),
+        };
+        Range {
+            arc: Default::default(),
+            range,
+            paths,
+            high: marker::PhantomData,
+        }
+    }
+
+    /// Reverse range over all entries from high to low.
+    pub fn reverse<R, Q>(&self, range: R) -> Reverse<K, V, R, Q>
+    where
+        K: Borrow<Q>,
+        R: RangeBounds<Q>,
+        Q: Ord + ?Sized,
+    {
+        let root = self.root.as_ref().map(Deref::deref);
+        let paths = match range.end_bound() {
+            Bound::Unbounded => Some(build_iter(IFlag::Right, root, vec![])),
+            Bound::Included(high) => Some(find_end(root, high, true, vec![])),
+            Bound::Excluded(high) => Some(find_end(root, high, false, vec![])),
+        };
+        let low = marker::PhantomData;
+        Reverse {
+            arc: Default::default(),
+            range,
+            paths,
+            low,
+        }
+    }
+}
+
+/// Deep walk validate of Llrb instance.
+impl<K, V> Llrb<K, V>
+where
+    K: Clone + Ord + Debug,
+    V: Clone + Diff,
+{
+    /// Validate LLRB tree with following rules:
+    ///
+    /// * From root to any leaf, no consecutive reds allowed in its path.
+    /// * Number of blacks should be same on under left child and right child.
+    /// * Make sure that keys are in sorted order.
+    ///
+    /// Additionally return full statistics on the tree. Refer to [`LlrbStats`]
+    /// for more information.
+    pub fn validate(&self) -> Result<LlrbStats, Error> {
+        let node_size = std::mem::size_of::<Node<K, V>>();
+        let mut stats = LlrbStats::new(self.n_count, node_size);
+        stats.set_depths(Default::default());
+
+        let root = self.root.as_ref().map(Deref::deref);
+        let (red, nb, d) = (is_red(root), 0, 0);
+        let blacks = validate_tree(root, red, nb, d, &mut stats)?;
+        stats.set_blacks(blacks);
+        Ok(stats)
+    }
+
+    /// Return quickly with basic statisics, only entries() method is valid
+    /// with this statisics. TODO: implement the same for MVCC.
+    pub fn stats(&self) -> LlrbStats {
+        LlrbStats::new(self.n_count, mem::size_of::<Node<K, V>>())
+    }
+}
+
+impl<K, V> Llrb<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
     //--------- rotation routines for 2-3 algorithm ----------------
 
     fn walkdown_rot23(node: Box<Node<K, V>>) -> Box<Node<K, V>> {

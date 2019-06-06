@@ -1,6 +1,6 @@
 use std::convert::TryInto;
 
-use crate::core::{Diff, Entry};
+use crate::core::Entry;
 
 #[derive(Clone, Default, Debug)]
 struct RefValue {
@@ -251,24 +251,22 @@ fn check_node(entry: Option<Entry<i64, i64>>, refn: Option<RefNode>) -> bool {
     let (n_vers, refn_vers) = (entry.deltas().len() + 1, refn.versions.len());
     assert_eq!(n_vers, refn_vers, "key {}", refn.key);
 
-    let mut curr_value = entry.value();
     //println!("versions {} {}", n_vers, refn_vers);
-    for (i, dlt) in entry.deltas().into_iter().enumerate() {
-        //println!("..... {} {:?}", dlt.seqno(), refn.versions);
-        let ver = &refn.versions[i + 1];
-        let delta = dlt.diff();
-        let prev_value = curr_value.merge(&delta);
-        assert_eq!(prev_value, ver.value, "key {} i {}", refn.key, i);
-        curr_value = prev_value;
-
-        assert_eq!(dlt.seqno(), ver.seqno, "key {} i {}", refn.key, i);
-        assert_eq!(
-            dlt.is_deleted(),
-            ver.deleted.is_some(),
-            "key {} i {}",
-            refn.key,
-            i
-        );
+    let deltas = entry.deltas();
+    for (i, value) in entry.versions().enumerate() {
+        let ver = &refn.versions[i];
+        assert_eq!(value, ver.value, "key {} i {}", refn.key, i);
+        if i > 0 {
+            let dlt = &deltas[i - 1];
+            assert_eq!(dlt.seqno(), ver.seqno, "key {} i {}", refn.key, i);
+            assert_eq!(
+                dlt.is_deleted(),
+                ver.deleted.is_some(),
+                "key {} i {}",
+                refn.key,
+                i
+            );
+        }
     }
 
     return true;

@@ -103,66 +103,6 @@ where
     }
 }
 
-// TODO: refactor this into Extend trait.
-/// Load a new instance of Llrb, with an iterator.
-impl<K, V> Llrb<K, V>
-where
-    K: Clone + Ord + Debug,
-    V: Clone + Diff,
-{
-    /// Create a new instance of Llrb tree and load it with entries from
-    /// `iter`. Note that iterator shall return Entry items.
-    pub fn load_from<S, I>(name: S, iter: I, lsm: bool) -> Result<Llrb<K, V>, Error>
-    where
-        I: Iterator<Item = Entry<K, V>>,
-        S: AsRef<str>,
-    {
-        let mut llrb = if lsm {
-            Llrb::new_lsm(name.as_ref().to_string())
-        } else {
-            Llrb::new(name.as_ref().to_string())
-        };
-
-        for entry in iter {
-            llrb.seqno = std::cmp::max(llrb.seqno, entry.seqno());
-            let mut node = Llrb::load_entry(llrb.root.take(), entry)?;
-            node.set_black();
-            llrb.root = Some(node);
-            llrb.n_count += 1;
-        }
-        Ok(llrb)
-    }
-
-    fn load_entry(
-        node: Option<Box<Node<K, V>>>,
-        entry: Entry<K, V>,
-    ) -> Result<Box<Node<K, V>>, Error> {
-        let key = entry.key_ref();
-        match node {
-            None => Ok(Box::new(From::from(entry))),
-            Some(mut node) => {
-                node = Llrb::walkdown_rot23(node);
-                match node.key_ref().cmp(key) {
-                    Ordering::Greater => {
-                        let left = node.left.take();
-                        node.left = Some(Llrb::load_entry(left, entry)?);
-                        Ok(Llrb::walkuprot_23(node))
-                    }
-                    Ordering::Less => {
-                        let right = node.right.take();
-                        node.right = Some(Llrb::load_entry(right, entry)?);
-                        Ok(Llrb::walkuprot_23(node))
-                    }
-                    Ordering::Equal => {
-                        let arg = format!("{:?}", key);
-                        Err(Error::DuplicateKey(arg))
-                    }
-                }
-            }
-        }
-    }
-}
-
 /// Maintanence API.
 impl<K, V> Llrb<K, V>
 where
@@ -228,7 +168,8 @@ where
         let seqno = self.seqno + 1;
         let root = self.root.take();
 
-        match Llrb::upsert(root, key, value, seqno, self.lsm) {
+        let entry = Entry::new_entry(key, Some(value), seqno);
+        match Llrb::upsert(root, entry, self.lsm) {
             (Some(mut root), entry) => {
                 root.set_black();
                 self.root = Some(root);
@@ -242,23 +183,31 @@ where
         }
     }
 
-    /// Set a new entry into a non-mvcc instance, only if entry's seqno matches
-    /// the supplied CAS. Use CAS == 0 to enforce a create operation. If key is
-    /// already present, return the previous entry. In LSM mode, this will add
-    /// a new version for the key.
-    pub fn set_cas(&mut self, key: K, value: V, cas: u64) -> Result<Option<Entry<K, V>>, Error> {
+    /// Similar to set, but succeeds only when CAS matches with entry's
+    /// latest `seqno`. In other words, since seqno is unique each mutation,
+    /// we use `seqno` of the mutation as the CAS value. Use CAS == 0 to
+    /// enforce a create operation.
+    ///
+    /// LSM mode: Add a new version for the key, perserving the old value.
+    pub fn set_cas(
+        &mut self,
+        key: K,
+        value: V,
+        cas: u64, // last seqno for key
+    ) -> Result<Option<Entry<K, V>>, Error> {
         let seqno = self.seqno + 1;
         let root = self.root.take();
 
-        match Llrb::upsert_cas(root, key, value, cas, seqno, self.lsm) {
+        let entry = Entry::new_entry(key, Some(value), seqno);
+        match Llrb::upsert_cas(root, entry, cas, self.lsm) {
             (root, _, Some(err)) => {
                 self.root = root;
                 Err(err)
             }
             (Some(mut root), entry, None) => {
                 root.set_black();
-                self.seqno = seqno;
                 self.root = Some(root);
+                self.seqno = seqno;
                 if entry.is_none() {
                     self.n_count += 1;
                 }
@@ -317,87 +266,85 @@ where
 
     fn upsert(
         node: Option<Box<Node<K, V>>>,
-        key: K,
-        value: V,
-        seqno: u64,
+        nentry: Entry<K, V>,
         lsm: bool,
     ) -> (Option<Box<Node<K, V>>>, Option<Entry<K, V>>) {
-        if node.is_none() {
-            let mut node = Node::new(key, Some(value), seqno, false /*black*/);
-            node.dirty = false;
-            return (Some(node), None);
-        }
-
-        let mut node = node.unwrap();
-        node = Llrb::walkdown_rot23(node);
-
-        match node.key_ref().cmp(&key) {
-            Ordering::Greater => {
-                let s = Llrb::upsert(node.left.take(), key, value, seqno, lsm);
-                let (l, entry) = s;
-                node.left = l;
-                (Some(Llrb::walkuprot_23(node)), entry)
+        match node {
+            Some(mut node) => {
+                node = Llrb::walkdown_rot23(node);
+                match node.key_ref().cmp(nentry.key_ref()) {
+                    Ordering::Greater => {
+                        let res = Llrb::upsert(node.left.take(), nentry, lsm);
+                        let (left, entry) = res;
+                        node.left = left;
+                        (Some(Llrb::walkuprot_23(node)), entry)
+                    }
+                    Ordering::Less => {
+                        let res = Llrb::upsert(node.right.take(), nentry, lsm);
+                        let (right, entry) = res;
+                        node.right = right;
+                        (Some(Llrb::walkuprot_23(node)), entry)
+                    }
+                    Ordering::Equal => {
+                        let entry = node.entry.clone();
+                        node.prepend_version(nentry.value(), nentry.seqno(), lsm);
+                        (Some(Llrb::walkuprot_23(node)), Some(entry))
+                    }
+                }
             }
-            Ordering::Less => {
-                let s = Llrb::upsert(node.right.take(), key, value, seqno, lsm);
-                let (r, entry) = s;
-                node.right = r;
-                (Some(Llrb::walkuprot_23(node)), entry)
-            }
-            Ordering::Equal => {
-                let entry = node.entry.clone();
-                node.prepend_version(value, seqno, lsm);
-                (Some(Llrb::walkuprot_23(node)), Some(entry))
+            None => {
+                let mut node: Box<Node<K, V>> = Box::new(From::from(nentry));
+                node.dirty = false;
+                return (Some(node), None);
             }
         }
     }
 
     fn upsert_cas(
         node: Option<Box<Node<K, V>>>,
-        key: K,
-        value: V,
+        nentry: Entry<K, V>,
         cas: u64,
-        seqno: u64,
         lsm: bool,
     ) -> (Option<Box<Node<K, V>>>, Option<Entry<K, V>>, Option<Error>) {
-        if node.is_none() && cas > 0 {
-            return (None, None, Some(Error::InvalidCAS));
-        } else if node.is_none() {
-            let mut node = Node::new(key, Some(value), seqno, false /*black*/);
-            node.dirty = false;
-            return (Some(node), None, None);
+        match node {
+            None if cas > 0 => (None, None, Some(Error::InvalidCAS)),
+            None => {
+                let mut node: Box<Node<K, V>> = Box::new(From::from(nentry));
+                node.dirty = false;
+                (Some(node), None, None)
+            }
+            Some(mut node) => {
+                node = Llrb::walkdown_rot23(node);
+                let (entry, err) = match node.key_ref().cmp(nentry.key_ref()) {
+                    Ordering::Greater => {
+                        let left = node.left.take();
+                        let (l, en, e) = Llrb::upsert_cas(left, nentry, cas, lsm);
+                        node.left = l;
+                        (en, e)
+                    }
+                    Ordering::Less => {
+                        let rt = node.right.take();
+                        let (r, en, e) = Llrb::upsert_cas(rt, nentry, cas, lsm);
+                        node.right = r;
+                        (en, e)
+                    }
+                    Ordering::Equal => {
+                        if node.is_deleted() && cas != 0 && cas != node.seqno() {
+                            (None, Some(Error::InvalidCAS))
+                        } else if !node.is_deleted() && cas != node.seqno() {
+                            (None, Some(Error::InvalidCAS))
+                        } else {
+                            let entry = node.entry.clone();
+                            let (value, seqno) = (nentry.value(), nentry.seqno());
+                            node.prepend_version(value, seqno, lsm);
+                            (Some(entry), None)
+                        }
+                    }
+                };
+                node = Llrb::walkuprot_23(node);
+                return (Some(node), entry, err);
+            }
         }
-
-        let mut node = node.unwrap();
-        node = Llrb::walkdown_rot23(node);
-        let (entry, err) = match node.key_ref().cmp(&key) {
-            Ordering::Greater => {
-                let (k, v, left) = (key, value, node.left.take());
-                let (l, entry, e) = Llrb::upsert_cas(left, k, v, cas, seqno, lsm);
-                node.left = l;
-                (entry, e)
-            }
-            Ordering::Less => {
-                let (k, v, r) = (key, value, node.right.take());
-                let (r, entry, e) = Llrb::upsert_cas(r, k, v, cas, seqno, lsm);
-                node.right = r;
-                (entry, e)
-            }
-            Ordering::Equal => {
-                if node.is_deleted() && cas != 0 && cas != node.seqno() {
-                    (None, Some(Error::InvalidCAS))
-                } else if !node.is_deleted() && cas != node.seqno() {
-                    (None, Some(Error::InvalidCAS))
-                } else {
-                    let entry = node.entry.clone();
-                    node.prepend_version(value, seqno, lsm);
-                    (Some(entry), None)
-                }
-            }
-        };
-
-        node = Llrb::walkuprot_23(node);
-        return (Some(node), entry, err);
     }
 
     fn delete_lsm<Q>(
@@ -409,41 +356,42 @@ where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
     {
-        if node.is_none() {
-            // insert and mark as delete
-            let (key, black) = (key.to_owned(), false);
-            let mut node = Node::new(key, None, seqno, black);
-            node.dirty = false;
-            node.delete(seqno);
-            return (Some(node), None);
-        }
-
-        let mut node = node.unwrap();
-        node = Llrb::walkdown_rot23(node);
-
-        let (node, entry) = match node.key_ref().borrow().cmp(&key) {
-            Ordering::Greater => {
-                let (l, entry) = Llrb::delete_lsm(node.left.take(), key, seqno);
-                node.left = l;
-                (node, entry)
+        match node {
+            None => {
+                // insert and mark as delete
+                let nentry = Entry::new_entry(key.to_owned(), None, seqno);
+                let mut node: Box<Node<K, V>> = Box::new(From::from(nentry));
+                node.dirty = false;
+                node.delete(seqno);
+                (Some(node), None)
             }
-            Ordering::Less => {
-                let (r, entry) = Llrb::delete_lsm(node.right.take(), key, seqno);
-                node.right = r;
-                (node, entry)
-            }
-            Ordering::Equal => {
-                let entry = node.entry.clone();
-                if node.is_deleted() {
-                    (node, Some(entry)) // noop
-                } else {
-                    node.delete(seqno);
-                    (node, Some(entry))
+            Some(mut node) => {
+                node = Llrb::walkdown_rot23(node);
+                match node.key_ref().borrow().cmp(&key) {
+                    Ordering::Greater => {
+                        let left = node.left.take();
+                        let (left, entry) = Llrb::delete_lsm(left, key, seqno);
+                        node.left = left;
+                        (Some(Llrb::walkuprot_23(node)), entry)
+                    }
+                    Ordering::Less => {
+                        let right = node.right.take();
+                        let (right, entry) = Llrb::delete_lsm(right, key, seqno);
+                        node.right = right;
+                        (Some(Llrb::walkuprot_23(node)), entry)
+                    }
+                    Ordering::Equal => {
+                        let entry = node.entry.clone();
+                        if node.is_deleted() {
+                            (Some(Llrb::walkuprot_23(node)), Some(entry)) // noop
+                        } else {
+                            node.delete(seqno);
+                            (Some(Llrb::walkuprot_23(node)), Some(entry))
+                        }
+                    }
                 }
             }
-        };
-
-        (Some(Llrb::walkuprot_23(node)), entry)
+        }
     }
 
     // this is the non-lsm path.
@@ -527,7 +475,14 @@ where
         node.left = left;
         (Some(Llrb::fixup(node)), old_node)
     }
+}
 
+/// Read operations on Llrb instance.
+impl<K, V> Llrb<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
     /// Get the latest version for key.
     pub fn get<Q>(&self, key: &Q) -> Option<Entry<K, V>>
     where

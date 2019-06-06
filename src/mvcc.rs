@@ -86,7 +86,12 @@ where
     V: Clone + Diff,
 {
     fn from(mut llrb: Llrb<K, V>) -> Mvcc<K, V> {
-        let mvcc = Mvcc::new(llrb.id(), llrb.is_lsm());
+        let mvcc = if llrb.is_lsm() {
+            Mvcc::new_lsm(llrb.id())
+        } else {
+            Mvcc::new(llrb.id())
+        };
+
         let (root, seqno, n_count) = llrb.squash();
         mvcc.snapshot
             .shift_snapshot(root, seqno, n_count, vec![] /*reclaim*/);
@@ -94,18 +99,31 @@ where
     }
 }
 
+/// Construct new instance of Mvcc.
 impl<K, V> Mvcc<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    pub fn new<S>(name: S, lsm: bool) -> Mvcc<K, V>
+    pub fn new<S>(name: S) -> Mvcc<K, V>
     where
         S: AsRef<str>,
     {
         Mvcc {
             name: name.as_ref().to_string(),
-            lsm,
+            lsm: false,
+            snapshot: Snapshot::new(),
+            fencer: SyncWriter::new(),
+        }
+    }
+
+    pub fn new_lsm<S>(name: S) -> Mvcc<K, V>
+    where
+        S: AsRef<str>,
+    {
+        Mvcc {
+            name: name.as_ref().to_string(),
+            lsm: true,
             snapshot: Snapshot::new(),
             fencer: SyncWriter::new(),
         }
@@ -118,19 +136,17 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    /// Identify this instance. Applications can choose unique names while
-    /// creating Mvcc instances.
-    pub fn id(&self) -> String {
-        self.name.clone()
+    #[inline]
+    #[cfg(test)]
+    pub(crate) fn mvccroot_ref(&self) -> &MvccRoot<K, V> {
+        unsafe { self.snapshot.value.load(Relaxed).as_ref().unwrap() }
     }
 
-    /// Return number of entries in this instance.
-    pub fn len(&self) -> usize {
-        Snapshot::clone(&self.snapshot).n_count
-    }
-
-    /// Set current seqno.
-    pub fn set_seqno(&mut self, seqno: u64) {
+    /// Set current seqno. Use this API iff you are totaly sure
+    /// about what you are doing.
+    #[inline]
+    #[allow(dead_code)] // TODO: remove this once bogn is weaved-up.
+    pub(crate) fn set_seqno(&mut self, seqno: u64) {
         let _lock = self.fencer.lock();
 
         let mvcc_arc: Arc<MvccRoot<K, V>> = Snapshot::clone(&self.snapshot);
@@ -139,94 +155,32 @@ where
         self.snapshot.shift_snapshot(root, seqno, n_count, vec![]);
     }
 
+    /// Identify this instance. Applications can choose unique names while
+    /// creating Mvcc instances.
+    #[inline]
+    pub fn id(&self) -> String {
+        self.name.clone()
+    }
+
+    /// Return number of entries in this instance.
+    #[inline]
+    pub fn len(&self) -> usize {
+        Snapshot::clone(&self.snapshot).n_count
+    }
+
     /// Return current seqno.
+    #[inline]
     pub fn get_seqno(&self) -> u64 {
         Snapshot::clone(&self.snapshot).seqno
     }
-
-    pub fn mvccroot_ref(&self) -> &MvccRoot<K, V> {
-        unsafe { self.snapshot.value.load(Relaxed).as_ref().unwrap() }
-    }
 }
 
+/// Create/Update/Delete operations on Llrb instance.
 impl<K, V> Mvcc<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    /// Get the latest version for key.
-    pub fn get<Q>(&self, key: &Q) -> Option<Entry<K, V>>
-    where
-        K: Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
-        get(Snapshot::clone(&self.snapshot).root_ref(), key)
-    }
-
-    pub fn iter(&self) -> Iter<K, V> {
-        let mut iter = Iter {
-            arc: Snapshot::clone(&self.snapshot),
-            paths: Default::default(),
-        };
-        let root = iter
-            .arc
-            .as_ref()
-            .root_duplicate()
-            .map(|n| Box::leak(n) as &Node<K, V>);
-        iter.paths = Some(build_iter(IFlag::Left, root, vec![]));
-        iter
-    }
-
-    pub fn range<R, Q>(&self, range: R) -> Range<K, V, R, Q>
-    where
-        K: Borrow<Q>,
-        R: RangeBounds<Q>,
-        Q: Ord + ?Sized,
-    {
-        let mut r = Range {
-            arc: Snapshot::clone(&self.snapshot),
-            range,
-            paths: Default::default(),
-            high: marker::PhantomData,
-        };
-        let root = r
-            .arc
-            .as_ref()
-            .root_duplicate()
-            .map(|n| Box::leak(n) as &Node<K, V>);
-        r.paths = match r.range.start_bound() {
-            Bound::Unbounded => Some(build_iter(IFlag::Left, root, vec![])),
-            Bound::Included(low) => Some(find_start(root, low, true, vec![])),
-            Bound::Excluded(low) => Some(find_start(root, low, false, vec![])),
-        };
-        r
-    }
-
-    pub fn reverse<R, Q>(&self, range: R) -> Reverse<K, V, R, Q>
-    where
-        K: Borrow<Q>,
-        R: RangeBounds<Q>,
-        Q: Ord + ?Sized,
-    {
-        let mut r = Reverse {
-            arc: Snapshot::clone(&self.snapshot),
-            range,
-            paths: Default::default(),
-            low: marker::PhantomData,
-        };
-        let root = r
-            .arc
-            .as_ref()
-            .root_duplicate()
-            .map(|n| Box::leak(n) as &Node<K, V>);
-        r.paths = match r.range.end_bound() {
-            Bound::Unbounded => Some(build_iter(IFlag::Right, root, vec![])),
-            Bound::Included(high) => Some(find_end(root, high, true, vec![])),
-            Bound::Excluded(high) => Some(find_end(root, high, false, vec![])),
-        };
-        r
-    }
-
     pub fn set(&self, key: K, value: V) -> Option<Entry<K, V>> {
         let _lock = self.fencer.lock();
 
@@ -291,8 +245,8 @@ where
     pub fn delete<Q>(&self, key: &Q) -> Option<Entry<K, V>>
     where
         // TODO: From<Q> and Clone will fail if V=String and Q=str
-        K: Borrow<Q> + From<Q>,
-        Q: Clone + Ord + ?Sized,
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
     {
         let _lock = self.fencer.lock();
 
@@ -337,42 +291,7 @@ where
         self.snapshot.shift_snapshot(root, seqno, n_count, reclm);
         entry
     }
-}
 
-impl<K, V> Mvcc<K, V>
-where
-    K: Clone + Ord + Debug,
-    V: Clone + Diff,
-{
-    /// Validate LLRB tree with following rules:
-    ///
-    /// * From root to any leaf, no consecutive reds allowed in its path.
-    /// * Number of blacks should be same on under left child and right child.
-    /// * Make sure that keys are in sorted order.
-    ///
-    /// Additionally return full statistics on the tree. Refer to [`LlrbStats`]
-    /// for more information.
-    pub fn validate(&self) -> Result<LlrbStats, Error> {
-        let arc_mvcc = Snapshot::clone(&self.snapshot);
-
-        let n_count = arc_mvcc.n_count;
-        let node_size = std::mem::size_of::<Node<K, V>>();
-        let mut stats = LlrbStats::new(n_count, node_size);
-        stats.set_depths(Default::default());
-
-        let root = arc_mvcc.root_ref();
-        let (red, nb, d) = (is_red(root), 0, 0);
-        let blacks = validate_tree(root, red, nb, d, &mut stats)?;
-        stats.set_blacks(blacks);
-        Ok(stats)
-    }
-}
-
-impl<K, V> Mvcc<K, V>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-{
     fn upsert(
         node: Option<Box<Node<K, V>>>,
         key: K,
@@ -494,12 +413,12 @@ where
         Option<Entry<K, V>>,
     )
     where
-        K: Borrow<Q> + From<Q>,
-        Q: Clone + Ord + ?Sized,
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
     {
         if node.is_none() {
-            let (key, black) = (key.clone().into(), false);
-            let mut node = Node::new(key, None, seqno, black);
+            let key = key.to_owned();
+            let mut node = Node::new(key, None, seqno, false /*black*/);
             node.delete(seqno);
             let n = node.duplicate();
             return (Some(node), Some(n), None);
@@ -635,7 +554,122 @@ where
             (Some(Mvcc::fixup(new_node, reclaim)), old_node)
         }
     }
+}
 
+/// Read operations on Llrb instance.
+impl<K, V> Mvcc<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    /// Get the latest version for key.
+    pub fn get<Q>(&self, key: &Q) -> Option<Entry<K, V>>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        get(Snapshot::clone(&self.snapshot).root_ref(), key)
+    }
+
+    pub fn iter(&self) -> Iter<K, V> {
+        let mut iter = Iter {
+            arc: Snapshot::clone(&self.snapshot),
+            paths: Default::default(),
+        };
+        let root = iter
+            .arc
+            .as_ref()
+            .root_duplicate()
+            .map(|n| Box::leak(n) as &Node<K, V>);
+        iter.paths = Some(build_iter(IFlag::Left, root, vec![]));
+        iter
+    }
+
+    pub fn range<R, Q>(&self, range: R) -> Range<K, V, R, Q>
+    where
+        K: Borrow<Q>,
+        R: RangeBounds<Q>,
+        Q: Ord + ?Sized,
+    {
+        let mut r = Range {
+            arc: Snapshot::clone(&self.snapshot),
+            range,
+            paths: Default::default(),
+            high: marker::PhantomData,
+        };
+        let root = r
+            .arc
+            .as_ref()
+            .root_duplicate()
+            .map(|n| Box::leak(n) as &Node<K, V>);
+        r.paths = match r.range.start_bound() {
+            Bound::Unbounded => Some(build_iter(IFlag::Left, root, vec![])),
+            Bound::Included(low) => Some(find_start(root, low, true, vec![])),
+            Bound::Excluded(low) => Some(find_start(root, low, false, vec![])),
+        };
+        r
+    }
+
+    pub fn reverse<R, Q>(&self, range: R) -> Reverse<K, V, R, Q>
+    where
+        K: Borrow<Q>,
+        R: RangeBounds<Q>,
+        Q: Ord + ?Sized,
+    {
+        let mut r = Reverse {
+            arc: Snapshot::clone(&self.snapshot),
+            range,
+            paths: Default::default(),
+            low: marker::PhantomData,
+        };
+        let root = r
+            .arc
+            .as_ref()
+            .root_duplicate()
+            .map(|n| Box::leak(n) as &Node<K, V>);
+        r.paths = match r.range.end_bound() {
+            Bound::Unbounded => Some(build_iter(IFlag::Right, root, vec![])),
+            Bound::Included(high) => Some(find_end(root, high, true, vec![])),
+            Bound::Excluded(high) => Some(find_end(root, high, false, vec![])),
+        };
+        r
+    }
+}
+
+impl<K, V> Mvcc<K, V>
+where
+    K: Clone + Ord + Debug,
+    V: Clone + Diff,
+{
+    /// Validate LLRB tree with following rules:
+    ///
+    /// * From root to any leaf, no consecutive reds allowed in its path.
+    /// * Number of blacks should be same on under left child and right child.
+    /// * Make sure that keys are in sorted order.
+    ///
+    /// Additionally return full statistics on the tree. Refer to [`LlrbStats`]
+    /// for more information.
+    pub fn validate(&self) -> Result<LlrbStats, Error> {
+        let arc_mvcc = Snapshot::clone(&self.snapshot);
+
+        let n_count = arc_mvcc.n_count;
+        let node_size = std::mem::size_of::<Node<K, V>>();
+        let mut stats = LlrbStats::new(n_count, node_size);
+        stats.set_depths(Default::default());
+
+        let root = arc_mvcc.root_ref();
+        let (red, nb, d) = (is_red(root), 0, 0);
+        let blacks = validate_tree(root, red, nb, d, &mut stats)?;
+        stats.set_blacks(blacks);
+        Ok(stats)
+    }
+}
+
+impl<K, V> Mvcc<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
     ////--------- rotation routines for 2-3 algorithm ----------------
 
     //fn walkdown_rot23(node: Box<Node<K, V>>) -> Box<Node<K, V>> {

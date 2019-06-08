@@ -53,6 +53,14 @@ impl<V> Value<V> {
             length,
         }
     }
+
+    #[allow(dead_code)] // TODO: remove this once bogn is weaved-up.
+    pub(crate) fn into_native(self) -> Option<V> {
+        match self {
+            Value::Native { value } => Some(value),
+            _ => None,
+        }
+    }
 }
 
 // *-----*------------------------------------*
@@ -68,7 +76,8 @@ impl<V> Value<V> {
 // * bit 63 reserved
 
 #[derive(Clone)]
-pub(crate) enum Delta<V>
+// TODO: figure out a way to make this crate private
+pub enum Delta<V>
 where
     V: Diff,
 {
@@ -105,5 +114,12 @@ where
     #[allow(dead_code)]
     pub(crate) fn new_backup(file: String, fpos: u64, length: u64) -> Delta<V> {
         Delta::Backup { file, fpos, length }
+    }
+
+    pub(crate) fn into_native(self) -> Option<<V as Diff>::D> {
+        match self {
+            Delta::Native { delta } => Some(delta),
+            _ => None,
+        }
     }
 }

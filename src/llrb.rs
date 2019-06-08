@@ -5,10 +5,11 @@ use std::ops::{Bound, Deref, DerefMut, RangeBounds};
 use std::sync::Arc;
 use std::{marker, mem};
 
-use crate::core::{Diff, Entry};
+use crate::core::{Diff, Entry, Value};
 use crate::error::Error;
 use crate::llrb_node::{LlrbStats, Node};
 use crate::mvcc::MvccRoot;
+use crate::vlog;
 
 include!("llrb_common.rs");
 
@@ -163,13 +164,16 @@ where
     /// present, update the value and return the previous entry, else
     /// create a new entry.
     ///
-    /// LSM mode: Add a new version for the key, perserving the old value.
+    /// *LSM mode*: Add a new version for the key, perserving the old value.
     pub fn set(&mut self, key: K, value: V) -> Option<Entry<K, V>> {
         let seqno = self.seqno + 1;
         let root = self.root.take();
 
-        let entry = Entry::new_entry(key, Some(value), seqno);
-        match Llrb::upsert(root, entry, self.lsm) {
+        let new_entry = Entry::new(
+            key,
+            Value::new_upsert(vlog::Value::new_native(value), seqno),
+        );
+        match Llrb::upsert(root, new_entry, self.lsm) {
             (Some(mut root), entry) => {
                 root.set_black();
                 self.root = Some(root);
@@ -184,11 +188,11 @@ where
     }
 
     /// Similar to set, but succeeds only when CAS matches with entry's
-    /// latest `seqno`. In other words, since seqno is unique each mutation,
+    /// last `seqno`. In other words, since seqno is unique to each mutation,
     /// we use `seqno` of the mutation as the CAS value. Use CAS == 0 to
     /// enforce a create operation.
     ///
-    /// LSM mode: Add a new version for the key, perserving the old value.
+    /// *LSM mode*: Add a new version for the key, perserving the old value.
     pub fn set_cas(
         &mut self,
         key: K,
@@ -198,8 +202,11 @@ where
         let seqno = self.seqno + 1;
         let root = self.root.take();
 
-        let entry = Entry::new_entry(key, Some(value), seqno);
-        match Llrb::upsert_cas(root, entry, cas, self.lsm) {
+        let new_entry = Entry::new(
+            key,
+            Value::new_upsert(vlog::Value::new_native(value), seqno),
+        );
+        match Llrb::upsert_cas(root, new_entry, cas, self.lsm) {
             (root, _, Some(err)) => {
                 self.root = root;
                 Err(err)
@@ -217,9 +224,11 @@ where
         }
     }
 
-    /// Delete the given key from non-mvcc intance, in LSM mode it simply marks
-    /// the version as deleted. Note that back-to-back delete for the same
+    /// Delete the given key. Note that back-to-back delete for the same
     /// key shall collapse into a single delete.
+    ///
+    /// *LSM mode*: Mark the entry as deleted along with seqno at which it
+    /// deleted
     ///
     /// NOTE: K should be borrowable as &Q and Q must be converted to owned K.
     /// This is require in lsm mode, where owned K must be inserted into the
@@ -238,13 +247,18 @@ where
             root.set_black();
             self.root = Some(root);
 
-            if entry.is_none() {
-                self.n_count += 1;
-                self.seqno = seqno;
-            } else if !entry.as_ref().unwrap().is_deleted() {
-                self.seqno = seqno;
-            }
-            return entry;
+            return match entry {
+                None => {
+                    self.n_count += 1;
+                    self.seqno = seqno;
+                    None
+                }
+                Some(entry) if !entry.is_deleted() => {
+                    self.seqno = seqno;
+                    Some(entry)
+                }
+                entry => entry,
+            };
         }
 
         // in non-lsm mode remove the entry from the tree.
@@ -266,34 +280,34 @@ where
 
     fn upsert(
         node: Option<Box<Node<K, V>>>,
-        nentry: Entry<K, V>,
+        new_entry: Entry<K, V>,
         lsm: bool,
     ) -> (Option<Box<Node<K, V>>>, Option<Entry<K, V>>) {
         match node {
             Some(mut node) => {
                 node = Llrb::walkdown_rot23(node);
-                match node.key_ref().cmp(nentry.key_ref()) {
+                match node.as_key().cmp(new_entry.as_key()) {
                     Ordering::Greater => {
-                        let res = Llrb::upsert(node.left.take(), nentry, lsm);
+                        let res = Llrb::upsert(node.left.take(), new_entry, lsm);
                         let (left, entry) = res;
                         node.left = left;
                         (Some(Llrb::walkuprot_23(node)), entry)
                     }
                     Ordering::Less => {
-                        let res = Llrb::upsert(node.right.take(), nentry, lsm);
+                        let res = Llrb::upsert(node.right.take(), new_entry, lsm);
                         let (right, entry) = res;
                         node.right = right;
                         (Some(Llrb::walkuprot_23(node)), entry)
                     }
                     Ordering::Equal => {
                         let entry = node.entry.clone();
-                        node.prepend_version(nentry.value(), nentry.seqno(), lsm);
+                        node.prepend_version(new_entry, lsm);
                         (Some(Llrb::walkuprot_23(node)), Some(entry))
                     }
                 }
             }
             None => {
-                let mut node: Box<Node<K, V>> = Box::new(From::from(nentry));
+                let mut node: Box<Node<K, V>> = Box::new(From::from(new_entry));
                 node.dirty = false;
                 return (Some(node), None);
             }
@@ -315,7 +329,7 @@ where
             }
             Some(mut node) => {
                 node = Llrb::walkdown_rot23(node);
-                let (entry, err) = match node.key_ref().cmp(nentry.key_ref()) {
+                let (entry, err) = match node.as_key().cmp(nentry.as_key()) {
                     Ordering::Greater => {
                         let left = node.left.take();
                         let (l, en, e) = Llrb::upsert_cas(left, nentry, cas, lsm);
@@ -335,8 +349,7 @@ where
                             (None, Some(Error::InvalidCAS))
                         } else {
                             let entry = node.entry.clone();
-                            let (value, seqno) = (nentry.value(), nentry.seqno());
-                            node.prepend_version(value, seqno, lsm);
+                            node.prepend_version(nentry, lsm);
                             (Some(entry), None)
                         }
                     }
@@ -359,15 +372,15 @@ where
         match node {
             None => {
                 // insert and mark as delete
-                let nentry = Entry::new_entry(key.to_owned(), None, seqno);
-                let mut node: Box<Node<K, V>> = Box::new(From::from(nentry));
+                let ne = Entry::new(key.to_owned(), Value::new_deleted(seqno));
+                let mut node: Box<Node<K, V>> = Box::new(From::from(ne));
                 node.dirty = false;
                 node.delete(seqno);
                 (Some(node), None)
             }
             Some(mut node) => {
                 node = Llrb::walkdown_rot23(node);
-                match node.key_ref().borrow().cmp(&key) {
+                match node.as_key().borrow().cmp(&key) {
                     Ordering::Greater => {
                         let left = node.left.take();
                         let (left, entry) = Llrb::delete_lsm(left, key, seqno);
@@ -381,13 +394,12 @@ where
                         (Some(Llrb::walkuprot_23(node)), entry)
                     }
                     Ordering::Equal => {
+                        println!("entry cloned deleted lsm");
                         let entry = node.entry.clone();
-                        if node.is_deleted() {
-                            (Some(Llrb::walkuprot_23(node)), Some(entry)) // noop
-                        } else {
+                        if !node.is_deleted() {
                             node.delete(seqno);
-                            (Some(Llrb::walkuprot_23(node)), Some(entry))
                         }
+                        (Some(Llrb::walkuprot_23(node)), Some(entry))
                     }
                 }
             }
@@ -408,7 +420,7 @@ where
             Some(node) => node,
         };
 
-        if node.key_ref().borrow().gt(key) {
+        if node.as_key().borrow().gt(key) {
             if node.left.is_none() {
                 (Some(node), None)
             } else {
@@ -425,7 +437,7 @@ where
                 node = Llrb::rotate_right(node);
             }
 
-            if !node.key_ref().borrow().lt(key) && node.right.is_none() {
+            if !node.as_key().borrow().lt(key) && node.right.is_none() {
                 return (None, Some(node.entry.clone()));
             }
 
@@ -434,7 +446,7 @@ where
                 node = Llrb::move_red_right(node);
             }
 
-            if !node.key_ref().borrow().lt(key) {
+            if !node.as_key().borrow().lt(key) {
                 // node == key
                 let (right, mut res_node) = Llrb::delete_min(node.right.take());
                 node.right = right;
@@ -460,20 +472,19 @@ where
     fn delete_min(
         node: Option<Box<Node<K, V>>>, // root node
     ) -> (Option<Box<Node<K, V>>>, Option<Node<K, V>>) {
-        if node.is_none() {
-            return (None, None);
+        match node {
+            None => (None, None),
+            Some(node) if node.left.is_none() => (None, Some(*node)),
+            Some(mut node) => {
+                let left = node.left_deref();
+                if !is_red(left) && !is_red(left.unwrap().left_deref()) {
+                    node = Llrb::move_red_left(node);
+                }
+                let (left, old_node) = Llrb::delete_min(node.left.take());
+                node.left = left;
+                (Some(Llrb::fixup(node)), old_node)
+            }
         }
-        let mut node = node.unwrap();
-        if node.left.is_none() {
-            return (None, Some(*node));
-        }
-        let left = node.left_deref();
-        if !is_red(left) && !is_red(left.unwrap().left_deref()) {
-            node = Llrb::move_red_left(node);
-        }
-        let (left, old_node) = Llrb::delete_min(node.left.take());
-        node.left = left;
-        (Some(Llrb::fixup(node)), old_node)
     }
 }
 

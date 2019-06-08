@@ -228,13 +228,13 @@ fn check_node(entry: Option<Entry<i64, i64>>, refn: Option<RefNode>) -> bool {
     } else if refn.is_none() {
         let entry = entry.as_ref().unwrap();
         println!("entry num_versions {}", entry.deltas().len());
-        panic!("refn is none but not entry {:?}", entry.key_ref());
+        panic!("refn is none but not entry {:?}", entry.as_key());
     }
 
     let entry = entry.unwrap();
     let refn = refn.unwrap();
     //println!("check_node {} {}", entry.key(), refn.key);
-    assert_eq!(entry.key_ref().clone(), refn.key, "key");
+    assert_eq!(entry.as_key().clone(), refn.key, "key");
 
     let ver = &refn.versions[0];
     assert_eq!(entry.value(), ver.value, "key {}", refn.key);

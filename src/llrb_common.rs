@@ -24,7 +24,7 @@ where
     Q: Ord + ?Sized,
 {
     while let Some(nref) = node {
-        node = match nref.key_ref().borrow().cmp(key) {
+        node = match nref.as_key().borrow().cmp(key) {
             Ordering::Less => nref.right_deref(),
             Ordering::Greater => nref.left_deref(),
             Ordering::Equal => return Some(nref.entry.clone()),
@@ -59,16 +59,16 @@ where
                 return Err(Error::UnbalancedBlacks(l, r));
             }
             if let Some(left) = left {
-                if left.key_ref().ge(node.key_ref()) {
-                    let left = format!("{:?}", left.key_ref());
-                    let parent = format!("{:?}", node.key_ref());
+                if left.as_key().ge(node.as_key()) {
+                    let left = format!("{:?}", left.as_key());
+                    let parent = format!("{:?}", node.as_key());
                     return Err(Error::SortError(left, parent));
                 }
             }
             if let Some(right) = right {
-                if right.key_ref().le(node.key_ref()) {
-                    let parent = format!("{:?}", node.key_ref());
-                    let right = format!("{:?}", right.key_ref());
+                if right.as_key().le(node.as_key()) {
+                    let parent = format!("{:?}", node.as_key());
+                    let right = format!("{:?}", right.as_key());
                     return Err(Error::SortError(parent, right));
                 }
             }
@@ -196,7 +196,7 @@ where
         match item {
             None => None,
             Some(entry) => {
-                let qey = entry.key_ref().borrow();
+                let qey = entry.as_key().borrow();
                 match self.range.end_bound() {
                     Bound::Included(high) if qey.le(high) => Some(entry),
                     Bound::Excluded(high) if qey.lt(high) => Some(entry),
@@ -265,7 +265,7 @@ where
         match item {
             None => None,
             Some(entry) => {
-                let qey = entry.key_ref().borrow();
+                let qey = entry.as_key().borrow();
                 match self.range.start_bound() {
                     Bound::Included(low) if qey.ge(low) => Some(entry),
                     Bound::Excluded(low) if qey.gt(low) => Some(entry),
@@ -334,7 +334,7 @@ where
     match nref {
         None => paths,
         Some(nref) => {
-            let cmp = nref.key_ref().borrow().cmp(low);
+            let cmp = nref.as_key().borrow().cmp(low);
             let flag = match cmp {
                 Ordering::Less => IFlag::Right,
                 Ordering::Equal if incl => IFlag::Left,
@@ -371,7 +371,7 @@ where
     match nref {
         None => paths,
         Some(nref) => {
-            let cmp = nref.key_ref().borrow().cmp(high);
+            let cmp = nref.as_key().borrow().cmp(high);
             let flag = match cmp {
                 Ordering::Less => IFlag::Right,
                 Ordering::Equal if incl => IFlag::Right,

@@ -196,7 +196,7 @@ where
             let mblock: MBlock<K, V> = MBlock::new_decode(fd, fpos, &config)?;
             let (_, is_z, entry) = mblock.find(key, from, to)?;
             fpos = match entry.vlog_value_ref() {
-                vlog::Value::Reference { fpos, .. } => *fpos,
+                Some(vlog::Value::Reference { fpos, .. }) => *fpos,
                 _ => unreachable!(),
             };
             if is_z {
@@ -206,7 +206,7 @@ where
 
         let zblock: ZBlock<K, V> = ZBlock::new_decode(fd, zblock_fpos, &config)?;
         let (_, entry) = zblock.find(key, from, to)?;
-        if entry.key_ref().borrow().eq(key) {
+        if entry.as_key().borrow().eq(key) {
             Ok(entry)
         } else {
             Err(Error::KeyNotFound)
@@ -252,7 +252,7 @@ where
                     mzs,
                     high,
                 };
-                if entry.key_ref().eq(&key) {
+                if entry.as_key().eq(&key) {
                     r.next();
                 }
                 r
@@ -290,7 +290,7 @@ where
                     mzs,
                     low,
                 };
-                if entry.key_ref().eq(&key) {
+                if entry.as_key().eq(&key) {
                     r.next();
                 }
                 r
@@ -310,11 +310,11 @@ where
             let mblock: MBlock<K, V> = MBlock::new_decode(fd, fpos, config)?;
             let (index, is_z, entry) = mblock.entry_at(0)?;
             fpos = match (is_z, entry.vlog_value_ref()) {
-                (false, vlog::Value::Reference { fpos, .. }) => {
+                (false, Some(vlog::Value::Reference { fpos, .. })) => {
                     mzs.push(MZ::M { fpos: *fpos, index });
                     *fpos
                 }
-                (true, vlog::Value::Reference { fpos, .. }) => {
+                (true, Some(vlog::Value::Reference { fpos, .. })) => {
                     break *fpos;
                 }
                 _ => unreachable!(),
@@ -339,11 +339,11 @@ where
             let mblock: MBlock<K, V> = MBlock::new_decode(fd, fpos, config)?;
             let (index, is_z, entry) = mblock.entry_at(mblock.len() - 1)?;
             fpos = match (is_z, entry.vlog_value_ref()) {
-                (false, vlog::Value::Reference { fpos, .. }) => {
+                (false, Some(vlog::Value::Reference { fpos, .. })) => {
                     mzs.push(MZ::M { fpos: *fpos, index });
                     *fpos
                 }
-                (true, vlog::Value::Reference { fpos, .. }) => {
+                (true, Some(vlog::Value::Reference { fpos, .. })) => {
                     break *fpos;
                 }
                 _ => unreachable!(),
@@ -367,11 +367,11 @@ where
             let mblock: MBlock<K, V> = MBlock::new_decode(fd, fpos, config)?;
             let (index, is_z, entry) = mblock.find(key, from, to)?;
             fpos = match (is_z, entry.vlog_value_ref()) {
-                (false, vlog::Value::Reference { fpos, .. }) => {
+                (false, Some(vlog::Value::Reference { fpos, .. })) => {
                     mzs.push(MZ::M { fpos: *fpos, index });
                     *fpos
                 }
-                (true, vlog::Value::Reference { fpos, .. }) => {
+                (true, Some(vlog::Value::Reference { fpos, .. })) => {
                     break *fpos;
                 }
                 _ => unreachable!(),
@@ -401,7 +401,7 @@ where
                         });
 
                         let zblock_fpos = match entry.vlog_value_ref() {
-                            vlog::Value::Reference { fpos, .. } => *fpos,
+                            Some(vlog::Value::Reference { fpos, .. }) => *fpos,
                             _ => unreachable!(),
                         };
                         let zblock = ZBlock::new_decode(fd, zblock_fpos, config)?;
@@ -416,7 +416,7 @@ where
                         });
 
                         let fpos = match entry.vlog_value_ref() {
-                            vlog::Value::Reference { fpos, .. } => *fpos,
+                            Some(vlog::Value::Reference { fpos, .. }) => *fpos,
                             _ => unreachable!(),
                         };
                         self.build_fwd(mzs, fpos)?;
@@ -447,7 +447,7 @@ where
                         });
 
                         let zblock_fpos = match entry.vlog_value_ref() {
-                            vlog::Value::Reference { fpos, .. } => *fpos,
+                            Some(vlog::Value::Reference { fpos, .. }) => *fpos,
                             _ => unreachable!(),
                         };
                         let zblock = ZBlock::new_decode(fd, zblock_fpos, config)?;
@@ -462,7 +462,7 @@ where
                         });
 
                         let fpos = match entry.vlog_value_ref() {
-                            vlog::Value::Reference { fpos, .. } => *fpos,
+                            Some(vlog::Value::Reference { fpos, .. }) => *fpos,
                             _ => unreachable!(),
                         };
                         self.build_rev(mzs, fpos)?;
@@ -530,8 +530,8 @@ where
     fn till_ok(&self, entry: &Entry<K, V>) -> bool {
         match &self.high {
             Bound::Unbounded => true,
-            Bound::Included(key) => entry.key_ref().le(key),
-            Bound::Excluded(key) => entry.key_ref().lt(key),
+            Bound::Included(key) => entry.as_key().le(key),
+            Bound::Excluded(key) => entry.as_key().lt(key),
         }
     }
 }
@@ -586,8 +586,8 @@ where
     fn till_ok(&self, entry: &Entry<K, V>) -> bool {
         match &self.low {
             Bound::Unbounded => true,
-            Bound::Included(key) => entry.key_ref().ge(key),
-            Bound::Excluded(key) => entry.key_ref().gt(key),
+            Bound::Included(key) => entry.as_key().ge(key),
+            Bound::Excluded(key) => entry.as_key().gt(key),
         }
     }
 }

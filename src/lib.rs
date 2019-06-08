@@ -24,14 +24,15 @@
 
 #![feature(rc_into_raw_non_null)]
 #![feature(copy_within)]
+#![feature(bind_by_move_pattern_guards)]
 
 extern crate jsondata;
 
-mod bubt_build;
-mod bubt_config;
-mod bubt_indx;
-mod bubt_snap;
-mod bubt_stats;
+//mod bubt_build;
+//mod bubt_config;
+//mod bubt_indx;
+//mod bubt_snap;
+//mod bubt_stats;
 mod core;
 mod error;
 mod llrb;
@@ -46,9 +47,8 @@ mod util;
 mod vlog;
 
 //pub use crate::bubt_build::Builder;
-pub use crate::bubt_build::Builder;
-pub use crate::bubt_config::Config;
-pub use crate::bubt_snap::Snapshot;
+//pub use crate::bubt_config::Config;
+//pub use crate::bubt_snap::Snapshot;
 pub use crate::core::{Diff, Result, Serialize};
 pub use crate::error::Error;
 pub use crate::llrb::Llrb;

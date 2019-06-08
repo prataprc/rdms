@@ -563,7 +563,7 @@ where
             } => {
                 let (req, cap) = ((i_block.len() + size), i_block.capacity());
                 if req < cap {
-                    first_key.get_or_insert(entry.key_ref().clone());
+                    first_key.get_or_insert(entry.as_key().clone());
                     self.encode_entry(entry, vmem2 as u64);
                     Ok(())
                 } else {
@@ -578,7 +578,7 @@ where
         match self {
             ZBlock::Encode { k_buf, .. } => {
                 k_buf.truncate(0);
-                entry.key_ref().encode(k_buf);
+                entry.as_key().encode(k_buf);
                 k_buf.len()
             }
             ZBlock::Decode { .. } => unreachable!(),
@@ -599,12 +599,14 @@ where
     fn encode_value(v_buf: &mut Vec<u8>, entry: &Entry<K, V>) -> usize {
         v_buf.truncate(0);
         match entry.vlog_value_ref() {
-            vlog::Value::Native { value } => {
+            Some(vlog::Value::Native { value }) => {
                 value.encode(v_buf);
                 v_buf.len()
             }
-            vlog::Value::Reference { length, .. } => *length as usize,
-            vlog::Value::Backup { .. } => panic!("impossible situation"),
+            Some(vlog::Value::Reference { length, .. }) => *length as usize,
+            Some(vlog::Value::Backup { .. }) | None => {
+                panic!("impossible situation");
+            }
         }
     }
 
@@ -626,13 +628,15 @@ where
         d_bufs.truncate(0);
         for (i, delta) in entry.deltas_ref().iter().enumerate() {
             d_bufs[i].truncate(0);
-            let length = match delta.vlog_delta_ref() {
-                vlog::Delta::Native { delta } => {
+            let length = match delta.delta_ref() {
+                Some(vlog::Delta::Native { delta }) => {
                     delta.encode(&mut d_bufs[i]);
                     d_bufs[i].len()
                 }
-                vlog::Delta::Reference { length, .. } => *length as usize,
-                vlog::Delta::Backup { .. } => panic!("impossible situation"),
+                Some(vlog::Delta::Reference { length, .. }) => *length as usize,
+                Some(vlog::Delta::Backup { .. }) | None => {
+                    panic!("impossible situation");
+                }
             };
             entry_size += Self::DELTA_HEADER;
             dmem += length;
@@ -673,27 +677,27 @@ where
         i_block.extend_from_slice(k_buf);
         // value
         match entry.vlog_value_ref() {
-            vlog::Value::Native { .. } if config.value_in_vlog => {
+            Some(vlog::Value::Native { .. }) if config.value_in_vlog => {
                 let scratch = (*vpos + (v_block.len() as u64)).to_be_bytes();
                 i_block.extend_from_slice(&scratch);
                 let vhdr = (v_buf.len() as u64) | vlog::Value::<Empty>::VALUE_FLAG;
                 v_block.extend_from_slice(&vhdr.to_be_bytes());
                 v_block.extend_from_slice(v_buf);
             }
-            vlog::Value::Native { .. } => {
+            Some(vlog::Value::Native { .. }) => {
                 i_block.extend_from_slice(v_buf);
             }
-            vlog::Value::Reference { fpos, .. } => {
+            Some(vlog::Value::Reference { fpos, .. }) => {
                 i_block.extend_from_slice(&fpos.to_be_bytes());
             }
-            vlog::Value::Backup { .. } => unreachable!(),
+            Some(vlog::Value::Backup { .. }) | None => unreachable!(),
         };
 
         // deltas
         if config.vlog_file.is_some() {
             for (i, delta) in entry.deltas_ref().iter().enumerate() {
-                let (len, bseq, dseq, fpos) = match delta.vlog_delta_ref() {
-                    vlog::Delta::Native { .. } => {
+                let (len, bseq, dseq, fpos) = match delta.delta_ref() {
+                    Some(vlog::Delta::Native { .. }) => {
                         let fpos = *vpos + (v_block.len() as u64);
                         let d_buf = &d_bufs[i];
                         let scratch = (d_buf.len() as u64).to_be_bytes();
@@ -706,13 +710,13 @@ where
                             fpos,
                         )
                     }
-                    vlog::Delta::Reference { fpos, length } => (
+                    Some(vlog::Delta::Reference { fpos, length }) => (
                         *length,
                         delta.born_seqno(),
                         delta.dead_seqno().unwrap_or(0),
                         *fpos,
                     ),
-                    vlog::Delta::Backup { .. } => unreachable!(),
+                    Some(vlog::Delta::Backup { .. }) | None => unreachable!(),
                 };
                 // encode delta in entry
                 i_block.extend_from_slice(&len.to_be_bytes());
@@ -959,7 +963,7 @@ where
                 n += 8;
 
                 let delta = vlog::Delta::Reference { fpos, length: dlen };
-                deltas.push(Delta::new(delta, seqno, deleted));
+                deltas.push(Delta::new(Some(delta), seqno, deleted));
             }
             Ok((index, Entry::new(key, Some(value), seqno, deleted, deltas)))
         } else {

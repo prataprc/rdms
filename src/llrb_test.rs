@@ -398,8 +398,8 @@ fn test_crud_lsm() {
     for _i in 0..20000 {
         let key: i64 = (random::<i64>() % size).abs();
         let value: i64 = random();
-        let op: i64 = (random::<i64>() % 2).abs();
-        //println!("op {} on {}", op, key);
+        let op: i64 = (random::<i64>() % 3).abs();
+        println!("op {} on {}", op, key);
         match op {
             0 => {
                 let entry = llrb.set(key, value);

@@ -8,11 +8,12 @@ use std::sync::{
     Arc,
 };
 
-use crate::core::{Diff, Entry};
+use crate::core::{Diff, Entry, Value};
 use crate::error::Error;
 use crate::llrb::Llrb;
 use crate::llrb_node::{LlrbStats, Node};
 use crate::sync_writer::SyncWriter;
+use crate::vlog;
 
 const RECLAIM_CAP: usize = 128;
 
@@ -191,7 +192,11 @@ where
         let root = arc_mvcc.root_duplicate();
         let mut reclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
 
-        match Mvcc::upsert(root, key, value, seqno, lsm, &mut reclm) {
+        let new_entry = Entry::new(
+            key,
+            Value::new_upsert(vlog::Value::new_native(value), seqno),
+        );
+        match Mvcc::upsert(root, new_entry, lsm, &mut reclm) {
             (Some(mut root), Some(mut n), entry) => {
                 root.set_black();
                 if entry.is_none() {
@@ -216,7 +221,11 @@ where
         let rt = arc_mvcc.root_duplicate();
         let mut rclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
 
-        let s = match Mvcc::upsert_cas(rt, key, value, cas, seqno, lsm, &mut rclm) {
+        let new_entry = Entry::new(
+            key,
+            Value::new_upsert(vlog::Value::new_native(value), seqno),
+        );
+        let s = match Mvcc::upsert_cas(rt, new_entry, cas, lsm, &mut rclm) {
             (Some(mut root), optn, _, Some(err)) => {
                 root.set_black();
                 (root, optn, Err(err))
@@ -294,9 +303,7 @@ where
 
     fn upsert(
         node: Option<Box<Node<K, V>>>,
-        key: K,
-        value: V,
-        seqno: u64,
+        new_entry: Entry<K, V>,
         lsm: bool,
         reclaim: &mut Vec<Box<Node<K, V>>>,
     ) -> (
@@ -305,7 +312,7 @@ where
         Option<Entry<K, V>>,
     ) {
         if node.is_none() {
-            let node = Node::new(key, Some(value), seqno, false /*black*/);
+            let node: Box<Node<K, V>> = Box::new(From::from(new_entry));
             let n = node.duplicate();
             return (Some(node), Some(n), None);
         }
@@ -314,20 +321,20 @@ where
         let mut new_node = node.mvcc_clone(reclaim);
         //node = Mvcc::walkdown_rot23(node);
 
-        let cmp = new_node.key_ref().cmp(&key);
+        let cmp = new_node.as_key().cmp(new_entry.as_key());
         let (new_node, n, entry) = if cmp == Ordering::Greater {
             let left = new_node.left.take();
-            let (l, n, en) = Mvcc::upsert(left, key, value, seqno, lsm, reclaim);
+            let (l, n, en) = Mvcc::upsert(left, new_entry, lsm, reclaim);
             new_node.left = l;
             (Some(Mvcc::walkuprot_23(new_node, reclaim)), n, en)
         } else if cmp == Ordering::Less {
             let right = new_node.right.take();
-            let (r, n, en) = Mvcc::upsert(right, key, value, seqno, lsm, reclaim);
+            let (r, n, en) = Mvcc::upsert(right, new_entry, lsm, reclaim);
             new_node.right = r;
             (Some(Mvcc::walkuprot_23(new_node, reclaim)), n, en)
         } else {
             let entry = node.entry.clone();
-            new_node.prepend_version(value, seqno, lsm);
+            new_node.prepend_version(new_entry, lsm);
             new_node.dirty = true;
             let n = new_node.duplicate();
             (
@@ -343,10 +350,8 @@ where
 
     fn upsert_cas(
         node: Option<Box<Node<K, V>>>,
-        key: K,
-        value: V,
+        nentry: Entry<K, V>,
         cas: u64,
-        seqno: u64,
         lsm: bool,
         reclaim: &mut Vec<Box<Node<K, V>>>,
     ) -> (
@@ -358,7 +363,7 @@ where
         if node.is_none() && cas > 0 {
             return (None, None, None, Some(Error::InvalidCAS));
         } else if node.is_none() {
-            let node = Node::new(key, Some(value), seqno, false /*black*/);
+            let node: Box<Node<K, V>> = Box::new(From::from(nentry));
             let n = node.duplicate();
             return (Some(node), Some(n), None, None);
         }
@@ -367,27 +372,26 @@ where
         let mut new_node = node.mvcc_clone(reclaim);
         // node = Mvcc::walkdown_rot23(node);
 
-        let cmp = new_node.key_ref().cmp(&key);
+        let cmp = new_node.as_key().cmp(nentry.as_key());
         let (new_node, n, entry, err) = if cmp == Ordering::Greater {
             let left = new_node.left.take();
-            let s = Mvcc::upsert_cas(left, key, value, cas, seqno, lsm, reclaim);
+            let s = Mvcc::upsert_cas(left, nentry, cas, lsm, reclaim);
             let (left, n, entry, e) = s;
             new_node.left = left;
             (Some(Mvcc::walkuprot_23(new_node, reclaim)), n, entry, e)
         } else if cmp == Ordering::Less {
             let right = new_node.right.take();
-            let s = Mvcc::upsert_cas(right, key, value, cas, seqno, lsm, reclaim);
+            let s = Mvcc::upsert_cas(right, nentry, cas, lsm, reclaim);
             let (rh, n, entry, e) = s;
             new_node.right = rh;
             (Some(Mvcc::walkuprot_23(new_node, reclaim)), n, entry, e)
         } else if new_node.is_deleted() && cas != 0 && cas != new_node.seqno() {
-            // TODO: should we have the cas != new_node.seqno() predicate ??
             (Some(new_node), None, None, Some(Error::InvalidCAS))
         } else if !new_node.is_deleted() && cas != new_node.seqno() {
             (Some(new_node), None, None, Some(Error::InvalidCAS))
         } else {
             let entry = Some(node.entry.clone());
-            new_node.prepend_version(value, seqno, lsm);
+            new_node.prepend_version(nentry, lsm);
             new_node.dirty = true;
             let n = new_node.duplicate();
             (
@@ -418,7 +422,7 @@ where
     {
         if node.is_none() {
             let key = key.to_owned();
-            let mut node = Node::new(key, None, seqno, false /*black*/);
+            let mut node = Node::new(key, seqno, false /*black*/);
             node.delete(seqno);
             let n = node.duplicate();
             return (Some(node), Some(n), None);
@@ -428,7 +432,7 @@ where
         let mut new_node = node.mvcc_clone(reclaim);
         //let mut node = Mvcc::walkdown_rot23(node.unwrap());
 
-        let (n, entry) = match new_node.key_ref().borrow().cmp(&key) {
+        let (n, entry) = match new_node.as_key().borrow().cmp(&key) {
             Ordering::Greater => {
                 let left = new_node.left.take();
                 let s = Mvcc::delete_lsm(left, key, seqno, reclaim);
@@ -473,7 +477,7 @@ where
         let mut new_node = node.mvcc_clone(reclaim);
         Box::leak(node);
 
-        if new_node.key_ref().borrow().gt(key) {
+        if new_node.as_key().borrow().gt(key) {
             if new_node.left.is_none() {
                 // key not present, nothing to delete
                 (Some(new_node), None)
@@ -493,7 +497,7 @@ where
             }
 
             // if key equals node and no right children
-            if !new_node.key_ref().borrow().lt(key) && new_node.right.is_none() {
+            if !new_node.as_key().borrow().lt(key) && new_node.right.is_none() {
                 new_node.mvcc_detach();
                 return (None, Some(new_node.entry.clone()));
             }
@@ -504,7 +508,7 @@ where
             }
 
             // if key equal node and there is a right children
-            if !new_node.key_ref().borrow().lt(key) {
+            if !new_node.as_key().borrow().lt(key) {
                 // node == key
                 let right = new_node.right.take();
                 let (right, mut res_node) = Mvcc::delete_min(right, reclaim);

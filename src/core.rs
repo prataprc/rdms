@@ -11,8 +11,8 @@ use crate::vlog;
 ///
 /// D = N - O (diff operation)
 /// O = N - D (merge operation, to get old value)
-pub trait Diff {
-    type D: Clone;
+pub trait Diff: Sized {
+    type D: Clone + From<Self> + Into<Self>;
 
     /// Return the delta between two version of value.
     /// D = N - O
@@ -36,13 +36,12 @@ pub trait Serialize: Sized {
 /// Delta maintains the older version of value, with necessary fields for
 /// log-structured-merge.
 #[derive(Clone)]
-pub struct Delta<V>
+pub enum Delta<V>
 where
     V: Clone + Diff,
 {
-    delta: vlog::Delta<V>, // actual value
-    seqno: u64,            // when this version mutated
-    deleted: Option<u64>,  // for lsm, deleted can be > 0
+    U { delta: vlog::Delta<V>, seqno: u64 },
+    D { deleted: u64 },
 }
 
 // Delta construction methods.
@@ -50,28 +49,27 @@ impl<V> Delta<V>
 where
     V: Clone + Diff,
 {
-    pub(crate) fn new(
-        delta: vlog::Delta<V>, // construct with any variant
-        seqno: u64,
-        deleted: Option<u64>,
-    ) -> Delta<V> {
-        Delta {
-            delta,
-            seqno,
-            deleted,
+    pub(crate) fn new_upsert(delta: vlog::Delta<V>, seqno: u64) -> Delta<V> {
+        Delta::U { delta, seqno }
+    }
+
+    pub(crate) fn new_deleted(deleted: u64) -> Delta<V> {
+        Delta::D { deleted }
+    }
+
+    #[allow(dead_code)] // TODO: remove this once bogn is weaved-up.
+    pub(crate) fn to_deleted(self) -> u64 {
+        match self {
+            Delta::D { deleted } => deleted,
+            Delta::U { .. } => unreachable!(),
         }
     }
 
-    /// Use facing values of Delta must constructed using this API.
-    fn new_delta(
-        delta: <V as Diff>::D, // construct with native value.
-        seqno: u64,
-        deleted: Option<u64>,
-    ) -> Delta<V> {
-        Delta {
-            delta: vlog::Delta::new_native(delta),
-            seqno,
-            deleted,
+    #[allow(dead_code)] // TODO: remove this once bogn is weaved-up.
+    pub(crate) fn to_upserted(self) -> (vlog::Delta<V>, u64) {
+        match self {
+            Delta::U { delta, seqno } => (delta, seqno),
+            Delta::D { .. } => unreachable!(),
         }
     }
 }
@@ -81,17 +79,19 @@ impl<V> Delta<V>
 where
     V: Clone + Diff,
 {
-    pub(crate) fn vlog_delta_ref(&self) -> &vlog::Delta<V> {
-        &self.delta
+    #[allow(dead_code)] // TODO: remove this once bogn is weaved-up.
+    pub(crate) fn as_delta(&self) -> Option<&vlog::Delta<V>> {
+        match self {
+            Delta::D { .. } => None,
+            Delta::U { delta, .. } => Some(delta),
+        }
     }
 
     /// Return the underlying `difference` value for this delta.
-    pub fn into_diff(self) -> <V as Diff>::D {
-        match &self.delta {
-            vlog::Delta::Native { delta } => delta.clone(),
-            vlog::Delta::Reference { .. } | vlog::Delta::Backup { .. } => {
-                panic!("impossible situation, call the programmer!")
-            }
+    pub fn into_diff(self) -> Option<<V as Diff>::D> {
+        match self {
+            Delta::D { .. } => None,
+            Delta::U { delta, .. } => delta.into_native(),
         }
     }
 
@@ -99,23 +99,68 @@ where
     /// which includes Create and Delete operations.
     /// To differentiate between Create and Delete operations
     /// use born_seqno() and dead_seqno() methods respectively.
-    pub fn seqno(&self) -> u64 {
-        self.deleted.unwrap_or(self.seqno)
+    pub fn to_seqno(&self) -> u64 {
+        match self {
+            Delta::U { seqno, .. } => *seqno,
+            Delta::D { deleted } => *deleted,
+        }
     }
 
-    /// Return the seqno at which this delta was created.
-    pub fn born_seqno(&self) -> u64 {
-        self.seqno
+    /// Return the seqno and the state of modification. `true` means
+    /// this version was a create/update, and `false` means
+    /// this version was deleted.
+    pub fn to_seqno_state(&self) -> (bool, u64) {
+        match self {
+            Delta::U { seqno, .. } => (true, *seqno),
+            Delta::D { deleted } => (false, *deleted),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) enum Value<V>
+where
+    V: Clone + Diff,
+{
+    U { value: vlog::Value<V>, seqno: u64 },
+    D { deleted: u64 },
+}
+
+impl<V> Value<V>
+where
+    V: Clone + Diff,
+{
+    pub(crate) fn new_upsert(value: vlog::Value<V>, seqno: u64) -> Value<V> {
+        Value::U { value, seqno }
     }
 
-    /// Return the seqno at which this delta was deleted.
-    pub fn dead_seqno(&self) -> Option<u64> {
-        self.deleted
+    pub(crate) fn new_deleted(deleted: u64) -> Value<V> {
+        Value::D { deleted }
     }
 
-    /// Return whether this delta was deleted.
-    pub fn is_deleted(&self) -> bool {
-        self.deleted.is_some()
+    fn to_native_value(&self) -> Option<V> {
+        match &self {
+            Value::D { .. } => None,
+            Value::U {
+                value: vlog::Value::Native { value, .. },
+                ..
+            } => Some(value.clone()),
+            Value::U {
+                value: vlog::Value::Reference { .. },
+                ..
+            } => panic!("impossible situation, call the programmer"),
+            Value::U {
+                value: vlog::Value::Backup { .. },
+                ..
+            } => panic!("impossible situation, call the programmer"),
+        }
+    }
+
+    fn is_deleted(&self) -> bool {
+        match self {
+            Value::U { .. } => false,
+            Value::D { .. } => true,
+        }
     }
 }
 
@@ -129,9 +174,7 @@ where
     V: Clone + Diff,
 {
     key: K,
-    value: Option<vlog::Value<V>>,
-    seqno: u64,
-    deleted: Option<u64>,
+    value: Value<V>,
     deltas: Vec<Delta<V>>,
 }
 
@@ -143,30 +186,17 @@ where
     K: Ord + Clone,
     V: Clone + Diff,
 {
-    pub(crate) fn new(
-        key: K,
-        value: Option<vlog::Value<V>>,
-        seqno: u64,
-        deleted: Option<u64>,
-        deltas: Vec<Delta<V>>,
-    ) -> Entry<K, V> {
+    pub(crate) fn new(key: K, value: Value<V>) -> Entry<K, V> {
         Entry {
             key,
             value,
-            seqno,
-            deleted: deleted,
-            deltas: deltas,
+            deltas: vec![],
         }
     }
 
-    pub(crate) fn new_entry(key: K, value: Option<V>, seqno: u64) -> Entry<K, V> {
-        Entry {
-            key,
-            value: value.map(vlog::Value::new_native),
-            seqno,
-            deleted: None,
-            deltas: vec![],
-        }
+    #[allow(dead_code)] // TODO: remove this once bogn is weaved-up.
+    pub(crate) fn set_deltas(&mut self, deltas: Vec<Delta<V>>) {
+        self.deltas = deltas;
     }
 }
 
@@ -178,61 +208,89 @@ where
 {
     // Prepend a new version, also the lates version, for this entry.
     // In non-lsm mode this is equivalent to over-writing previous value.
-    pub(crate) fn prepend_version(&mut self, value: V, seqno: u64, lsm: bool) {
+    pub(crate) fn prepend_version(&mut self, new_entry: Self, lsm: bool) {
         if lsm {
-            self.prepend_version_lsm(value, seqno)
+            self.prepend_version_lsm(new_entry)
         } else {
-            self.prepend_version_nolsm(value, seqno)
+            self.prepend_version_nolsm(new_entry)
         }
     }
 
-    fn prepend_version_lsm(&mut self, value: V, seqno: u64) {
-        let old_value = match &self.value {
-            None => {
-                return self.prepend_version_nolsm(value, seqno);
+    fn prepend_version_nolsm(&mut self, new_entry: Self) {
+        self.value = new_entry.value.clone();
+    }
+
+    fn prepend_version_lsm(&mut self, new_entry: Self) {
+        match &self.value {
+            Value::D { deleted } => {
+                self.deltas.insert(0, Delta::new_deleted(*deleted));
             }
-            Some(old_value) => old_value,
-        };
-        match old_value {
-            vlog::Value::Native { value: old_value } => {
-                let d = value.diff(old_value);
-                let delta = Delta::new_delta(d, self.seqno, self.deleted);
-                self.deltas.insert(0, delta);
-                self.value = Some(vlog::Value::new_native(value));
-                self.seqno = seqno;
-                self.deleted = None;
+            Value::U {
+                value: vlog::Value::Native { value },
+                seqno,
+            } => {
+                let d = new_entry.to_native_value().unwrap().diff(value);
+                let delta = vlog::Delta::new_native(d);
+                self.deltas.insert(0, Delta::new_upsert(delta, *seqno));
             }
-            vlog::Value::Backup { .. } => {
+            Value::U {
+                value: vlog::Value::Backup { .. },
+                ..
+            } => {
                 // TODO: Figure out a way to use {file, fpos, length} to
                 // get the entry details from disk. Note that disk index
                 // can have different formats based on configuration.
                 // Take that into account.
                 panic!("TBD")
             }
-            vlog::Value::Reference { .. } => panic!("impossible situation"),
+            Value::U {
+                value: vlog::Value::Reference { .. },
+                ..
+            } => panic!("impossible situation"),
         }
+        self.prepend_version_nolsm(new_entry)
     }
 
-    fn prepend_version_nolsm(&mut self, value: V, seqno: u64) {
-        self.value = Some(vlog::Value::new_native(value));
-        self.seqno = seqno;
-        self.deleted = None;
-    }
-
-    // if entry is already deleted, this call becomes a no-op.
+    // only lsm, if entry is already deleted this call becomes a no-op.
     pub(crate) fn delete(&mut self, seqno: u64) {
-        if self.deleted.is_none() {
-            self.deleted = Some(seqno)
+        match &self.value {
+            Value::D { .. } => (),
+            Value::U {
+                value: vlog::Value::Native { value },
+                seqno,
+            } => {
+                let d: <V as Diff>::D = From::from(value.clone());
+                let delta = vlog::Delta::new_native(d);
+                self.deltas.insert(0, Delta::new_upsert(delta, *seqno));
+            }
+            Value::U {
+                value: vlog::Value::Backup { .. },
+                ..
+            } => {
+                // TODO: Figure out a way to use {file, fpos, length} to
+                // get the entry details from disk. Note that disk index
+                // can have different formats based on configuration.
+                // Take that into account.
+                panic!("TBD");
+            }
+            Value::U {
+                value: vlog::Value::Reference { .. },
+                ..
+            } => {
+                panic!("impossible situation");
+            }
         }
+        self.value = Value::D { deleted: seqno };
     }
 
+    #[allow(dead_code)] // TODO: remove this once bogn is weaved-up.
     pub(crate) fn purge(&mut self, before: u64) -> bool {
-        if self.seqno < before {
+        if self.to_seqno() < before {
             // purge everything
             true
         } else {
             for i in 0..self.deltas.len() {
-                if self.deltas[i].seqno < before {
+                if self.deltas[i].to_seqno() < before {
                     self.deltas.truncate(i); // purge everything from i..len
                     break;
                 }
@@ -249,62 +307,52 @@ where
     V: Clone + Diff,
 {
     #[inline]
-    pub(crate) fn vlog_value_ref(&self) -> &vlog::Value<V> {
-        self.value.as_ref().unwrap() // TODO: is this ok ? panic ?
-    }
-
-    #[inline]
-    pub(crate) fn deltas_ref(&self) -> &[Delta<V>] {
+    #[allow(dead_code)] // TODO: remove this once bogn is weaved-up.
+    pub(crate) fn as_deltas(&self) -> &[Delta<V>] {
         &self.deltas
     }
 
     /// Return ownership of key.
     #[inline]
-    pub fn key(self) -> K {
-        self.key
+    pub fn to_key(&self) -> K {
+        self.key.clone()
     }
 
     /// Return a reference to key.
     #[inline]
-    pub fn key_ref(&self) -> &K {
+    pub fn as_key(&self) -> &K {
         &self.key
     }
 
     /// Return value.
-    pub fn value(&self) -> V {
-        use vlog::Value::{Backup, Reference};
-
-        match &self.value {
-            Some(vlog::Value::Native { value }) => value.clone(),
-            Some(Reference { .. }) | Some(Backup { .. }) | None => {
-                panic!("impossible situation, call the programmer")
-            }
-        }
+    pub fn to_native_value(&self) -> Option<V> {
+        self.value.to_native_value()
     }
 
     /// Return the latest seqno that created/updated/deleted this entry.
     #[inline]
-    pub fn seqno(&self) -> u64 {
-        self.deleted.unwrap_or(self.seqno)
+    pub fn to_seqno(&self) -> u64 {
+        match &self.value {
+            Value::U { seqno, .. } => *seqno,
+            Value::D { deleted, .. } => *deleted,
+        }
     }
 
-    /// Return the seqno that created or updated the latest value for this
-    /// entry.
+    /// Return the seqno and the state of modification. `true` means
+    /// latest value was a create/update, and `false` means latest value
+    /// was deleted.
     #[inline]
-    pub fn born_seqno(&self) -> u64 {
-        self.seqno
+    pub fn to_seqno_state(&self) -> (bool, u64) {
+        match &self.value {
+            Value::U { seqno, .. } => (true, *seqno),
+            Value::D { deleted, .. } => (false, *deleted),
+        }
     }
 
-    /// Return the seqno that deleted the latest value for this entry.
-    #[inline]
-    pub fn dead_seqno(&self) -> Option<u64> {
-        self.deleted
-    }
-
-    /// Return whether the entry is deleted.
-    #[inline]
+    /// Return whether this entry is in deleted state, applicable onle
+    /// in lsm mode.
     pub fn is_deleted(&self) -> bool {
-        self.deleted.is_some()
+        self.value.is_deleted()
     }
 
     /// Return the previous versions of this entry as Deltas.
@@ -314,63 +362,73 @@ where
     }
 
     /// Return an iterator of previous versions.
-    pub fn versions(&self) -> VersionIter<V> {
-        let value = match &self.value {
-            Some(value) => match value {
-                vlog::Value::Native { value } => Some(value.clone()),
-                vlog::Value::Reference { .. } => panic!("TODO: TBD"),
-                vlog::Value::Backup { .. } => panic!("TODO: TBD"),
-            },
-            None => None,
-        };
+    pub fn versions(&self) -> VersionIter<K, V> {
+        let entry = Some(self.clone());
+        let curval = self.to_native_value();
         VersionIter {
-            deltas: self.deltas(),
-            value,
-            offset: None,
+            key: self.key.clone(),
+            entry,
+            curval,
+            deltas: self.deltas().into_iter(),
         }
     }
 }
 
-pub struct VersionIter<V>
+pub struct VersionIter<K, V>
 where
+    K: Clone + Ord,
     V: Clone + Diff,
 {
-    deltas: Vec<Delta<V>>,
-    value: Option<V>,
-    offset: Option<usize>,
+    key: K,
+    entry: Option<Entry<K, V>>,
+    curval: Option<V>,
+    deltas: std::vec::IntoIter<Delta<V>>,
 }
 
-impl<V> Iterator for VersionIter<V>
+impl<K, V> Iterator for VersionIter<K, V>
 where
-    V: Clone + Diff,
+    K: Clone + Ord,
+    V: Clone + Diff + From<<V as Diff>::D>,
 {
-    type Item = V;
+    type Item = Entry<K, V>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let curr_value = match &self.value {
-            None => return None,
-            Some(value) => value,
-        };
-
-        let (value, item) = match self.offset {
-            None => {
-                self.offset = Some(0);
-                (Some(curr_value.clone()), Some(curr_value.clone()))
+        match self.entry.take() {
+            Some(entry) => {
+                self.curval = entry.to_native_value();
+                Some(entry)
             }
-            Some(n) if n < self.deltas.len() => match &self.deltas[n].delta {
-                vlog::Delta::Native { delta } => {
-                    let nvalue = curr_value.merge(&delta);
-                    self.offset = Some(n + 1);
-                    (Some(nvalue.clone()), Some(nvalue))
+            None => match (self.deltas.next(), self.curval.take()) {
+                (None, _) => None,
+                (Some(Delta::D { deleted }), _) => {
+                    // this entry is deleted.
+                    let key = self.key.clone();
+                    Some(Entry::new(key, Value::new_deleted(deleted)))
                 }
-                vlog::Delta::Reference { .. } => panic!("TODO: TBD"),
-                vlog::Delta::Backup { .. } => panic!("TODO: TBD"),
+                (Some(Delta::U { delta, seqno }), None) => {
+                    // previous entry was a delete.
+                    let nv: V = From::from(delta.into_native().unwrap());
+                    let key = self.key.clone();
+                    self.curval = Some(nv.clone());
+                    Some(Entry::new(
+                        key,
+                        Value::new_upsert(vlog::Value::new_native(nv), seqno),
+                    ))
+                }
+                (Some(Delta::U { delta, seqno }), Some(curval)) => {
+                    // this and previous entry are create/update.
+                    let nv = curval.merge(&delta.into_native().unwrap());
+                    self.curval = Some(nv.clone());
+                    let key = self.key.clone();
+                    Some(Entry::new(
+                        key,
+                        Value::new_upsert(vlog::Value::new_native(nv), seqno),
+                    ))
+                }
             },
-            _ => (None, None),
-        };
-        self.value = value;
-        item
+        }
     }
 }
 
+// TODO: remove this
 pub type Result<T> = std::result::Result<T, Error>;

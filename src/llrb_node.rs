@@ -1,6 +1,6 @@
 use std::ops::Deref;
 
-use crate::core::{Diff, Entry};
+use crate::core::{Diff, Entry, Value};
 #[allow(unused_imports)]
 use crate::{Llrb, Mvcc};
 
@@ -25,14 +25,9 @@ where
     V: Clone + Diff,
 {
     // CREATE operation
-    pub(crate) fn new(
-        k: K,
-        v: Option<V>, // in case of delete None
-        seqno: u64,
-        black: bool,
-    ) -> Box<Node<K, V>> {
+    pub(crate) fn new(key: K, deleted: u64, black: bool) -> Box<Node<K, V>> {
         let node = Box::new(Node {
-            entry: Entry::new_entry(k, v, seqno),
+            entry: Entry::new(key, Value::new_deleted(deleted)),
             black,
             dirty: true,
             left: None,
@@ -89,8 +84,8 @@ where
     V: Clone + Diff,
 {
     // prepend operation, equivalent to SET / INSERT / UPDATE
-    pub(crate) fn prepend_version(&mut self, value: V, seqno: u64, lsm: bool) {
-        self.entry.prepend_version(value, seqno, lsm)
+    pub(crate) fn prepend_version(&mut self, entry: Entry<K, V>, lsm: bool) {
+        self.entry.prepend_version(entry, lsm)
     }
 
     // DELETE operation, back to back delete shall collapse
@@ -136,12 +131,12 @@ where
         self.black
     }
 
-    pub(crate) fn key_ref(&self) -> &K {
-        &self.entry.key_ref()
+    pub(crate) fn as_key(&self) -> &K {
+        self.entry.as_key()
     }
 
     pub(crate) fn seqno(&self) -> u64 {
-        self.entry.seqno()
+        self.entry.to_seqno()
     }
 
     pub(crate) fn is_deleted(&self) -> bool {

@@ -53,23 +53,23 @@ where
         Delta::U { delta, seqno }
     }
 
-    pub(crate) fn new_deleted(deleted: u64) -> Delta<V> {
+    pub(crate) fn new_delete(deleted: u64) -> Delta<V> {
         Delta::D { deleted }
     }
 
     #[allow(dead_code)] // TODO: remove this once bogn is weaved-up.
-    pub(crate) fn to_deleted(self) -> u64 {
+    pub(crate) fn into_upserted(self) -> Option<(vlog::Delta<V>, u64)> {
         match self {
-            Delta::D { deleted } => deleted,
-            Delta::U { .. } => unreachable!(),
+            Delta::U { delta, seqno } => Some((delta, seqno)),
+            Delta::D { .. } => None,
         }
     }
 
     #[allow(dead_code)] // TODO: remove this once bogn is weaved-up.
-    pub(crate) fn to_upserted(self) -> (vlog::Delta<V>, u64) {
+    pub(crate) fn into_deleted(self) -> Option<u64> {
         match self {
-            Delta::U { delta, seqno } => (delta, seqno),
-            Delta::D { .. } => unreachable!(),
+            Delta::D { deleted } => Some(deleted),
+            Delta::U { .. } => None,
         }
     }
 }
@@ -79,14 +79,6 @@ impl<V> Delta<V>
 where
     V: Clone + Diff,
 {
-    #[allow(dead_code)] // TODO: remove this once bogn is weaved-up.
-    pub(crate) fn as_delta(&self) -> Option<&vlog::Delta<V>> {
-        match self {
-            Delta::D { .. } => None,
-            Delta::U { delta, .. } => Some(delta),
-        }
-    }
-
     /// Return the underlying `difference` value for this delta.
     pub fn into_diff(self) -> Option<<V as Diff>::D> {
         match self {
@@ -134,11 +126,11 @@ where
         Value::U { value, seqno }
     }
 
-    pub(crate) fn new_deleted(deleted: u64) -> Value<V> {
+    pub(crate) fn new_delete(deleted: u64) -> Value<V> {
         Value::D { deleted }
     }
 
-    fn to_native_value(&self) -> Option<V> {
+    pub(crate) fn to_native_value(&self) -> Option<V> {
         match &self {
             Value::D { .. } => None,
             Value::U {
@@ -156,7 +148,7 @@ where
         }
     }
 
-    fn is_deleted(&self) -> bool {
+    pub(crate) fn is_deleted(&self) -> bool {
         match self {
             Value::U { .. } => false,
             Value::D { .. } => true,
@@ -223,7 +215,7 @@ where
     fn prepend_version_lsm(&mut self, new_entry: Self) {
         match &self.value {
             Value::D { deleted } => {
-                self.deltas.insert(0, Delta::new_deleted(*deleted));
+                self.deltas.insert(0, Delta::new_delete(*deleted));
             }
             Value::U {
                 value: vlog::Value::Native { value },
@@ -403,7 +395,7 @@ where
                 (Some(Delta::D { deleted }), _) => {
                     // this entry is deleted.
                     let key = self.key.clone();
-                    Some(Entry::new(key, Value::new_deleted(deleted)))
+                    Some(Entry::new(key, Value::new_delete(deleted)))
                 }
                 (Some(Delta::U { delta, seqno }), None) => {
                     // previous entry was a delete.

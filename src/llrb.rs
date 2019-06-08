@@ -372,7 +372,7 @@ where
         match node {
             None => {
                 // insert and mark as delete
-                let ne = Entry::new(key.to_owned(), Value::new_deleted(seqno));
+                let ne = Entry::new(key.to_owned(), Value::new_delete(seqno));
                 let mut node: Box<Node<K, V>> = Box::new(From::from(ne));
                 node.dirty = false;
                 node.delete(seqno);

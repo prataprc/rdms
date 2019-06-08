@@ -1,43 +1,47 @@
-use crate::core::{Delta, Diff, Entry};
+use crate::core::{Delta, Value};
 use crate::vlog;
 
 #[test]
-fn test_delta_new1() {
-    let dlt = vlog::Delta::Native { delta: 10.diff(20) };
-    let delta = Delta::new(dlt, 100, None);
-    match delta.vlog_delta_vref() {
-        vlog::Delta::Native{ dlt } => assert_eq!(dlt, 20),
-        _ => unreachable!(),
-    }
-    assert_eq!(delta.into_diff(), 20);
-    assert_eq!(delta.seqno(), 100);
-    assert_eq!(delta.born_seqno(), 100);
-    assert_eq!(delta.dead_seqno(), None);
-    assert_eq!(delta.is_deleted(), false);
+fn test_delta_new_upsert() {
+    let delta: Delta<i32> = Delta::new_upsert(vlog::Delta::new_native(100), 200);
+    assert_eq!(delta.clone().into_diff(), Some(100));
+    assert_eq!(delta.to_seqno(), 200);
+    assert_eq!(delta.to_seqno_state(), (true, 200));
 
-    let delta = Delta::new(dlt, 100, Some(200));
-    assert_eq!(delta.seqno(), 200);
-    assert_eq!(delta.dead_seqno(), 200);
-    assert_eq!(delta.is_deleted(), true);
+    match delta.clone().into_upserted() {
+        Some((d, seqno)) => {
+            assert_eq!(d.into_native(), Some(100));
+            assert_eq!(seqno, 200);
+        }
+        None => assert!(false),
+    }
+    assert_eq!(delta.into_deleted(), None);
 }
 
 #[test]
-fn test_delta_new2() {
-    let delta = Delta::new_delta(10.diff(20) }, 100, None);
-    match delta.vlog_delta_vref() {
-        vlog::Delta::Native{ dlt } => assert_eq!(dlt, 20),
-        _ => unreachable!(),
+fn test_delta_new_delete() {
+    let delta: Delta<i32> = Delta::new_delete(300);
+    assert_eq!(delta.clone().into_diff(), None);
+    assert_eq!(delta.to_seqno(), 300);
+    assert_eq!(delta.to_seqno_state(), (false, 300));
+
+    match delta.clone().into_upserted() {
+        Some(_) => assert!(false),
+        _ => (),
     }
-    assert_eq!(delta.into_diff(), 20);
-    assert_eq!(delta.seqno(), 100);
-    assert_eq!(delta.born_seqno(), 100);
-    assert_eq!(delta.dead_seqno(), None);
-    assert_eq!(delta.is_deleted(), false);
+    assert_eq!(delta.into_deleted(), Some(300));
+}
 
-    let delta = Delta::new_delta(10.diff(20) }, 100, Some(200));
-    assert_eq!(delta.seqno(), 200);
-    assert_eq!(delta.dead_seqno(), 200);
-    assert_eq!(delta.is_deleted(), true);
+#[test]
+fn test_value_new_upsert() {
+    let value: Value<i32> = Value::new_upsert(vlog::Value::new_native(100), 200);
+    assert_eq!(value.to_native_value(), Some(100));
+    assert_eq!(value.is_deleted(), false);
+}
 
-    let delta = Delta::new_delta(10.diff(20) }, 20, None);
+#[test]
+fn test_value_new_delete() {
+    let value: Value<i32> = Value::new_delete(300);
+    assert_eq!(value.to_native_value(), None);
+    assert_eq!(value.is_deleted(), true);
 }

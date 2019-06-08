@@ -237,36 +237,28 @@ fn check_node(entry: Option<Entry<i64, i64>>, refn: Option<RefNode>) -> bool {
     assert_eq!(entry.as_key().clone(), refn.key, "key");
 
     let ver = &refn.versions[0];
-    assert_eq!(entry.value(), ver.value, "key {}", refn.key);
-    assert_eq!(entry.seqno(), ver.seqno, "key {}", refn.key);
+    assert_eq!(entry.to_native_value(), Some(ver.value), "key {}", refn.key);
+    assert_eq!(entry.to_seqno(), ver.seqno, "key {}", refn.key);
     assert_eq!(
         entry.is_deleted(),
         ver.deleted.is_some(),
         "key {}",
         refn.key
     );
-    assert_eq!(entry.seqno(), refn.get_seqno(), "key {}", refn.key);
+    assert_eq!(entry.to_seqno(), refn.get_seqno(), "key {}", refn.key);
     assert_eq!(entry.is_deleted(), refn.is_deleted(), "key {}", refn.key);
 
     let (n_vers, refn_vers) = (entry.deltas().len() + 1, refn.versions.len());
     assert_eq!(n_vers, refn_vers, "key {}", refn.key);
 
     //println!("versions {} {}", n_vers, refn_vers);
-    let deltas = entry.deltas();
-    for (i, value) in entry.versions().enumerate() {
+    for (i, core_ver) in entry.versions().enumerate() {
         let ver = &refn.versions[i];
-        assert_eq!(value, ver.value, "key {} i {}", refn.key, i);
-        if i > 0 {
-            let dlt = &deltas[i - 1];
-            assert_eq!(dlt.seqno(), ver.seqno, "key {} i {}", refn.key, i);
-            assert_eq!(
-                dlt.is_deleted(),
-                ver.deleted.is_some(),
-                "key {} i {}",
-                refn.key,
-                i
-            );
-        }
+        let value = core_ver.to_native_value();
+        assert_eq!(value, Some(ver.value), "key {} i {}", refn.key, i);
+        assert_eq!(core_ver.to_seqno(), ver.seqno, "key {} i {}", refn.key, i);
+        let (del1, del2) = (core_ver.is_deleted(), ver.deleted.is_some());
+        assert_eq!(del1, del2, "key {} i {}", refn.key, i);
     }
 
     return true;

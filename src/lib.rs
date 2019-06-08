@@ -57,6 +57,8 @@ pub use crate::mvcc::Mvcc;
 pub use crate::type_empty::Empty; // TODO: proper nomenclature.
 
 #[cfg(test)]
+mod core_test;
+#[cfg(test)]
 mod llrb_test;
 #[cfg(test)]
 mod mvcc_test;

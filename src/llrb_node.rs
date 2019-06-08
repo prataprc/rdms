@@ -27,7 +27,7 @@ where
     // CREATE operation
     pub(crate) fn new(key: K, deleted: u64, black: bool) -> Box<Node<K, V>> {
         let node = Box::new(Node {
-            entry: Entry::new(key, Value::new_deleted(deleted)),
+            entry: Entry::new(key, Value::new_delete(deleted)),
             black,
             dirty: true,
             left: None,

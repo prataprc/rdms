@@ -395,9 +395,9 @@ where
             let (rh, n, entry, e) = s;
             new_node.right = rh;
             (Some(Mvcc::walkuprot_23(new_node, reclaim)), n, entry, e)
-        } else if new_node.is_deleted() && cas != 0 && cas != new_node.seqno() {
+        } else if new_node.is_deleted() && cas != 0 && cas != new_node.to_seqno() {
             (Some(new_node), None, None, Some(Error::InvalidCAS))
-        } else if !new_node.is_deleted() && cas != new_node.seqno() {
+        } else if !new_node.is_deleted() && cas != new_node.to_seqno() {
             (Some(new_node), None, None, Some(Error::InvalidCAS))
         } else {
             let entry = Some(node.entry.clone());
@@ -431,7 +431,7 @@ where
         Q: ToOwned<Owned = K> + Ord + ?Sized,
     {
         if node.is_none() {
-            let mut node = Node::new_deleted(key.to_owned(), seqno, false);
+            let mut node = Node::new_deleted(key.to_owned(), seqno);
             node.dirty = false;
             let n = node.duplicate();
             return (Some(node), Some(n), None);
@@ -486,59 +486,59 @@ where
         }
 
         let node = node.unwrap();
-        let mut new_node = node.mvcc_clone(reclaim);
+        let mut newnd = node.mvcc_clone(reclaim);
         Box::leak(node);
 
-        if new_node.as_key().borrow().gt(key) {
-            if new_node.left.is_none() {
+        if newnd.as_key().borrow().gt(key) {
+            if newnd.left.is_none() {
                 // key not present, nothing to delete
-                (Some(new_node), None)
+                (Some(newnd), None)
             } else {
-                let ok = !is_red(new_node.left_deref());
-                if ok && !is_red(new_node.left.as_ref().unwrap().left_deref()) {
-                    new_node = Mvcc::move_red_left(new_node, reclaim);
+                let ok = !is_red(newnd.as_left_deref());
+                if ok && !is_red(newnd.left.as_ref().unwrap().as_left_deref()) {
+                    newnd = Mvcc::move_red_left(newnd, reclaim);
                 }
-                let left = new_node.left.take();
+                let left = newnd.left.take();
                 let (left, entry) = Mvcc::do_delete(left, key, reclaim);
-                new_node.left = left;
-                (Some(Mvcc::fixup(new_node, reclaim)), entry)
+                newnd.left = left;
+                (Some(Mvcc::fixup(newnd, reclaim)), entry)
             }
         } else {
-            if is_red(new_node.left_deref()) {
-                new_node = Mvcc::rotate_right(new_node, reclaim);
+            if is_red(newnd.as_left_deref()) {
+                newnd = Mvcc::rotate_right(newnd, reclaim);
             }
 
             // if key equals node and no right children
-            if !new_node.as_key().borrow().lt(key) && new_node.right.is_none() {
-                new_node.mvcc_detach();
-                return (None, Some(new_node.entry.clone()));
+            if !newnd.as_key().borrow().lt(key) && newnd.right.is_none() {
+                newnd.mvcc_detach();
+                return (None, Some(newnd.entry.clone()));
             }
 
-            let ok = new_node.right.is_some() && !is_red(new_node.right_deref());
-            if ok && !is_red(new_node.right.as_ref().unwrap().left_deref()) {
-                new_node = Mvcc::move_red_right(new_node, reclaim);
+            let ok = newnd.right.is_some() && !is_red(newnd.as_right_deref());
+            if ok && !is_red(newnd.right.as_ref().unwrap().as_left_deref()) {
+                newnd = Mvcc::move_red_right(newnd, reclaim);
             }
 
             // if key equal node and there is a right children
-            if !new_node.as_key().borrow().lt(key) {
+            if !newnd.as_key().borrow().lt(key) {
                 // node == key
-                let right = new_node.right.take();
+                let right = newnd.right.take();
                 let (right, mut res_node) = Mvcc::delete_min(right, reclaim);
-                new_node.right = right;
+                newnd.right = right;
                 if res_node.is_none() {
                     panic!("do_delete(): fatal logic, call the programmer");
                 }
                 let mut newnode = res_node.take().unwrap();
-                newnode.left = new_node.left.take();
-                newnode.right = new_node.right.take();
-                newnode.black = new_node.black;
-                let entry = new_node.entry.clone();
+                newnode.left = newnd.left.take();
+                newnode.right = newnd.right.take();
+                newnode.black = newnd.black;
+                let entry = newnd.entry.clone();
                 (Some(Mvcc::fixup(newnode, reclaim)), Some(entry))
             } else {
-                let right = new_node.right.take();
+                let right = newnd.right.take();
                 let (right, entry) = Mvcc::do_delete(right, key, reclaim);
-                new_node.right = right;
-                (Some(Mvcc::fixup(new_node, reclaim)), entry)
+                newnd.right = right;
+                (Some(Mvcc::fixup(newnd, reclaim)), entry)
             }
         }
     }
@@ -560,8 +560,8 @@ where
             new_node.mvcc_detach();
             (None, Some(new_node))
         } else {
-            let left = new_node.left_deref();
-            if !is_red(left) && !is_red(left.unwrap().left_deref()) {
+            let left = new_node.as_left_deref();
+            if !is_red(left) && !is_red(left.unwrap().as_left_deref()) {
                 new_node = Mvcc::move_red_left(new_node, reclaim);
             }
             let left = new_node.left.take();
@@ -696,14 +696,14 @@ where
         mut node: Box<Node<K, V>>,
         reclaim: &mut Vec<Box<Node<K, V>>>, /* reclaim */
     ) -> Box<Node<K, V>> {
-        if is_red(node.right_deref()) && !is_red(node.left_deref()) {
+        if is_red(node.as_right_deref()) && !is_red(node.as_left_deref()) {
             node = Mvcc::rotate_left(node, reclaim);
         }
-        let left = node.left_deref();
-        if is_red(left) && is_red(left.unwrap().left_deref()) {
+        let left = node.as_left_deref();
+        if is_red(left) && is_red(left.unwrap().as_left_deref()) {
             node = Mvcc::rotate_right(node, reclaim);
         }
-        if is_red(node.left_deref()) && is_red(node.right_deref()) {
+        if is_red(node.as_left_deref()) && is_red(node.as_right_deref()) {
             Mvcc::flip(node.deref_mut(), reclaim)
         }
         node
@@ -810,14 +810,14 @@ where
         mut node: Box<Node<K, V>>,
         reclaim: &mut Vec<Box<Node<K, V>>>, /* reclaim */
     ) -> Box<Node<K, V>> {
-        if is_red(node.right_deref()) {
+        if is_red(node.as_right_deref()) {
             node = Mvcc::rotate_left(node, reclaim)
         }
-        let left = node.left_deref();
-        if is_red(left) && is_red(left.unwrap().left_deref()) {
+        let left = node.as_left_deref();
+        if is_red(left) && is_red(left.unwrap().as_left_deref()) {
             node = Mvcc::rotate_right(node, reclaim)
         }
-        if is_red(node.left_deref()) && is_red(node.right_deref()) {
+        if is_red(node.as_left_deref()) && is_red(node.as_right_deref()) {
             Mvcc::flip(node.deref_mut(), reclaim);
         }
         node
@@ -828,7 +828,7 @@ where
         reclaim: &mut Vec<Box<Node<K, V>>>, /* reclaim */
     ) -> Box<Node<K, V>> {
         Mvcc::flip(node.deref_mut(), reclaim);
-        if is_red(node.right.as_ref().unwrap().left_deref()) {
+        if is_red(node.right.as_ref().unwrap().as_left_deref()) {
             let right = node.right.take().unwrap();
             node.right = Some(Mvcc::rotate_right(right, reclaim));
             node = Mvcc::rotate_left(node, reclaim);
@@ -842,7 +842,7 @@ where
         reclaim: &mut Vec<Box<Node<K, V>>>, /* reclaim */
     ) -> Box<Node<K, V>> {
         Mvcc::flip(node.deref_mut(), reclaim);
-        if is_red(node.left.as_ref().unwrap().left_deref()) {
+        if is_red(node.left.as_ref().unwrap().as_left_deref()) {
             node = Mvcc::rotate_right(node, reclaim);
             Mvcc::flip(node.deref_mut(), reclaim);
         }

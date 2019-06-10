@@ -24,15 +24,11 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    // CREATE operation
-    pub(crate) fn new_deleted(
-        key: K,
-        deleted: u64, // this node is marked deleted in lsm
-        black: bool,
-    ) -> Box<Node<K, V>> {
+    // lsm delete.
+    pub(crate) fn new_deleted(key: K, deleted: u64) -> Box<Node<K, V>> {
         let node = Box::new(Node {
             entry: Entry::new(key, Value::new_delete(deleted)),
-            black,
+            black: false,
             dirty: true,
             left: None,
             right: None,
@@ -121,12 +117,12 @@ where
     V: Clone + Diff,
 {
     #[inline]
-    pub(crate) fn left_deref(&self) -> Option<&Node<K, V>> {
+    pub(crate) fn as_left_deref(&self) -> Option<&Node<K, V>> {
         self.left.as_ref().map(Deref::deref)
     }
 
     #[inline]
-    pub(crate) fn right_deref(&self) -> Option<&Node<K, V>> {
+    pub(crate) fn as_right_deref(&self) -> Option<&Node<K, V>> {
         self.right.as_ref().map(Deref::deref)
     }
 
@@ -139,7 +135,7 @@ where
         self.entry.as_key()
     }
 
-    pub(crate) fn seqno(&self) -> u64 {
+    pub(crate) fn to_seqno(&self) -> u64 {
         self.entry.to_seqno()
     }
 

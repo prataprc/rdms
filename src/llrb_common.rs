@@ -25,8 +25,8 @@ where
 {
     while let Some(nref) = node {
         node = match nref.as_key().borrow().cmp(key) {
-            Ordering::Less => nref.right_deref(),
-            Ordering::Greater => nref.left_deref(),
+            Ordering::Less => nref.as_right_deref(),
+            Ordering::Greater => nref.as_left_deref(),
             Ordering::Equal => return Some(nref.entry.clone()),
         };
     }
@@ -52,7 +52,7 @@ where
             if !red {
                 nb += 1;
             }
-            let (left, right) = (node.left_deref(), node.right_deref());
+            let (left, right) = (node.as_left_deref(), node.as_right_deref());
             let l = validate_tree(left, red, nb, depth + 1, depths)?;
             let r = validate_tree(right, red, nb, depth + 1, depths)?;
             if l != r {
@@ -129,7 +129,7 @@ where
                 (IFlag::Center, nref) => {
                     path.flag = IFlag::Right;
                     paths.push(path);
-                    let rnref = nref.right_deref();
+                    let rnref = nref.as_right_deref();
                     self.paths = Some(build_iter(IFlag::Left, rnref, paths));
                     self.next()
                 }
@@ -183,7 +183,7 @@ where
                 (IFlag::Center, nref) => {
                     path.flag = IFlag::Right;
                     paths.push(path);
-                    let rnref = nref.right_deref();
+                    let rnref = nref.as_right_deref();
                     self.paths = Some(build_iter(IFlag::Left, rnref, paths));
                     self.next()
                 }
@@ -252,7 +252,7 @@ where
                 (IFlag::Center, nref) => {
                     path.flag = IFlag::Left;
                     paths.push(path);
-                    let rnref = nref.left_deref();
+                    let rnref = nref.as_left_deref();
                     self.paths = Some(build_iter(IFlag::Right, rnref, paths));
                     self.next()
                 }
@@ -310,8 +310,8 @@ where
         Some(nref) => {
             let item = Fragment { flag, nref };
             let nref = match flag {
-                IFlag::Left => nref.left_deref(),
-                IFlag::Right => nref.right_deref(),
+                IFlag::Left => nref.as_left_deref(),
+                IFlag::Right => nref.as_right_deref(),
                 IFlag::Center => unreachable!(),
             };
             paths.push(item);
@@ -344,12 +344,12 @@ where
             paths.push(Fragment { flag, nref });
             match cmp {
                 Ordering::Less => {
-                    let nref = nref.right_deref();
+                    let nref = nref.as_right_deref();
                     find_start(nref, low, incl, paths)
                 }
                 Ordering::Equal => paths,
                 Ordering::Greater => {
-                    let nref = nref.left_deref();
+                    let nref = nref.as_left_deref();
                     find_start(nref, low, incl, paths)
                 }
             }
@@ -381,12 +381,12 @@ where
             paths.push(Fragment { flag, nref });
             match cmp {
                 Ordering::Less => {
-                    let nref = nref.right_deref();
+                    let nref = nref.as_right_deref();
                     find_end(nref, high, incl, paths)
                 }
                 Ordering::Equal => paths,
                 Ordering::Greater => {
-                    let nref = nref.left_deref();
+                    let nref = nref.as_left_deref();
                     find_end(nref, high, incl, paths)
                 }
             }

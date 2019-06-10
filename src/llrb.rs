@@ -320,44 +320,46 @@ where
         cas: u64,
         lsm: bool,
     ) -> (Option<Box<Node<K, V>>>, Option<Entry<K, V>>, Option<Error>) {
-        match node {
-            None if cas > 0 => (None, None, Some(Error::InvalidCAS)),
+        let mut node = match node {
+            None if cas > 0 => {
+                return (None, None, Some(Error::InvalidCAS));
+            }
             None => {
                 let mut node: Box<Node<K, V>> = Box::new(From::from(nentry));
                 node.dirty = false;
-                (Some(node), None, None)
+                return (Some(node), None, None);
             }
-            Some(mut node) => {
-                node = Llrb::walkdown_rot23(node);
-                let (entry, err) = match node.as_key().cmp(nentry.as_key()) {
-                    Ordering::Greater => {
-                        let left = node.left.take();
-                        let (l, en, e) = Llrb::upsert_cas(left, nentry, cas, lsm);
-                        node.left = l;
-                        (en, e)
-                    }
-                    Ordering::Less => {
-                        let rt = node.right.take();
-                        let (r, en, e) = Llrb::upsert_cas(rt, nentry, cas, lsm);
-                        node.right = r;
-                        (en, e)
-                    }
-                    Ordering::Equal => {
-                        if node.is_deleted() && cas != 0 && cas != node.seqno() {
-                            (None, Some(Error::InvalidCAS))
-                        } else if !node.is_deleted() && cas != node.seqno() {
-                            (None, Some(Error::InvalidCAS))
-                        } else {
-                            let entry = node.entry.clone();
-                            node.prepend_version(nentry, lsm);
-                            (Some(entry), None)
-                        }
-                    }
-                };
-                node = Llrb::walkuprot_23(node);
-                return (Some(node), entry, err);
+            Some(node) => node,
+        };
+
+        node = Llrb::walkdown_rot23(node);
+        let (entry, err) = match node.as_key().cmp(nentry.as_key()) {
+            Ordering::Greater => {
+                let left = node.left.take();
+                let (l, en, e) = Llrb::upsert_cas(left, nentry, cas, lsm);
+                node.left = l;
+                (en, e)
             }
-        }
+            Ordering::Less => {
+                let rt = node.right.take();
+                let (r, en, e) = Llrb::upsert_cas(rt, nentry, cas, lsm);
+                node.right = r;
+                (en, e)
+            }
+            Ordering::Equal => {
+                if node.is_deleted() && cas != 0 && cas != node.to_seqno() {
+                    (None, Some(Error::InvalidCAS))
+                } else if !node.is_deleted() && cas != node.to_seqno() {
+                    (None, Some(Error::InvalidCAS))
+                } else {
+                    let entry = node.entry.clone();
+                    node.prepend_version(nentry, lsm);
+                    (Some(entry), None)
+                }
+            }
+        };
+        node = Llrb::walkuprot_23(node);
+        return (Some(node), entry, err);
     }
 
     fn delete_lsm<Q>(
@@ -372,7 +374,7 @@ where
         match node {
             None => {
                 // insert and mark as delete
-                let mut node = Node::new_deleted(key.to_owned(), seqno, false);
+                let mut node = Node::new_deleted(key.to_owned(), seqno);
                 node.dirty = false;
                 (Some(node), None)
             }
@@ -421,8 +423,8 @@ where
             if node.left.is_none() {
                 (Some(node), None)
             } else {
-                let ok = !is_red(node.left_deref());
-                if ok && !is_red(node.left.as_ref().unwrap().left_deref()) {
+                let ok = !is_red(node.as_left_deref());
+                if ok && !is_red(node.left.as_ref().unwrap().as_left_deref()) {
                     node = Llrb::move_red_left(node);
                 }
                 let (left, entry) = Llrb::do_delete(node.left.take(), key);
@@ -430,7 +432,7 @@ where
                 (Some(Llrb::fixup(node)), entry)
             }
         } else {
-            if is_red(node.left_deref()) {
+            if is_red(node.as_left_deref()) {
                 node = Llrb::rotate_right(node);
             }
 
@@ -438,8 +440,8 @@ where
                 return (None, Some(node.entry.clone()));
             }
 
-            let ok = node.right.is_some() && !is_red(node.right_deref());
-            if ok && !is_red(node.right.as_ref().unwrap().left_deref()) {
+            let ok = node.right.is_some() && !is_red(node.as_right_deref());
+            if ok && !is_red(node.right.as_ref().unwrap().as_left_deref()) {
                 node = Llrb::move_red_right(node);
             }
 
@@ -473,8 +475,8 @@ where
             None => (None, None),
             Some(node) if node.left.is_none() => (None, Some(*node)),
             Some(mut node) => {
-                let left = node.left_deref();
-                if !is_red(left) && !is_red(left.unwrap().left_deref()) {
+                let left = node.as_left_deref();
+                if !is_red(left) && !is_red(left.unwrap().as_left_deref()) {
                     node = Llrb::move_red_left(node);
                 }
                 let (left, old_node) = Llrb::delete_min(node.left.take());
@@ -600,14 +602,14 @@ where
     }
 
     fn walkuprot_23(mut node: Box<Node<K, V>>) -> Box<Node<K, V>> {
-        if is_red(node.right_deref()) && !is_red(node.left_deref()) {
+        if is_red(node.as_right_deref()) && !is_red(node.as_left_deref()) {
             node = Llrb::rotate_left(node);
         }
-        let left = node.left_deref();
-        if is_red(left) && is_red(left.unwrap().left_deref()) {
+        let left = node.as_left_deref();
+        if is_red(left) && is_red(left.unwrap().as_left_deref()) {
             node = Llrb::rotate_right(node);
         }
-        if is_red(node.left_deref()) && is_red(node.right_deref()) {
+        if is_red(node.as_left_deref()) && is_red(node.as_right_deref()) {
             Llrb::flip(node.deref_mut())
         }
         node
@@ -624,7 +626,7 @@ where
     //                  xl   xr       left   xl
     //
     fn rotate_left(mut node: Box<Node<K, V>>) -> Box<Node<K, V>> {
-        if is_black(node.right_deref()) {
+        if is_black(node.as_right_deref()) {
             panic!("rotateleft(): rotating a black link ? call the programmer");
         }
         let mut x = node.right.take().unwrap();
@@ -646,7 +648,7 @@ where
     //       xl   xr                             xr  right
     //
     fn rotate_right(mut node: Box<Node<K, V>>) -> Box<Node<K, V>> {
-        if is_black(node.left_deref()) {
+        if is_black(node.as_left_deref()) {
             panic!("rotateright(): rotating a black link ? call the programmer")
         }
         let mut x = node.left.take().unwrap();
@@ -672,20 +674,20 @@ where
     }
 
     fn fixup(mut node: Box<Node<K, V>>) -> Box<Node<K, V>> {
-        node = if is_red(node.right_deref()) {
+        node = if is_red(node.as_right_deref()) {
             Llrb::rotate_left(node)
         } else {
             node
         };
         node = {
-            let left = node.left_deref();
-            if is_red(left) && is_red(left.unwrap().left_deref()) {
+            let left = node.as_left_deref();
+            if is_red(left) && is_red(left.unwrap().as_left_deref()) {
                 Llrb::rotate_right(node)
             } else {
                 node
             }
         };
-        if is_red(node.left_deref()) && is_red(node.right_deref()) {
+        if is_red(node.as_left_deref()) && is_red(node.as_right_deref()) {
             Llrb::flip(node.deref_mut());
         }
         node
@@ -693,7 +695,7 @@ where
 
     fn move_red_left(mut node: Box<Node<K, V>>) -> Box<Node<K, V>> {
         Llrb::flip(node.deref_mut());
-        if is_red(node.right.as_ref().unwrap().left_deref()) {
+        if is_red(node.right.as_ref().unwrap().as_left_deref()) {
             node.right = Some(Llrb::rotate_right(node.right.take().unwrap()));
             node = Llrb::rotate_left(node);
             Llrb::flip(node.deref_mut());
@@ -703,7 +705,7 @@ where
 
     fn move_red_right(mut node: Box<Node<K, V>>) -> Box<Node<K, V>> {
         Llrb::flip(node.deref_mut());
-        if is_red(node.left.as_ref().unwrap().left_deref()) {
+        if is_red(node.left.as_ref().unwrap().as_left_deref()) {
             node = Llrb::rotate_right(node);
             Llrb::flip(node.deref_mut());
         }

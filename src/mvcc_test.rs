@@ -20,9 +20,9 @@ fn test_id() {
 #[test]
 fn test_seqno() {
     let mut mvcc: Mvcc<i32, Empty> = Mvcc::new("test-mvcc");
-    assert_eq!(mvcc.get_seqno(), 0);
+    assert_eq!(mvcc.to_seqno(), 0);
     mvcc.set_seqno(1234);
-    assert_eq!(mvcc.get_seqno(), 1234);
+    assert_eq!(mvcc.to_seqno(), 1234);
 }
 
 #[test]
@@ -336,7 +336,7 @@ fn test_crud() {
                 let off: usize = key.try_into().unwrap();
                 let refn = &refns.entries[off];
                 let cas = if refn.versions.len() > 0 {
-                    refn.get_seqno()
+                    refn.to_seqno()
                 } else {
                     0
                 };
@@ -400,7 +400,7 @@ fn test_crud_lsm() {
     for _i in 0..20000 {
         let key: i64 = (random::<i64>() % size).abs();
         let value: i64 = random();
-        let op: i64 = (random::<i64>() % 2).abs();
+        let op: i64 = (random::<i64>() % 3).abs();
         //println!("op {} on {}", op, key);
         match op {
             0 => {
@@ -413,7 +413,7 @@ fn test_crud_lsm() {
                 let off: usize = key.try_into().unwrap();
                 let refn = &refns.entries[off];
                 let cas = if refn.versions.len() > 0 {
-                    refn.get_seqno()
+                    refn.to_seqno()
                 } else {
                     0
                 };

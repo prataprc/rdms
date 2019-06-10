@@ -25,7 +25,11 @@ where
     V: Clone + Diff,
 {
     // CREATE operation
-    pub(crate) fn new(key: K, deleted: u64, black: bool) -> Box<Node<K, V>> {
+    pub(crate) fn new_deleted(
+        key: K,
+        deleted: u64, // this node is marked deleted in lsm
+        black: bool,
+    ) -> Box<Node<K, V>> {
         let node = Box::new(Node {
             entry: Entry::new(key, Value::new_delete(deleted)),
             black,
@@ -227,7 +231,7 @@ impl LlrbStats {
     /// // size of key: 8 bytes
     /// // size of value: 16 bytes
     /// // overhead is 24 bytes
-    /// assert_eq!(llrb.stats().node_size(), 128);
+    /// assert_eq!(llrb.stats().node_size(), 120);
     /// ```
     pub fn node_size(&self) -> usize {
         self.node_size

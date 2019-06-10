@@ -171,7 +171,7 @@ where
 
     /// Return current seqno.
     #[inline]
-    pub fn get_seqno(&self) -> u64 {
+    pub fn to_seqno(&self) -> u64 {
         Snapshot::clone(&self.snapshot).seqno
     }
 }
@@ -260,7 +260,7 @@ where
         let _lock = self.fencer.lock();
 
         let arc_mvcc = Snapshot::clone(&self.snapshot);
-        let (seqno, mut n_count) = (arc_mvcc.seqno + 1, arc_mvcc.n_count);
+        let (mut seqno, mut n_count) = (arc_mvcc.seqno + 1, arc_mvcc.n_count);
         let root = arc_mvcc.root_duplicate();
         let mut reclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
 
@@ -274,9 +274,17 @@ where
             };
             let (root, optn, entry) = s;
 
-            if entry.is_none() {
-                n_count += 1
+            //println!("mvcc delete {:?}", entry.as_ref().map(|e| e.is_deleted()));
+            match &entry {
+                None => {
+                    n_count += 1;
+                }
+                Some(e) if e.is_deleted() => {
+                    seqno -= 1;
+                }
+                _ => (),
             }
+
             if let Some(mut n) = optn {
                 n.dirty = false;
                 Box::leak(n);
@@ -293,6 +301,8 @@ where
             };
             if entry.is_some() {
                 n_count -= 1;
+            } else {
+                seqno -= 1;
             }
             (root, entry)
         };
@@ -421,9 +431,8 @@ where
         Q: ToOwned<Owned = K> + Ord + ?Sized,
     {
         if node.is_none() {
-            let key = key.to_owned();
-            let mut node = Node::new(key, seqno, false /*black*/);
-            node.delete(seqno);
+            let mut node = Node::new_deleted(key.to_owned(), seqno, false);
+            node.dirty = false;
             let n = node.duplicate();
             return (Some(node), Some(n), None);
         }
@@ -448,10 +457,13 @@ where
                 (n, entry)
             }
             Ordering::Equal => {
-                new_node.delete(seqno);
+                let entry = node.entry.clone();
+                if !node.is_deleted() {
+                    new_node.delete(seqno);
+                }
                 new_node.dirty = true;
                 let n = new_node.duplicate();
-                (Some(n), Some(node.entry.clone()))
+                (Some(n), Some(entry))
             }
         };
 

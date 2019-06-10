@@ -2,23 +2,31 @@ use std::convert::TryInto;
 
 use crate::core::Entry;
 
-#[derive(Clone, Default, Debug)]
-struct RefValue {
-    value: i64,
-    seqno: u64,
-    deleted: Option<u64>,
+#[derive(Clone, Debug)]
+enum RefValue {
+    U { value: i64, seqno: u64 },
+    D { deleted: u64 },
 }
 
 impl RefValue {
-    fn get_seqno(&self) -> u64 {
-        match self.deleted {
-            None => self.seqno,
-            Some(seqno) => {
-                if seqno < self.seqno {
-                    panic!("{} < {}", seqno, self.seqno);
-                }
-                seqno
-            }
+    fn to_seqno(&self) -> u64 {
+        match self {
+            RefValue::U { seqno, .. } => *seqno,
+            RefValue::D { deleted } => *deleted,
+        }
+    }
+
+    fn to_value(&self) -> Option<i64> {
+        match self {
+            RefValue::U { value, .. } => Some(*value),
+            RefValue::D { .. } => None,
+        }
+    }
+
+    fn is_deleted(&self) -> bool {
+        match self {
+            RefValue::U { .. } => false,
+            RefValue::D { .. } => true,
         }
     }
 }
@@ -30,12 +38,15 @@ struct RefNode {
 }
 
 impl RefNode {
-    fn get_seqno(&self) -> u64 {
-        self.versions[0].get_seqno()
+    fn to_seqno(&self) -> u64 {
+        self.versions[0].to_seqno()
     }
 
     fn is_deleted(&self) -> bool {
-        self.versions[0].deleted.is_some()
+        match self.versions[0] {
+            RefValue::D { .. } => true,
+            RefValue::U { .. } => false,
+        }
     }
 
     fn is_present(&self) -> bool {
@@ -133,18 +144,18 @@ impl RefNodes {
     }
 
     fn set(&mut self, key: i64, value: i64) -> Option<RefNode> {
-        let refval = RefValue {
+        let refval = RefValue::U {
             value,
             seqno: self.seqno + 1,
-            deleted: None,
         };
         let off: usize = key.try_into().unwrap();
         let entry = &mut self.entries[off];
-        let refn = if entry.versions.len() > 0 {
+        let old = if entry.versions.len() > 0 {
             Some(entry.clone())
         } else {
             None
         };
+
         entry.key = key;
         if self.lsm || entry.versions.len() == 0 {
             entry.versions.insert(0, refval);
@@ -152,19 +163,18 @@ impl RefNodes {
             entry.versions[0] = refval;
         };
         self.seqno += 1;
-        refn
+        old
     }
 
     fn set_cas(&mut self, key: i64, value: i64, cas: u64) -> Option<RefNode> {
-        let refval = RefValue {
+        let refval = RefValue::U {
             value,
             seqno: self.seqno + 1,
-            deleted: None,
         };
         let off: usize = key.try_into().unwrap();
         let entry = &mut self.entries[off];
         let ok = entry.versions.len() == 0 && cas == 0;
-        if ok || (cas == entry.versions[0].seqno) {
+        if ok || (cas == entry.versions[0].to_seqno()) {
             let refn = if entry.versions.len() > 0 {
                 Some(entry.clone())
             } else {
@@ -185,36 +195,36 @@ impl RefNodes {
     }
 
     fn delete(&mut self, key: i64) -> Option<RefNode> {
+        let newver = RefValue::D {
+            deleted: self.seqno + 1,
+        };
         let off: usize = key.try_into().unwrap();
         let entry = &mut self.entries[off];
-
-        if entry.is_present() {
-            if self.lsm && entry.versions[0].deleted.is_none() {
-                let refn = entry.clone();
-                entry.versions[0].deleted = Some(self.seqno + 1);
-                self.seqno += 1;
-                Some(refn)
-            } else if self.lsm {
-                entry.versions[0].deleted = Some(self.seqno + 1);
-                self.seqno += 1;
-                Some(entry.clone())
-            } else {
-                let refn = entry.clone();
-                entry.versions = vec![];
-                self.seqno += 1;
-                Some(refn)
-            }
+        let old = if entry.versions.len() > 0 {
+            Some(entry.clone())
         } else {
-            if self.lsm {
-                let refval = RefValue {
-                    value: 0,
-                    seqno: 0,
-                    deleted: Some(self.seqno + 1),
-                };
-                entry.versions.insert(0, refval);
-                entry.key = key;
+            None
+        };
+
+        entry.key = key;
+        if self.lsm && entry.is_present() {
+            match entry.versions[0] {
+                RefValue::U { .. } => {
+                    entry.versions.insert(0, newver);
+                    self.seqno += 1;
+                    old
+                }
+                RefValue::D { .. } => old,
             }
+        } else if self.lsm {
+            entry.versions.insert(0, newver);
             self.seqno += 1;
+            old
+        } else if entry.is_present() {
+            entry.versions.truncate(0);
+            self.seqno += 1;
+            old
+        } else {
             None
         }
     }
@@ -227,7 +237,7 @@ fn check_node(entry: Option<Entry<i64, i64>>, refn: Option<RefNode>) -> bool {
         panic!("entry is none but not refn {:?}", refn.unwrap().key);
     } else if refn.is_none() {
         let entry = entry.as_ref().unwrap();
-        println!("entry num_versions {}", entry.to_deltas().len());
+        //println!("entry num_versions {}", entry.to_deltas().len());
         panic!("refn is none but not entry {:?}", entry.as_key());
     }
 
@@ -237,15 +247,11 @@ fn check_node(entry: Option<Entry<i64, i64>>, refn: Option<RefNode>) -> bool {
     assert_eq!(entry.as_key().clone(), refn.key, "key");
 
     let ver = &refn.versions[0];
-    assert_eq!(entry.to_native_value(), Some(ver.value), "key {}", refn.key);
-    assert_eq!(entry.to_seqno(), ver.seqno, "key {}", refn.key);
-    assert_eq!(
-        entry.is_deleted(),
-        ver.deleted.is_some(),
-        "key {}",
-        refn.key
-    );
-    assert_eq!(entry.to_seqno(), refn.get_seqno(), "key {}", refn.key);
+    //println!("check-node value {:?}", entry.to_native_value());
+    assert_eq!(entry.to_native_value(), ver.to_value(), "key {}", refn.key);
+    assert_eq!(entry.to_seqno(), ver.to_seqno(), "key {}", refn.key);
+    assert_eq!(entry.is_deleted(), ver.is_deleted(), "key {}", refn.key);
+    assert_eq!(entry.to_seqno(), refn.to_seqno(), "key {}", refn.key);
     assert_eq!(entry.is_deleted(), refn.is_deleted(), "key {}", refn.key);
 
     let (n_vers, refn_vers) = (entry.to_deltas().len() + 1, refn.versions.len());
@@ -255,9 +261,10 @@ fn check_node(entry: Option<Entry<i64, i64>>, refn: Option<RefNode>) -> bool {
     for (i, core_ver) in entry.versions().enumerate() {
         let ver = &refn.versions[i];
         let value = core_ver.to_native_value();
-        assert_eq!(value, Some(ver.value), "key {} i {}", refn.key, i);
-        assert_eq!(core_ver.to_seqno(), ver.seqno, "key {} i {}", refn.key, i);
-        let (del1, del2) = (core_ver.is_deleted(), ver.deleted.is_some());
+        assert_eq!(value, ver.to_value(), "key {} i {}", refn.key, i);
+        let (seqno1, seqno2) = (core_ver.to_seqno(), ver.to_seqno());
+        assert_eq!(seqno1, seqno2, "key {} i {}", refn.key, i);
+        let (del1, del2) = (core_ver.is_deleted(), ver.is_deleted());
         assert_eq!(del1, del2, "key {} i {}", refn.key, i);
     }
 

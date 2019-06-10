@@ -149,7 +149,7 @@ where
 
     /// Return current seqno.
     #[inline]
-    pub fn get_seqno(&self) -> u64 {
+    pub fn to_seqno(&self) -> u64 {
         self.seqno
     }
 }
@@ -273,8 +273,8 @@ where
         self.root = root;
         if entry.is_some() {
             self.n_count -= 1;
+            self.seqno = seqno;
         }
-        self.seqno = seqno;
         entry
     }
 
@@ -372,10 +372,8 @@ where
         match node {
             None => {
                 // insert and mark as delete
-                let ne = Entry::new(key.to_owned(), Value::new_delete(seqno));
-                let mut node: Box<Node<K, V>> = Box::new(From::from(ne));
+                let mut node = Node::new_deleted(key.to_owned(), seqno, false);
                 node.dirty = false;
-                node.delete(seqno);
                 (Some(node), None)
             }
             Some(mut node) => {
@@ -394,7 +392,6 @@ where
                         (Some(Llrb::walkuprot_23(node)), entry)
                     }
                     Ordering::Equal => {
-                        println!("entry cloned deleted lsm");
                         let entry = node.entry.clone();
                         if !node.is_deleted() {
                             node.delete(seqno);

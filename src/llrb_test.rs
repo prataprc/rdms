@@ -19,9 +19,9 @@ fn test_id() {
 #[test]
 fn test_seqno() {
     let mut llrb: Llrb<i32, Empty> = Llrb::new("test-llrb");
-    assert_eq!(llrb.get_seqno(), 0);
+    assert_eq!(llrb.to_seqno(), 0);
     llrb.set_seqno(1234);
-    assert_eq!(llrb.get_seqno(), 1234);
+    assert_eq!(llrb.to_seqno(), 1234);
 }
 
 #[test]
@@ -190,10 +190,14 @@ fn test_delete() {
     assert!(llrb.validate().is_ok());
 
     // test iter
+    //println!("start loop");
     {
         let (mut iter, mut iter_ref) = (llrb.iter(), refns.iter());
         loop {
-            if check_node(iter.next(), iter_ref.next().cloned()) == false {
+            let entry = iter.next();
+            let refn = iter_ref.next().cloned();
+            //println!("entry: {} ref: {}", entry.is_some(), refn.is_some());
+            if check_node(entry, refn) == false {
                 break;
             }
         }
@@ -334,7 +338,7 @@ fn test_crud() {
                 let off: usize = key.try_into().unwrap();
                 let refn = &refns.entries[off];
                 let cas = if refn.versions.len() > 0 {
-                    refn.get_seqno()
+                    refn.to_seqno()
                 } else {
                     0
                 };
@@ -399,7 +403,7 @@ fn test_crud_lsm() {
         let key: i64 = (random::<i64>() % size).abs();
         let value: i64 = random();
         let op: i64 = (random::<i64>() % 3).abs();
-        println!("op {} on {}", op, key);
+        // println!("op {} on {}", op, key);
         match op {
             0 => {
                 let entry = llrb.set(key, value);
@@ -411,7 +415,7 @@ fn test_crud_lsm() {
                 let off: usize = key.try_into().unwrap();
                 let refn = &refns.entries[off];
                 let cas = if refn.versions.len() > 0 {
-                    refn.get_seqno()
+                    refn.to_seqno()
                 } else {
                     0
                 };

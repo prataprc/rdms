@@ -13,7 +13,7 @@ where
     K: Ord + Clone,
     V: Clone + Diff,
 {
-    node.map_or(true, |node| node.is_black())
+    node.map_or(true, Node::is_black)
 }
 
 /// Get the latest version for key.

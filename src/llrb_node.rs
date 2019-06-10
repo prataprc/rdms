@@ -6,7 +6,7 @@ use crate::{Llrb, Mvcc};
 
 /// Node corresponds to a single entry in Llrb instance.
 #[derive(Clone)]
-pub struct Node<K, V>
+pub(crate) struct Node<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff,
@@ -176,47 +176,45 @@ where
     }
 }
 
-/// Statistics for [`Llrb`] and [`Mvcc`] tree. Serves two purpose:
-///
-/// * To get partial but quick statistics via [`Llrb::stats`] method.
-/// * To get full statisics via [`Llrb::validate`] method.
-#[derive(Default)]
-pub struct LlrbStats {
-    entries: usize, // number of entries in the tree.
-    node_size: usize,
-    blacks: Option<usize>,
-    depths: Option<LlrbDepth>,
+/// Statistics for [`Llrb`] and [`Mvcc`] tree.
+pub enum LlrbStats {
+    /// full statisics via [`Llrb::validate`] method.
+    Full {
+        entries: usize,
+        node_size: usize,
+        blacks: usize,
+        depths: LlrbDepth,
+    },
+    /// partial but quick statistics via [`Llrb::stats`] method.
+    Partial { entries: usize, node_size: usize },
 }
 
 impl LlrbStats {
-    pub(crate) fn new(entries: usize, node_size: usize) -> LlrbStats {
-        LlrbStats {
+    pub(crate) fn new_partial(entries: usize, node_size: usize) -> LlrbStats {
+        LlrbStats::Partial { entries, node_size }
+    }
+
+    pub(crate) fn new_full(
+        entries: usize,
+        node_size: usize,
+        blacks: usize,
+        depths: LlrbDepth,
+    ) -> LlrbStats {
+        LlrbStats::Full {
             entries,
             node_size,
-            blacks: Default::default(),
-            depths: Default::default(),
+            blacks,
+            depths,
         }
     }
 
     #[inline]
-    pub(crate) fn set_blacks(&mut self, blacks: usize) {
-        self.blacks = Some(blacks)
-    }
-
-    #[inline]
-    pub(crate) fn set_depths(&mut self, depths: LlrbDepth) {
-        self.depths = Some(depths)
-    }
-
-    #[inline]
-    pub(crate) fn sample_depth(&mut self, depth: usize) {
-        self.depths.as_mut().unwrap().sample(depth)
-    }
-
-    #[inline]
     /// Return number entries in [`Llrb`] / [`Mvcc`] instance.
-    pub fn entries(&self) -> usize {
-        self.entries
+    pub fn to_entries(&self) -> usize {
+        match self {
+            LlrbStats::Partial { entries, .. } => *entries,
+            LlrbStats::Full { entries, .. } => *entries,
+        }
     }
 
     #[inline]
@@ -231,25 +229,30 @@ impl LlrbStats {
     /// // size of key: 8 bytes
     /// // size of value: 16 bytes
     /// // overhead is 24 bytes
-    /// assert_eq!(llrb.stats().node_size(), 120);
+    /// assert_eq!(llrb.stats().to_node_size(), 120);
     /// ```
-    pub fn node_size(&self) -> usize {
-        self.node_size
+    pub fn to_node_size(&self) -> usize {
+        match self {
+            LlrbStats::Partial { node_size, .. } => *node_size,
+            LlrbStats::Full { node_size, .. } => *node_size,
+        }
     }
 
     #[inline]
     /// Return number of black nodes from root to leaf, on both left
     /// and right child.
-    pub fn blacks(&self) -> Option<usize> {
-        self.blacks
+    pub fn to_blacks(&self) -> Option<usize> {
+        match self {
+            LlrbStats::Partial { .. } => None,
+            LlrbStats::Full { blacks, .. } => Some(*blacks),
+        }
     }
 
     /// Return [`LlrbDepth`] statistics.
-    pub fn depths(&self) -> Option<LlrbDepth> {
-        if self.depths.as_ref().unwrap().samples() == 0 {
-            None
-        } else {
-            self.depths.clone()
+    pub fn to_depths(&self) -> Option<LlrbDepth> {
+        match self {
+            LlrbStats::Partial { .. } => None,
+            LlrbStats::Full { depths, .. } => Some(depths.clone()),
         }
     }
 }
@@ -281,28 +284,28 @@ impl LlrbDepth {
     }
 
     /// Return number of leaf-nodes sample for depth in LLRB tree.
-    pub fn samples(&self) -> usize {
+    pub fn to_samples(&self) -> usize {
         self.samples
     }
 
     /// Return minimum depth of leaf-node in LLRB tree.
-    pub fn min(&self) -> usize {
+    pub fn to_min(&self) -> usize {
         self.min
     }
 
     /// Return the average depth of leaf-nodes in LLRB tree.
-    pub fn mean(&self) -> usize {
+    pub fn to_mean(&self) -> usize {
         self.total / self.samples
     }
 
     /// Return maximum depth of leaf-node in LLRB tree.
-    pub fn max(&self) -> usize {
+    pub fn to_max(&self) -> usize {
         self.max
     }
 
     /// Return depth as tuple of percentiles, each tuple provides
     /// (percentile, depth). Returned percentiles from 90, 91 .. 99
-    pub fn percentiles(&self) -> Vec<(u8, usize)> {
+    pub fn to_percentiles(&self) -> Vec<(u8, usize)> {
         let mut percentiles: Vec<(u8, usize)> = vec![];
         let (mut acc, mut prev_perc) = (0_u64, 90_u8);
         let iter = self.depths.iter().enumerate().filter(|(_, &item)| item > 0);
@@ -318,29 +321,31 @@ impl LlrbDepth {
     }
 
     pub fn pretty_print(&self, prefix: &str) {
-        let mean = self.mean();
+        let mean = self.to_mean();
         println!(
             "{}depth (min, max, avg): {:?}",
             prefix,
             (self.min, mean, self.max)
         );
-        for (depth, n) in self.percentiles().into_iter() {
+        for (depth, n) in self.to_percentiles().into_iter() {
             if n > 0 {
                 println!("{}  {} percentile = {}", prefix, depth, n);
             }
         }
     }
 
-    pub fn json(&self) -> String {
+    // TODO: start using jsondata package. Can be a single line implementation
+    // From::from::<jsondata::Json>(self).to_string()
+    pub fn to_json_text(&self) -> String {
         let ps: Vec<String> = self
-            .percentiles()
+            .to_percentiles()
             .into_iter()
             .map(|(d, n)| format!("{}: {}", d, n))
             .collect();
         let strs = [
-            format!("min: {}", self.min),
-            format!("mean: {}", self.mean()),
-            format!("max: {}", self.max),
+            format!("min: {}", self.to_min()),
+            format!("mean: {}", self.to_mean()),
+            format!("max: {}", self.to_max()),
             format!("percentiles: {}", ps.join(", ")),
         ];
         ("{ ".to_string() + strs.join(", ").as_str() + " }").to_string()

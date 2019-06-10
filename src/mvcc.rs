@@ -11,7 +11,7 @@ use std::sync::{
 use crate::core::{Diff, Entry, Value};
 use crate::error::Error;
 use crate::llrb::Llrb;
-use crate::llrb_node::{LlrbStats, Node};
+use crate::llrb_node::{LlrbDepth, LlrbStats, Node};
 use crate::sync_writer::SyncWriter;
 use crate::vlog;
 
@@ -667,17 +667,17 @@ where
     /// for more information.
     pub fn validate(&self) -> Result<LlrbStats, Error> {
         let arc_mvcc = Snapshot::clone(&self.snapshot);
-
-        let n_count = arc_mvcc.n_count;
-        let node_size = std::mem::size_of::<Node<K, V>>();
-        let mut stats = LlrbStats::new(n_count, node_size);
-        stats.set_depths(Default::default());
-
         let root = arc_mvcc.root_ref();
         let (red, nb, d) = (is_red(root), 0, 0);
-        let blacks = validate_tree(root, red, nb, d, &mut stats)?;
-        stats.set_blacks(blacks);
-        Ok(stats)
+        let mut depths: LlrbDepth = Default::default();
+        let blacks = validate_tree(root, red, nb, d, &mut depths)?;
+
+        Ok(LlrbStats::new_full(
+            arc_mvcc.n_count,
+            std::mem::size_of::<Node<K, V>>(),
+            blacks,
+            depths,
+        ))
     }
 }
 
@@ -946,7 +946,7 @@ where
         }
     }
 
-    pub fn root_ref(&self) -> Option<&Node<K, V>> {
+    fn root_ref(&self) -> Option<&Node<K, V>> {
         self.root.as_ref().map(Deref::deref)
     }
 }

@@ -7,7 +7,7 @@ use std::{marker, mem};
 
 use crate::core::{Diff, Entry, Value};
 use crate::error::Error;
-use crate::llrb_node::{LlrbStats, Node};
+use crate::llrb_node::{LlrbDepth, LlrbStats, Node};
 use crate::mvcc::MvccRoot;
 use crate::vlog;
 
@@ -568,21 +568,23 @@ where
     /// Additionally return full statistics on the tree. Refer to [`LlrbStats`]
     /// for more information.
     pub fn validate(&self) -> Result<LlrbStats, Error> {
-        let node_size = std::mem::size_of::<Node<K, V>>();
-        let mut stats = LlrbStats::new(self.n_count, node_size);
-        stats.set_depths(Default::default());
-
         let root = self.root.as_ref().map(Deref::deref);
         let (red, nb, d) = (is_red(root), 0, 0);
-        let blacks = validate_tree(root, red, nb, d, &mut stats)?;
-        stats.set_blacks(blacks);
-        Ok(stats)
+        let mut depths: LlrbDepth = Default::default();
+        let blacks = validate_tree(root, red, nb, d, &mut depths)?;
+
+        Ok(LlrbStats::new_full(
+            self.n_count,
+            std::mem::size_of::<Node<K, V>>(),
+            blacks,
+            depths,
+        ))
     }
 
     /// Return quickly with basic statisics, only entries() method is valid
     /// with this statisics. TODO: implement the same for MVCC.
     pub fn stats(&self) -> LlrbStats {
-        LlrbStats::new(self.n_count, mem::size_of::<Node<K, V>>())
+        LlrbStats::new_partial(self.n_count, mem::size_of::<Node<K, V>>())
     }
 }
 

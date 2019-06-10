@@ -38,7 +38,7 @@ fn validate_tree<K, V>(
     fromred: bool,
     mut nb: usize,
     depth: usize,
-    stats: &mut LlrbStats,
+    depths: &mut LlrbDepth,
 ) -> Result<usize, Error>
 where
     K: Ord + Clone + Debug,
@@ -53,8 +53,8 @@ where
                 nb += 1;
             }
             let (left, right) = (node.left_deref(), node.right_deref());
-            let l = validate_tree(left, red, nb, depth + 1, stats)?;
-            let r = validate_tree(right, red, nb, depth + 1, stats)?;
+            let l = validate_tree(left, red, nb, depth + 1, depths)?;
+            let r = validate_tree(right, red, nb, depth + 1, depths)?;
             if l != r {
                 return Err(Error::UnbalancedBlacks(l, r));
             }
@@ -75,7 +75,7 @@ where
             Ok(l)
         }
         None => {
-            stats.sample_depth(depth);
+            depths.sample(depth);
             Ok(nb)
         }
     }

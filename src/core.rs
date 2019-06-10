@@ -30,7 +30,7 @@ pub trait Serialize: Sized {
 
     /// Reverse process of encode, given the binary equivalent, `buf`,
     /// of a value, construct self.
-    fn decode(&mut self, buf: &[u8]) -> Result<()>;
+    fn decode(&mut self, buf: &[u8]) -> Result<(), Error>;
 }
 
 /// Delta maintains the older version of value, with necessary fields for
@@ -277,16 +277,15 @@ where
 
     #[allow(dead_code)] // TODO: remove this once bogn is weaved-up.
     pub(crate) fn purge(&mut self, before: u64) -> bool {
+        for i in 0..self.deltas.len() {
+            if self.deltas[i].to_seqno() < before {
+                self.deltas.truncate(i); // purge everything from i..len
+                break;
+            }
+        }
         if self.to_seqno() < before {
-            // purge everything
             true
         } else {
-            for i in 0..self.deltas.len() {
-                if self.deltas[i].to_seqno() < before {
-                    self.deltas.truncate(i); // purge everything from i..len
-                    break;
-                }
-            }
             false
         }
     }
@@ -349,7 +348,7 @@ where
 
     /// Return the previous versions of this entry as Deltas.
     #[inline]
-    pub fn deltas(&self) -> Vec<Delta<V>> {
+    pub fn to_deltas(&self) -> Vec<Delta<V>> {
         self.deltas.clone()
     }
 
@@ -361,7 +360,7 @@ where
             key: self.key.clone(),
             entry,
             curval,
-            deltas: self.deltas().into_iter(),
+            deltas: self.to_deltas().into_iter(),
         }
     }
 }
@@ -421,6 +420,3 @@ where
         }
     }
 }
-
-// TODO: remove this
-pub type Result<T> = std::result::Result<T, Error>;

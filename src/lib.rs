@@ -49,7 +49,7 @@ mod vlog;
 //pub use crate::bubt_build::Builder;
 //pub use crate::bubt_config::Config;
 //pub use crate::bubt_snap::Snapshot;
-pub use crate::core::{Diff, Result, Serialize};
+pub use crate::core::{Diff, Serialize};
 pub use crate::error::Error;
 pub use crate::llrb::Llrb;
 pub use crate::llrb_node::LlrbStats;

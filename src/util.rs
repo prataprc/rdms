@@ -1,11 +1,10 @@
 use std::{fs, path};
 
-use crate::core::Result;
 use crate::error::Error;
 
 // open file for writing, if reuse is false, create file.
 #[allow(dead_code)] // TODO: remove this once bogn is weaved-up.
-pub(crate) fn open_file_w(file: &str, reuse: bool) -> Result<fs::File> {
+pub(crate) fn open_file_w(file: &str, reuse: bool) -> Result<fs::File, Error> {
     let p = path::Path::new(file);
 
     let mut opts = fs::OpenOptions::new();
@@ -23,7 +22,7 @@ pub(crate) fn open_file_w(file: &str, reuse: bool) -> Result<fs::File> {
 
 // open file for reading.
 #[allow(dead_code)] // TODO: remove this once bogn is weaved-up.
-pub(crate) fn open_file_r(file: &str) -> Result<fs::File> {
+pub(crate) fn open_file_r(file: &str) -> Result<fs::File, Error> {
     let p = path::Path::new(file);
     let mut opts = fs::OpenOptions::new();
     Ok(opts.read(true).open(p)?)

@@ -227,7 +227,7 @@ fn check_node(entry: Option<Entry<i64, i64>>, refn: Option<RefNode>) -> bool {
         panic!("entry is none but not refn {:?}", refn.unwrap().key);
     } else if refn.is_none() {
         let entry = entry.as_ref().unwrap();
-        println!("entry num_versions {}", entry.deltas().len());
+        println!("entry num_versions {}", entry.to_deltas().len());
         panic!("refn is none but not entry {:?}", entry.as_key());
     }
 
@@ -248,7 +248,7 @@ fn check_node(entry: Option<Entry<i64, i64>>, refn: Option<RefNode>) -> bool {
     assert_eq!(entry.to_seqno(), refn.get_seqno(), "key {}", refn.key);
     assert_eq!(entry.is_deleted(), refn.is_deleted(), "key {}", refn.key);
 
-    let (n_vers, refn_vers) = (entry.deltas().len() + 1, refn.versions.len());
+    let (n_vers, refn_vers) = (entry.to_deltas().len() + 1, refn.versions.len());
     assert_eq!(n_vers, refn_vers, "key {}", refn.key);
 
     //println!("versions {} {}", n_vers, refn_vers);

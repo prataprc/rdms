@@ -13,7 +13,7 @@ include!("./ref_test.rs");
 #[test]
 fn test_id() {
     let llrb: Llrb<i32, Empty> = Llrb::new("test-llrb");
-    assert_eq!(llrb.id(), "test-llrb".to_string());
+    assert_eq!(llrb.to_name(), "test-llrb".to_string());
 }
 
 #[test]

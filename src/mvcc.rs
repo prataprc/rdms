@@ -88,9 +88,9 @@ where
 {
     fn from(mut llrb: Llrb<K, V>) -> Mvcc<K, V> {
         let mvcc = if llrb.is_lsm() {
-            Mvcc::new_lsm(llrb.id())
+            Mvcc::new_lsm(llrb.to_name())
         } else {
-            Mvcc::new(llrb.id())
+            Mvcc::new(llrb.to_name())
         };
 
         let (root, seqno, n_count) = llrb.squash();

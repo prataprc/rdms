@@ -36,12 +36,20 @@ pub trait Serialize: Sized {
 /// Delta maintains the older version of value, with necessary fields for
 /// log-structured-merge.
 #[derive(Clone)]
-pub enum Delta<V>
+enum DeltaCore<V>
 where
     V: Clone + Diff,
 {
     U { delta: vlog::Delta<V>, seqno: u64 },
     D { deleted: u64 },
+}
+
+#[derive(Clone)]
+pub struct Delta<V>
+where
+    V: Clone + Diff,
+{
+    data: DeltaCore<V>,
 }
 
 // Delta construction methods.
@@ -50,26 +58,30 @@ where
     V: Clone + Diff,
 {
     pub(crate) fn new_upsert(delta: vlog::Delta<V>, seqno: u64) -> Delta<V> {
-        Delta::U { delta, seqno }
+        Delta {
+            data: DeltaCore::U { delta, seqno },
+        }
     }
 
     pub(crate) fn new_delete(deleted: u64) -> Delta<V> {
-        Delta::D { deleted }
+        Delta {
+            data: DeltaCore::D { deleted },
+        }
     }
 
     #[allow(dead_code)] // TODO: remove this once bogn is weaved-up.
     pub(crate) fn into_upserted(self) -> Option<(vlog::Delta<V>, u64)> {
-        match self {
-            Delta::U { delta, seqno } => Some((delta, seqno)),
-            Delta::D { .. } => None,
+        match self.data {
+            DeltaCore::U { delta, seqno } => Some((delta, seqno)),
+            DeltaCore::D { .. } => None,
         }
     }
 
     #[allow(dead_code)] // TODO: remove this once bogn is weaved-up.
     pub(crate) fn into_deleted(self) -> Option<u64> {
-        match self {
-            Delta::D { deleted } => Some(deleted),
-            Delta::U { .. } => None,
+        match self.data {
+            DeltaCore::D { deleted } => Some(deleted),
+            DeltaCore::U { .. } => None,
         }
     }
 }
@@ -81,9 +93,9 @@ where
 {
     /// Return the underlying `difference` value for this delta.
     pub fn into_diff(self) -> Option<<V as Diff>::D> {
-        match self {
-            Delta::D { .. } => None,
-            Delta::U { delta, .. } => delta.into_native(),
+        match self.data {
+            DeltaCore::D { .. } => None,
+            DeltaCore::U { delta, .. } => delta.into_native(),
         }
     }
 
@@ -92,9 +104,9 @@ where
     /// To differentiate between Create and Delete operations
     /// use born_seqno() and dead_seqno() methods respectively.
     pub fn to_seqno(&self) -> u64 {
-        match self {
-            Delta::U { seqno, .. } => *seqno,
-            Delta::D { deleted } => *deleted,
+        match &self.data {
+            DeltaCore::U { seqno, .. } => *seqno,
+            DeltaCore::D { deleted } => *deleted,
         }
     }
 
@@ -102,9 +114,9 @@ where
     /// this version was a create/update, and `false` means
     /// this version was deleted.
     pub fn to_seqno_state(&self) -> (bool, u64) {
-        match self {
-            Delta::U { seqno, .. } => (true, *seqno),
-            Delta::D { deleted } => (false, *deleted),
+        match &self.data {
+            DeltaCore::U { seqno, .. } => (true, *seqno),
+            DeltaCore::D { deleted } => (false, *deleted),
         }
     }
 }
@@ -389,14 +401,14 @@ where
                 self.curval = entry.to_native_value();
                 Some(entry)
             }
-            None => match (self.deltas.next(), self.curval.take()) {
+            None => match (self.deltas.next().map(|x| x.data), self.curval.take()) {
                 (None, _) => None,
-                (Some(Delta::D { deleted }), _) => {
+                (Some(DeltaCore::D { deleted }), _) => {
                     // this entry is deleted.
                     let key = self.key.clone();
                     Some(Entry::new(key, Value::new_delete(deleted)))
                 }
-                (Some(Delta::U { delta, seqno }), None) => {
+                (Some(DeltaCore::U { delta, seqno }), None) => {
                     // previous entry was a delete.
                     let nv: V = From::from(delta.into_native().unwrap());
                     let key = self.key.clone();
@@ -406,7 +418,7 @@ where
                         Value::new_upsert(vlog::Value::new_native(nv), seqno),
                     ))
                 }
-                (Some(Delta::U { delta, seqno }), Some(curval)) => {
+                (Some(DeltaCore::U { delta, seqno }), Some(curval)) => {
                     // this and previous entry are create/update.
                     let nv = curval.merge(&delta.into_native().unwrap());
                     self.curval = Some(nv.clone());

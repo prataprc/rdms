@@ -13,17 +13,15 @@ use crate::vlog;
 
 include!("llrb_common.rs");
 
-// TODO: optimize comparison
-
 /// Llrb manage a single instance of in-memory index using
 /// [left-leaning-red-black][llrb] tree.
 ///
-/// **[LSM mode]**: Llrb instance can support what is called as
-/// log-structured-merge while mutating the tree. In simple terms, this
-/// means that nothing shall be over-written in the tree and all the
-/// mutations for the same key shall be preserved until they are undone or
-/// purged. Although there is one exception to it, back-to-back deletes
-/// will collapse into a no-op and only the last delete shall be ingested.
+/// **[LSM mode]**: Llrb index can support log-structured-merge while
+/// mutating the tree. In simple terms, this means that nothing shall be
+/// over-written in the tree and all the mutations for the same key shall
+/// be preserved until they are undone or purged. Although there is one
+/// exception to it, back-to-back deletes will collapse into a no-op and
+/// only the first delete shall be ingested.
 ///
 /// [llrb]: https://en.wikipedia.org/wiki/Left-leaning_red-black_tree
 /// [LSM mode]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
@@ -65,13 +63,19 @@ where
     }
 }
 
-/// Construct new instance of Llrb.
+/// Construct new Llrb index.
 impl<K, V> Llrb<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    /// Create an empty instance of Llrb, identified by `name`.
+    /// Squash this index and return the root and its book-keeping.
+    /// IMPORTANT: after calling this method, value must be dropped.
+    pub(crate) fn squash(&mut self) -> (Option<Box<Node<K, V>>>, u64, usize) {
+        (self.root.take(), self.seqno, self.n_count)
+    }
+
+    /// Create an empty Llrb index, identified by `name`.
     /// Applications can choose unique names.
     pub fn new<S>(name: S) -> Llrb<K, V>
     where
@@ -86,7 +90,7 @@ where
         }
     }
 
-    /// Create a new instance of Llrb in lsm mode. In lsm mode, mutations
+    /// Create a new Llrb index in lsm mode. In lsm mode, mutations
     /// are added as log for each key, instead of over-writing previous
     /// mutation. Note that, in case of back-to-back delete, first delete
     /// shall be applied and subsequent deletes shall be ignored.
@@ -110,20 +114,10 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    /// Return whether this instance support lsm mode.
+    /// Return whether this index support lsm mode.
     #[inline]
     pub(crate) fn is_lsm(&self) -> bool {
         self.lsm
-    }
-
-    /// Squash this instance and return the root and its book-keeping.
-    #[inline]
-    pub(crate) fn squash(&mut self) -> (Option<Box<Node<K, V>>>, u64, usize) {
-        let (seqno, n_count) = (self.seqno, self.n_count);
-        self.seqno = 0;
-        self.n_count = 0;
-        self.lsm = false;
-        (self.root.take(), seqno, n_count)
     }
 
     /// Set current seqno. Use this API iff you are totaly sure
@@ -134,17 +128,17 @@ where
         self.seqno = seqno
     }
 
-    /// Identify this instance. Applications can choose unique names while
-    /// creating Llrb instances.
-    #[inline]
-    pub fn id(&self) -> String {
-        self.name.clone()
-    }
-
-    /// Return number of entries in this instance.
+    /// Return number of entries in this index.
     #[inline]
     pub fn len(&self) -> usize {
         self.n_count
+    }
+
+    /// Identify this index. Applications can choose unique names while
+    /// creating Llrb indices.
+    #[inline]
+    pub fn to_name(&self) -> String {
+        self.name.clone()
     }
 
     /// Return current seqno.
@@ -152,9 +146,15 @@ where
     pub fn to_seqno(&self) -> u64 {
         self.seqno
     }
+
+    /// Return quickly with basic statisics, only entries() method is valid
+    /// with this statisics. TODO: implement the same for MVCC.
+    pub fn stats(&self) -> LlrbStats {
+        LlrbStats::new_partial(self.n_count, mem::size_of::<Node<K, V>>())
+    }
 }
 
-/// Create/Update/Delete operations on Llrb instance.
+/// Create/Update/Delete operations on Llrb index.
 impl<K, V> Llrb<K, V>
 where
     K: Clone + Ord,
@@ -166,18 +166,15 @@ where
     ///
     /// *LSM mode*: Add a new version for the key, perserving the old value.
     pub fn set(&mut self, key: K, value: V) -> Option<Entry<K, V>> {
-        let seqno = self.seqno + 1;
-        let root = self.root.take();
-
         let new_entry = Entry::new(
             key,
-            Value::new_upsert(vlog::Value::new_native(value), seqno),
+            Value::new_upsert(vlog::Value::new_native(value), self.seqno + 1),
         );
-        match Llrb::upsert(root, new_entry, self.lsm) {
+        match Llrb::upsert(self.root.take(), new_entry, self.lsm) {
             (Some(mut root), entry) => {
                 root.set_black();
                 self.root = Some(root);
-                self.seqno = seqno;
+                self.seqno += 1;
                 if entry.is_none() {
                     self.n_count += 1;
                 }
@@ -193,20 +190,12 @@ where
     /// enforce a create operation.
     ///
     /// *LSM mode*: Add a new version for the key, perserving the old value.
-    pub fn set_cas(
-        &mut self,
-        key: K,
-        value: V,
-        cas: u64, // last seqno for key
-    ) -> Result<Option<Entry<K, V>>, Error> {
-        let seqno = self.seqno + 1;
-        let root = self.root.take();
-
+    pub fn set_cas(&mut self, key: K, value: V, cas: u64) -> Result<Option<Entry<K, V>>, Error> {
         let new_entry = Entry::new(
             key,
-            Value::new_upsert(vlog::Value::new_native(value), seqno),
+            Value::new_upsert(vlog::Value::new_native(value), self.seqno + 1),
         );
-        match Llrb::upsert_cas(root, new_entry, cas, self.lsm) {
+        match Llrb::upsert_cas(self.root.take(), new_entry, cas, self.lsm) {
             (root, _, Some(err)) => {
                 self.root = root;
                 Err(err)
@@ -214,7 +203,7 @@ where
             (Some(mut root), entry, None) => {
                 root.set_black();
                 self.root = Some(root);
-                self.seqno = seqno;
+                self.seqno += 1;
                 if entry.is_none() {
                     self.n_count += 1;
                 }
@@ -241,11 +230,9 @@ where
         let seqno = self.seqno + 1;
 
         if self.lsm {
-            let root = self.root.take();
-            let (root, entry) = Llrb::delete_lsm(root, key, seqno);
-            let mut root = root.unwrap();
-            root.set_black();
-            self.root = Some(root);
+            let (root, entry) = Llrb::delete_lsm(self.root.take(), key, seqno);
+            self.root = root;
+            self.root.as_mut().map(|r| r.set_black());
 
             return match entry {
                 None => {
@@ -262,8 +249,7 @@ where
         }
 
         // in non-lsm mode remove the entry from the tree.
-        let root = self.root.take();
-        let (root, entry) = match Llrb::do_delete(root, key) {
+        let (root, entry) = match Llrb::do_delete(self.root.take(), key) {
             (None, entry) => (None, entry),
             (Some(mut root), entry) => {
                 root.set_black();
@@ -280,36 +266,36 @@ where
 
     fn upsert(
         node: Option<Box<Node<K, V>>>,
-        new_entry: Entry<K, V>,
+        nentry: Entry<K, V>,
         lsm: bool,
     ) -> (Option<Box<Node<K, V>>>, Option<Entry<K, V>>) {
         match node {
+            None => {
+                let mut node: Box<Node<K, V>> = Box::new(From::from(nentry));
+                node.dirty = false;
+                return (Some(node), None);
+            }
             Some(mut node) => {
                 node = Llrb::walkdown_rot23(node);
-                match node.as_key().cmp(new_entry.as_key()) {
+                match node.as_key().cmp(nentry.as_key()) {
                     Ordering::Greater => {
-                        let res = Llrb::upsert(node.left.take(), new_entry, lsm);
+                        let res = Llrb::upsert(node.left.take(), nentry, lsm);
                         let (left, entry) = res;
                         node.left = left;
                         (Some(Llrb::walkuprot_23(node)), entry)
                     }
                     Ordering::Less => {
-                        let res = Llrb::upsert(node.right.take(), new_entry, lsm);
+                        let res = Llrb::upsert(node.right.take(), nentry, lsm);
                         let (right, entry) = res;
                         node.right = right;
                         (Some(Llrb::walkuprot_23(node)), entry)
                     }
                     Ordering::Equal => {
                         let entry = node.entry.clone();
-                        node.prepend_version(new_entry, lsm);
+                        node.prepend_version(nentry, lsm);
                         (Some(Llrb::walkuprot_23(node)), Some(entry))
                     }
                 }
-            }
-            None => {
-                let mut node: Box<Node<K, V>> = Box::new(From::from(new_entry));
-                node.dirty = false;
-                return (Some(node), None);
             }
         }
     }
@@ -487,13 +473,13 @@ where
     }
 }
 
-/// Read operations on Llrb instance.
+/// Read operations on Llrb index.
 impl<K, V> Llrb<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    /// Get the latest version for key.
+    /// Get the entry for `key`.
     pub fn get<Q>(&self, key: &Q) -> Option<Entry<K, V>>
     where
         K: Borrow<Q>,
@@ -502,7 +488,7 @@ where
         get(self.root.as_ref().map(Deref::deref), key)
     }
 
-    /// Return an iterator over all entries in this instance.
+    /// Return an iterator over all entries in this index.
     pub fn iter(&self) -> Iter<K, V> {
         let node = self.root.as_ref().map(Deref::deref);
         Iter {
@@ -555,7 +541,9 @@ where
     }
 }
 
-/// Deep walk validate of Llrb instance.
+/// Deep walk validate of Llrb index. Note that in addition to normal
+/// contraints to type parameter `K`, K-type shall also implement
+/// `Debug` trait.
 impl<K, V> Llrb<K, V>
 where
     K: Clone + Ord + Debug,
@@ -581,12 +569,6 @@ where
             blacks,
             depths,
         ))
-    }
-
-    /// Return quickly with basic statisics, only entries() method is valid
-    /// with this statisics. TODO: implement the same for MVCC.
-    pub fn stats(&self) -> LlrbStats {
-        LlrbStats::new_partial(self.n_count, mem::size_of::<Node<K, V>>())
     }
 }
 

@@ -214,7 +214,8 @@ where
     }
 
     /// Delete the given key. Note that back-to-back delete for the same
-    /// key shall collapse into a single delete.
+    /// key shall collapse into a single delete, first deleted is ingested
+    /// while the rest are ignored.
     ///
     /// *LSM mode*: Mark the entry as deleted along with seqno at which it
     /// deleted
@@ -559,9 +560,9 @@ where
     /// for more information.
     pub fn validate(&self) -> Result<LlrbStats, Error> {
         let root = self.root.as_ref().map(Deref::deref);
-        let (red, nb, d) = (is_red(root), 0, 0);
+        let (red, blacks, depth) = (is_red(root), 0, 0);
         let mut depths: LlrbDepth = Default::default();
-        let blacks = validate_tree(root, red, nb, d, &mut depths)?;
+        let blacks = validate_tree(root, red, blacks, depth, &mut depths)?;
 
         Ok(LlrbStats::new_full(
             self.n_count,

@@ -71,6 +71,10 @@ impl RefNodes {
         }
     }
 
+    fn to_seqno(&self) -> u64 {
+        self.seqno
+    }
+
     fn get(&self, key: i64) -> Option<RefNode> {
         let off: usize = key.try_into().unwrap();
         let entry = self.entries[off].clone();

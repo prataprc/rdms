@@ -1,10 +1,13 @@
+// TODO: unlike Llrb, Mvcc uses &self for write operation, it is better
+// to provide a writer constructor that will accept only &mut self.
+
 use std::borrow::Borrow;
 use std::cmp::{Ord, Ordering};
 use std::fmt::Debug;
 use std::marker;
 use std::ops::{Bound, Deref, DerefMut, RangeBounds};
 use std::sync::{
-    atomic::{AtomicPtr, Ordering::Relaxed},
+    atomic::{AtomicPtr, AtomicU8, Ordering::Relaxed},
     Arc,
 };
 
@@ -12,7 +15,6 @@ use crate::core::{Diff, Entry, Value};
 use crate::error::Error;
 use crate::llrb::Llrb;
 use crate::llrb_node::{LlrbDepth, LlrbStats, Node};
-use crate::sync_writer::SyncWriter;
 use crate::vlog;
 
 const RECLAIM_CAP: usize = 128;
@@ -27,7 +29,7 @@ where
     name: String,
     lsm: bool,
     snapshot: Snapshot<K, V>,
-    fencer: SyncWriter,
+    writers: AtomicU8,
 }
 
 impl<K, V> Clone for Mvcc<K, V>
@@ -36,21 +38,22 @@ where
     V: Clone + Diff,
 {
     fn clone(&self) -> Mvcc<K, V> {
-        let mvcc = Mvcc {
+        let cloned = Mvcc {
             name: self.name.clone(),
             lsm: self.lsm,
             snapshot: Snapshot::new(),
-            fencer: SyncWriter::new(),
+            writers: Default::default(),
         };
 
-        let arc_mvcc: Arc<MvccRoot<K, V>> = Snapshot::clone(&self.snapshot);
-        let root = match arc_mvcc.root_ref() {
+        let s: Arc<MvccRoot<K, V>> = Snapshot::clone(&self.snapshot);
+        let root_node = match s.as_root() {
             None => None,
             Some(n) => Some(Box::new(n.clone())),
         };
-        mvcc.snapshot
-            .shift_snapshot(root, arc_mvcc.seqno, arc_mvcc.n_count, vec![]);
-        mvcc
+        cloned
+            .snapshot
+            .shift_snapshot(root_node, s.seqno, s.n_count, vec![]);
+        cloned
     }
 }
 
@@ -70,13 +73,12 @@ where
         // NOTE: Likewise MvccRoot will fence the drop on its `root` field, so we
         // have to get past that and drop it here.
 
-        // drop arc.
-        let root_arc = self.snapshot.value.load(Relaxed);
-        let mut boxed_arc = unsafe { Box::from_raw(root_arc) };
-        let mvcc_root = Arc::get_mut(boxed_arc.deref_mut()).unwrap();
+        let snapshot_ptr = self.snapshot.value.load(Relaxed);
+        // snapshot shall be dropped, along with it MvccRoot.
+        let mut snapshot = unsafe { Box::from_raw(snapshot_ptr) };
+        let mvcc_root = Arc::get_mut(&mut *snapshot).unwrap();
 
         //println!("drop mvcc {:p} {:p}", self, mvcc_root);
-
         mvcc_root.root.take().map(|root| drop_tree(root));
     }
 }
@@ -86,17 +88,18 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    fn from(mut llrb: Llrb<K, V>) -> Mvcc<K, V> {
-        let mvcc = if llrb.is_lsm() {
-            Mvcc::new_lsm(llrb.to_name())
+    fn from(mut llrb_index: Llrb<K, V>) -> Mvcc<K, V> {
+        let mvcc_index = if llrb_index.is_lsm() {
+            Mvcc::new_lsm(llrb_index.to_name())
         } else {
-            Mvcc::new(llrb.to_name())
+            Mvcc::new(llrb_index.to_name())
         };
 
-        let (root, seqno, n_count) = llrb.squash();
-        mvcc.snapshot
+        let (root, seqno, n_count) = llrb_index.squash();
+        mvcc_index
+            .snapshot
             .shift_snapshot(root, seqno, n_count, vec![] /*reclaim*/);
-        mvcc
+        mvcc_index
     }
 }
 
@@ -114,7 +117,7 @@ where
             name: name.as_ref().to_string(),
             lsm: false,
             snapshot: Snapshot::new(),
-            fencer: SyncWriter::new(),
+            writers: Default::default(),
         }
     }
 
@@ -126,7 +129,15 @@ where
             name: name.as_ref().to_string(),
             lsm: true,
             snapshot: Snapshot::new(),
-            fencer: SyncWriter::new(),
+            writers: Default::default(),
+        }
+    }
+
+    pub fn to_writer(&self) -> Writer<K, V> {
+        if self.writers.compare_and_swap(0, 1, Relaxed) == 0 {
+            Writer { index: self }
+        } else {
+            panic!("there cannot be more than one writers!")
         }
     }
 }
@@ -137,19 +148,11 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    #[inline]
-    #[cfg(test)]
-    pub(crate) fn mvccroot_ref(&self) -> &MvccRoot<K, V> {
-        unsafe { self.snapshot.value.load(Relaxed).as_ref().unwrap() }
-    }
-
     /// Set current seqno. Use this API iff you are totaly sure
     /// about what you are doing.
     #[inline]
     #[allow(dead_code)] // TODO: remove this once bogn is weaved-up.
     pub(crate) fn set_seqno(&mut self, seqno: u64) {
-        let _lock = self.fencer.lock();
-
         let mvcc_arc: Arc<MvccRoot<K, V>> = Snapshot::clone(&self.snapshot);
         let (root, n_count) = (mvcc_arc.root_duplicate(), mvcc_arc.n_count);
 
@@ -159,7 +162,7 @@ where
     /// Identify this instance. Applications can choose unique names while
     /// creating Mvcc instances.
     #[inline]
-    pub fn id(&self) -> String {
+    pub fn to_name(&self) -> String {
         self.name.clone()
     }
 
@@ -182,135 +185,6 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    pub fn set(&self, key: K, value: V) -> Option<Entry<K, V>> {
-        let _lock = self.fencer.lock();
-
-        let lsm = self.lsm;
-        let arc_mvcc = Snapshot::clone(&self.snapshot);
-
-        let (seqno, mut n_count) = (arc_mvcc.seqno + 1, arc_mvcc.n_count);
-        let root = arc_mvcc.root_duplicate();
-        let mut reclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
-
-        let new_entry = Entry::new(
-            key,
-            Value::new_upsert(vlog::Value::new_native(value), seqno),
-        );
-        match Mvcc::upsert(root, new_entry, lsm, &mut reclm) {
-            (Some(mut root), Some(mut n), entry) => {
-                root.set_black();
-                if entry.is_none() {
-                    n_count += 1;
-                }
-                n.dirty = false;
-                Box::leak(n);
-                self.snapshot
-                    .shift_snapshot(Some(root), seqno, n_count, reclm);
-                entry
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    pub fn set_cas(&self, key: K, value: V, cas: u64) -> Result<Option<Entry<K, V>>, Error> {
-        let _lock = self.fencer.lock();
-
-        let lsm = self.lsm;
-        let arc_mvcc = Snapshot::clone(&self.snapshot);
-        let (seqno, mut n_count) = (arc_mvcc.seqno + 1, arc_mvcc.n_count);
-        let rt = arc_mvcc.root_duplicate();
-        let mut rclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
-
-        let new_entry = Entry::new(
-            key,
-            Value::new_upsert(vlog::Value::new_native(value), seqno),
-        );
-        let s = match Mvcc::upsert_cas(rt, new_entry, cas, lsm, &mut rclm) {
-            (Some(mut root), optn, _, Some(err)) => {
-                root.set_black();
-                (root, optn, Err(err))
-            }
-            (Some(mut root), optn, entry, None) => {
-                root.set_black();
-                if entry.is_none() {
-                    n_count += 1
-                }
-                (root, optn, Ok(entry))
-            }
-            _ => panic!("set_cas: impossible case, call programmer"),
-        };
-        let (root, optn, entry) = s;
-
-        self.snapshot
-            .shift_snapshot(Some(root), seqno, n_count, rclm);
-
-        if let Some(mut n) = optn {
-            n.dirty = false;
-            Box::leak(n);
-        }
-        entry
-    }
-
-    pub fn delete<Q>(&self, key: &Q) -> Option<Entry<K, V>>
-    where
-        // TODO: From<Q> and Clone will fail if V=String and Q=str
-        K: Borrow<Q>,
-        Q: ToOwned<Owned = K> + Ord + ?Sized,
-    {
-        let _lock = self.fencer.lock();
-
-        let arc_mvcc = Snapshot::clone(&self.snapshot);
-        let (mut seqno, mut n_count) = (arc_mvcc.seqno + 1, arc_mvcc.n_count);
-        let root = arc_mvcc.root_duplicate();
-        let mut reclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
-
-        let (root, entry) = if self.lsm {
-            let s = match Mvcc::delete_lsm(root, key, seqno, &mut reclm) {
-                (Some(mut root), optn, entry) => {
-                    root.set_black();
-                    (Some(root), optn, entry)
-                }
-                (None, optn, entry) => (None, optn, entry),
-            };
-            let (root, optn, entry) = s;
-
-            //println!("mvcc delete {:?}", entry.as_ref().map(|e| e.is_deleted()));
-            match &entry {
-                None => {
-                    n_count += 1;
-                }
-                Some(e) if e.is_deleted() => {
-                    seqno -= 1;
-                }
-                _ => (),
-            }
-
-            if let Some(mut n) = optn {
-                n.dirty = false;
-                Box::leak(n);
-            }
-            (root, entry)
-        } else {
-            // in non-lsm mode remove the entry from the tree.
-            let (root, entry) = match Mvcc::do_delete(root, key, &mut reclm) {
-                (None, entry) => (None, entry),
-                (Some(mut root), entry) => {
-                    root.set_black();
-                    (Some(root), entry)
-                }
-            };
-            if entry.is_some() {
-                n_count -= 1;
-            } else {
-                seqno -= 1;
-            }
-            (root, entry)
-        };
-
-        self.snapshot.shift_snapshot(root, seqno, n_count, reclm);
-        entry
-    }
-
     fn upsert(
         node: Option<Box<Node<K, V>>>,
         new_entry: Entry<K, V>,
@@ -329,7 +203,6 @@ where
 
         let node = node.unwrap();
         let mut new_node = node.mvcc_clone(reclaim);
-        //node = Mvcc::walkdown_rot23(node);
 
         let cmp = new_node.as_key().cmp(new_entry.as_key());
         let (new_node, n, entry) = if cmp == Ordering::Greater {
@@ -379,33 +252,32 @@ where
         }
 
         let node = node.unwrap();
-        let mut new_node = node.mvcc_clone(reclaim);
-        // node = Mvcc::walkdown_rot23(node);
+        let mut newnd = node.mvcc_clone(reclaim);
 
-        let cmp = new_node.as_key().cmp(nentry.as_key());
-        let (new_node, n, entry, err) = if cmp == Ordering::Greater {
-            let left = new_node.left.take();
+        let cmp = newnd.as_key().cmp(nentry.as_key());
+        let (newnd, n, entry, err) = if cmp == Ordering::Greater {
+            let left = newnd.left.take();
             let s = Mvcc::upsert_cas(left, nentry, cas, lsm, reclaim);
             let (left, n, entry, e) = s;
-            new_node.left = left;
-            (Some(Mvcc::walkuprot_23(new_node, reclaim)), n, entry, e)
+            newnd.left = left;
+            (Some(Mvcc::walkuprot_23(newnd, reclaim)), n, entry, e)
         } else if cmp == Ordering::Less {
-            let right = new_node.right.take();
+            let right = newnd.right.take();
             let s = Mvcc::upsert_cas(right, nentry, cas, lsm, reclaim);
             let (rh, n, entry, e) = s;
-            new_node.right = rh;
-            (Some(Mvcc::walkuprot_23(new_node, reclaim)), n, entry, e)
-        } else if new_node.is_deleted() && cas != 0 && cas != new_node.to_seqno() {
-            (Some(new_node), None, None, Some(Error::InvalidCAS))
-        } else if !new_node.is_deleted() && cas != new_node.to_seqno() {
-            (Some(new_node), None, None, Some(Error::InvalidCAS))
+            newnd.right = rh;
+            (Some(Mvcc::walkuprot_23(newnd, reclaim)), n, entry, e)
+        } else if newnd.is_deleted() && cas != 0 && cas != newnd.to_seqno() {
+            (Some(newnd), None, None, Some(Error::InvalidCAS))
+        } else if !newnd.is_deleted() && cas != newnd.to_seqno() {
+            (Some(newnd), None, None, Some(Error::InvalidCAS))
         } else {
             let entry = Some(node.entry.clone());
-            new_node.prepend_version(nentry, lsm);
-            new_node.dirty = true;
-            let n = new_node.duplicate();
+            newnd.prepend_version(nentry, lsm);
+            newnd.dirty = true;
+            let n = newnd.duplicate();
             (
-                Some(Mvcc::walkuprot_23(new_node, reclaim)),
+                Some(Mvcc::walkuprot_23(newnd, reclaim)),
                 Some(n),
                 entry,
                 None,
@@ -413,7 +285,7 @@ where
         };
 
         Box::leak(node);
-        (new_node, n, entry, err)
+        (newnd, n, entry, err)
     }
 
     fn delete_lsm<Q>(
@@ -439,7 +311,6 @@ where
 
         let node = node.unwrap();
         let mut new_node = node.mvcc_clone(reclaim);
-        //let mut node = Mvcc::walkdown_rot23(node.unwrap());
 
         let (n, entry) = match new_node.as_key().borrow().cmp(&key) {
             Ordering::Greater => {
@@ -584,7 +455,7 @@ where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        get(Snapshot::clone(&self.snapshot).root_ref(), key)
+        get(Snapshot::clone(&self.snapshot).as_root(), key)
     }
 
     pub fn iter(&self) -> Iter<K, V> {
@@ -652,6 +523,9 @@ where
     }
 }
 
+/// Deep walk validate of Mvcc index. Note that in addition to normal
+/// contraints to type parameter `K`, K-type shall also implement
+/// `Debug` trait.
 impl<K, V> Mvcc<K, V>
 where
     K: Clone + Ord + Debug,
@@ -667,10 +541,10 @@ where
     /// for more information.
     pub fn validate(&self) -> Result<LlrbStats, Error> {
         let arc_mvcc = Snapshot::clone(&self.snapshot);
-        let root = arc_mvcc.root_ref();
-        let (red, nb, d) = (is_red(root), 0, 0);
+        let root = arc_mvcc.as_root();
+        let (red, blacks, depth) = (is_red(root), 0, 0);
         let mut depths: LlrbDepth = Default::default();
-        let blacks = validate_tree(root, red, nb, d, &mut depths)?;
+        let blacks = validate_tree(root, red, blacks, depth, &mut depths)?;
 
         Ok(LlrbStats::new_full(
             arc_mvcc.n_count,
@@ -687,10 +561,6 @@ where
     V: Clone + Diff,
 {
     ////--------- rotation routines for 2-3 algorithm ----------------
-
-    //fn walkdown_rot23(node: Box<Node<K, V>>) -> Box<Node<K, V>> {
-    //    node
-    //}
 
     fn walkuprot_23(
         mut node: Box<Node<K, V>>,
@@ -864,9 +734,9 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
+    // create the first snapshot and a placeholder `next` snapshot for Mvcc.
     fn new() -> Snapshot<K, V> {
-        let next = Some(Arc::new(MvccRoot::new(None)));
-        let mvcc_root: MvccRoot<K, V> = MvccRoot::new(next);
+        let mvcc_root = MvccRoot::new(Some(Arc::new(MvccRoot::new(None))));
         let arc = Box::new(Arc::new(mvcc_root));
         //println!("new snapshot {:p} {}", arc, Arc::strong_count(&arc));
         Snapshot {
@@ -874,6 +744,7 @@ where
         }
     }
 
+    // similar to Arc::clone for AtomicPtr<Arc<MvccRoot<K,V>>>
     fn clone(this: &Snapshot<K, V>) -> Arc<MvccRoot<K, V>> {
         Arc::clone(unsafe { this.value.load(Relaxed).as_ref().unwrap() })
     }
@@ -885,11 +756,15 @@ where
         n_count: usize,
         reclaim: Vec<Box<Node<K, V>>>,
     ) {
-        // gets arc-dropped
-        let arc = unsafe { Box::from_raw(self.value.load(Relaxed)) };
-        let next_arc = Box::new(Arc::clone(arc.next.as_ref().unwrap()));
+        // * curr_s points to next_s, and currently the only reference to next_s.
+        // * curr_s gets dropped, but there can be readers holding a reference.
+        // * when curr_s gets dropped it reference to next_s is decremented.
+        // * before curr_s gets dropped next_s is cloned, leaked, stored.
+
+        let curr_s = unsafe { Box::from_raw(self.value.load(Relaxed)) };
+        let next_s = Box::new(Arc::clone(curr_s.next.as_ref().unwrap()));
         let mvcc_root = unsafe {
-            (&**next_arc as *const MvccRoot<K, V> as *mut MvccRoot<K, V>)
+            (&**next_s as *const MvccRoot<K, V> as *mut MvccRoot<K, V>)
                 .as_mut()
                 .unwrap()
         };
@@ -898,17 +773,9 @@ where
         mvcc_root.seqno = seqno;
         mvcc_root.n_count = n_count;
         mvcc_root.next = Some(Arc::new(MvccRoot::new(None)));
-        //println!(
-        //    "shift snapshot {:p} {} {} {:p}",
-        //    next_arc,
-        //    Arc::strong_count(&arc),
-        //    Arc::strong_count(&next_arc),
-        //    mvcc_root.next.as_ref().unwrap().deref(),
-        //);
-        //print_reclaim("    ", &reclaim);
         mvcc_root.reclaim = reclaim;
 
-        self.value.store(Box::leak(next_arc), Relaxed);
+        self.value.store(Box::leak(next_s), Relaxed);
     }
 }
 
@@ -929,6 +796,8 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
+    // shall be called twice while creating the Mvcc index and once
+    // for every new snapshot that gets created and shifted into the chain.
     fn new(next: Option<Arc<MvccRoot<K, V>>>) -> MvccRoot<K, V> {
         //println!("new mvcc-root {:p}", mvcc_root);
         let mut mvcc_root: MvccRoot<K, V> = Default::default();
@@ -946,7 +815,7 @@ where
         }
     }
 
-    fn root_ref(&self) -> Option<&Node<K, V>> {
+    fn as_root(&self) -> Option<&Node<K, V>> {
         self.root.as_ref().map(Deref::deref)
     }
 }
@@ -983,6 +852,149 @@ where
             n_count: Default::default(),
             next: Default::default(),
         }
+    }
+}
+
+pub struct Writer<'a, K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    index: &'a Mvcc<K, V>,
+}
+
+impl<'a, K, V> Writer<'a, K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    pub fn set(&mut self, key: K, value: V) -> Option<Entry<K, V>> {
+        let lsm = self.index.lsm;
+        let snapshot = Snapshot::clone(&self.index.snapshot);
+
+        let (seqno, mut n_count) = (snapshot.seqno + 1, snapshot.n_count);
+        let new_entry = Entry::new(
+            key,
+            Value::new_upsert(vlog::Value::new_native(value), seqno),
+        );
+
+        let root = snapshot.root_duplicate();
+        let mut reclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
+        match Mvcc::upsert(root, new_entry, lsm, &mut reclm) {
+            (Some(mut root), Some(mut n), entry) => {
+                root.set_black();
+                if entry.is_none() {
+                    n_count += 1;
+                }
+                n.dirty = false;
+                Box::leak(n);
+                self.index
+                    .snapshot
+                    .shift_snapshot(Some(root), seqno, n_count, reclm);
+                entry
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn set_cas(&mut self, key: K, value: V, cas: u64) -> Result<Option<Entry<K, V>>, Error> {
+        let lsm = self.index.lsm;
+        let snapshot = Snapshot::clone(&self.index.snapshot);
+
+        let (mut seqno, mut n_count) = (snapshot.seqno, snapshot.n_count);
+        let new_entry = Entry::new(
+            key,
+            Value::new_upsert(vlog::Value::new_native(value), seqno + 1),
+        );
+        let root = snapshot.root_duplicate();
+        let mut rclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
+        let s = match Mvcc::upsert_cas(root, new_entry, cas, lsm, &mut rclm) {
+            (Some(mut root), optn, _, Some(err)) => {
+                root.set_black();
+                (root, optn, Err(err))
+            }
+            (Some(mut root), optn, entry, None) => {
+                root.set_black();
+                seqno += 1;
+                if entry.is_none() {
+                    n_count += 1
+                }
+                (root, optn, Ok(entry))
+            }
+            _ => panic!("set_cas: impossible case, call programmer"),
+        };
+        let (root, optn, entry) = s;
+
+        // TODO: can we optimize this for no-op cases (err cases) ?
+        self.index
+            .snapshot
+            .shift_snapshot(Some(root), seqno, n_count, rclm);
+
+        if let Some(mut n) = optn {
+            n.dirty = false;
+            Box::leak(n);
+        }
+        entry
+    }
+
+    pub fn delete<Q>(&mut self, key: &Q) -> Option<Entry<K, V>>
+    where
+        // TODO: From<Q> and Clone will fail if V=String and Q=str
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
+    {
+        let snapshot = Snapshot::clone(&self.index.snapshot);
+
+        let (mut seqno, mut n_count) = (snapshot.seqno + 1, snapshot.n_count);
+        let root = snapshot.root_duplicate();
+        let mut reclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
+        let (root, entry) = if self.index.lsm {
+            let s = match Mvcc::delete_lsm(root, key, seqno, &mut reclm) {
+                (Some(mut root), optn, entry) => {
+                    root.set_black();
+                    (Some(root), optn, entry)
+                }
+                (None, optn, entry) => (None, optn, entry),
+            };
+            let (root, optn, entry) = s;
+
+            //println!("delete {:?}", entry.as_ref().map(|e| e.is_deleted()));
+            match &entry {
+                None => {
+                    n_count += 1;
+                }
+                Some(e) if e.is_deleted() => {
+                    seqno -= 1;
+                }
+                _ => (),
+            }
+
+            if let Some(mut n) = optn {
+                n.dirty = false;
+                Box::leak(n);
+            }
+            (root, entry)
+        } else {
+            // in non-lsm mode remove the entry from the tree.
+            let (root, entry) = match Mvcc::do_delete(root, key, &mut reclm) {
+                (None, entry) => (None, entry),
+                (Some(mut root), entry) => {
+                    root.set_black();
+                    (Some(root), entry)
+                }
+            };
+            if entry.is_some() {
+                n_count -= 1;
+            } else {
+                seqno -= 1;
+            }
+            (root, entry)
+        };
+
+        self.index
+            .snapshot
+            .shift_snapshot(root, seqno, n_count, reclm);
+        entry
     }
 }
 

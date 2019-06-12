@@ -36,7 +36,7 @@ where
 fn validate_tree<K, V>(
     node: Option<&Node<K, V>>,
     fromred: bool,
-    mut nb: usize,
+    mut blacks: usize,
     depth: usize,
     depths: &mut LlrbDepth,
 ) -> Result<usize, Error>
@@ -50,11 +50,11 @@ where
         Some(_node) if fromred && red => Err(Error::ConsecutiveReds),
         Some(node) => {
             if !red {
-                nb += 1;
+                blacks += 1;
             }
             let (left, right) = (node.as_left_deref(), node.as_right_deref());
-            let l = validate_tree(left, red, nb, depth + 1, depths)?;
-            let r = validate_tree(right, red, nb, depth + 1, depths)?;
+            let l = validate_tree(left, red, blacks, depth + 1, depths)?;
+            let r = validate_tree(right, red, blacks, depth + 1, depths)?;
             if l != r {
                 return Err(Error::UnbalancedBlacks(l, r));
             }
@@ -76,7 +76,7 @@ where
         }
         None => {
             depths.sample(depth);
-            Ok(nb)
+            Ok(blacks)
         }
     }
 }

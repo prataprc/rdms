@@ -13,8 +13,7 @@ include!("./ref_test.rs");
 #[test]
 fn test_id() {
     let mvcc: Mvcc<i32, Empty> = Mvcc::new("test-mvcc");
-    let _arc = mvcc.mvccroot_ref();
-    assert_eq!(mvcc.id(), "test-mvcc".to_string());
+    assert_eq!(mvcc.to_name(), "test-mvcc".to_string());
 }
 
 #[test]
@@ -36,30 +35,32 @@ fn test_set() {
     let mvcc: Mvcc<i64, i64> = Mvcc::new("test-mvcc");
     let mut refns = RefNodes::new(false /*lsm*/, 10);
 
-    assert!(mvcc.set(2, 10).is_none());
+    let mut w = mvcc.to_writer();
+    assert!(w.set(2, 10).is_none());
     refns.set(2, 10);
-    assert!(mvcc.set(1, 10).is_none());
+    assert!(w.set(1, 10).is_none());
     refns.set(1, 10);
-    assert!(mvcc.set(3, 10).is_none());
+    assert!(w.set(3, 10).is_none());
     refns.set(3, 10);
-    assert!(mvcc.set(6, 10).is_none());
+    assert!(w.set(6, 10).is_none());
     refns.set(6, 10);
-    assert!(mvcc.set(5, 10).is_none());
+    assert!(w.set(5, 10).is_none());
     refns.set(5, 10);
-    assert!(mvcc.set(4, 10).is_none());
+    assert!(w.set(4, 10).is_none());
     refns.set(4, 10);
-    assert!(mvcc.set(8, 10).is_none());
+    assert!(w.set(8, 10).is_none());
     refns.set(8, 10);
-    assert!(mvcc.set(0, 10).is_none());
+    assert!(w.set(0, 10).is_none());
     refns.set(0, 10);
-    assert!(mvcc.set(9, 10).is_none());
+    assert!(w.set(9, 10).is_none());
     refns.set(9, 10);
-    assert!(mvcc.set(7, 10).is_none());
+    assert!(w.set(7, 10).is_none());
     refns.set(7, 10);
 
     assert_eq!(mvcc.len(), 10);
     assert!(mvcc.validate().is_ok());
 
+    assert_eq!(refns.to_seqno(), mvcc.to_seqno());
     // test get
     for i in 0..10 {
         let node = mvcc.get(&i);
@@ -80,68 +81,70 @@ fn test_cas_lsm() {
     let mvcc: Mvcc<i64, i64> = Mvcc::new_lsm("test-mvcc");
     let mut refns = RefNodes::new(true /*lsm*/, 11);
 
-    assert!(mvcc.set(2, 100).is_none());
+    let mut w = mvcc.to_writer();
+    assert!(w.set(2, 100).is_none());
     refns.set(2, 100);
-    assert!(mvcc.set(1, 100).is_none());
+    assert!(w.set(1, 100).is_none());
     refns.set(1, 100);
-    assert!(mvcc.set(3, 100).is_none());
+    assert!(w.set(3, 100).is_none());
     refns.set(3, 100);
-    assert!(mvcc.set(6, 100).is_none());
+    assert!(w.set(6, 100).is_none());
     refns.set(6, 100);
-    assert!(mvcc.set(5, 100).is_none());
+    assert!(w.set(5, 100).is_none());
     refns.set(5, 100);
-    assert!(mvcc.set(4, 100).is_none());
+    assert!(w.set(4, 100).is_none());
     refns.set(4, 100);
-    assert!(mvcc.set(8, 100).is_none());
+    assert!(w.set(8, 100).is_none());
     refns.set(8, 100);
-    assert!(mvcc.set(0, 100).is_none());
+    assert!(w.set(0, 100).is_none());
     refns.set(0, 100);
-    assert!(mvcc.set(9, 100).is_none());
+    assert!(w.set(9, 100).is_none());
     refns.set(9, 100);
-    assert!(mvcc.set(7, 100).is_none());
+    assert!(w.set(7, 100).is_none());
     refns.set(7, 100);
 
     // repeated mutations on same key
 
-    let node = mvcc.set_cas(0, 200, 8).ok().unwrap();
+    let node = w.set_cas(0, 200, 8).ok().unwrap();
     let refn = refns.set_cas(0, 200, 8);
     check_node(node, refn);
 
-    let node = mvcc.set_cas(5, 200, 5).ok().unwrap();
+    let node = w.set_cas(5, 200, 5).ok().unwrap();
     let refn = refns.set_cas(5, 200, 5);
     check_node(node, refn);
 
-    let node = mvcc.set_cas(6, 200, 4).ok().unwrap();
+    let node = w.set_cas(6, 200, 4).ok().unwrap();
     let refn = refns.set_cas(6, 200, 4);
     check_node(node, refn);
 
-    let node = mvcc.set_cas(9, 200, 9).ok().unwrap();
+    let node = w.set_cas(9, 200, 9).ok().unwrap();
     let refn = refns.set_cas(9, 200, 9);
     check_node(node, refn);
 
-    let node = mvcc.set_cas(0, 300, 11).ok().unwrap();
+    let node = w.set_cas(0, 300, 11).ok().unwrap();
     let refn = refns.set_cas(0, 300, 11);
     check_node(node, refn);
 
-    let node = mvcc.set_cas(5, 300, 12).ok().unwrap();
+    let node = w.set_cas(5, 300, 12).ok().unwrap();
     let refn = refns.set_cas(5, 300, 12);
     check_node(node, refn);
 
-    let node = mvcc.set_cas(9, 300, 14).ok().unwrap();
+    let node = w.set_cas(9, 300, 14).ok().unwrap();
     let refn = refns.set_cas(9, 300, 14);
     check_node(node, refn);
 
     // create
-    assert!(mvcc.set_cas(10, 100, 0).ok().unwrap().is_none());
+    assert!(w.set_cas(10, 100, 0).ok().unwrap().is_none());
     assert!(refns.set_cas(10, 100, 0).is_none());
     // error create
-    assert!(mvcc.set_cas(10, 100, 0).err() == Some(Error::InvalidCAS));
+    assert!(w.set_cas(10, 100, 0).err() == Some(Error::InvalidCAS));
     // error insert
-    assert!(mvcc.set_cas(9, 400, 14).err() == Some(Error::InvalidCAS));
+    assert!(w.set_cas(9, 400, 14).err() == Some(Error::InvalidCAS));
 
     assert_eq!(mvcc.len(), 11);
     assert!(mvcc.validate().is_ok());
 
+    assert_eq!(refns.to_seqno(), mvcc.to_seqno());
     // test get
     for i in 0..11 {
         let node = mvcc.get(&i);
@@ -162,34 +165,36 @@ fn test_delete() {
     let mvcc: Mvcc<i64, i64> = Mvcc::new("test-mvcc");
     let mut refns = RefNodes::new(false /*lsm*/, 11);
 
-    assert!(mvcc.set(2, 100).is_none());
+    let mut w = mvcc.to_writer();
+    assert!(w.set(2, 100).is_none());
     refns.set(2, 100);
-    assert!(mvcc.set(1, 100).is_none());
+    assert!(w.set(1, 100).is_none());
     refns.set(1, 100);
-    assert!(mvcc.set(3, 100).is_none());
+    assert!(w.set(3, 100).is_none());
     refns.set(3, 100);
-    assert!(mvcc.set(6, 100).is_none());
+    assert!(w.set(6, 100).is_none());
     refns.set(6, 100);
-    assert!(mvcc.set(5, 100).is_none());
+    assert!(w.set(5, 100).is_none());
     refns.set(5, 100);
-    assert!(mvcc.set(4, 100).is_none());
+    assert!(w.set(4, 100).is_none());
     refns.set(4, 100);
-    assert!(mvcc.set(8, 100).is_none());
+    assert!(w.set(8, 100).is_none());
     refns.set(8, 100);
-    assert!(mvcc.set(0, 100).is_none());
+    assert!(w.set(0, 100).is_none());
     refns.set(0, 100);
-    assert!(mvcc.set(9, 100).is_none());
+    assert!(w.set(9, 100).is_none());
     refns.set(9, 100);
-    assert!(mvcc.set(7, 100).is_none());
+    assert!(w.set(7, 100).is_none());
     refns.set(7, 100);
 
     // delete a missing node.
-    assert!(mvcc.delete(&10).is_none());
+    assert!(w.delete(&10).is_none());
     assert!(refns.delete(10).is_none());
 
     assert_eq!(mvcc.len(), 10);
     assert!(mvcc.validate().is_ok());
 
+    assert_eq!(refns.to_seqno(), mvcc.to_seqno());
     // test iter
     {
         let (mut iter, mut iter_ref) = (mvcc.iter(), refns.iter());
@@ -202,10 +207,11 @@ fn test_delete() {
 
     // delete all entry. and set new entries
     for i in 0..10 {
-        let node = mvcc.delete(&i);
+        let node = w.delete(&i);
         let refn = refns.delete(i);
         check_node(node, refn);
     }
+    assert_eq!(refns.to_seqno(), mvcc.to_seqno());
     assert_eq!(mvcc.len(), 0);
     assert!(mvcc.validate().is_ok());
     // test iter
@@ -217,30 +223,32 @@ fn test_iter() {
     let mvcc: Mvcc<i64, i64> = Mvcc::new("test-mvcc");
     let mut refns = RefNodes::new(false /*lsm*/, 10);
 
-    assert!(mvcc.set(2, 10).is_none());
+    let mut w = mvcc.to_writer();
+    assert!(w.set(2, 10).is_none());
     refns.set(2, 10);
-    assert!(mvcc.set(1, 10).is_none());
+    assert!(w.set(1, 10).is_none());
     refns.set(1, 10);
-    assert!(mvcc.set(3, 10).is_none());
+    assert!(w.set(3, 10).is_none());
     refns.set(3, 10);
-    assert!(mvcc.set(6, 10).is_none());
+    assert!(w.set(6, 10).is_none());
     refns.set(6, 10);
-    assert!(mvcc.set(5, 10).is_none());
+    assert!(w.set(5, 10).is_none());
     refns.set(5, 10);
-    assert!(mvcc.set(4, 10).is_none());
+    assert!(w.set(4, 10).is_none());
     refns.set(4, 10);
-    assert!(mvcc.set(8, 10).is_none());
+    assert!(w.set(8, 10).is_none());
     refns.set(8, 10);
-    assert!(mvcc.set(0, 10).is_none());
+    assert!(w.set(0, 10).is_none());
     refns.set(0, 10);
-    assert!(mvcc.set(9, 10).is_none());
+    assert!(w.set(9, 10).is_none());
     refns.set(9, 10);
-    assert!(mvcc.set(7, 10).is_none());
+    assert!(w.set(7, 10).is_none());
     refns.set(7, 10);
 
     assert_eq!(mvcc.len(), 10);
     assert!(mvcc.validate().is_ok());
 
+    assert_eq!(refns.to_seqno(), mvcc.to_seqno());
     // test iter
     let (mut iter, mut iter_ref) = (mvcc.iter(), refns.iter());
     loop {
@@ -259,30 +267,32 @@ fn test_range() {
     let mvcc: Mvcc<i64, i64> = Mvcc::new("test-mvcc");
     let mut refns = RefNodes::new(false /*lsm*/, 10);
 
-    assert!(mvcc.set(2, 10).is_none());
+    let mut w = mvcc.to_writer();
+    assert!(w.set(2, 10).is_none());
     refns.set(2, 10);
-    assert!(mvcc.set(1, 10).is_none());
+    assert!(w.set(1, 10).is_none());
     refns.set(1, 10);
-    assert!(mvcc.set(3, 10).is_none());
+    assert!(w.set(3, 10).is_none());
     refns.set(3, 10);
-    assert!(mvcc.set(6, 10).is_none());
+    assert!(w.set(6, 10).is_none());
     refns.set(6, 10);
-    assert!(mvcc.set(5, 10).is_none());
+    assert!(w.set(5, 10).is_none());
     refns.set(5, 10);
-    assert!(mvcc.set(4, 10).is_none());
+    assert!(w.set(4, 10).is_none());
     refns.set(4, 10);
-    assert!(mvcc.set(8, 10).is_none());
+    assert!(w.set(8, 10).is_none());
     refns.set(8, 10);
-    assert!(mvcc.set(0, 10).is_none());
+    assert!(w.set(0, 10).is_none());
     refns.set(0, 10);
-    assert!(mvcc.set(9, 10).is_none());
+    assert!(w.set(9, 10).is_none());
     refns.set(9, 10);
-    assert!(mvcc.set(7, 10).is_none());
+    assert!(w.set(7, 10).is_none());
     refns.set(7, 10);
 
     assert_eq!(mvcc.len(), 10);
     assert!(mvcc.validate().is_ok());
 
+    assert_eq!(refns.to_seqno(), mvcc.to_seqno());
     // test range
     for _ in 0..1_000 {
         let (low, high) = random_low_high(mvcc.len());
@@ -320,6 +330,7 @@ fn test_crud() {
     let mvcc: Mvcc<i64, i64> = Mvcc::new("test-mvcc");
     let mut refns = RefNodes::new(false /*lsm*/, size);
 
+    let mut w = mvcc.to_writer();
     for _ in 0..100000 {
         let key: i64 = (random::<i64>() % (size as i64)).abs();
         let value: i64 = random();
@@ -327,7 +338,7 @@ fn test_crud() {
         //println!("key {} value {} op {}", key, value, op);
         match op {
             0 => {
-                let node = mvcc.set(key, value);
+                let node = w.set(key, value);
                 let refn = refns.set(key, value);
                 check_node(node, refn);
                 false
@@ -341,13 +352,13 @@ fn test_crud() {
                     0
                 };
 
-                let node = mvcc.set_cas(key, value, cas).ok().unwrap();
+                let node = w.set_cas(key, value, cas).ok().unwrap();
                 let refn = refns.set_cas(key, value, cas);
                 check_node(node, refn);
                 false
             }
             2 => {
-                let node = mvcc.delete(&key);
+                let node = w.delete(&key);
                 let refn = refns.delete(key);
                 check_node(node, refn);
                 true
@@ -360,6 +371,7 @@ fn test_crud() {
 
     //println!("len {}", mvcc.len());
 
+    assert_eq!(refns.to_seqno(), mvcc.to_seqno());
     // test iter
     let (mut iter, mut iter_ref) = (mvcc.iter(), refns.iter());
     loop {
@@ -397,6 +409,7 @@ fn test_crud_lsm() {
     let mvcc: Mvcc<i64, i64> = Mvcc::new_lsm("test-mvcc");
     let mut refns = RefNodes::new(true /*lsm*/, size as usize);
 
+    let mut w = mvcc.to_writer();
     for _i in 0..20000 {
         let key: i64 = (random::<i64>() % size).abs();
         let value: i64 = random();
@@ -404,7 +417,7 @@ fn test_crud_lsm() {
         //println!("op {} on {}", op, key);
         match op {
             0 => {
-                let node = mvcc.set(key, value);
+                let node = w.set(key, value);
                 let refn = refns.set(key, value);
                 check_node(node, refn);
                 false
@@ -419,13 +432,13 @@ fn test_crud_lsm() {
                 };
 
                 //println!("set_cas {} {}", key, seqno);
-                let node = mvcc.set_cas(key, value, cas).ok().unwrap();
+                let node = w.set_cas(key, value, cas).ok().unwrap();
                 let refn = refns.set_cas(key, value, cas);
                 check_node(node, refn);
                 false
             }
             2 => {
-                let node = mvcc.delete(&key);
+                let node = w.delete(&key);
                 let refn = refns.delete(key);
                 check_node(node, refn);
                 true
@@ -438,6 +451,7 @@ fn test_crud_lsm() {
 
     //println!("len {}", mvcc.len());
 
+    assert_eq!(refns.to_seqno(), mvcc.to_seqno());
     // test iter
     let (mut iter, mut iter_ref) = (mvcc.iter(), refns.iter());
     loop {

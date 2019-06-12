@@ -59,6 +59,7 @@ fn test_set() {
     assert_eq!(llrb.len(), 10);
     assert!(llrb.validate().is_ok());
 
+    assert_eq!(refns.to_seqno(), llrb.to_seqno());
     // test get
     for i in 0..10 {
         let entry = llrb.get(&i);
@@ -141,6 +142,7 @@ fn test_cas_lsm() {
     assert_eq!(llrb.len(), 11);
     assert!(llrb.validate().is_ok());
 
+    assert_eq!(refns.to_seqno(), llrb.to_seqno());
     // test get
     for i in 0..11 {
         let entry = llrb.get(&i);
@@ -189,6 +191,7 @@ fn test_delete() {
     assert_eq!(llrb.len(), 10);
     assert!(llrb.validate().is_ok());
 
+    assert_eq!(refns.to_seqno(), llrb.to_seqno());
     // test iter
     //println!("start loop");
     {
@@ -209,6 +212,7 @@ fn test_delete() {
         let refn = refns.delete(i);
         check_node(entry, refn);
     }
+    assert_eq!(refns.to_seqno(), llrb.to_seqno());
     assert_eq!(llrb.len(), 0);
     assert!(llrb.validate().is_ok());
     // test iter
@@ -244,6 +248,7 @@ fn test_iter() {
     assert_eq!(llrb.len(), 10);
     assert!(llrb.validate().is_ok());
 
+    assert_eq!(refns.to_seqno(), llrb.to_seqno());
     // test iter
     let (mut iter, mut iter_ref) = (llrb.iter(), refns.iter());
     loop {
@@ -286,6 +291,7 @@ fn test_range() {
     assert_eq!(llrb.len(), 10);
     assert!(llrb.validate().is_ok());
 
+    assert_eq!(refns.to_seqno(), llrb.to_seqno());
     // test range
     for _ in 0..1_000 {
         let (low, high) = random_low_high(llrb.len());
@@ -362,6 +368,7 @@ fn test_crud() {
 
     //println!("len {}", llrb.len());
 
+    assert_eq!(refns.to_seqno(), llrb.to_seqno());
     // test iter
     let (mut iter, mut iter_ref) = (llrb.iter(), refns.iter());
     loop {
@@ -440,6 +447,7 @@ fn test_crud_lsm() {
 
     //println!("len {}", llrb.len());
 
+    assert_eq!(refns.to_seqno(), llrb.to_seqno());
     // test iter
     let (mut iter, mut iter_ref) = (llrb.iter(), refns.iter());
     loop {

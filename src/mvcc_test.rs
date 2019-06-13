@@ -63,9 +63,9 @@ fn test_set() {
     assert_eq!(refns.to_seqno(), mvcc.to_seqno());
     // test get
     for i in 0..10 {
-        let node = mvcc.get(&i);
+        let entry = mvcc.get(&i);
         let refn = refns.get(i);
-        check_node(node, refn);
+        check_node(entry.ok(), refn);
     }
     // test iter
     let (mut iter, mut iter_ref) = (mvcc.iter(), refns.iter());
@@ -147,9 +147,9 @@ fn test_cas_lsm() {
     assert_eq!(refns.to_seqno(), mvcc.to_seqno());
     // test get
     for i in 0..11 {
-        let node = mvcc.get(&i);
+        let entry = mvcc.get(&i);
         let refn = refns.get(i);
-        check_node(node, refn);
+        check_node(entry.ok(), refn);
     }
     // test iter
     let (mut iter, mut iter_ref) = (mvcc.iter(), refns.iter());

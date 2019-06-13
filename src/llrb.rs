@@ -481,7 +481,7 @@ where
     V: Clone + Diff,
 {
     /// Get the entry for `key`.
-    pub fn get<Q>(&self, key: &Q) -> Option<Entry<K, V>>
+    pub fn get<Q>(&self, key: &Q) -> Result<Entry<K, V>, Error>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,

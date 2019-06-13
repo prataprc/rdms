@@ -17,7 +17,7 @@ where
 }
 
 /// Get the latest version for key.
-fn get<K, V, Q>(mut node: Option<&Node<K, V>>, key: &Q) -> Option<Entry<K, V>>
+fn get<K, V, Q>(mut node: Option<&Node<K, V>>, key: &Q) -> Result<Entry<K, V>, Error>
 where
     K: Clone + Ord + Borrow<Q>,
     V: Clone + Diff,
@@ -27,10 +27,10 @@ where
         node = match nref.as_key().borrow().cmp(key) {
             Ordering::Less => nref.as_right_deref(),
             Ordering::Greater => nref.as_left_deref(),
-            Ordering::Equal => return Some(nref.entry.clone()),
+            Ordering::Equal => return Ok(nref.entry.clone()),
         };
     }
-    None
+    Err(Error::KeyNotFound)
 }
 
 fn validate_tree<K, V>(

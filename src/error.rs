@@ -34,9 +34,10 @@ pub enum Error {
     /// Duplicated keys are not allowed in the index. Each and every
     /// Key must be unique.
     DuplicateKey(String),
-    /// MVCC algorithm uses dirty node marker for newly created nodes
-    /// in its mutation path.
+    /// Llrb and Mvcc index uses dirty node marker for newly
+    /// created nodes in its mutation path.
     DirtyNode,
+    /// Supplied key is not found in the index.
     KeyNotFound,
     InvalidFile(String),
     IoError(io::Error),

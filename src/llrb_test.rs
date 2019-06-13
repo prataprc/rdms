@@ -64,7 +64,7 @@ fn test_set() {
     for i in 0..10 {
         let entry = llrb.get(&i);
         let refn = refns.get(i);
-        check_node(entry, refn);
+        check_node(entry.ok(), refn);
     }
     // test iter
     let (mut iter, mut iter_ref) = (llrb.iter(), refns.iter());
@@ -147,7 +147,7 @@ fn test_cas_lsm() {
     for i in 0..11 {
         let entry = llrb.get(&i);
         let refn = refns.get(i);
-        check_node(entry, refn);
+        check_node(entry.ok(), refn);
     }
     // test iter
     let (mut iter, mut iter_ref) = (llrb.iter(), refns.iter());

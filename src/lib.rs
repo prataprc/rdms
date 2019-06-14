@@ -33,6 +33,7 @@ extern crate jsondata;
 //mod bubt_indx;
 //mod bubt_snap;
 //mod bubt_stats;
+mod bubt_entry;
 mod core;
 mod error;
 mod llrb;

@@ -1,3 +1,5 @@
+use std::convert::TryInto;
+use std::fmt::Display;
 use std::{fs, path};
 
 use crate::error::Error;
@@ -26,4 +28,14 @@ pub(crate) fn open_file_r(file: &str) -> Result<fs::File, Error> {
     let p = path::Path::new(file);
     let mut opts = fs::OpenOptions::new();
     Ok(opts.read(true).open(p)?)
+}
+
+pub(crate) fn try_convert_int<T, U>(from: T, msg: &str) -> Result<U, Error>
+where
+    T: Copy + Display + TryInto<U>,
+{
+    match from.try_into() {
+        Ok(to) => Ok(to),
+        Err(_) => Err(Error::FailConversion(format!("{} for {}", msg, from))),
+    }
 }

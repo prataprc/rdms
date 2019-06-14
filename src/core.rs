@@ -25,8 +25,8 @@ pub trait Diff: Sized {
 
 /// Serialize types and values to binary sequence of bytes.
 pub trait Serialize: Sized {
-    /// Convert this value into binary equivalent.
-    fn encode(&self, buf: &mut Vec<u8>);
+    /// Convert this value into binary equivalent. Return bytes encoded.
+    fn encode(&self, buf: &mut Vec<u8>) -> usize;
 
     /// Reverse process of encode, given the binary equivalent, `buf`,
     /// of a value, construct self.
@@ -36,7 +36,7 @@ pub trait Serialize: Sized {
 /// Delta maintains the older version of value, with necessary fields for
 /// log-structured-merge.
 #[derive(Clone)]
-enum DeltaCore<V>
+pub(crate) enum DeltaTuck<V>
 where
     V: Clone + Diff,
 {
@@ -49,7 +49,7 @@ pub struct Delta<V>
 where
     V: Clone + Diff,
 {
-    data: DeltaCore<V>,
+    data: DeltaTuck<V>,
 }
 
 // Delta construction methods.
@@ -59,30 +59,39 @@ where
 {
     pub(crate) fn new_upsert(delta: vlog::Delta<V>, seqno: u64) -> Delta<V> {
         Delta {
-            data: DeltaCore::U { delta, seqno },
+            data: DeltaTuck::U { delta, seqno },
         }
     }
 
     pub(crate) fn new_delete(deleted: u64) -> Delta<V> {
         Delta {
-            data: DeltaCore::D { deleted },
+            data: DeltaTuck::D { deleted },
         }
     }
 
     #[allow(dead_code)] // TODO: remove this once bogn is weaved-up.
     pub(crate) fn into_upserted(self) -> Option<(vlog::Delta<V>, u64)> {
         match self.data {
-            DeltaCore::U { delta, seqno } => Some((delta, seqno)),
-            DeltaCore::D { .. } => None,
+            DeltaTuck::U { delta, seqno } => Some((delta, seqno)),
+            DeltaTuck::D { .. } => None,
         }
     }
 
     #[allow(dead_code)] // TODO: remove this once bogn is weaved-up.
     pub(crate) fn into_deleted(self) -> Option<u64> {
         match self.data {
-            DeltaCore::D { deleted } => Some(deleted),
-            DeltaCore::U { .. } => None,
+            DeltaTuck::D { deleted } => Some(deleted),
+            DeltaTuck::U { .. } => None,
         }
+    }
+}
+
+impl<V> AsRef<DeltaTuck<V>> for Delta<V>
+where
+    V: Clone + Diff,
+{
+    fn as_ref(&self) -> &DeltaTuck<V> {
+        &self.data
     }
 }
 
@@ -94,8 +103,8 @@ where
     /// Return the underlying `difference` value for this delta.
     pub fn into_diff(self) -> Option<<V as Diff>::D> {
         match self.data {
-            DeltaCore::D { .. } => None,
-            DeltaCore::U { delta, .. } => delta.into_native(),
+            DeltaTuck::D { .. } => None,
+            DeltaTuck::U { delta, .. } => delta.into_native(),
         }
     }
 
@@ -105,8 +114,8 @@ where
     /// use born_seqno() and dead_seqno() methods respectively.
     pub fn to_seqno(&self) -> u64 {
         match &self.data {
-            DeltaCore::U { seqno, .. } => *seqno,
-            DeltaCore::D { deleted } => *deleted,
+            DeltaTuck::U { seqno, .. } => *seqno,
+            DeltaTuck::D { deleted } => *deleted,
         }
     }
 
@@ -115,8 +124,8 @@ where
     /// this version was deleted.
     pub fn to_seqno_state(&self) -> (bool, u64) {
         match &self.data {
-            DeltaCore::U { seqno, .. } => (true, *seqno),
-            DeltaCore::D { deleted } => (false, *deleted),
+            DeltaTuck::U { seqno, .. } => (true, *seqno),
+            DeltaTuck::D { deleted } => (false, *deleted),
         }
     }
 }
@@ -190,6 +199,10 @@ where
     K: Ord + Clone,
     V: Clone + Diff,
 {
+    pub const KEY_SIZE_LIMIT: usize = 1024 * 1024 * 1024; // 1GB
+    pub const DIFF_SIZE_LIMIT: usize = 1024 * 1024 * 1024 * 1024; // 1TB
+    pub const VALUE_SIZE_LIMIT: usize = 1024 * 1024 * 1024 * 1024; // 1TB
+
     pub(crate) fn new(key: K, value: Value<V>) -> Entry<K, V> {
         Entry {
             key,
@@ -310,9 +323,16 @@ where
     V: Clone + Diff,
 {
     #[inline]
-    #[allow(dead_code)] // TODO: remove this once bogn is weaved-up.
-    pub(crate) fn as_deltas(&self) -> &[Delta<V>] {
+    pub(crate) fn as_deltas(&self) -> &Vec<Delta<V>> {
         &self.deltas
+    }
+
+    pub(crate) fn to_delta_count(&self) -> usize {
+        self.deltas.len()
+    }
+
+    pub(crate) fn as_value(&self) -> &Value<V> {
+        &self.value
     }
 
     /// Return ownership of key.
@@ -403,12 +423,12 @@ where
             }
             None => match (self.deltas.next().map(|x| x.data), self.curval.take()) {
                 (None, _) => None,
-                (Some(DeltaCore::D { deleted }), _) => {
+                (Some(DeltaTuck::D { deleted }), _) => {
                     // this entry is deleted.
                     let key = self.key.clone();
                     Some(Entry::new(key, Value::new_delete(deleted)))
                 }
-                (Some(DeltaCore::U { delta, seqno }), None) => {
+                (Some(DeltaTuck::U { delta, seqno }), None) => {
                     // previous entry was a delete.
                     let nv: V = From::from(delta.into_native().unwrap());
                     let key = self.key.clone();
@@ -418,7 +438,7 @@ where
                         Value::new_upsert(vlog::Value::new_native(nv), seqno),
                     ))
                 }
-                (Some(DeltaCore::U { delta, seqno }), Some(curval)) => {
+                (Some(DeltaTuck::U { delta, seqno }), Some(curval)) => {
                     // this and previous entry are create/update.
                     let nv = curval.merge(&delta.into_native().unwrap());
                     self.curval = Some(nv.clone());

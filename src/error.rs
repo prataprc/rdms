@@ -39,6 +39,18 @@ pub enum Error {
     DirtyNode,
     /// Supplied key is not found in the index.
     KeyNotFound,
+    /// Error converting one type to another type.
+    FailConversion(String),
+    /// Expected a native value. TODO: hide this ?
+    NotNativeValue,
+    /// Expected a native delta. TODO: hide this ?
+    NotNativeDelta,
+    /// Key size, after serializing, exceeds limit.
+    KeySizeExceeded(usize),
+    /// Value size, after serializing, exceeds limit.
+    ValueSizeExceeded(usize),
+    /// Value-diff size, after serializing, exceeds limit.
+    DiffSizeExceeded(usize),
     InvalidFile(String),
     IoError(io::Error),
     PartialRead(usize, usize),

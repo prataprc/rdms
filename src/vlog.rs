@@ -1,6 +1,7 @@
 // TODO: There are dead code meant for future use case.
 
-use crate::core::Diff;
+use crate::core::{self, Diff, Serialize};
+use crate::error::Error;
 
 // *-----*------------------------------------*
 // |flags|        60-bit length               |
@@ -34,7 +35,7 @@ pub(crate) enum Value<V> {
 }
 
 impl<V> Value<V> {
-    pub(crate) const VALUE_FLAG: u64 = 0x1000000000000000;
+    const VALUE_FLAG: u64 = 0x1000000000000000;
 
     pub(crate) fn new_native(value: V) -> Value<V> {
         Value::Native { value }
@@ -63,6 +64,33 @@ impl<V> Value<V> {
     }
 }
 
+pub(crate) fn encode_value<V>(value: &Value<V>) -> Result<Vec<u8>, Error>
+where
+    V: Serialize,
+{
+    use crate::util::try_convert_int;
+
+    match value {
+        Value::Native { value } => {
+            let mut buf = vec![];
+            let n = value.encode(&mut buf);
+            buf.resize(n + 8, 0);
+            buf.copy_within(0..n, 8);
+
+            let mut vlen: u64 = try_convert_int(n + 8, "value-size: usize->u64")?;
+            vlen |= Value::<V>::VALUE_FLAG;
+            (&mut buf[..8]).copy_from_slice(&(vlen - 8).to_be_bytes());
+
+            if buf.len() < core::Entry::<i32, i32>::VALUE_SIZE_LIMIT {
+                Ok(buf)
+            } else {
+                Err(Error::ValueSizeExceeded(buf.len()))
+            }
+        }
+        _ => Err(Error::NotNativeValue),
+    }
+}
+
 // *-----*------------------------------------*
 // |flags|        60-bit length               |
 // *-----*------------------------------------*
@@ -81,11 +109,11 @@ pub enum Delta<V>
 where
     V: Diff,
 {
-    // Native delta, already de-serialized.
+    // Native diff, already de-serialized.
     Native {
-        delta: <V as Diff>::D,
+        diff: <V as Diff>::D,
     },
-    // Refers to serialized delta on disk, either index-file or vlog-file
+    // Refers to serialized diff on disk, either index-file or vlog-file
     Reference {
         fpos: u64,
         length: u64,
@@ -102,8 +130,8 @@ impl<V> Delta<V>
 where
     V: Diff,
 {
-    pub(crate) fn new_native(delta: <V as Diff>::D) -> Delta<V> {
-        Delta::Native { delta }
+    pub(crate) fn new_native(diff: <V as Diff>::D) -> Delta<V> {
+        Delta::Native { diff }
     }
 
     #[allow(dead_code)]
@@ -118,8 +146,35 @@ where
 
     pub(crate) fn into_native(self) -> Option<<V as Diff>::D> {
         match self {
-            Delta::Native { delta } => Some(delta),
+            Delta::Native { diff } => Some(diff),
             _ => None,
         }
+    }
+}
+
+pub(crate) fn encode_delta<V>(delta: &Delta<V>) -> Result<Vec<u8>, Error>
+where
+    V: Diff,
+    <V as Diff>::D: Serialize,
+{
+    use crate::util::try_convert_int;
+
+    match delta {
+        Delta::Native { diff } => {
+            let mut buf = vec![];
+            let n = diff.encode(&mut buf);
+            buf.resize(n + 8, 0);
+            buf.copy_within(..n, 8);
+
+            let mut dlen: u64 = try_convert_int(n + 8, "diff-size: usize->u64")?;
+            (&mut buf[..8]).copy_from_slice(&(dlen - 8).to_be_bytes());
+
+            if buf.len() < core::Entry::<i32, i32>::DIFF_SIZE_LIMIT {
+                Ok(buf)
+            } else {
+                Err(Error::DiffSizeExceeded(buf.len()))
+            }
+        }
+        _ => Err(Error::NotNativeDelta),
     }
 }

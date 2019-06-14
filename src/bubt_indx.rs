@@ -401,14 +401,12 @@ where
 // *-----*------------------------------------*
 // |              64-bit seqno                |
 // *-------------------*----------------------*
-// |          64-bit delete seqno             |
-// *-------------------*----------------------*
 // |               delta-fpos                 |
 // *------------------------------------------*
 //
 // Flags:
 //
-// * bit 60 reserved
+// * bit 60: 0 means delete operation, 1 means upsert operation
 // * bit 61 reserved
 // * bit 62 reserved
 // * bit 63 reserved
@@ -423,8 +421,6 @@ where
 // |flags|      60-bit value-len              |
 // *-----*------------------------------------*
 // |              64-bit seqno                |
-// *-----*------------------------------------*
-// |          64-bit delete seqno             |
 // *-------------------*----------------------*
 // |                  key                     |
 // *-------------------*----------------------*
@@ -436,8 +432,8 @@ where
 // *------------------------------------------*
 //
 // Flags:
-// * bit 60 set = value in vlog-file.
-// * bit 61 reserved
+// * bit 60: 1 means value in vlog-file, 0 means value in leaf node
+// * bit 61: 0 means delete operation, 1 means upsert operation
 // * bit 62 reserved
 // * bit 63 reserved
 //
@@ -473,6 +469,8 @@ where
         offsets: Vec<u32>,
         vpos: u64,
         // working buffers
+        entry_buf: Vec<u8>,
+        // working buffers
         first_key: Option<K>,
         k_buf: Vec<u8>,
         v_buf: Vec<u8>,
@@ -495,8 +493,8 @@ where
     V: Default + Clone + Diff + Serialize,
     <V as Diff>::D: Default + Clone + Serialize,
 {
-    const DELTA_HEADER: usize = 8 + 8 + 8 + 8;
-    const ENTRY_HEADER: usize = 8 + 8 + 8 + 8;
+    const DELTA_HEADER: usize = 8 + 8 + 8;
+    const ENTRY_HEADER: usize = 8 + 8 + 8;
     const FLAGS_VLOG: u64 = 0x1000000000000000;
     const FLAGS_VLEN: u64 = 0xF000000000000000;
     const FLAGS_DLEN: u64 = 0xF000000000000000;
@@ -573,6 +571,8 @@ where
             ZBlock::Decode { .. } => unreachable!(),
         }
     }
+
+    fn encode_hdr1(&mut self, 
 
     fn encode_key(&mut self, entry: &Entry<K, V>) -> usize {
         match self {

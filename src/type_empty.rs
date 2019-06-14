@@ -21,8 +21,8 @@ impl Diff for Empty {
 }
 
 impl Serialize for Empty {
-    fn encode(&self, _buf: &mut Vec<u8>) {
-        ()
+    fn encode(&self, _buf: &mut Vec<u8>) -> usize {
+        0
     }
 
     fn decode(&mut self, _buf: &[u8]) -> Result<(), Error> {

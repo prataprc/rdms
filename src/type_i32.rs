@@ -16,9 +16,10 @@ impl Diff for i32 {
 }
 
 impl Serialize for i32 {
-    fn encode(&self, buf: &mut Vec<u8>) {
+    fn encode(&self, buf: &mut Vec<u8>) -> usize {
         buf.resize(4, 0);
         buf.copy_from_slice(&self.to_be_bytes()[..4]);
+        4
     }
 
     fn decode(&mut self, buf: &[u8]) -> Result<(), Error> {

@@ -51,6 +51,8 @@ pub enum Error {
     ValueSizeExceeded(usize),
     /// Value-diff size, after serializing, exceeds limit.
     DiffSizeExceeded(usize),
+    /// De-serialization failed.
+    DecodeFail(String),
     InvalidFile(String),
     IoError(io::Error),
     PartialRead(usize, usize),

@@ -17,15 +17,20 @@ impl Diff for i32 {
 
 impl Serialize for i32 {
     fn encode(&self, buf: &mut Vec<u8>) -> usize {
-        buf.resize(4, 0);
-        buf.copy_from_slice(&self.to_be_bytes()[..4]);
+        let n = buf.len();
+        buf.resize(n + 4, 0);
+        buf[n..].copy_from_slice(&self.to_be_bytes());
         4
     }
 
     fn decode(&mut self, buf: &[u8]) -> Result<(), Error> {
-        let mut scratch = [0_u8; 4];
-        scratch.copy_from_slice(&buf[..4]);
-        *self = i32::from_be_bytes(scratch);
-        Ok(())
+        if buf.len() >= 4 {
+            let mut scratch = [0_u8; 4];
+            scratch.copy_from_slice(&buf[..4]);
+            *self = i32::from_be_bytes(scratch);
+            Ok(())
+        } else {
+            Err(Error::DecodeFail(format!("i32 encoded len {}", buf.len())))
+        }
     }
 }

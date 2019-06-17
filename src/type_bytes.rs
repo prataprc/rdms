@@ -17,8 +17,9 @@ impl Diff for Vec<u8> {
 
 impl Serialize for Vec<u8> {
     fn encode(&self, buf: &mut Vec<u8>) -> usize {
-        buf.resize(self.len(), 0);
-        buf.copy_from_slice(self);
+        let n = buf.len();
+        buf.resize(n + self.len(), 0);
+        buf[n..].copy_from_slice(self);
         self.len()
     }
 

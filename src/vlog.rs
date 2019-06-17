@@ -64,7 +64,10 @@ impl<V> Value<V> {
     }
 }
 
-pub(crate) fn encode_value<V>(value: &Value<V>) -> Result<Vec<u8>, Error>
+pub(crate) fn encode_value<V>(
+    value: &Value<V>, // encode if native value
+    buf: &mut Vec<u8>,
+) -> Result<usize, Error>
 where
     V: Serialize,
 {
@@ -72,19 +75,19 @@ where
 
     match value {
         Value::Native { value } => {
-            let mut buf = vec![];
-            let n = value.encode(&mut buf);
-            buf.resize(n + 8, 0);
-            buf.copy_within(0..n, 8);
+            let m = buf.len();
+            let n = value.encode(buf);
+            buf.resize(m + n + 8, 0);
+            buf.copy_within(m..n, m + 8);
 
             let mut vlen: u64 = try_convert_int(n + 8, "value-size: usize->u64")?;
             vlen |= Value::<V>::VALUE_FLAG;
-            (&mut buf[..8]).copy_from_slice(&(vlen - 8).to_be_bytes());
+            (&mut buf[m..m + 8]).copy_from_slice(&(vlen - 8).to_be_bytes());
 
-            if buf.len() < core::Entry::<i32, i32>::VALUE_SIZE_LIMIT {
-                Ok(buf)
+            if n < core::Entry::<i32, i32>::VALUE_SIZE_LIMIT {
+                Ok(n)
             } else {
-                Err(Error::ValueSizeExceeded(buf.len()))
+                Err(Error::ValueSizeExceeded(n))
             }
         }
         _ => Err(Error::NotNativeValue),
@@ -152,7 +155,10 @@ where
     }
 }
 
-pub(crate) fn encode_delta<V>(delta: &Delta<V>) -> Result<Vec<u8>, Error>
+pub(crate) fn encode_delta<V>(
+    delta: &Delta<V>, // encode if native diff
+    buf: &mut Vec<u8>,
+) -> Result<usize, Error>
 where
     V: Diff,
     <V as Diff>::D: Serialize,
@@ -161,18 +167,18 @@ where
 
     match delta {
         Delta::Native { diff } => {
-            let mut buf = vec![];
-            let n = diff.encode(&mut buf);
-            buf.resize(n + 8, 0);
-            buf.copy_within(..n, 8);
+            let m = buf.len();
+            let n = diff.encode(buf);
+            buf.resize(m + n + 8, 0);
+            buf.copy_within(m..n, m + 8);
 
-            let mut dlen: u64 = try_convert_int(n + 8, "diff-size: usize->u64")?;
-            (&mut buf[..8]).copy_from_slice(&(dlen - 8).to_be_bytes());
+            let dlen: u64 = try_convert_int(n + 8, "diff-size: usize->u64")?;
+            (&mut buf[m..m + 8]).copy_from_slice(&(dlen - 8).to_be_bytes());
 
-            if buf.len() < core::Entry::<i32, i32>::DIFF_SIZE_LIMIT {
-                Ok(buf)
+            if n < core::Entry::<i32, i32>::DIFF_SIZE_LIMIT {
+                Ok(n)
             } else {
-                Err(Error::DiffSizeExceeded(buf.len()))
+                Err(Error::DiffSizeExceeded(n))
             }
         }
         _ => Err(Error::NotNativeDelta),

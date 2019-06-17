@@ -12,7 +12,7 @@ use std::{
 use crate::bubt_build::FlushClient;
 use crate::bubt_config::Config;
 use crate::bubt_stats::Stats;
-use crate::core::{Delta, Diff, Entry, Result, Serialize};
+use crate::core::{Delta, Diff, Entry, Serialize};
 use crate::error::Error;
 use crate::type_empty::Empty;
 use crate::vlog;
@@ -116,7 +116,7 @@ where
         }
     }
 
-    pub(crate) fn insertz(&mut self, key: &K, child_fpos: u64) -> Result<bool> {
+    pub(crate) fn insertz(&mut self, key: &K, child_fpos: u64) -> Result<bool, Error> {
         let mut size = Self::ENTRY_HEADER;
         size += self.encode_key(key);
         size += self.compute_next_offset();
@@ -138,7 +138,7 @@ where
         }
     }
 
-    pub(crate) fn insertm(&mut self, key: &K, child_fpos: u64) -> Result<bool> {
+    pub(crate) fn insertm(&mut self, key: &K, child_fpos: u64) -> Result<bool, Error> {
         let mut size = Self::ENTRY_HEADER;
         size += self.encode_key(&key);
         size += self.compute_next_offset();
@@ -264,7 +264,7 @@ where
         fd: &mut fs::File,
         fpos: u64,
         config: &Config, // from configuration
-    ) -> Result<MBlock<K, V>> {
+    ) -> Result<MBlock<K, V>, Error> {
         let mut block: Vec<u8> = Vec::with_capacity(config.m_blocksize);
         block.resize(block.capacity(), 0);
         fd.seek(io::SeekFrom::Start(fpos))?;
@@ -296,7 +296,7 @@ where
         key: &K,
         from: Bound<usize>,
         to: Bound<usize>,
-    ) -> Result<(usize, bool, Entry<K, V>)> {
+    ) -> Result<(usize, bool, Entry<K, V>), Error> {
         let pivot = self.find_pivot(from, to)?;
         match (pivot, from) {
             (0, Bound::Included(f)) => self.entry_at(f),
@@ -310,7 +310,7 @@ where
         }
     }
 
-    fn find_pivot(&self, from: Bound<usize>, to: Bound<usize>) -> Result<isize> {
+    fn find_pivot(&self, from: Bound<usize>, to: Bound<usize>) -> Result<isize, Error> {
         let count = match self {
             MBlock::Decode { count, .. } => *count,
             _ => unreachable!(),
@@ -330,7 +330,7 @@ where
         }
     }
 
-    pub fn entry_at(&self, index: usize) -> Result<(usize, bool, Entry<K, V>)> {
+    pub fn entry_at(&self, index: usize) -> Result<(usize, bool, Entry<K, V>), Error> {
         let (count, adjust, offsets, entries) = match self {
             MBlock::Decode {
                 count,
@@ -368,7 +368,7 @@ where
         }
     }
 
-    fn key_at(&self, index: usize) -> Result<K> {
+    fn key_at(&self, index: usize) -> Result<K, Error> {
         let (adjust, offsets, entries) = match self {
             MBlock::Decode {
                 adjust,
@@ -546,14 +546,25 @@ where
         &mut self,
         entry: &Entry<K, V>,
         stats: &mut Stats, // update build statistics
-    ) -> Result<()> {
-        let mut size = Self::ENTRY_HEADER;
+    ) -> Result<(), Error> {
+        let config = match &self {
+            ZBlock::Encode { i_block, v_block, config, .. } => {
+                (i_block, v_block, config)
+            }
+            ZBlock::Decode { .. } => unreachable!(),
+        }
+        match EncodeEntry::encode(entry, config.value_in_vlog)? {
+            EncodeEntry::Vlog{ leaf, voff, doff, blob } => {
+                i_block
+            }
+            EncodeEntry::Local{ leaf, doff, blob } => {
+            }
+        }
+
         let kmem = self.encode_key(entry);
         let (vmem1, vmem2) = self.try_encode_value(entry);
         let (dmem1, dmem2) = self.try_encode_deltas(entry);
         size += kmem + vmem1 + dmem1 + self.compute_next_offset();
-        stats.keymem += kmem;
-        stats.valmem += vmem2 + dmem2;
 
         match self {
             ZBlock::Encode {
@@ -821,7 +832,7 @@ where
         fd: &mut fs::File,
         fpos: u64,
         config: &Config, // open from configuration
-    ) -> Result<ZBlock<K, V>> {
+    ) -> Result<ZBlock<K, V>, Error> {
         let mut block: Vec<u8> = Vec::with_capacity(config.z_blocksize);
         block.resize(block.capacity(), 0);
         fd.seek(io::SeekFrom::Start(fpos))?;
@@ -852,7 +863,7 @@ where
         key: &K,
         from: Bound<usize>,
         to: Bound<usize>,
-    ) -> Result<(usize, Entry<K, V>)> {
+    ) -> Result<(usize, Entry<K, V>), Error> {
         let pivot = self.find_pivot(from, to)?;
         match (pivot, from) {
             (0, Bound::Included(f)) => self.entry_at(f),
@@ -866,7 +877,7 @@ where
         }
     }
 
-    fn find_pivot(&self, from: Bound<usize>, to: Bound<usize>) -> Result<isize> {
+    fn find_pivot(&self, from: Bound<usize>, to: Bound<usize>) -> Result<isize, Error> {
         let count = match self {
             ZBlock::Decode { count, .. } => count,
             _ => unreachable!(),
@@ -886,7 +897,7 @@ where
         }
     }
 
-    pub fn entry_at(&self, index: usize) -> Result<(usize, Entry<K, V>)> {
+    pub fn entry_at(&self, index: usize) -> Result<(usize, Entry<K, V>), Error> {
         let (count, adjust, offsets, entries) = match self {
             ZBlock::Decode {
                 count,
@@ -971,7 +982,7 @@ where
         }
     }
 
-    fn key_at(&self, index: usize) -> Result<K> {
+    fn key_at(&self, index: usize) -> Result<K, Error> {
         let (adjust, offsets, entries) = match self {
             ZBlock::Decode {
                 adjust,

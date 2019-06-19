@@ -1,12 +1,7 @@
 // TODO: Review all error messages. Sometimes better to consolidate
 // error variants and describe the different error-out with messages.
 
-use std::{
-    convert::TryInto,
-    fmt, fs,
-    io::{self, Read, Seek},
-    path,
-};
+use std::{convert::TryInto, fmt, fs, path};
 
 use lazy_static::lazy_static;
 
@@ -207,64 +202,37 @@ pub(crate) fn read_meta_items(dir: &str, name: &str) -> Result<Vec<MetaItem>, Er
 
     // read marker block
     fpos -= Config::MARKER_BLOCK_SIZE as u64;
-    fd.seek(io::SeekFrom::Start(fpos))?;
-
-    let mut block = Vec::with_capacity(Config::MARKER_BLOCK_SIZE);
-    block.resize(block.capacity(), 0);
-    let n = fd.read(&mut block)?;
-    let marker = if n != block.len() {
-        Err(Error::PartialRead(block.len(), n))
-    } else {
-        Ok(MetaItem::Marker(block))
-    }?;
-    metaitems.push(marker);
+    metaitems.push(MetaItem::Marker(util::read_buffer(
+        &mut fd,
+        fpos,
+        Config::MARKER_BLOCK_SIZE as u64,
+        "reading marker block",
+    )?));
 
     // read metadata blocks
-    fd.seek(io::SeekFrom::Start(fpos - 8))?;
+    let buf = util::read_buffer(&mut fd, fpos - 8, 8, "reading metablock len")?;
+    let mdlen: usize = u64::from_be_bytes(buf.as_slice().try_into().unwrap())
+        .try_into()
+        .unwrap();
 
-    let mut scratch = [0_u8; 8];
-    let n = fd.read(&mut scratch)?;
-    let metadata = if n != scratch.len() {
-        Err(Error::PartialRead(scratch.len(), n))
-    } else {
-        let mdlen = u64::from_be_bytes(scratch) as usize;
-        let n_blocks = ((mdlen + 8) / Config::MARKER_BLOCK_SIZE) + 1;
-        let n = n_blocks * Config::MARKER_BLOCK_SIZE;
-        fpos -= n as u64;
-        fd.seek(io::SeekFrom::Start(fpos))?;
+    let n_blocks = ((mdlen + 8) / Config::MARKER_BLOCK_SIZE) + 1;
+    let n: u64 = (n_blocks * Config::MARKER_BLOCK_SIZE).try_into().unwrap();
+    fpos -= n;
 
-        let mut blocks: Vec<u8> = Vec::with_capacity(n);
-        blocks.resize(blocks.capacity(), 0);
-        let n = fd.read(&mut blocks)?;
-        if n != blocks.len() {
-            Err(Error::PartialRead(scratch.len(), n))
-        } else {
-            blocks.resize(mdlen, 0);
-            Ok(MetaItem::Metadata(blocks))
-        }
-    }?;
-    metaitems.push(metadata);
+    let mut blocks = util::read_buffer(&mut fd, fpos, n, "reading metablocks")?;
+    blocks.resize(mdlen, 0);
+    metaitems.push(MetaItem::Metadata(blocks));
 
     // read stats block
-    fpos -= Config::MARKER_BLOCK_SIZE as u64;
-    fd.seek(io::SeekFrom::Start(fpos))?;
-
-    let mut block: Vec<u8> = Vec::with_capacity(Config::MARKER_BLOCK_SIZE);
-    block.resize(block.capacity(), 0);
-    let n = fd.read(&mut block)?;
-    let stats = if n != block.len() {
-        Err(Error::PartialRead(scratch.len(), n))
-    } else {
-        let ln = u64::from_be_bytes(block[..8].try_into().unwrap()) as usize;
-        Ok(MetaItem::Stats(
-            std::str::from_utf8(&block[8..8 + ln])?.to_string(),
-        ))
-    }?;
-    metaitems.push(stats);
+    let n = Config::MARKER_BLOCK_SIZE.try_into().unwrap();
+    fpos -= n;
+    let block = util::read_buffer(&mut fd, fpos, n, "reading stats")?;
+    let m = u64::from_be_bytes(block[..8].try_into().unwrap()) as usize;
+    let block = &block[8..8 + m];
+    metaitems.push(MetaItem::Stats(std::str::from_utf8(block)?.to_string()));
 
     // root item
-    fpos -= Config::MARKER_BLOCK_SIZE as u64;
-    metaitems.push(MetaItem::Root(fpos));
+    metaitems.push(MetaItem::Root(fpos - Config::MARKER_BLOCK_SIZE as u64));
 
     Ok(metaitems)
 }

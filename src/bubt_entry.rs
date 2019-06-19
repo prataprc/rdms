@@ -109,7 +109,7 @@ impl DiskDelta {
 // * bit 63 reserved
 //
 
-enum DiskEntry {
+pub(crate) enum DiskEntry {
     // key, value in leaf node
     L {
         size: usize,

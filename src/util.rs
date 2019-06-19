@@ -1,6 +1,10 @@
 use std::convert::TryInto;
 use std::fmt::Display;
-use std::{fs, path};
+use std::{
+    fs,
+    io::{self, Read, Seek},
+    path,
+};
 
 use crate::error::Error;
 
@@ -37,5 +41,22 @@ where
     match from.try_into() {
         Ok(to) => Ok(to),
         Err(_) => Err(Error::FailConversion(format!("{} for {}", msg, from))),
+    }
+}
+
+pub(crate) fn read_buffer(
+    fd: &mut fs::File,
+    fpos: u64,
+    n: u64,
+    msg: &str,
+) -> Result<Vec<u8>, Error> {
+    fd.seek(io::SeekFrom::Start(fpos))?;
+    let mut buf = Vec::with_capacity(n.try_into().unwrap());
+    buf.resize(buf.capacity(), 0);
+    let n = fd.read(&mut buf)?;
+    if buf.len() == n {
+        Ok(buf)
+    } else {
+        Err(Error::PartialRead(msg.to_string(), buf.len(), n))
     }
 }

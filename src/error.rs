@@ -53,9 +53,10 @@ pub enum Error {
     DiffSizeExceeded(usize),
     /// De-serialization failed.
     DecodeFail(String),
+    /// Unable to read expected bytes from file.
+    PartialRead(String, usize, usize),
     InvalidFile(String),
     IoError(io::Error),
-    PartialRead(usize, usize),
     PartialWrite(usize, usize),
     ValueDecode(Vec<u8>),
     ZBlockOverflow(usize),

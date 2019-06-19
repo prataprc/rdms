@@ -17,23 +17,7 @@ use crate::error::Error;
 use crate::type_empty::Empty;
 use crate::vlog;
 
-// Binary format (MEntry):
-//
-// *------*------------*----------------------*
-// |flags |   reserved |   32-bit key-len     |
-// *------*------------*----------------------*
-// |             child-block fpos             |
-// *-------------------*----------------------*
-// |                  key                     |
-// *-------------------*----------------------*
-//
-// Flags:
-// * bit 60 set = means child-block is a ZBlock.
-// * bit 61 reserved
-// * bit 62 reserved
-// * bit 63 reserved
-//
-// Binary format (MBlock):
+// Binary format (InterMediate-Block prefix):
 //
 // *----------------------*
 // |      num-entries     |
@@ -58,11 +42,9 @@ where
     <V as Diff>::D: Default + Clone + Serialize,
 {
     Encode {
-        i_block: Vec<u8>,
+        mblock: Vec<u8>,
         offsets: Vec<u32>,
-        // working buffer
         first_key: Option<K>,
-        k_buf: Vec<u8>,
         config: Config,
     },
     Decode {
@@ -85,10 +67,9 @@ where
 
     pub(crate) fn new_encode(config: Config) -> MBlock<K, V> {
         MBlock::Encode {
-            i_block: Vec::with_capacity(config.m_blocksize),
+            mblock: Vec::with_capacity(config.m_blocksize),
             offsets: Default::default(),
             first_key: None,
-            k_buf: Default::default(),
             config,
         }
     }
@@ -96,149 +77,94 @@ where
     pub(crate) fn reset(&mut self) {
         match self {
             MBlock::Encode {
-                i_block,
+                mblock,
                 offsets,
                 first_key,
                 ..
             } => {
-                i_block.truncate(0);
+                mblock.truncate(0);
                 offsets.truncate(0);
-                *first_key = None;
+                first_key.take();
             }
             MBlock::Decode { .. } => unreachable!(),
         }
     }
 
-    pub(crate) fn first_key(&self) -> Option<K> {
+    pub(crate) fn first_key(&mut self) -> Option<K> {
         match self {
             MBlock::Encode { first_key, .. } => first_key.clone(),
             MBlock::Decode { .. } => unreachable!(),
         }
     }
 
-    pub(crate) fn insertz(&mut self, key: &K, child_fpos: u64) -> Result<bool, Error> {
-        let mut size = Self::ENTRY_HEADER;
-        size += self.encode_key(key);
-        size += self.compute_next_offset();
-
+    pub(crate) fn insertz(&mut self, key: &K, fpos: u64) -> Result<usize, Error> {
         match self {
-            MBlock::Encode {
-                i_block, first_key, ..
-            } => {
-                let (req, cap) = ((i_block.len() + size), i_block.capacity());
-                if req < cap {
-                    first_key.get_or_insert(key.clone());
-                    self.encode_entry(child_fpos, true /*zblock*/);
-                    Ok(true)
+            MBlock::Encode{ mblock, offsets, first_key, config, .. } => {
+                let m = mblock.len();
+                DiskEntry::encode_m(None, Some(fpos), key, mblock)?;
+                let n = mblock.len();
+                if n < config.m_blocksize {
+                    offsets.push(m as u32);
+                    if let &mut None = first_Key {
+                        first_key.get_or_insert(key.clone());
+                    }
+                    Ok(offsets.len())
                 } else {
-                    Err(Error::ZBlockOverflow(req - cap))
+                    mblock.truncate(m);
+                    Err(Error::ZBlockOverflow(n))
                 }
             }
-            MBlock::Decode { .. } => unreachable!(),
+            MBlock::Decode{ .. } => unreachable!()
         }
     }
 
-    pub(crate) fn insertm(&mut self, key: &K, child_fpos: u64) -> Result<bool, Error> {
-        let mut size = Self::ENTRY_HEADER;
-        size += self.encode_key(&key);
-        size += self.compute_next_offset();
-
+    pub(crate) fn insertm(&mut self, key: &K, fpos: u64) -> Result<usize, Error> {
         match self {
-            MBlock::Encode {
-                i_block, first_key, ..
-            } => {
-                let (req, cap) = ((i_block.len() + size), i_block.capacity());
-                if req < cap {
-                    first_key.get_or_insert(key.clone());
-                    self.encode_entry(child_fpos, false /*zblock*/);
-                    Ok(true)
+            MBlock::Encode{ mblock, offsets, config, .. } => {
+                let m = mblock.len();
+                DiskEntry::encode_m(Some(fpos), None, key, mblock)?;
+                let n = mblock.len();
+                if n < config.m_blocksize {
+                    offsets.push(m as u32);
+                    if let &mut None = first_Key {
+                        first_key.get_or_insert(key.clone());
+                    }
+                    Ok(offsets.len())
                 } else {
-                    Err(Error::ZBlockOverflow(req - cap))
+                    mblock.truncate(m);
+                    Err(Error::ZBlockOverflow(n))
                 }
             }
-            MBlock::Decode { .. } => unreachable!(),
+            MBlock::Decode{ .. } => unreachable!()
         }
     }
 
-    fn encode_key(&mut self, key: &K) -> usize {
-        match self {
-            MBlock::Encode { k_buf, .. } => {
-                k_buf.truncate(0);
-                key.encode(k_buf);
-                k_buf.len()
-            }
-            MBlock::Decode { .. } => unreachable!(),
-        }
-    }
-
-    fn compute_next_offset(&self) -> usize {
-        match self {
-            MBlock::Encode { offsets, .. } => 4 + ((offsets.len() + 1) * 4),
-            MBlock::Decode { .. } => unreachable!(),
-        }
-    }
-
-    fn encode_entry(
-        &mut self,
-        child_fpos: u64,
-        zblock: bool, /* child_fpos points to Z-block */
-    ) {
-        self.start_encode_entry();
-
-        match self {
-            MBlock::Encode { i_block, k_buf, .. } => {
-                // header field 1, klen and flags.
-                let hdr1 = if zblock {
-                    (k_buf.len() as u64) | Self::FLAGS_ZBLOCK
-                } else {
-                    k_buf.len() as u64
-                };
-                i_block.extend_from_slice(&hdr1.to_be_bytes());
-                // header field 2, child_fpos
-                i_block.extend_from_slice(&child_fpos.to_be_bytes());
-                i_block.extend_from_slice(k_buf);
-            }
-            MBlock::Decode { .. } => unreachable!(),
-        };
-    }
-
-    fn start_encode_entry(&mut self) {
+    pub(crate) fn finalize(&mut self, stats: &mut Stats) {
         match self {
             MBlock::Encode {
-                i_block, offsets, ..
-            } => {
-                offsets.push(i_block.len() as u32); // adjust this during finalize
-            }
-            MBlock::Decode { .. } => unreachable!(),
-        }
-    }
-
-    pub(crate) fn finalize(&mut self, stats: &mut Stats) -> usize {
-        match self {
-            MBlock::Encode {
-                i_block,
+                mblock,
                 offsets,
                 config,
                 ..
             } => {
-                // adjust the offset and encode
                 let adjust = 4 + (offsets.len() * 4);
-                offsets.iter_mut().for_each(|x| *x += adjust as u32);
-                // encode.
-                let ln = i_block.len();
-                i_block.resize(config.m_blocksize, 0);
-                i_block.copy_within(0..ln, adjust);
-                let mut n = 4;
-                let offset = offsets.len() as u32;
-                &i_block[..n].copy_from_slice(&offset.to_be_bytes());
-                for offset in offsets {
-                    i_block[n..n + 4].copy_from_slice(&offset.to_be_bytes());
-                    n += 4;
+                offsets.iter_mut().for_each(|i| *i += (adjust as u32));
+                // adjust space for offset header
+                let m = mblock.len();
+                mblock.resize(m+adjust, 0);
+                mblock.copy_within(0..m, adjust);
+                // encode offset header
+                let num = offsets.len() as u32;
+                &mblock[..4].copy_from_slice(&num.to_be_bytes());
+                for (i, offset) in offsets.enumerate() {
+                    let x = (i+1) * 4;
+                    mblock[x..x + 4].copy_from_slice(&offset.to_be_bytes());
                 }
-
-                stats.padding += i_block.capacity() - (adjust + ln);
+                // update statistics
+                stats.padding += config.m_blocksize - mblock.len();
                 stats.m_bytes += config.m_blocksize;
-                config.m_blocksize
+                // align blocks
+                mblock.resize(config.m_blocksize, 0);
             }
             MBlock::Decode { .. } => unreachable!(),
         }
@@ -246,8 +172,8 @@ where
 
     pub(crate) fn flush(&mut self, i_flusher: &mut FlushClient) {
         match self {
-            MBlock::Encode { i_block, .. } => {
-                i_flusher.send(i_block.clone());
+            MBlock::Encode { mblock, .. } => {
+                i_flusher.send(mblock.clone());
             }
             MBlock::Decode { .. } => unreachable!(),
         }
@@ -394,52 +320,7 @@ where
     }
 }
 
-// Binary format (ZDelta):
-//
-// *-----*------------------------------------*
-// |flags|      60-bit delta-len              |
-// *-----*------------------------------------*
-// |              64-bit seqno                |
-// *-------------------*----------------------*
-// |               delta-fpos                 |
-// *------------------------------------------*
-//
-// Flags:
-//
-// * bit 60: 0 means delete operation, 1 means upsert operation
-// * bit 61 reserved
-// * bit 62 reserved
-// * bit 63 reserved
-//
-// If deleted seqno is ZERO, then that version was never deleted.
-
-// Binary format (ZEntry):
-//
-// *-------------------*----------------------*
-// |  32-bit key len   |   number of deltas   |
-// *-------------------*----------------------*
-// |flags|      60-bit value-len              |
-// *-----*------------------------------------*
-// |              64-bit seqno                |
-// *-------------------*----------------------*
-// |                  key                     |
-// *-------------------*----------------------*
-// |              value / fpos                |
-// *------------------------------------------*
-// |                zdelta 1                  |
-// *------------------------------------------*
-// |                zdelta 2                  |
-// *------------------------------------------*
-//
-// Flags:
-// * bit 60: 1 means value in vlog-file, 0 means value in leaf node
-// * bit 61: 0 means delete operation, 1 means upsert operation
-// * bit 62 reserved
-// * bit 63 reserved
-//
-// If deleted seqno is ZERO, then that version was never deleted.
-//
-// Binary format (ZBlock):
+// Binary format (ZBlock prefix):
 //
 // *----------------------*
 // |      num-entries     |
@@ -464,26 +345,20 @@ where
     <V as Diff>::D: Default + Clone + Serialize,
 {
     Encode {
-        i_block: Vec<u8>, // buffer for z_block
-        v_block: Vec<u8>, // buffer for vlog
+        leaf: Vec<u8>, // buffer for z_block
+        blob: Vec<u8>, // buffer for vlog
         offsets: Vec<u32>,
+        des: Vec<DiskEntry>,
         vpos: u64,
-        // working buffers
-        entry_buf: Vec<u8>,
-        // working buffers
         first_key: Option<K>,
-        k_buf: Vec<u8>,
-        v_buf: Vec<u8>,
-        d_bufs: Vec<Vec<u8>>,
         config: Config,
-
-        phantom_val: marker::PhantomData<V>,
     },
     Decode {
         count: usize,
         adjust: usize,
         offsets: Vec<u8>,
         entries: Vec<u8>,
+        phantom_val: marker::PhantomData<V>,
     },
 }
 
@@ -493,43 +368,34 @@ where
     V: Default + Clone + Diff + Serialize,
     <V as Diff>::D: Default + Clone + Serialize,
 {
-    const DELTA_HEADER: usize = 8 + 8 + 8;
-    const ENTRY_HEADER: usize = 8 + 8 + 8;
-    const FLAGS_VLOG: u64 = 0x1000000000000000;
-    const FLAGS_VLEN: u64 = 0xF000000000000000;
-    const FLAGS_DLEN: u64 = 0xF000000000000000;
-
     pub(crate) fn new_encode(vpos: u64, config: Config) -> ZBlock<K, V> {
         ZBlock::Encode {
-            i_block: Vec::with_capacity(config.z_blocksize),
-            v_block: Vec::with_capacity(config.v_blocksize),
+            leaf: Vec::with_capacity(config.z_blocksize),
+            blob: Vec::with_capacity(config.v_blocksize),
             offsets: Default::default(),
-            vpos,
-            first_key: None,
-            // working buffers
-            k_buf: Default::default(),
-            v_buf: Default::default(),
-            d_bufs: Default::default(),
-            config,
-            phantom_val: marker::PhantomData,
+            des: Default::default(),
+            vpos: Default::default(),
+            first_key: Default::default(),
         }
     }
 
     pub(crate) fn reset(&mut self, vpos: u64) {
         match self {
             ZBlock::Encode {
-                i_block,
-                v_block,
+                leaf,
+                blob,
                 offsets,
+                des,
                 vpos: vpos_ref,
                 first_key,
                 ..
             } => {
-                i_block.truncate(0);
-                v_block.truncate(0);
+                leaf.truncate(0);
+                blob.truncate(0);
                 offsets.truncate(0);
+                des.truncate(0);
                 *vpos_ref = vpos;
-                *first_key = None;
+                first_key.take();
             }
             ZBlock::Decode { .. } => unreachable!(),
         }
@@ -545,261 +411,60 @@ where
     pub(crate) fn insert(
         &mut self,
         entry: &Entry<K, V>,
-        stats: &mut Stats, // update build statistics
-    ) -> Result<(), Error> {
-        let config = match &self {
-            ZBlock::Encode { i_block, v_block, config, .. } => {
-                (i_block, v_block, config)
-            }
-            ZBlock::Decode { .. } => unreachable!(),
-        }
-        match EncodeEntry::encode(entry, config.value_in_vlog)? {
-            EncodeEntry::Vlog{ leaf, voff, doff, blob } => {
-                i_block
-            }
-            EncodeEntry::Local{ leaf, doff, blob } => {
-            }
-        }
-
-        let kmem = self.encode_key(entry);
-        let (vmem1, vmem2) = self.try_encode_value(entry);
-        let (dmem1, dmem2) = self.try_encode_deltas(entry);
-        size += kmem + vmem1 + dmem1 + self.compute_next_offset();
-
-        match self {
-            ZBlock::Encode {
-                i_block, first_key, ..
-            } => {
-                let (req, cap) = ((i_block.len() + size), i_block.capacity());
-                if req < cap {
-                    first_key.get_or_insert(entry.as_key().clone());
-                    self.encode_entry(entry, vmem2 as u64);
-                    Ok(())
-                } else {
-                    Err(Error::ZBlockOverflow(req - cap))
+        s: &mut Stats, // update build statistics
+    ) -> Result<usize, Error> {
+        match &self {
+            ZBlock::Encode { leaf, blob, offsets, des, first_key, config } => {
+                let (m, x) = (leaf.len(), blob.len());
+                let de = match (config.value_in_vlog, config.delta_ok) => {
+                    (false, false) => DiskEntry::encode_l(entry, leaf, s)?,
+                    (false, true) => DiskEntry::encode_ld(entry, leaf, blob, s)?,
+                    (true, false) => DiskEntry::encode_lv(entry, leaf, blob, s)?,
+                    (true, true) => DiskEntry::encode_lvd(entry, leaf, blob, s)?,
                 }
-            }
-            ZBlock::Decode { .. } => unreachable!(),
-        }
-    }
+                des.push(de);
 
-    fn encode_hdr1(&mut self, 
-
-    fn encode_key(&mut self, entry: &Entry<K, V>) -> usize {
-        match self {
-            ZBlock::Encode { k_buf, .. } => {
-                k_buf.truncate(0);
-                entry.as_key().encode(k_buf);
-                k_buf.len()
-            }
-            ZBlock::Decode { .. } => unreachable!(),
-        }
-    }
-
-    fn try_encode_value(&mut self, entry: &Entry<K, V>) -> (usize, usize) {
-        match self {
-            ZBlock::Encode { v_buf, config, .. } => {
-                let vmem = Self::encode_value(v_buf, entry);
-                let hmem = if config.value_in_vlog { 8 } else { vmem };
-                (hmem, vmem)
-            }
-            ZBlock::Decode { .. } => unreachable!(),
-        }
-    }
-
-    fn encode_value(v_buf: &mut Vec<u8>, entry: &Entry<K, V>) -> usize {
-        v_buf.truncate(0);
-        match entry.vlog_value_ref() {
-            Some(vlog::Value::Native { value }) => {
-                value.encode(v_buf);
-                v_buf.len()
-            }
-            Some(vlog::Value::Reference { length, .. }) => *length as usize,
-            Some(vlog::Value::Backup { .. }) | None => {
-                panic!("impossible situation");
-            }
-        }
-    }
-
-    fn try_encode_deltas(&mut self, entry: &Entry<K, V>) -> (usize, usize) {
-        match self {
-            ZBlock::Encode { d_bufs, config, .. } => match config.vlog_file {
-                None => (0, 0),
-                Some(_) => Self::encode_deltas(d_bufs, entry),
+                let n = leaf.len();
+                if n < config.z_blocksize {
+                    offsets.push(m as u32);
+                    if let &mut None = first_Key {
+                        first_key.get_or_insert(key.clone());
+                    }
+                    Ok(offsets.len())
+                } else {
+                    leaf.truncate(m);
+                    blob.truncate(x);
+                    Err(Error::ZBlockOverflow(n))
+                }
             },
             ZBlock::Decode { .. } => unreachable!(),
         }
     }
 
-    fn encode_deltas(
-        d_bufs: &mut Vec<Vec<u8>>, /* list of buffers for delta encoding */
-        entry: &Entry<K, V>,
-    ) -> (usize, usize) {
-        let (mut entry_size, mut dmem) = (0, 0);
-        d_bufs.truncate(0);
-        for (i, delta) in entry.deltas_ref().iter().enumerate() {
-            d_bufs[i].truncate(0);
-            let length = match delta.delta_ref() {
-                Some(vlog::Delta::Native { delta }) => {
-                    delta.encode(&mut d_bufs[i]);
-                    d_bufs[i].len()
-                }
-                Some(vlog::Delta::Reference { length, .. }) => *length as usize,
-                Some(vlog::Delta::Backup { .. }) | None => {
-                    panic!("impossible situation");
-                }
-            };
-            entry_size += Self::DELTA_HEADER;
-            dmem += length;
-        }
-        (entry_size, dmem)
-    }
-
-    fn compute_next_offset(&self) -> usize {
-        match self {
-            ZBlock::Encode { offsets, .. } => 4 + ((offsets.len() + 1) * 4),
-            ZBlock::Decode { .. } => unreachable!(),
-        }
-    }
-
-    fn encode_entry(&mut self, entry: &Entry<K, V>, vlen: u64) {
-        self.start_encode_entry();
-
-        let (i_block, v_block, vpos, k_buf, v_buf, d_bufs, config) = match self {
-            ZBlock::Encode {
-                i_block,
-                v_block,
-                vpos,
-                k_buf,
-                v_buf,
-                d_bufs,
-                config,
-                ..
-            } => (i_block, v_block, vpos, k_buf, v_buf, d_bufs, config),
-            ZBlock::Decode { .. } => unreachable!(),
-        };
-
-        // header
-        let klen = k_buf.len() as u64;
-        let num_deltas = d_bufs.len() as u64;
-        Self::encode_header(i_block, klen, num_deltas, vlen, entry, config);
-
-        // key
-        i_block.extend_from_slice(k_buf);
-        // value
-        match entry.vlog_value_ref() {
-            Some(vlog::Value::Native { .. }) if config.value_in_vlog => {
-                let scratch = (*vpos + (v_block.len() as u64)).to_be_bytes();
-                i_block.extend_from_slice(&scratch);
-                let vhdr = (v_buf.len() as u64) | vlog::Value::<Empty>::VALUE_FLAG;
-                v_block.extend_from_slice(&vhdr.to_be_bytes());
-                v_block.extend_from_slice(v_buf);
-            }
-            Some(vlog::Value::Native { .. }) => {
-                i_block.extend_from_slice(v_buf);
-            }
-            Some(vlog::Value::Reference { fpos, .. }) => {
-                i_block.extend_from_slice(&fpos.to_be_bytes());
-            }
-            Some(vlog::Value::Backup { .. }) | None => unreachable!(),
-        };
-
-        // deltas
-        if config.vlog_file.is_some() {
-            for (i, delta) in entry.deltas_ref().iter().enumerate() {
-                let (len, bseq, dseq, fpos) = match delta.delta_ref() {
-                    Some(vlog::Delta::Native { .. }) => {
-                        let fpos = *vpos + (v_block.len() as u64);
-                        let d_buf = &d_bufs[i];
-                        let scratch = (d_buf.len() as u64).to_be_bytes();
-                        v_block.extend_from_slice(&scratch);
-                        v_block.extend_from_slice(d_buf);
-                        (
-                            d_buf.len() as u64,
-                            delta.born_seqno(),
-                            delta.dead_seqno().unwrap_or(0),
-                            fpos,
-                        )
-                    }
-                    Some(vlog::Delta::Reference { fpos, length }) => (
-                        *length,
-                        delta.born_seqno(),
-                        delta.dead_seqno().unwrap_or(0),
-                        *fpos,
-                    ),
-                    Some(vlog::Delta::Backup { .. }) | None => unreachable!(),
-                };
-                // encode delta in entry
-                i_block.extend_from_slice(&len.to_be_bytes());
-                i_block.extend_from_slice(&bseq.to_be_bytes());
-                i_block.extend_from_slice(&dseq.to_be_bytes());
-                i_block.extend_from_slice(&fpos.to_be_bytes());
-            }
-        }
-    }
-
-    fn start_encode_entry(&mut self) {
-        match self {
-            ZBlock::Encode {
-                i_block, offsets, ..
-            } => {
-                offsets.push(i_block.len() as u32); // adjust this in finalize
-            }
-            ZBlock::Decode { .. } => unreachable!(),
-        }
-    }
-
-    fn encode_header(
-        i_block: &mut Vec<u8>,
-        klen: u64,
-        num_deltas: u64,
-        vlen: u64,
-        entry: &Entry<K, V>,
-        config: &Config,
-    ) {
-        // key header field, klen and number-of-deltas
-        let hdr1 = (klen << 32) | num_deltas;
-        i_block.extend_from_slice(&hdr1.to_be_bytes());
-        // value header field 1, value len
-        let hdr2 = if config.value_in_vlog {
-            vlen | Self::FLAGS_VLOG
-        } else {
-            vlen
-        };
-        i_block.extend_from_slice(&hdr2.to_be_bytes());
-        // value header field 2
-        i_block.extend_from_slice(&entry.born_seqno().to_be_bytes());
-        // value header field 3
-        i_block.extend_from_slice(&entry.dead_seqno().unwrap_or(0).to_be_bytes());
-    }
-
     pub(crate) fn finalize(&mut self, stats: &mut Stats) -> (usize, usize) {
         match self {
-            ZBlock::Encode {
-                i_block,
-                v_block,
-                config,
-                offsets,
-                ..
-            } => {
-                // adjust the offset and encode
+            ZBlock::Encode { leaf, blob, offsets, des, vpos, first_key } => {
                 let adjust = 4 + (offsets.len() * 4);
-                offsets.iter_mut().for_each(|x| *x += adjust as u32);
-                // encode.
-                let ln = i_block.len();
-                i_block.resize(config.z_blocksize, 0);
-                i_block.copy_within(0..ln, adjust);
-                let mut n = 4;
-                let l = offsets.len() as u32;
-                &i_block[..n].copy_from_slice(&l.to_be_bytes());
-                for offset in offsets {
-                    i_block[n..n + 4].copy_from_slice(&offset.to_be_bytes());
-                    n += 4;
+                offsets.iter_mut().for_each(|i| *i += (adjust as u32));
+                // adjust the offset and encode
+                let m = leaf.len();
+                leaf.resize(m + adjust, 0);
+                leaf.copy_within(0..m, adjust);
+                // encode offset header
+                let num = offsets.len() as u32;
+                &leaf[..4].copy_from_slice(&num.to_be_bytes());
+                for (i, offset) in offsets.enumerate() {
+                    let x = (i+1) * 4;
+                    leaf[x..x + 4].copy_from_slice(&offset.to_be_bytes());
                 }
-                stats.padding += i_block.capacity() - (adjust + ln);
+                // adjust file position offsets for value and delta in vlog.
+                des.iter().for_each(|de| de.encode_fpos(&mut leaf, vpos));
+                // update statistics
+                stats.padding += config.z_blocksize - leaf.len();
                 stats.z_bytes += config.z_blocksize;
-                stats.v_bytes += v_block.len();
-                (config.z_blocksize, v_block.len())
+                stats.v_bytes += blob.len();
+                // align blocks
+                leaf.resize(config.z_blocksize, 0);
             }
             ZBlock::Decode { .. } => unreachable!(),
         }
@@ -811,11 +476,9 @@ where
         v_flusher: Option<&mut FlushClient>,
     ) {
         match self {
-            ZBlock::Encode {
-                i_block, v_block, ..
-            } => {
-                i_flusher.send(i_block.clone());
-                v_flusher.map(|x| x.send(v_block.clone()));
+            ZBlock::Encode { leaf, blob, ..  } => {
+                i_flusher.send(leaf.clone());
+                v_flusher.map(|x| x.send(blob.clone()));
             }
             ZBlock::Decode { .. } => unreachable!(),
         }

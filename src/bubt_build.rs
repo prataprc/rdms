@@ -34,13 +34,10 @@ where
     pub fn initial(config: Config) -> Result<Builder<K, V>> {
         let index_file = Config::index_file(&config.dir, &config.name);
         let i_flusher = FlushClient::new(index_file, false /*reuse*/)?;
-        let v_flusher = if config.vlog_ok {
-            Some(FlushClient::new(
-                config.vlog_file_w(&config.dir, &config.name),
-                false, /*reuse*/
-            )?)
-        } else {
-            None
+        let reuse = false;
+        let v_flusher = match config.to_value_log {
+            Some(vlog_file) => Some(FlushClient::new(vlog_file, reuse)?),
+            None => None,
         };
 
         Ok(Builder {
@@ -56,13 +53,10 @@ where
     pub fn incremental(config: Config) -> Result<Builder<K, V>> {
         let index_file = Config::index_file(&config.dir, &config.name);
         let i_flusher = FlushClient::new(index_file, false /*reuse*/)?;
-        let v_flusher = if config.vlog_ok {
-            Some(FlushClient::new(
-                config.vlog_file_w(&config.dir, &config.name),
-                true, /*reuse*/
-            )?)
-        } else {
-            None
+        let reuse = true;
+        let v_flusher = match config.to_value_log.is_some() {
+            Some(vlog_file) => Some(FlushClient::new(vlog_file, reuse)?),
+            None => None,
         };
 
         let mut stats: Stats = From::from(config.clone());

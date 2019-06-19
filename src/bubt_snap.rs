@@ -105,11 +105,12 @@ where
                 Some(vlog_file_2)
             }
         };
-        snap.vlog_fd = if snap.config.vlog_ok {
-            Some(util::open_file_r(&Config::vlog_file(dir, name))?)
-        } else {
-            None
-        };
+        snap.vlog_fd = snap
+            .config
+            .to_value_log()
+            .as_ref()
+            .map(util::open_file_r)
+            .transpose()?;
 
         // read root
         snap.root = match iter.next() {
@@ -157,8 +158,10 @@ where
         let index_file = Config::index_file(&self.config.dir, &self.config.name);
         let mut footprint = fs::metadata(index_file).unwrap().len();
 
-        let vlog_file = Config::vlog_file(&self.config.dir, &self.config.name);
-        footprint += fs::metadata(vlog_file).unwrap().len();
+        footprint += match self.to_value_log() {
+            Some(vlog_file) => fs::metadata(vlog_file).unwrap().len(),
+            None => 0,
+        };
         footprint
     }
 

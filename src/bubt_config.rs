@@ -42,11 +42,12 @@ pub struct Config {
     /// `Some(seqno)`, all iterated entries, whose seqno is older than
     /// configured seqno, shall be ignored.
     pub tomb_purge: Option<u64>,
-    /// Values and/or deltas are stored in separate log file.
-    pub vlog_ok: bool,
-    /// Optional name for value log file. If not supplied, but `vlog_ok` is
-    /// true, then value log file name will be computed based on `name`
-    /// configuration.
+    /// Include delta as part of entry. Note that delta values are always
+    /// stored in separate value-log file.
+    pub delta_ok: bool,
+    /// Optional name for value log file. If not supplied, but `delta_ok` or
+    /// `value_in_vlog` is true, then value log file name will be computed
+    /// based on configuration`name` and `dir`.
     pub vlog_file: Option<String>,
     /// If true, then value shall be persisted in value log file. Otherwise
     /// value shall be saved in the index' leaf node.
@@ -60,6 +61,29 @@ impl Config {
     const MARKER_BLOCK_SIZE: usize = 1024 * 4;
     const MARKER_BYTE: u8 = 0xAB;
 
+    pub(crate) fn to_index_file(&self) -> String {
+        Self::stitch_index_file(&self.dir, &self.name)
+    }
+
+    pub(crate) fn to_value_log(&self) -> Option<String> {
+        match &self.vlog_file {
+            Some(file) => Some(file.clone()),
+            None => Some(Self::stitch_vlog_file(&self.dir, &self.name)),
+        }
+    }
+
+    fn stitch_index_file(dir: &str, name: &str) -> String {
+        let mut index_file = path::PathBuf::from(dir);
+        index_file.push(format!("bubt-{}-shard1.indx", name));
+        index_file.to_str().unwrap().to_string()
+    }
+
+    fn stitch_vlog_file(dir: &str, name: &str) -> String {
+        let mut vlog_file = path::PathBuf::from(dir);
+        vlog_file.push(format!("bubt-{}-shard1.vlog", name));
+        vlog_file.to_str().unwrap().to_string()
+    }
+
     // New default configuration:
     // * With ZBLOCKSIZE, MBLOCKSIZE, VBLOCKSIZE.
     // * Without a separate vlog-file for value.
@@ -72,7 +96,7 @@ impl Config {
             v_blocksize: Self::VBLOCKSIZE,
             m_blocksize: Self::MBLOCKSIZE,
             tomb_purge: Default::default(),
-            vlog_ok: Default::default(),
+            delta_ok: Default::default(),
             vlog_file: Default::default(),
             value_in_vlog: Default::default(),
         }
@@ -90,34 +114,16 @@ impl Config {
         self
     }
 
-    pub fn set_vlog(
-        mut self,
-        vlog_file: Option<String>, /* if None, generate vlog file */
-        value_in_vlog: bool,
-    ) -> Config {
-        self.vlog_ok = true;
-        self.vlog_file = vlog_file;
-        self.value_in_vlog = value_in_vlog;
+    pub fn set_delta(mut self, vlog_file: Option<String>) -> Config {
+        self.delta_ok = true;
+        self.vlog_file = self.vlog_file.take().or(vlog_file);
         self
     }
 
-    pub(crate) fn index_file(dir: &str, name: &str) -> String {
-        let mut index_file = path::PathBuf::from(dir);
-        index_file.push(format!("bubt-{}.indx", name));
-        index_file.to_str().unwrap().to_string()
-    }
-
-    pub(crate) fn vlog_file(dir: &str, name: &str) -> String {
-        let mut vlog_file = path::PathBuf::from(dir);
-        vlog_file.push(format!("bubt-{}.vlog", name));
-        vlog_file.to_str().unwrap().to_string()
-    }
-
-    pub(crate) fn vlog_file_w(&self, dir: &str, name: &str) -> String {
-        match &self.vlog_file {
-            Some(vlog_file) => vlog_file.clone(),
-            None => Config::vlog_file(dir, name),
-        }
+    pub fn set_value_log(mut self, vlog_file: Option<String>) -> Config {
+        self.value_in_vlog = true;
+        self.vlog_file = self.vlog_file.take().or(vlog_file);
+        self
     }
 }
 
@@ -130,7 +136,7 @@ impl From<Stats> for Config {
             m_blocksize: stats.mblocksize,
             v_blocksize: stats.vblocksize,
             tomb_purge: Default::default(),
-            vlog_ok: stats.vlog_ok,
+            delta_ok: stats.delta_ok,
             vlog_file: stats.vlog_file,
             value_in_vlog: stats.value_in_vlog,
         }
@@ -194,10 +200,9 @@ impl fmt::Display for MetaItem {
 //}
 
 pub(crate) fn read_meta_items(dir: &str, name: &str) -> Result<Vec<MetaItem>, Error> {
-    let index_file = Config::index_file(dir, name);
+    let index_file = Config::stitch_index_file(dir, name);
     let mut fd = util::open_file_r(&index_file)?;
-
-    let mut fpos = fs::metadata(index_file)?.len();
+    let mut fpos = fs::metadata(&index_file)?.len();
     let mut metaitems: Vec<MetaItem> = vec![];
 
     // read marker block

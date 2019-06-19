@@ -10,7 +10,7 @@ pub struct Stats {
     pub zblocksize: usize,
     pub mblocksize: usize,
     pub vblocksize: usize,
-    pub vlog_ok: bool,
+    pub delta_ok: bool,
     pub vlog_file: Option<String>,
     pub value_in_vlog: bool,
 
@@ -36,7 +36,7 @@ impl From<Config> for Stats {
             zblocksize: config.z_blocksize,
             mblocksize: config.m_blocksize,
             vblocksize: config.v_blocksize,
-            vlog_ok: config.vlog_ok,
+            delta_ok: config.delta_ok,
             vlog_file: config.vlog_file,
             value_in_vlog: config.value_in_vlog,
 
@@ -67,7 +67,7 @@ impl FromStr for Stats {
             zblocksize: js.get("/zblocksize")?.integer().unwrap() as usize,
             mblocksize: js.get("/mblocksize")?.integer().unwrap() as usize,
             vblocksize: js.get("/vblocksize")?.integer().unwrap() as usize,
-            vlog_ok: js.get("/vlog_ok")?.boolean().unwrap(),
+            delta_ok: js.get("/delta_ok")?.boolean().unwrap(),
             vlog_file: Some(js.get("/vlog_file")?.string().unwrap()),
             value_in_vlog: js.get("/value_in_vlog")?.boolean().unwrap(),
 
@@ -98,7 +98,7 @@ impl Display for Stats {
             .unwrap();
         js.set("/vblocksize", Json::new(self.vblocksize as i128))
             .unwrap();
-        js.set("/vlog_ok", Json::new(self.vlog_ok)).unwrap();
+        js.set("/delta_ok", Json::new(self.delta_ok)).unwrap();
         js.set(
             "/vlog_file",
             Json::new(self.vlog_file.clone().map_or("".to_string(), From::from)),

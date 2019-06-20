@@ -5,9 +5,9 @@ use std::{convert::TryInto, fmt, fs, path};
 
 use lazy_static::lazy_static;
 
-use crate::bubt_build::FlushClient;
-use crate::bubt_stats::Stats;
 use crate::error::Error;
+use crate::robt_build::FlushClient;
+use crate::robt_stats::Stats;
 use crate::util;
 
 lazy_static! {
@@ -69,13 +69,13 @@ impl Config {
 
     pub(crate) fn stitch_index_file(dir: &str, name: &str) -> String {
         let mut index_file = path::PathBuf::from(dir);
-        index_file.push(format!("bubt-{}-shard1.indx", name));
+        index_file.push(format!("robt-{}-shard1.indx", name));
         index_file.to_str().unwrap().to_string()
     }
 
     pub(crate) fn stitch_vlog_file(dir: &str, name: &str) -> String {
         let mut vlog_file = path::PathBuf::from(dir);
-        vlog_file.push(format!("bubt-{}-shard1.vlog", name));
+        vlog_file.push(format!("robt-{}-shard1.vlog", name));
         vlog_file.to_str().unwrap().to_string()
     }
 

@@ -28,17 +28,17 @@
 
 extern crate jsondata;
 
-mod bubt_build;
-mod bubt_config;
-mod bubt_entry;
-mod bubt_indx;
-mod bubt_snap;
-mod bubt_stats;
 mod core;
 mod error;
 mod llrb;
 mod llrb_node;
 mod mvcc;
+mod robt_build;
+mod robt_config;
+mod robt_entry;
+mod robt_indx;
+mod robt_snap;
+mod robt_stats;
 mod sync_writer;
 mod type_bytes;
 mod type_empty;
@@ -47,14 +47,14 @@ mod type_i64;
 mod util;
 mod vlog;
 
-pub use crate::bubt_build::Builder;
-pub use crate::bubt_config::Config;
-pub use crate::bubt_snap::Snapshot;
 pub use crate::core::{Diff, Serialize};
 pub use crate::error::Error;
 pub use crate::llrb::Llrb;
 pub use crate::llrb_node::LlrbStats;
 pub use crate::mvcc::Mvcc;
+pub use crate::robt_build::Builder;
+pub use crate::robt_config::Config;
+pub use crate::robt_snap::Snapshot;
 pub use crate::type_empty::Empty; // TODO: proper nomenclature.
 
 #[cfg(test)]

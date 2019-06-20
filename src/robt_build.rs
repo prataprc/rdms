@@ -3,11 +3,11 @@
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::{cmp, fs, io::Write, marker, mem, thread, time};
 
-use crate::bubt_config::{self, Config, MetaItem, MARKER_BLOCK};
-use crate::bubt_indx::{MBlock, ZBlock};
-use crate::bubt_stats::Stats;
 use crate::core::{Diff, Entry, Serialize};
 use crate::error::Error;
+use crate::robt_config::{self, Config, MetaItem, MARKER_BLOCK};
+use crate::robt_indx::{MBlock, ZBlock};
+use crate::robt_stats::Stats;
 use crate::util;
 
 pub struct Builder<K, V>
@@ -132,7 +132,7 @@ where
         // marker
         meta_items.push(MetaItem::Marker(MARKER_BLOCK.clone()));
         // flush them down
-        bubt_config::write_meta_items(meta_items, &mut self.i_flusher);
+        robt_config::write_meta_items(meta_items, &mut self.i_flusher);
 
         // flush marker block and close
         self.i_flusher.close_wait();

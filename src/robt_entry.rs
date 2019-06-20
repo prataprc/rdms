@@ -1,8 +1,8 @@
 // TODO: compute diffmem similar to keymem and valmem
 
-use crate::bubt_stats::Stats;
 use crate::core::{self, Diff, Serialize};
 use crate::error::Error;
+use crate::robt_stats::Stats;
 use crate::util;
 use crate::vlog;
 

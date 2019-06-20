@@ -1,8 +1,8 @@
 use std::{fmt, fmt::Display, str::FromStr};
 
-use crate::bubt_config::Config;
 use crate::error::Error;
 use crate::jsondata::{Json, Property};
+use crate::robt_config::Config;
 
 #[derive(Clone, Default)]
 pub struct Stats {

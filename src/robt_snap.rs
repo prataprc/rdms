@@ -6,12 +6,12 @@
 use std::borrow::Borrow;
 use std::{fs, marker, ops::Bound, path};
 
-use crate::bubt_config::{self, Config, MetaItem};
-use crate::bubt_entry::DiskEntryM;
-use crate::bubt_indx::{MBlock, ZBlock};
-use crate::bubt_stats::Stats;
 use crate::core::{Diff, Entry, Serialize};
 use crate::error::Error;
+use crate::robt_config::{self, Config, MetaItem};
+use crate::robt_entry::DiskEntryM;
+use crate::robt_indx::{MBlock, ZBlock};
+use crate::robt_stats::Stats;
 use crate::util;
 
 pub struct Snapshot<K, V>
@@ -53,7 +53,7 @@ where
             phantom_val: marker::PhantomData,
         };
 
-        let mut iter = bubt_config::read_meta_items(dir, name)?.into_iter();
+        let mut iter = robt_config::read_meta_items(dir, name)?.into_iter();
         // read and discard marker
         match iter.next() {
             Some(MetaItem::Marker(_)) => (),

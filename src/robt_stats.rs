@@ -1,4 +1,4 @@
-use std::{fmt, fmt::Display, str::FromStr};
+use std::{convert::TryInto, fmt, fmt::Display, str::FromStr};
 
 use crate::error::Error;
 use crate::jsondata::{Json, Property};
@@ -62,28 +62,42 @@ impl FromStr for Stats {
 
     fn from_str(s: &str) -> Result<Stats, Error> {
         let js: Json = s.parse()?;
+        let to_usize = |key: &str| -> Result<usize, Error> {
+            let n: usize = js.get(key)?.integer().unwrap().try_into().unwrap();
+            Ok(n)
+        };
+        let to_u64 = |key: &str| -> Result<u64, Error> {
+            let n: u64 = js.get(key)?.integer().unwrap().try_into().unwrap();
+            Ok(n)
+        };
+        let vlog_file = match js.get("/vlog_file")?.string().unwrap() {
+            s if s.len() == 0 => None,
+            s => Some(s),
+        };
+
         Ok(Stats {
+            // config fields.
             name: js.get("/name")?.string().unwrap(),
-            zblocksize: js.get("/zblocksize")?.integer().unwrap() as usize,
-            mblocksize: js.get("/mblocksize")?.integer().unwrap() as usize,
-            vblocksize: js.get("/vblocksize")?.integer().unwrap() as usize,
+            zblocksize: to_usize("/zblocksize")?,
+            mblocksize: to_usize("/mblocksize")?,
+            vblocksize: to_usize("/vblocksize")?,
             delta_ok: js.get("/delta_ok")?.boolean().unwrap(),
-            vlog_file: Some(js.get("/vlog_file")?.string().unwrap()),
+            vlog_file,
             value_in_vlog: js.get("/value_in_vlog")?.boolean().unwrap(),
+            // statitics fields.
+            n_count: to_u64("/n_count")?,
+            n_deleted: to_usize("/n_deleted")?,
+            seqno: to_u64("/seqno")?,
+            keymem: to_usize("/keymem")?,
+            valmem: to_usize("/valmem")?,
+            z_bytes: to_usize("/z_bytes")?,
+            v_bytes: to_usize("/v_bytes")?,
+            m_bytes: to_usize("/m_bytes")?,
+            padding: to_usize("/padding")?,
+            n_abytes: to_usize("/n_abytes")?,
 
-            n_count: js.get("/n_count")?.integer().unwrap() as u64,
-            n_deleted: js.get("/n_deleted")?.integer().unwrap() as usize,
-            seqno: js.get("/seqno")?.integer().unwrap() as u64,
-            keymem: js.get("/keymem")?.integer().unwrap() as usize,
-            valmem: js.get("/valmem")?.integer().unwrap() as usize,
-            z_bytes: js.get("/z_bytes")?.integer().unwrap() as usize,
-            v_bytes: js.get("/v_bytes")?.integer().unwrap() as usize,
-            m_bytes: js.get("/m_bytes")?.integer().unwrap() as usize,
-            padding: js.get("/padding")?.integer().unwrap() as usize,
-            n_abytes: js.get("/n_abytes")?.integer().unwrap() as usize,
-
-            buildtime: js.get("/buildtime")?.integer().unwrap() as u64,
-            epoch: js.get("/epoch")?.integer().unwrap() as i128,
+            buildtime: to_u64("/buildtime")?,
+            epoch: js.get("/epoch")?.integer().unwrap(),
         })
     }
 }
@@ -91,38 +105,29 @@ impl FromStr for Stats {
 impl Display for Stats {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         let mut js = Json::new::<Vec<Property>>(vec![]);
-        js.set("/name", Json::new(self.name.clone())).unwrap();
-        js.set("/zblocksize", Json::new(self.zblocksize as i128))
-            .unwrap();
-        js.set("/mblocksize", Json::new(self.mblocksize as i128))
-            .unwrap();
-        js.set("/vblocksize", Json::new(self.vblocksize as i128))
-            .unwrap();
-        js.set("/delta_ok", Json::new(self.delta_ok)).unwrap();
-        js.set(
-            "/vlog_file",
-            Json::new(self.vlog_file.clone().map_or("".to_string(), From::from)),
-        )
-        .unwrap();
-        js.set("/value_in_vlog", Json::new(self.value_in_vlog))
-            .unwrap();
 
-        js.set("/n_count", Json::new(self.n_count as i128)).unwrap();
-        js.set("/n_deleted", Json::new(self.n_deleted as i128))
-            .unwrap();
-        js.set("/seqno", Json::new(self.seqno as i128)).unwrap();
-        js.set("/keymem", Json::new(self.keymem as i128)).unwrap();
-        js.set("/valmem", Json::new(self.valmem as i128)).unwrap();
-        js.set("/z_bytes", Json::new(self.z_bytes as i128)).unwrap();
-        js.set("/v_bytes", Json::new(self.v_bytes as i128)).unwrap();
-        js.set("/m_bytes", Json::new(self.m_bytes as i128)).unwrap();
-        js.set("/padding", Json::new(self.padding as i128)).unwrap();
-        js.set("/n_abytes", Json::new(self.n_abytes as i128))
-            .unwrap();
+        js.set("/name", Json::new(self.name.clone())).ok();
+        js.set("/zblocksize", Json::new(self.zblocksize)).ok();
+        js.set("/mblocksize", Json::new(self.mblocksize)).ok();
+        js.set("/vblocksize", Json::new(self.vblocksize)).ok();
+        js.set("/delta_ok", Json::new(self.delta_ok)).ok();
+        let file = self.vlog_file.clone().map_or("".to_string(), From::from);
+        js.set("/vlog_file", Json::new(file)).ok();
+        js.set("/value_in_vlog", Json::new(self.value_in_vlog)).ok();
 
-        js.set("/buildtime", Json::new(self.buildtime as i128))
-            .unwrap();
-        js.set("/epoch", Json::new(self.epoch)).unwrap();
+        js.set("/n_count", Json::new(self.n_count)).ok();
+        js.set("/n_deleted", Json::new(self.n_deleted)).ok();
+        js.set("/seqno", Json::new(self.seqno)).ok();
+        js.set("/keymem", Json::new(self.keymem)).ok();
+        js.set("/valmem", Json::new(self.valmem)).ok();
+        js.set("/z_bytes", Json::new(self.z_bytes)).ok();
+        js.set("/v_bytes", Json::new(self.v_bytes)).ok();
+        js.set("/m_bytes", Json::new(self.m_bytes)).ok();
+        js.set("/padding", Json::new(self.padding)).ok();
+        js.set("/n_abytes", Json::new(self.n_abytes)).ok();
+
+        js.set("/buildtime", Json::new(self.buildtime)).ok();
+        js.set("/epoch", Json::new(self.epoch)).ok();
 
         write!(f, "{}", js.to_string())
     }

@@ -7,7 +7,7 @@ use std::{
     ops::Bound,
 };
 
-//use crate::bubt_build::FlushClient;
+use crate::bubt_build::FlushClient;
 use crate::bubt_config::Config;
 use crate::bubt_entry::{DiskEntryM, DiskEntryZ};
 use crate::bubt_stats::Stats;
@@ -60,8 +60,6 @@ where
     V: Default + Clone + Diff + Serialize,
     <V as Diff>::D: Default + Clone + Serialize,
 {
-    const FLAGS_ZBLOCK: u64 = 0x1000000000000000;
-
     pub(crate) fn new_encode(config: Config) -> MBlock<K, V> {
         MBlock::Encode {
             mblock: Vec::with_capacity(config.m_blocksize),
@@ -87,9 +85,19 @@ where
         }
     }
 
-    pub(crate) fn first_key(&mut self) -> Option<K> {
+    pub(crate) fn as_first_key(&mut self) -> &K {
         match self {
-            MBlock::Encode { first_key, .. } => first_key.clone(),
+            MBlock::Encode { first_key, .. } => first_key.as_ref().unwrap(),
+            MBlock::Decode { .. } => unreachable!(),
+        }
+    }
+
+    pub(crate) fn has_first_key(&self) -> bool {
+        match self {
+            MBlock::Encode { first_key, .. } => match first_key {
+                Some(_) => true,
+                None => false,
+            },
             MBlock::Decode { .. } => unreachable!(),
         }
     }
@@ -142,7 +150,7 @@ where
         }
     }
 
-    pub(crate) fn finalize(&mut self, stats: &mut Stats) {
+    pub(crate) fn finalize(&mut self, stats: &mut Stats) -> usize {
         match self {
             MBlock::Encode {
                 mblock,
@@ -169,19 +177,21 @@ where
                 stats.m_bytes += config.m_blocksize;
                 // align blocks
                 mblock.resize(config.m_blocksize, 0);
+
+                config.m_blocksize
             }
             MBlock::Decode { .. } => unreachable!(),
         }
     }
 
-    //pub(crate) fn flush(&mut self, i_flusher: &mut FlushClient) {
-    //    match self {
-    //        MBlock::Encode { mblock, .. } => {
-    //            i_flusher.send(mblock.clone());
-    //        }
-    //        MBlock::Decode { .. } => unreachable!(),
-    //    }
-    //}
+    pub(crate) fn flush(&mut self, i_flusher: &mut FlushClient) {
+        match self {
+            MBlock::Encode { mblock, .. } => {
+                i_flusher.send(mblock.clone());
+            }
+            MBlock::Decode { .. } => unreachable!(),
+        }
+    }
 }
 
 impl<K, V> MBlock<K, V>
@@ -220,7 +230,7 @@ where
         key: &K,
         from: Bound<usize>,
         to: Bound<usize>,
-    ) -> Result<DiskEntryM<K>, Error> {
+    ) -> Result<DiskEntryM, Error> {
         let pivot = self.find_pivot(from, to)?;
         match (pivot, from) {
             (0, Bound::Included(f)) => self.to_entry(f),
@@ -254,7 +264,7 @@ where
         }
     }
 
-    pub fn to_entry(&self, index: usize) -> Result<DiskEntryM<K>, Error> {
+    pub fn to_entry(&self, index: usize) -> Result<DiskEntryM, Error> {
         let (count, adjust, offsets, entries) = match self {
             MBlock::Decode {
                 count,
@@ -268,7 +278,9 @@ where
         if index < count {
             let offset = offsets[index..index + 4].try_into().unwrap();
             let offset = u32::from_be_bytes(offset) as usize;
-            DiskEntryM::to_entry(&entries[offset - adjust..])
+            let mut mentry = DiskEntryM::to_entry(&entries[offset - adjust..])?;
+            mentry.set_index(index);
+            Ok(mentry)
         } else {
             Err(Error::MBlockExhausted)
         }
@@ -372,9 +384,19 @@ where
         }
     }
 
-    pub(crate) fn first_key(&self) -> Option<K> {
+    pub(crate) fn as_first_key(&self) -> &K {
         match self {
-            ZBlock::Encode { first_key, .. } => first_key.clone(),
+            ZBlock::Encode { first_key, .. } => first_key.as_ref().unwrap(),
+            ZBlock::Decode { .. } => unreachable!(),
+        }
+    }
+
+    pub(crate) fn has_first_key(&self) -> bool {
+        match self {
+            ZBlock::Encode { first_key, .. } => match first_key {
+                Some(_) => true,
+                None => false,
+            },
             ZBlock::Decode { .. } => unreachable!(),
         }
     }
@@ -418,7 +440,7 @@ where
         }
     }
 
-    pub(crate) fn finalize(&mut self, stats: &mut Stats) {
+    pub(crate) fn finalize(&mut self, stats: &mut Stats) -> (usize, usize) {
         match self {
             ZBlock::Encode {
                 leaf,
@@ -450,24 +472,26 @@ where
                 stats.v_bytes += blob.len();
                 // align blocks
                 leaf.resize(config.z_blocksize, 0);
+
+                (config.z_blocksize, blob.len())
             }
             ZBlock::Decode { .. } => unreachable!(),
         }
     }
 
-    //pub(crate) fn flush(
-    //    &mut self,
-    //    i_flusher: &mut FlushClient,
-    //    v_flusher: Option<&mut FlushClient>,
-    //) {
-    //    match self {
-    //        ZBlock::Encode { leaf, blob, ..  } => {
-    //            i_flusher.send(leaf.clone());
-    //            v_flusher.map(|x| x.send(blob.clone()));
-    //        }
-    //        ZBlock::Decode { .. } => unreachable!(),
-    //    }
-    //}
+    pub(crate) fn flush(
+        &mut self,
+        i_flusher: &mut FlushClient,
+        v_flusher: Option<&mut FlushClient>,
+    ) {
+        match self {
+            ZBlock::Encode { leaf, blob, .. } => {
+                i_flusher.send(leaf.clone());
+                v_flusher.map(|x| x.send(blob.clone()));
+            }
+            ZBlock::Decode { .. } => unreachable!(),
+        }
+    }
 }
 
 impl<K, V> ZBlock<K, V>
@@ -476,9 +500,6 @@ where
     V: Default + Clone + Diff + Serialize,
     <V as Diff>::D: Default + Clone + Serialize,
 {
-    const VLEN_MASK: u64 = 0x0FFFFFFFFFFFFFFF;
-    const DLEN_MASK: u64 = 0x0FFFFFFFFFFFFFFF;
-
     pub(crate) fn new_decode(
         fd: &mut fs::File,
         fpos: u64,
@@ -510,7 +531,7 @@ where
         key: &K,
         from: Bound<usize>,
         to: Bound<usize>,
-    ) -> Result<core::Entry<K, V>, Error> {
+    ) -> Result<(usize, core::Entry<K, V>), Error> {
         let pivot = self.find_pivot(from, to)?;
         match (pivot, from) {
             (0, Bound::Included(f)) => self.to_entry(f),
@@ -544,7 +565,7 @@ where
         }
     }
 
-    pub fn to_entry(&self, index: usize) -> Result<core::Entry<K, V>, Error> {
+    pub fn to_entry(&self, index: usize) -> Result<(usize, core::Entry<K, V>), Error> {
         let (count, adjust, offsets, entries) = match self {
             ZBlock::Decode {
                 count,
@@ -558,7 +579,7 @@ where
         if index < count {
             let offset = &offsets[index..index + 4];
             let offset = u32::from_be_bytes(offset.try_into().unwrap()) as usize;
-            DiskEntryZ::to_entry(&entries[offset - adjust..])
+            Ok((index, DiskEntryZ::to_entry(&entries[offset - adjust..])?))
         } else {
             Err(Error::ZBlockExhausted)
         }

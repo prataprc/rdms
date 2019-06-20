@@ -7,12 +7,12 @@ use std::borrow::Borrow;
 use std::{fs, marker, ops::Bound, path};
 
 use crate::bubt_config::{self, Config, MetaItem};
+use crate::bubt_entry::DiskEntryM;
 use crate::bubt_indx::{MBlock, ZBlock};
 use crate::bubt_stats::Stats;
-use crate::core::{Diff, Entry, Result, Serialize};
+use crate::core::{Diff, Entry, Serialize};
 use crate::error::Error;
 use crate::util;
-use crate::vlog;
 
 pub struct Snapshot<K, V>
 where
@@ -38,8 +38,8 @@ where
     V: Default + Clone + Diff + Serialize,
     <V as Diff>::D: Default + Clone + Serialize,
 {
-    pub fn open(dir: &str, name: &str) -> Result<Snapshot<K, V>> {
-        let index_fd = util::open_file_r(&Config::index_file(dir, name))?;
+    pub fn open(dir: &str, name: &str) -> Result<Snapshot<K, V>, Error> {
+        let index_fd = util::open_file_r(&Config::stitch_index_file(dir, name))?;
 
         let mut snap = Snapshot {
             metadata: Default::default(),
@@ -96,7 +96,7 @@ where
             None => None,
             Some(vlog_file_1) => {
                 let f = path::Path::new(&vlog_file_1).file_name().unwrap();
-                let ifile = Config::index_file(&dir, &name);
+                let ifile = Config::stitch_index_file(&dir, &name);
                 let mut file = path::PathBuf::new();
                 file.push(path::Path::new(&ifile).parent().unwrap());
                 file.push(f);
@@ -109,7 +109,7 @@ where
             .config
             .to_value_log()
             .as_ref()
-            .map(util::open_file_r)
+            .map(|s| util::open_file_r(s.as_str()))
             .transpose()?;
 
         // read root
@@ -155,10 +155,10 @@ where
     }
 
     pub fn footprint(&self) -> u64 {
-        let index_file = Config::index_file(&self.config.dir, &self.config.name);
+        let index_file = self.config.to_index_file();
         let mut footprint = fs::metadata(index_file).unwrap().len();
 
-        footprint += match self.to_value_log() {
+        footprint += match self.config.to_value_log() {
             Some(vlog_file) => fs::metadata(vlog_file).unwrap().len(),
             None => 0,
         };
@@ -189,26 +189,22 @@ where
     V: Default + Clone + Diff + Serialize,
     <V as Diff>::D: Default + Clone + Serialize,
 {
-    pub fn get(&mut self, key: &K) -> Result<Entry<K, V>> {
-        let mut fpos = self.root;
+    pub fn get(&mut self, key: &K) -> Result<Entry<K, V>, Error> {
+        let fpos = self.root;
         let fd = &mut self.index_fd;
         let config = &self.config;
         let (from, to) = (Bound::Unbounded, Bound::Unbounded);
 
         let zblock_fpos = loop {
             let mblock: MBlock<K, V> = MBlock::new_decode(fd, fpos, &config)?;
-            let (_, is_z, entry) = mblock.find(key, from, to)?;
-            fpos = match entry.vlog_value_ref() {
-                Some(vlog::Value::Reference { fpos, .. }) => *fpos,
-                _ => unreachable!(),
-            };
-            if is_z {
-                break fpos;
+            let mentry = mblock.find(key, from, to)?;
+            if mentry.is_zblock() {
+                break mentry.to_fpos();
             }
         };
 
         let zblock: ZBlock<K, V> = ZBlock::new_decode(fd, zblock_fpos, &config)?;
-        let (_, entry) = zblock.find(key, from, to)?;
+        let (_index, entry) = zblock.find(key, from, to)?;
         if entry.as_key().borrow().eq(key) {
             Ok(entry)
         } else {
@@ -216,7 +212,7 @@ where
         }
     }
 
-    pub fn iter<'a>(&'a mut self) -> Result<Iter<'a, K, V>> {
+    pub fn iter<'a>(&'a mut self) -> Result<Iter<'a, K, V>, Error> {
         let mut mzs = vec![];
         self.build_fwd(&mut mzs, self.root)?;
         Ok(Iter {
@@ -229,7 +225,7 @@ where
         &'a mut self,
         low: Bound<K>,  // upper bound
         high: Bound<K>, // lower bound
-    ) -> Result<Range<'a, K, V>> {
+    ) -> Result<Range<'a, K, V>, Error> {
         Ok(match low {
             Bound::Unbounded => {
                 let mut mzs = vec![];
@@ -267,7 +263,7 @@ where
         &'a mut self,
         high: Bound<K>, // upper bound
         low: Bound<K>,  // lower bound
-    ) -> Result<Reverse<'a, K, V>> {
+    ) -> Result<Reverse<'a, K, V>, Error> {
         Ok(match high {
             Bound::Unbounded => {
                 let mut mzs = vec![];
@@ -305,28 +301,27 @@ where
         &mut self,
         mzs: &mut Vec<MZ<K, V>>,
         mut fpos: u64, // from node
-    ) -> Result<Entry<K, V>> {
+    ) -> Result<Entry<K, V>, Error> {
         let fd = &mut self.index_fd;
         let config = &self.config;
 
         let zblock_fpos = loop {
             let mblock: MBlock<K, V> = MBlock::new_decode(fd, fpos, config)?;
-            let (index, is_z, entry) = mblock.entry_at(0)?;
-            fpos = match (is_z, entry.vlog_value_ref()) {
-                (false, Some(vlog::Value::Reference { fpos, .. })) => {
-                    mzs.push(MZ::M { fpos: *fpos, index });
-                    *fpos
+            let mentry = mblock.to_entry(0)?;
+            fpos = match (mentry.is_zblock(), mentry.to_fpos()) {
+                (false, fpos) => {
+                    mzs.push(MZ::M { fpos, index: 0 });
+                    fpos
                 }
-                (true, Some(vlog::Value::Reference { fpos, .. })) => {
-                    break *fpos;
+                (true, fpos) => {
+                    break fpos;
                 }
-                _ => unreachable!(),
             };
         };
 
         let zblock = ZBlock::new_decode(fd, zblock_fpos, config)?;
-        let (index, entry) = zblock.entry_at(0)?;
-        mzs.push(MZ::Z { zblock, index });
+        let (_index, entry) = zblock.to_entry(0)?;
+        mzs.push(MZ::Z { zblock, index: 0 });
         Ok(entry)
     }
 
@@ -334,32 +329,34 @@ where
         &mut self,
         mzs: &mut Vec<MZ<K, V>>,
         mut fpos: u64, // from node
-    ) -> Result<Entry<K, V>> {
+    ) -> Result<Entry<K, V>, Error> {
         let fd = &mut self.index_fd;
         let config = &self.config;
 
         let zblock_fpos = loop {
             let mblock: MBlock<K, V> = MBlock::new_decode(fd, fpos, config)?;
-            let (index, is_z, entry) = mblock.entry_at(mblock.len() - 1)?;
-            fpos = match (is_z, entry.vlog_value_ref()) {
-                (false, Some(vlog::Value::Reference { fpos, .. })) => {
-                    mzs.push(MZ::M { fpos: *fpos, index });
-                    *fpos
+            let mentry = mblock.to_entry(mblock.len() - 1)?;
+            fpos = match (mentry.is_zblock(), mentry.to_fpos()) {
+                (false, fpos) => {
+                    mzs.push(MZ::M {
+                        fpos,
+                        index: mblock.len() - 1,
+                    });
+                    fpos
                 }
-                (true, Some(vlog::Value::Reference { fpos, .. })) => {
-                    break *fpos;
+                (true, fpos) => {
+                    break fpos;
                 }
-                _ => unreachable!(),
             };
         };
 
         let zblock = ZBlock::new_decode(fd, zblock_fpos, config)?;
-        let (index, entry) = zblock.entry_at(zblock.len() - 1)?;
+        let (index, entry) = zblock.to_entry(zblock.len() - 1)?;
         mzs.push(MZ::Z { zblock, index });
         Ok(entry)
     }
 
-    fn build(&mut self, key: &K) -> Result<(Vec<MZ<K, V>>, Entry<K, V>)> {
+    fn build(&mut self, key: &K) -> Result<(Vec<MZ<K, V>>, Entry<K, V>), Error> {
         let mut mzs = vec![];
         let mut fpos = self.root;
         let fd = &mut self.index_fd;
@@ -368,16 +365,18 @@ where
 
         let zblock_fpos = loop {
             let mblock: MBlock<K, V> = MBlock::new_decode(fd, fpos, config)?;
-            let (index, is_z, entry) = mblock.find(key, from, to)?;
-            fpos = match (is_z, entry.vlog_value_ref()) {
-                (false, Some(vlog::Value::Reference { fpos, .. })) => {
-                    mzs.push(MZ::M { fpos: *fpos, index });
-                    *fpos
+            let mentry = mblock.find(key, from, to)?;
+            fpos = match (mentry.is_zblock(), mentry.to_fpos()) {
+                (false, fpos) => {
+                    mzs.push(MZ::M {
+                        fpos: fpos,
+                        index: mentry.to_index(),
+                    });
+                    fpos
                 }
-                (true, Some(vlog::Value::Reference { fpos, .. })) => {
-                    break *fpos;
+                (true, fpos) => {
+                    break fpos;
                 }
-                _ => unreachable!(),
             };
         };
 
@@ -387,7 +386,7 @@ where
         Ok((mzs, entry))
     }
 
-    fn rebuild_fwd(&mut self, mzs: &mut Vec<MZ<K, V>>) -> Result<()> {
+    fn rebuild_fwd(&mut self, mzs: &mut Vec<MZ<K, V>>) -> Result<(), Error> {
         let fd = &mut self.index_fd;
         let config = &self.config;
 
@@ -396,33 +395,33 @@ where
             Some(MZ::Z { .. }) => unreachable!(),
             Some(MZ::M { fpos, index }) => {
                 let mblock: MBlock<K, V> = MBlock::new_decode(fd, fpos, config)?;
-                match mblock.entry_at(index + 1) {
-                    Ok((_index, true /*is_z*/, entry)) => {
+                match mblock.to_entry(index + 1) {
+                    Ok(DiskEntryM::Entry {
+                        z: true,
+                        fpos: zblock_fpos,
+                        ..
+                    }) => {
                         mzs.push(MZ::M {
                             fpos,
                             index: index + 1,
                         });
 
-                        let zblock_fpos = match entry.vlog_value_ref() {
-                            Some(vlog::Value::Reference { fpos, .. }) => *fpos,
-                            _ => unreachable!(),
-                        };
                         let zblock = ZBlock::new_decode(fd, zblock_fpos, config)?;
-                        zblock.entry_at(0)?;
+                        zblock.to_entry(0)?;
                         mzs.push(MZ::Z { zblock, index: 0 });
                         Ok(())
                     }
-                    Ok((index, false /*is_z*/, entry)) => {
+                    Ok(DiskEntryM::Entry {
+                        z: false,
+                        fpos: mblock_fpos,
+                        ..
+                    }) => {
                         mzs.push(MZ::M {
                             fpos,
                             index: index + 1,
                         });
 
-                        let fpos = match entry.vlog_value_ref() {
-                            Some(vlog::Value::Reference { fpos, .. }) => *fpos,
-                            _ => unreachable!(),
-                        };
-                        self.build_fwd(mzs, fpos)?;
+                        self.build_fwd(mzs, mblock_fpos)?;
                         Ok(())
                     }
                     Err(Error::ZBlockExhausted) => self.rebuild_fwd(mzs),
@@ -432,7 +431,7 @@ where
         }
     }
 
-    fn rebuild_rev(&mut self, mzs: &mut Vec<MZ<K, V>>) -> Result<()> {
+    fn rebuild_rev(&mut self, mzs: &mut Vec<MZ<K, V>>) -> Result<(), Error> {
         let fd = &mut self.index_fd;
         let config = &self.config;
 
@@ -442,33 +441,33 @@ where
             Some(MZ::M { index: 0, .. }) => self.rebuild_rev(mzs),
             Some(MZ::M { fpos, index }) => {
                 let mblock: MBlock<K, V> = MBlock::new_decode(fd, fpos, config)?;
-                match mblock.entry_at(index - 1) {
-                    Ok((_index, true /*is_z*/, entry)) => {
+                match mblock.to_entry(index - 1) {
+                    Ok(DiskEntryM::Entry {
+                        z: true,
+                        fpos: zblock_fpos,
+                        ..
+                    }) => {
                         mzs.push(MZ::M {
                             fpos,
                             index: index - 1,
                         });
 
-                        let zblock_fpos = match entry.vlog_value_ref() {
-                            Some(vlog::Value::Reference { fpos, .. }) => *fpos,
-                            _ => unreachable!(),
-                        };
                         let zblock = ZBlock::new_decode(fd, zblock_fpos, config)?;
-                        let (index, _) = zblock.entry_at(zblock.len() - 1)?;
+                        let (index, _) = zblock.to_entry(zblock.len() - 1)?;
                         mzs.push(MZ::Z { zblock, index });
                         Ok(())
                     }
-                    Ok((index, false /*is_z*/, entry)) => {
+                    Ok(DiskEntryM::Entry {
+                        z: false,
+                        fpos: mblock_fpos,
+                        ..
+                    }) => {
                         mzs.push(MZ::M {
                             fpos,
                             index: index - 1,
                         });
 
-                        let fpos = match entry.vlog_value_ref() {
-                            Some(vlog::Value::Reference { fpos, .. }) => *fpos,
-                            _ => unreachable!(),
-                        };
-                        self.build_rev(mzs, fpos)?;
+                        self.build_rev(mzs, mblock_fpos)?;
                         Ok(())
                     }
                     _ => unreachable!(),
@@ -494,9 +493,9 @@ where
     V: Default + Clone + Diff + Serialize,
     <V as Diff>::D: Default + Clone + Serialize,
 {
-    type Item = Result<Entry<K, V>>;
+    type Item = Result<Entry<K, V>, Error>;
 
-    fn next(&mut self) -> Option<Result<Entry<K, V>>> {
+    fn next(&mut self) -> Option<Result<Entry<K, V>, Error>> {
         match self.mzs.pop() {
             None => None,
             Some(mut z) => match z.next() {
@@ -545,9 +544,9 @@ where
     V: Default + Clone + Diff + Serialize,
     <V as Diff>::D: Default + Clone + Serialize,
 {
-    type Item = Result<Entry<K, V>>;
+    type Item = Result<Entry<K, V>, Error>;
 
-    fn next(&mut self) -> Option<Result<Entry<K, V>>> {
+    fn next(&mut self) -> Option<Result<Entry<K, V>, Error>> {
         match self.mzs.pop() {
             None => None,
             Some(mut z) => match z.next() {
@@ -601,9 +600,9 @@ where
     V: Default + Clone + Diff + Serialize,
     <V as Diff>::D: Default + Clone + Serialize,
 {
-    type Item = Result<Entry<K, V>>;
+    type Item = Result<Entry<K, V>, Error>;
 
-    fn next(&mut self) -> Option<Result<Entry<K, V>>> {
+    fn next(&mut self) -> Option<Result<Entry<K, V>, Error>> {
         match self.mzs.pop() {
             None => None,
             Some(mut z) => match z.next_back() {
@@ -645,7 +644,7 @@ where
 
     fn next(&mut self) -> Option<Entry<K, V>> {
         match self {
-            MZ::Z { zblock, index } => match zblock.entry_at(*index) {
+            MZ::Z { zblock, index } => match zblock.to_entry(*index) {
                 Err(Error::ZBlockExhausted) => None,
                 Ok((_, entry)) => {
                     *index += 1;
@@ -667,7 +666,7 @@ where
     fn next_back(&mut self) -> Option<Entry<K, V>> {
         match self {
             MZ::Z { index: 0, .. } => None,
-            MZ::Z { zblock, index } => match zblock.entry_at(*index) {
+            MZ::Z { zblock, index } => match zblock.to_entry(*index) {
                 Ok((_, entry)) => {
                     *index -= 1;
                     Some(entry)

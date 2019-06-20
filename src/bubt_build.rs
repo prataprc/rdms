@@ -6,7 +6,7 @@ use std::{cmp, fs, io::Write, marker, mem, thread, time};
 use crate::bubt_config::{self, Config, MetaItem, MARKER_BLOCK};
 use crate::bubt_indx::{MBlock, ZBlock};
 use crate::bubt_stats::Stats;
-use crate::core::{Diff, Entry, Result, Serialize};
+use crate::core::{Diff, Entry, Serialize};
 use crate::error::Error;
 use crate::util;
 
@@ -31,11 +31,11 @@ where
     V: Default + Clone + Diff + Serialize,
     <V as Diff>::D: Default + Clone + Serialize,
 {
-    pub fn initial(config: Config) -> Result<Builder<K, V>> {
-        let index_file = Config::index_file(&config.dir, &config.name);
+    pub fn initial(config: Config) -> Result<Builder<K, V>, Error> {
+        let index_file = config.to_index_file();
         let i_flusher = FlushClient::new(index_file, false /*reuse*/)?;
         let reuse = false;
-        let v_flusher = match config.to_value_log {
+        let v_flusher = match config.to_value_log() {
             Some(vlog_file) => Some(FlushClient::new(vlog_file, reuse)?),
             None => None,
         };
@@ -50,11 +50,11 @@ where
         })
     }
 
-    pub fn incremental(config: Config) -> Result<Builder<K, V>> {
-        let index_file = Config::index_file(&config.dir, &config.name);
+    pub fn incremental(config: Config) -> Result<Builder<K, V>, Error> {
+        let index_file = config.to_index_file();
         let i_flusher = FlushClient::new(index_file, false /*reuse*/)?;
         let reuse = true;
-        let v_flusher = match config.to_value_log.is_some() {
+        let v_flusher = match config.to_value_log() {
             Some(vlog_file) => Some(FlushClient::new(vlog_file, reuse)?),
             None => None,
         };
@@ -74,9 +74,9 @@ where
         })
     }
 
-    pub fn build<I>(mut self, mut iter: I, metadata: Vec<u8>) -> Result<()>
+    pub fn build<I>(mut self, mut iter: I, metadata: Vec<u8>) -> Result<(), Error>
     where
-        I: Iterator<Item = Result<Entry<K, V>>>,
+        I: Iterator<Item = Result<Entry<K, V>, Error>>,
     {
         let start = time::SystemTime::now();
         let mut b = BuildData::new(self.stats.n_abytes, self.config.clone());
@@ -89,18 +89,17 @@ where
             match b.z.insert(&entry, &mut self.stats) {
                 Ok(_) => (),
                 Err(Error::ZBlockOverflow(_)) => {
-                    let first_key = b.z.first_key();
                     let (zbytes, vbytes) = b.z.finalize(&mut self.stats);
                     b.z.flush(&mut self.i_flusher, self.v_flusher.as_mut());
                     b.update_z_flush(zbytes, vbytes);
                     let mut m = b.mstack.pop().unwrap();
-                    if let Err(_) = m.insertz(first_key.as_ref().unwrap(), b.z_fpos) {
+                    if let Err(_) = m.insertz(b.z.as_first_key(), b.z_fpos) {
                         let mbytes = m.finalize(&mut self.stats);
                         m.flush(&mut self.i_flusher);
                         b.update_m_flush(mbytes);
-                        self.insertms(m.first_key(), &mut b)?;
+                        self.insertms(m.as_first_key(), &mut b)?;
                         m.reset();
-                        m.insertz(first_key.as_ref().unwrap(), b.z_fpos)?;
+                        m.insertz(b.z.as_first_key(), b.z_fpos)?;
                     }
                     b.mstack.push(m);
                     b.reset();
@@ -142,16 +141,15 @@ where
         Ok(())
     }
 
-    fn insertms(&mut self, first_key: Option<K>, b: &mut BuildData<K, V>) -> Result<()> {
-        let first_key = first_key.as_ref().unwrap();
+    fn insertms(&mut self, key: &K, b: &mut BuildData<K, V>) -> Result<(), Error> {
         let (mut m0, overflow, m_fpos) = match b.mstack.pop() {
-            Some(mut m0) => match m0.insertm(first_key, b.m_fpos) {
+            Some(mut m0) => match m0.insertm(key, b.m_fpos) {
                 Ok(_) => (m0, false, b.m_fpos),
                 Err(_) => (m0, true, b.m_fpos),
             },
             None => {
                 let mut m0 = MBlock::new_encode(self.config.clone());
-                m0.insertm(first_key, b.m_fpos)?;
+                m0.insertm(key, b.m_fpos)?;
                 (m0, false, b.m_fpos)
             }
         };
@@ -159,28 +157,28 @@ where
             let mbytes = m0.finalize(&mut self.stats);
             m0.flush(&mut self.i_flusher);
             b.update_m_flush(mbytes);
-            self.insertms(m0.first_key(), b)?;
+            self.insertms(m0.as_first_key(), b)?;
             m0.reset();
-            m0.insertm(first_key, m_fpos)?;
+            m0.insertm(key, m_fpos)?;
         }
         b.mstack.push(m0);
         Ok(())
     }
 
-    fn finalize1(&mut self, b: &mut BuildData<K, V>) -> Result<()> {
-        if let Some(first_key) = b.z.first_key() {
+    fn finalize1(&mut self, b: &mut BuildData<K, V>) -> Result<(), Error> {
+        if b.z.has_first_key() {
             let (zbytes, vbytes) = b.z.finalize(&mut self.stats);
             b.z.flush(&mut self.i_flusher, self.v_flusher.as_mut());
             b.update_z_flush(zbytes, vbytes);
             let mut m = b.mstack.pop().unwrap();
-            if let Err(_) = m.insertz(&first_key, b.z_fpos) {
+            if let Err(_) = m.insertz(b.z.as_first_key(), b.z_fpos) {
                 let mbytes = m.finalize(&mut self.stats);
                 m.flush(&mut self.i_flusher);
                 b.update_m_flush(mbytes);
-                self.insertms(m.first_key(), b)?;
+                self.insertms(m.as_first_key(), b)?;
 
                 m.reset();
-                m.insertz(&first_key, b.z_fpos)?;
+                m.insertz(b.z.as_first_key(), b.z_fpos)?;
                 b.reset();
             }
             b.mstack.push(m);
@@ -188,13 +186,13 @@ where
         Ok(())
     }
 
-    fn finalize2(&mut self, b: &mut BuildData<K, V>) -> Result<()> {
+    fn finalize2(&mut self, b: &mut BuildData<K, V>) -> Result<(), Error> {
         while let Some(mut m) = b.mstack.pop() {
-            if let Some(first_key) = m.first_key() {
+            if m.has_first_key() {
                 let mbytes = m.finalize(&mut self.stats);
                 m.flush(&mut self.i_flusher);
                 b.update_m_flush(mbytes);
-                self.insertms(Some(first_key), b)?;
+                self.insertms(m.as_first_key(), b)?;
 
                 b.reset();
             }
@@ -203,7 +201,7 @@ where
     }
 
     fn preprocess_entry(&mut self, entry: &mut Entry<K, V>) -> bool {
-        self.stats.seqno = cmp::max(self.stats.seqno, entry.seqno());
+        self.stats.seqno = cmp::max(self.stats.seqno, entry.to_seqno());
         self.purge_values(entry)
     }
 
@@ -280,7 +278,7 @@ pub(crate) struct FlushClient {
 }
 
 impl FlushClient {
-    fn new(file: String, reuse: bool) -> Result<FlushClient> {
+    fn new(file: String, reuse: bool) -> Result<FlushClient, Error> {
         let fd = util::open_file_w(&file, reuse)?;
         let (flusher, tx, rx) = Flusher::new(file.clone(), fd);
         let fpos = if reuse {

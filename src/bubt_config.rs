@@ -5,7 +5,7 @@ use std::{convert::TryInto, fmt, fs, path};
 
 use lazy_static::lazy_static;
 
-//use crate::bubt_build::FlushClient;
+use crate::bubt_build::FlushClient;
 use crate::bubt_stats::Stats;
 use crate::error::Error;
 use crate::util;
@@ -67,13 +67,13 @@ impl Config {
         }
     }
 
-    fn stitch_index_file(dir: &str, name: &str) -> String {
+    pub(crate) fn stitch_index_file(dir: &str, name: &str) -> String {
         let mut index_file = path::PathBuf::from(dir);
         index_file.push(format!("bubt-{}-shard1.indx", name));
         index_file.to_str().unwrap().to_string()
     }
 
-    fn stitch_vlog_file(dir: &str, name: &str) -> String {
+    pub(crate) fn stitch_vlog_file(dir: &str, name: &str) -> String {
         let mut vlog_file = path::PathBuf::from(dir);
         vlog_file.push(format!("bubt-{}-shard1.vlog", name));
         vlog_file.to_str().unwrap().to_string()
@@ -156,43 +156,43 @@ impl fmt::Display for MetaItem {
     }
 }
 
-//pub(crate) fn write_meta_items(items: Vec<MetaItem>, flusher: &mut FlushClient) {
-//    let mut iter = items.into_iter();
-//    // metaitem - stats
-//    if let Some(MetaItem::Stats(stats)) = iter.next() {
-//        let mut block: Vec<u8> = Vec::with_capacity(Config::MARKER_BLOCK_SIZE);
-//        let scratch = (stats.len() as u64).to_be_bytes();
-//        block.extend_from_slice(&scratch);
-//        block.extend_from_slice(stats.as_bytes());
-//        flusher.send(block);
-//    } else {
-//        unreachable!()
-//    }
-//    // metaitem - metadata
-//    if let Some(MetaItem::Metadata(metadata)) = iter.next() {
-//        let n = ((metadata.len() + 8) / Config::MARKER_BLOCK_SIZE) + 1;
-//        let n = n * Config::MARKER_BLOCK_SIZE;
-//        let mut blocks: Vec<u8> = Vec::with_capacity(n);
-//        blocks.extend_from_slice(&metadata);
-//
-//        blocks.resize(blocks.capacity(), 0);
-//
-//        let loc = blocks.len() - 8;
-//        let scratch = (metadata.len() as u64).to_be_bytes();
-//        blocks[loc..].copy_from_slice(&scratch);
-//        flusher.send(blocks);
-//    } else {
-//        unreachable!();
-//    }
-//    // metaitem -  marker
-//    if let Some(MetaItem::Marker(block)) = iter.next() {
-//        flusher.send(block);
-//    }
-//
-//    if iter.next().is_some() {
-//        unreachable!();
-//    }
-//}
+pub(crate) fn write_meta_items(items: Vec<MetaItem>, flusher: &mut FlushClient) {
+    let mut iter = items.into_iter();
+    // metaitem - stats
+    if let Some(MetaItem::Stats(stats)) = iter.next() {
+        let mut block: Vec<u8> = Vec::with_capacity(Config::MARKER_BLOCK_SIZE);
+        let scratch = (stats.len() as u64).to_be_bytes();
+        block.extend_from_slice(&scratch);
+        block.extend_from_slice(stats.as_bytes());
+        flusher.send(block);
+    } else {
+        unreachable!()
+    }
+    // metaitem - metadata
+    if let Some(MetaItem::Metadata(metadata)) = iter.next() {
+        let n = ((metadata.len() + 8) / Config::MARKER_BLOCK_SIZE) + 1;
+        let n = n * Config::MARKER_BLOCK_SIZE;
+        let mut blocks: Vec<u8> = Vec::with_capacity(n);
+        blocks.extend_from_slice(&metadata);
+
+        blocks.resize(blocks.capacity(), 0);
+
+        let loc = blocks.len() - 8;
+        let scratch = (metadata.len() as u64).to_be_bytes();
+        blocks[loc..].copy_from_slice(&scratch);
+        flusher.send(blocks);
+    } else {
+        unreachable!();
+    }
+    // metaitem -  marker
+    if let Some(MetaItem::Marker(block)) = iter.next() {
+        flusher.send(block);
+    }
+
+    if iter.next().is_some() {
+        unreachable!();
+    }
+}
 
 pub(crate) fn read_meta_items(dir: &str, name: &str) -> Result<Vec<MetaItem>, Error> {
     let index_file = Config::stitch_index_file(dir, name);

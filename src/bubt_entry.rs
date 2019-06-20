@@ -24,29 +24,23 @@ use std::{convert::TryInto, mem};
 // * bit 62 reserved
 // * bit 63 reserved
 
-pub(crate) enum DiskEntryM<K>
-where
-    K: Serialize,
-{
-    M { size: usize },
-    Entry { z: bool, key: K, fpos: u64 },
+pub(crate) enum DiskEntryM {
+    M,
+    Entry { z: bool, fpos: u64, index: usize },
 }
 
-impl<K> DiskEntryM<K>
-where
-    K: Serialize,
-{
+impl DiskEntryM {
     const ZBLOCK_FLAG: u64 = 0x1000000000000000;
     const KLEN_SHIFT: u64 = 32;
 
-    pub(crate) fn encode_m(
+    pub(crate) fn encode_m<K>(
         mfpos: Option<u64>, // file offset point to child m-block
         zfpos: Option<u64>, // file offset point to child z-block
         key: &K,
         mblock: &mut Vec<u8>, // output
-    ) -> Result<DiskEntryM<K>, Error>
+    ) -> Result<DiskEntryM, Error>
     where
-        K: Clone + Ord + Serialize,
+        K: Serialize,
     {
         // encode key
         let m = mblock.len();
@@ -67,25 +61,23 @@ where
         };
         mblock[..8].copy_from_slice(&scratch);
         mblock[8..16].copy_from_slice(&fpos.to_be_bytes());
-        Ok(DiskEntryM::M {
-            size: mblock.len() - m,
+        Ok(DiskEntryM::M)
+    }
+
+    pub fn to_entry(entry: &[u8]) -> Result<DiskEntryM, Error> {
+        let hdr1 = u64::from_be_bytes(entry[0..8].try_into().unwrap());
+        let z = (hdr1 & Self::ZBLOCK_FLAG) == Self::ZBLOCK_FLAG;
+
+        let fpos = u64::from_be_bytes(entry[8..16].try_into().unwrap());
+
+        Ok(DiskEntryM::Entry {
+            z,
+            fpos,
+            index: Default::default(),
         })
     }
 
-    pub fn to_entry(entry: &[u8]) -> Result<DiskEntryM<K>, Error> {
-        let hdr1 = u64::from_be_bytes(entry[0..8].try_into().unwrap());
-        let z = (hdr1 & Self::ZBLOCK_FLAG) == Self::ZBLOCK_FLAG;
-        let klen: usize = (hdr1 >> Self::KLEN_SHIFT).try_into().unwrap();
-
-        let fpos = u64::from_be_bytes(entry[8..15].try_into().unwrap());
-
-        let mut key: K = unsafe { mem::zeroed() };
-        key.decode(&entry[24..24 + klen])?;
-
-        Ok(DiskEntryM::Entry { key, fpos, z })
-    }
-
-    pub(crate) fn to_key(entry: &[u8]) -> Result<K, Error>
+    pub(crate) fn to_key<K>(entry: &[u8]) -> Result<K, Error>
     where
         K: Serialize,
     {
@@ -94,6 +86,36 @@ where
         let mut key: K = unsafe { mem::zeroed() };
         key.decode(&entry[24..24 + klen])?;
         Ok(key)
+    }
+
+    pub(crate) fn is_zblock(&self) -> bool {
+        match self {
+            &DiskEntryM::Entry { z, .. } => z,
+            _ => unreachable!(),
+        }
+    }
+
+    pub(crate) fn to_fpos(&self) -> u64 {
+        match self {
+            DiskEntryM::Entry { fpos, .. } => *fpos,
+            _ => unreachable!(),
+        }
+    }
+
+    pub(crate) fn to_index(&self) -> usize {
+        match self {
+            DiskEntryM::Entry { index, .. } => *index,
+            _ => unreachable!(),
+        }
+    }
+
+    pub(crate) fn set_index(&mut self, indx: usize) {
+        match self {
+            DiskEntryM::Entry { index, .. } => {
+                *index = indx;
+            }
+            _ => unreachable!(),
+        }
     }
 }
 
@@ -181,25 +203,13 @@ impl DiskDelta {
 
 pub(crate) enum DiskEntryZ {
     // encode {key, value} entry into Z-Block
-    L {
-        size: usize,
-    },
+    L,
     // encode {key, value} entry into Z-Block and delta in value-log
-    LD {
-        size: usize,
-        doff: usize,
-    },
+    LD { doff: usize },
     // encode key entry into Z-Block, while value in value-log
-    LV {
-        size: usize,
-        voff: usize,
-    },
+    LV { voff: usize },
     // encode key entry into Z-Block, while value and delta in value-log
-    LVD {
-        size: usize,
-        voff: usize,
-        doff: usize,
-    },
+    LVD { voff: usize, doff: usize },
 }
 
 impl DiskEntryZ {
@@ -236,9 +246,7 @@ impl DiskEntryZ {
         leaf[8..16].copy_from_slice(&DiskEntryZ::encode_hdr2(vlen, isd, false)?);
         leaf[16..24].copy_from_slice(&DiskEntryZ::encode_hdr3(seqno));
 
-        Ok(DiskEntryZ::L {
-            size: leaf.len() - m,
-        })
+        Ok(DiskEntryZ::L)
     }
 
     pub(crate) fn encode_ld<K, V>(
@@ -271,10 +279,7 @@ impl DiskEntryZ {
         let doff = leaf.len();
         DiskEntryZ::encode_delta(entry, leaf, blob)?;
 
-        Ok(DiskEntryZ::LD {
-            size: leaf.len() - m,
-            doff,
-        })
+        Ok(DiskEntryZ::LD { doff })
     }
 
     pub(crate) fn encode_lv<K, V>(
@@ -308,10 +313,7 @@ impl DiskEntryZ {
         leaf[8..16].copy_from_slice(&DiskEntryZ::encode_hdr2(vlen, isd, true)?);
         leaf[16..24].copy_from_slice(&DiskEntryZ::encode_hdr3(seqno));
 
-        Ok(DiskEntryZ::LV {
-            size: leaf.len() - m,
-            voff,
-        })
+        Ok(DiskEntryZ::LV { voff })
     }
 
     pub(crate) fn encode_lvd<K, V>(
@@ -348,11 +350,7 @@ impl DiskEntryZ {
         let doff = leaf.len();
         DiskEntryZ::encode_delta(entry, leaf, blob)?;
 
-        Ok(DiskEntryZ::LVD {
-            size: leaf.len() - m,
-            voff,
-            doff,
-        })
+        Ok(DiskEntryZ::LVD { voff, doff })
     }
 
     #[inline]

@@ -28,11 +28,11 @@
 
 extern crate jsondata;
 
-//mod bubt_build;
+mod bubt_build;
 mod bubt_config;
-mod bubt_indx;
-//mod bubt_snap;
 mod bubt_entry;
+mod bubt_indx;
+mod bubt_snap;
 mod bubt_stats;
 mod core;
 mod error;
@@ -47,9 +47,9 @@ mod type_i64;
 mod util;
 mod vlog;
 
-//pub use crate::bubt_build::Builder;
-//pub use crate::bubt_config::Config;
-//pub use crate::bubt_snap::Snapshot;
+pub use crate::bubt_build::Builder;
+pub use crate::bubt_config::Config;
+pub use crate::bubt_snap::Snapshot;
 pub use crate::core::{Diff, Serialize};
 pub use crate::error::Error;
 pub use crate::llrb::Llrb;

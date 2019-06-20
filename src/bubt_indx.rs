@@ -9,11 +9,11 @@ use std::{
 
 //use crate::bubt_build::FlushClient;
 use crate::bubt_config::Config;
-use crate::bubt_entry::DiskEntry;
+use crate::bubt_entry::{DiskEntryM, DiskEntryZ};
 use crate::bubt_stats::Stats;
 use crate::core::{self, Diff, Serialize};
 use crate::error::Error;
-use crate::{util, vlog};
+use crate::util;
 
 // Binary format (InterMediate-Block prefix):
 //
@@ -66,7 +66,7 @@ where
         MBlock::Encode {
             mblock: Vec::with_capacity(config.m_blocksize),
             offsets: Default::default(),
-            first_key: None,
+            first_key: Default::default(),
             config,
         }
     }
@@ -94,7 +94,7 @@ where
         }
     }
 
-    pub(crate) fn insertz(&mut self, key: &K, fpos: u64) -> Result<usize, Error> {
+    pub(crate) fn insertm(&mut self, key: &K, fpos: u64) -> Result<usize, Error> {
         match self {
             MBlock::Encode {
                 mblock,
@@ -103,7 +103,7 @@ where
                 config,
             } => {
                 let m = mblock.len();
-                DiskEntry::encode_m(None, Some(fpos), key, mblock)?;
+                DiskEntryM::encode_m(Some(fpos), None, key, mblock)?;
                 let n = mblock.len();
                 if n < config.m_blocksize {
                     offsets.push(m as u32);
@@ -118,7 +118,7 @@ where
         }
     }
 
-    pub(crate) fn insertm(&mut self, key: &K, fpos: u64) -> Result<usize, Error> {
+    pub(crate) fn insertz(&mut self, key: &K, fpos: u64) -> Result<usize, Error> {
         match self {
             MBlock::Encode {
                 mblock,
@@ -127,7 +127,7 @@ where
                 config,
             } => {
                 let m = mblock.len();
-                DiskEntry::encode_m(Some(fpos), None, key, mblock)?;
+                DiskEntryM::encode_m(None, Some(fpos), key, mblock)?;
                 let n = mblock.len();
                 if n < config.m_blocksize {
                     offsets.push(m as u32);
@@ -151,13 +151,14 @@ where
                 ..
             } => {
                 let adjust = 4 + (offsets.len() * 4);
-                offsets.iter_mut().for_each(|i| *i += adjust as u32);
+                let x: u32 = adjust.try_into().unwrap();
+                offsets.iter_mut().for_each(|offset| *offset += x);
                 // adjust space for offset header
                 let m = mblock.len();
                 mblock.resize(m + adjust, 0);
                 mblock.copy_within(0..m, adjust);
                 // encode offset header
-                let num = offsets.len() as u32;
+                let num: u32 = offsets.len().try_into().unwrap();
                 &mblock[..4].copy_from_slice(&num.to_be_bytes());
                 for (i, offset) in offsets.iter().enumerate() {
                     let x = (i + 1) * 4;
@@ -214,18 +215,17 @@ where
         }
     }
 
-    // return (index-to-child-block, child-is-zblock, core::Entry)
     pub(crate) fn find(
         &self,
         key: &K,
         from: Bound<usize>,
         to: Bound<usize>,
-    ) -> Result<(usize, bool, core::Entry<K, V>), Error> {
+    ) -> Result<DiskEntryM<K>, Error> {
         let pivot = self.find_pivot(from, to)?;
         match (pivot, from) {
-            (0, Bound::Included(f)) => self.entry_at(f),
+            (0, Bound::Included(f)) => self.to_entry(f),
             (n, _) => {
-                if key.lt(self.key_at(n as usize)?.borrow()) {
+                if key.lt(self.to_key(n as usize)?.borrow()) {
                     self.find(key, from, Bound::Excluded(pivot as usize))
                 } else {
                     self.find(key, Bound::Included(pivot as usize), to)
@@ -254,7 +254,7 @@ where
         }
     }
 
-    pub fn entry_at(&self, index: usize) -> Result<(usize, bool, core::Entry<K, V>), Error> {
+    pub fn to_entry(&self, index: usize) -> Result<DiskEntryM<K>, Error> {
         let (count, adjust, offsets, entries) = match self {
             MBlock::Decode {
                 count,
@@ -268,28 +268,13 @@ where
         if index < count {
             let offset = offsets[index..index + 4].try_into().unwrap();
             let offset = u32::from_be_bytes(offset) as usize;
-            let entry = &entries[offset - adjust..];
-            let mut n = 0;
-            let a = u64::from_be_bytes(entry[n..n + 8].try_into().unwrap());
-            let zchild = (a & Self::FLAGS_ZBLOCK) == Self::FLAGS_ZBLOCK;
-            let klen = (a >> 32) as usize;
-            n += 8;
-
-            let fpos = u64::from_be_bytes(entry[n..n + 8].try_into().unwrap());
-            n += 8;
-
-            let mut key: K = Default::default();
-            key.decode(&entry[n..n + klen])?;
-
-            let value = vlog::Value::Reference { fpos, length: 0 };
-            let value = core::Value::new_upsert(value, Default::default());
-            Ok((index, zchild, core::Entry::new(key, value)))
+            DiskEntryM::to_entry(&entries[offset - adjust..])
         } else {
             Err(Error::MBlockExhausted)
         }
     }
 
-    fn key_at(&self, index: usize) -> Result<K, Error> {
+    fn to_key(&self, index: usize) -> Result<K, Error> {
         let (adjust, offsets, entries) = match self {
             MBlock::Decode {
                 adjust,
@@ -301,17 +286,7 @@ where
         };
         let offset = offsets[index..index + 4].try_into().unwrap();
         let offset = u32::from_be_bytes(offset) as usize;
-        let entry = &entries[offset - adjust..];
-        let mut n = 0;
-        let klen = entry[n..n + 8].try_into().unwrap();
-        let klen = (u64::from_be_bytes(klen) >> 32) as usize;
-        n += 8;
-
-        n += 8;
-
-        let mut key: K = Default::default();
-        key.decode(&entry[n..n + klen])?;
-        Ok(key)
+        DiskEntryM::to_key(&entries[offset - adjust..])
     }
 }
 
@@ -343,7 +318,7 @@ where
         leaf: Vec<u8>, // buffer for z_block
         blob: Vec<u8>, // buffer for vlog
         offsets: Vec<u32>,
-        des: Vec<DiskEntry>,
+        des: Vec<DiskEntryZ>,
         vpos: u64,
         first_key: Option<K>,
         config: Config,
@@ -421,10 +396,10 @@ where
             } => {
                 let (m, x) = (leaf.len(), blob.len());
                 let de = match (config.value_in_vlog, config.delta_ok) {
-                    (false, false) => DiskEntry::encode_l(entry, leaf, s)?,
-                    (false, true) => DiskEntry::encode_ld(entry, leaf, blob, s)?,
-                    (true, false) => DiskEntry::encode_lv(entry, leaf, blob, s)?,
-                    (true, true) => DiskEntry::encode_lvd(entry, leaf, blob, s)?,
+                    (false, false) => DiskEntryZ::encode_l(entry, leaf, s)?,
+                    (false, true) => DiskEntryZ::encode_ld(entry, leaf, blob, s)?,
+                    (true, false) => DiskEntryZ::encode_lv(entry, leaf, blob, s)?,
+                    (true, true) => DiskEntryZ::encode_lvd(entry, leaf, blob, s)?,
                 };
                 des.push(de);
 
@@ -535,12 +510,12 @@ where
         key: &K,
         from: Bound<usize>,
         to: Bound<usize>,
-    ) -> Result<(usize, core::Entry<K, V>), Error> {
+    ) -> Result<core::Entry<K, V>, Error> {
         let pivot = self.find_pivot(from, to)?;
         match (pivot, from) {
-            (0, Bound::Included(f)) => self.entry_at(f),
+            (0, Bound::Included(f)) => self.to_entry(f),
             (n, _) => {
-                if key.lt(self.key_at(n as usize)?.borrow()) {
+                if key.lt(self.to_key(n as usize)?.borrow()) {
                     self.find(key, from, Bound::Excluded(pivot as usize))
                 } else {
                     self.find(key, Bound::Included(pivot as usize), to)
@@ -569,7 +544,7 @@ where
         }
     }
 
-    pub fn entry_at(&self, index: usize) -> Result<(usize, core::Entry<K, V>), Error> {
+    pub fn to_entry(&self, index: usize) -> Result<core::Entry<K, V>, Error> {
         let (count, adjust, offsets, entries) = match self {
             ZBlock::Decode {
                 count,
@@ -583,86 +558,13 @@ where
         if index < count {
             let offset = &offsets[index..index + 4];
             let offset = u32::from_be_bytes(offset.try_into().unwrap()) as usize;
-            let entry = &entries[offset - adjust..];
-            let mut n = 0;
-            let a = u64::from_be_bytes(entry[n..n + 8].try_into().unwrap());
-            let n_deltas = a & 0xFFFFFFFF;
-            let klen = (a >> 32) as usize;
-            n += 8;
-
-            let vlen = u64::from_be_bytes(entry[n..n + 8].try_into().unwrap());
-            n += 8;
-            let vref = (vlen & Self::VLEN_MASK) == Self::VLEN_MASK;
-            let vlen: usize = (vlen & (!Self::VLEN_MASK)).try_into().unwrap();
-
-            let seqno = u64::from_be_bytes(entry[n..n + 8].try_into().unwrap());
-            n += 8;
-
-            let deleted = entry[n..n + 8].try_into().unwrap();
-            let deleted = match u64::from_be_bytes(deleted) {
-                0 => None,
-                n => Some(n),
-            };
-            n += 8;
-
-            let mut key: K = Default::default();
-            key.decode(&entry[n..n + klen])?;
-            n += klen;
-
-            let value = if vref {
-                let fpos = entry[n..n + 8].try_into().unwrap();
-                let fpos = u64::from_be_bytes(fpos);
-                n += 8;
-                vlog::Value::Reference {
-                    fpos,
-                    length: vlen as u64,
-                }
-            } else {
-                let mut value: V = Default::default();
-                value.decode(&entry[n..n + vlen])?;
-                n += vlen;
-                vlog::Value::Native { value }
-            };
-            let value = match deleted {
-                None => core::Value::new_upsert(value, seqno),
-                Some(del) => core::Value::new_delete(del),
-            };
-
-            let mut deltas: Vec<core::Delta<V>> = vec![];
-            for _i in 0..n_deltas {
-                let dlen = entry[n..n + 8].try_into().unwrap();
-                let mut dlen = u64::from_be_bytes(dlen);
-                dlen = dlen & (!Self::DLEN_MASK);
-                n += 8;
-
-                let seqno = entry[n..n + 8].try_into().unwrap();
-                let seqno = u64::from_be_bytes(seqno);
-                n += 8;
-
-                let deleted = entry[n..n + 8].try_into().unwrap();
-                let deleted = match u64::from_be_bytes(deleted) {
-                    0 => None,
-                    n => Some(n),
-                };
-                n += 8;
-
-                let fpos = entry[n..n + 8].try_into().unwrap();
-                let fpos = u64::from_be_bytes(fpos);
-                n += 8;
-
-                let delta = vlog::Delta::Reference { fpos, length: dlen };
-                match deleted {
-                    None => deltas.push(core::Delta::new_upsert(delta, seqno)),
-                    Some(del) => deltas.push(core::Delta::new_delete(del)),
-                }
-            }
-            Ok((index, core::Entry::new(key, value)))
+            DiskEntryZ::to_entry(&entries[offset - adjust..])
         } else {
             Err(Error::ZBlockExhausted)
         }
     }
 
-    fn key_at(&self, index: usize) -> Result<K, Error> {
+    fn to_key(&self, index: usize) -> Result<K, Error> {
         let (adjust, offsets, entries) = match self {
             ZBlock::Decode {
                 adjust,
@@ -674,16 +576,6 @@ where
         };
         let offset = offsets[index..index + 4].try_into().unwrap();
         let offset = u32::from_be_bytes(offset) as usize;
-        let entry = &entries[offset - adjust..];
-        let mut n = 0;
-        let klen = entry[n..n + 8].try_into().unwrap();
-        let klen = (u64::from_be_bytes(klen) >> 32) as usize;
-        n += 8;
-
-        n += 8 + 8 + 8;
-
-        let mut key: K = Default::default();
-        key.decode(&entry[n..n + klen])?;
-        Ok(key)
+        DiskEntryZ::to_key(&entries[offset - adjust..])
     }
 }

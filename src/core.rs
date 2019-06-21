@@ -147,6 +147,11 @@ where
         Value::U { value, seqno }
     }
 
+    pub(crate) fn new_upsert_value(value: V, seqno: u64) -> Value<V> {
+        let value = vlog::Value::new_native(value);
+        Value::U { value, seqno }
+    }
+
     pub(crate) fn new_delete(deleted: u64) -> Value<V> {
         Value::D { deleted }
     }

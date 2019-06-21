@@ -9,7 +9,6 @@ use crate::core::{Diff, Entry, Value};
 use crate::error::Error;
 use crate::llrb_node::{LlrbDepth, LlrbStats, Node};
 use crate::mvcc::MvccRoot;
-use crate::vlog;
 
 include!("llrb_common.rs");
 
@@ -166,10 +165,8 @@ where
     ///
     /// *LSM mode*: Add a new version for the key, perserving the old value.
     pub fn set(&mut self, key: K, value: V) -> Option<Entry<K, V>> {
-        let new_entry = Entry::new(
-            key,
-            Value::new_upsert(vlog::Value::new_native(value), self.seqno + 1),
-        );
+        let value = Value::new_upsert_value(value, self.seqno + 1);
+        let new_entry = Entry::new(key, value);
         match Llrb::upsert(self.root.take(), new_entry, self.lsm) {
             (Some(mut root), entry) => {
                 root.set_black();
@@ -191,10 +188,8 @@ where
     ///
     /// *LSM mode*: Add a new version for the key, perserving the old value.
     pub fn set_cas(&mut self, key: K, value: V, cas: u64) -> Result<Option<Entry<K, V>>, Error> {
-        let new_entry = Entry::new(
-            key,
-            Value::new_upsert(vlog::Value::new_native(value), self.seqno + 1),
-        );
+        let value = Value::new_upsert_value(value, self.seqno + 1);
+        let new_entry = Entry::new(key, value);
         match Llrb::upsert_cas(self.root.take(), new_entry, cas, self.lsm) {
             (root, _, Some(err)) => {
                 self.root = root;

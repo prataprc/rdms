@@ -15,7 +15,6 @@ use crate::core::{Diff, Entry, Value};
 use crate::error::Error;
 use crate::llrb::Llrb;
 use crate::llrb_node::{LlrbDepth, LlrbStats, Node};
-use crate::vlog;
 
 const RECLAIM_CAP: usize = 128;
 
@@ -873,10 +872,8 @@ where
         let snapshot = Snapshot::clone(&self.index.snapshot);
 
         let (seqno, mut n_count) = (snapshot.seqno + 1, snapshot.n_count);
-        let new_entry = Entry::new(
-            key,
-            Value::new_upsert(vlog::Value::new_native(value), seqno),
-        );
+        let value = Value::new_upsert_value(value, seqno);
+        let new_entry = Entry::new(key, value);
 
         let root = snapshot.root_duplicate();
         let mut reclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
@@ -902,10 +899,8 @@ where
         let snapshot = Snapshot::clone(&self.index.snapshot);
 
         let (mut seqno, mut n_count) = (snapshot.seqno, snapshot.n_count);
-        let new_entry = Entry::new(
-            key,
-            Value::new_upsert(vlog::Value::new_native(value), seqno + 1),
-        );
+        let value = Value::new_upsert_value(value, seqno + 1);
+        let new_entry = Entry::new(key, value);
         let root = snapshot.root_duplicate();
         let mut rclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
         let s = match Mvcc::upsert_cas(root, new_entry, cas, lsm, &mut rclm) {

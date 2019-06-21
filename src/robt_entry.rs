@@ -1,12 +1,10 @@
-// TODO: compute diffmem similar to keymem and valmem
+use std::{convert::TryInto, mem};
 
 use crate::core::{self, Diff, Serialize};
 use crate::error::Error;
 use crate::robt_stats::Stats;
 use crate::util;
 use crate::vlog;
-
-use std::{convert::TryInto, mem};
 
 // Binary format (interMediate-Entry):
 //
@@ -25,7 +23,7 @@ use std::{convert::TryInto, mem};
 // * bit 63 reserved
 
 pub(crate) enum DiskEntryM {
-    M,
+    Enc,
     Entry { z: bool, fpos: u64, index: usize },
 }
 
@@ -45,7 +43,7 @@ impl DiskEntryM {
         // encode key
         let m = mblock.len();
         let k = key.encode(mblock);
-        if k >= core::Entry::<i32, i32>::KEY_SIZE_LIMIT {
+        if k > core::Entry::<i32, i32>::KEY_SIZE_LIMIT {
             return Err(Error::KeySizeExceeded(k));
         }
         let n = mblock.len();
@@ -61,7 +59,7 @@ impl DiskEntryM {
         };
         mblock[..8].copy_from_slice(&scratch);
         mblock[8..16].copy_from_slice(&fpos.to_be_bytes());
-        Ok(DiskEntryM::M)
+        Ok(DiskEntryM::Enc)
     }
 
     pub fn to_entry(entry: &[u8]) -> Result<DiskEntryM, Error> {
@@ -82,9 +80,9 @@ impl DiskEntryM {
         K: Serialize,
     {
         let hdr1 = u64::from_be_bytes(entry[0..8].try_into().unwrap());
-        let klen: usize = (hdr1 >> Self::KLEN_SHIFT).try_into().unwrap();
+        let n: usize = (hdr1 >> Self::KLEN_SHIFT).try_into().unwrap();
         let mut key: K = unsafe { mem::zeroed() };
-        key.decode(&entry[24..24 + klen])?;
+        key.decode(&entry[16..16 + n])?;
         Ok(key)
     }
 
@@ -109,10 +107,10 @@ impl DiskEntryM {
         }
     }
 
-    pub(crate) fn set_index(&mut self, indx: usize) {
+    pub(crate) fn set_index(&mut self, at_index: usize) {
         match self {
             DiskEntryM::Entry { index, .. } => {
-                *index = indx;
+                *index = at_index;
             }
             _ => unreachable!(),
         }
@@ -142,6 +140,7 @@ struct DiskDelta;
 
 impl DiskDelta {
     const UPSERT_FLAG: u64 = 0x1000000000000000;
+    const DLEN_MASK: u64 = 0x0FFFFFFFFFFFFFFF;
 
     pub(crate) fn encode<V>(
         delta: &core::Delta<V>, // input
@@ -154,15 +153,15 @@ impl DiskDelta {
     {
         match delta.as_ref() {
             core::DeltaTuck::U { delta, seqno } => {
-                let m = blob.len();
-                vlog::encode_delta(&delta, blob)?;
-                let n = blob.len();
-                let x: u64 = util::try_convert_int(n, "delta-len: usize->u64")?;
-                let x = x | Self::UPSERT_FLAG;
-                leaf.extend_from_slice(&x.to_be_bytes()); // diff-len
+                let pos: u64 = util::try_convert_int(blob.len(), "pos: ->u64")?;
+
+                let n = vlog::encode_delta(&delta, blob)?;
+                let hdr1: u64 = util::try_convert_int(n, "diff: usize->u64")?;
+                let hdr1 = hdr1 | Self::UPSERT_FLAG;
+
+                leaf.extend_from_slice(&hdr1.to_be_bytes()); // diff-len
                 leaf.extend_from_slice(&seqno.to_be_bytes());
-                let m: u64 = util::try_convert_int(m, "doff: usize->u64")?;
-                leaf.extend_from_slice(&m.to_be_bytes()); // fpos
+                leaf.extend_from_slice(&pos.to_be_bytes()); // fpos
                 Ok(n)
             }
             core::DeltaTuck::D { deleted } => {
@@ -171,6 +170,32 @@ impl DiskDelta {
                 leaf.extend_from_slice(&0_u64.to_be_bytes()); // fpos
                 Ok(0)
             }
+        }
+    }
+
+    fn encode_fpos(buf: &mut [u8], vpos: u64) {
+        let scratch: [u8; 8] = buf[16..24].try_into().unwrap();
+        let fpos = u64::from_be_bytes(scratch) + vpos;
+        buf[16..24].copy_from_slice(&fpos.to_be_bytes());
+    }
+
+    fn to_delta<V>(buf: &[u8]) -> Result<core::Delta<V>, Error>
+    where
+        V: Clone + Diff,
+    {
+        let hdr1 = u64::from_be_bytes(buf[0..8].try_into().unwrap());
+        let dlen = hdr1 & Self::DLEN_MASK;
+        let is_deleted = (hdr1 & Self::UPSERT_FLAG) == 0;
+
+        let seqno = u64::from_be_bytes(buf[8..16].try_into().unwrap());
+
+        let fpos = u64::from_be_bytes(buf[16..24].try_into().unwrap());
+
+        if is_deleted {
+            let delta = vlog::Delta::Reference { fpos, length: dlen };
+            Ok(core::Delta::new_upsert(delta, seqno))
+        } else {
+            Ok(core::Delta::new_delete(seqno))
         }
     }
 }
@@ -203,20 +228,28 @@ impl DiskDelta {
 
 pub(crate) enum DiskEntryZ {
     // encode {key, value} entry into Z-Block
-    L,
+    EncL,
     // encode {key, value} entry into Z-Block and delta in value-log
-    LD { doff: usize },
+    EncLD {
+        doff: usize,
+        ndeltas: usize,
+    },
     // encode key entry into Z-Block, while value in value-log
-    LV { voff: usize },
+    EncLV {
+        voff: usize,
+    },
     // encode key entry into Z-Block, while value and delta in value-log
-    LVD { voff: usize, doff: usize },
+    EncLVD {
+        voff: usize,
+        doff: usize,
+        ndeltas: usize,
+    },
 }
 
 impl DiskEntryZ {
     const UPSERT_FLAG: u64 = 0x1000000000000000;
     const VLOG_FLAG: u64 = 0x2000000000000000;
     const VLEN_MASK: u64 = 0x0FFFFFFFFFFFFFFF;
-    const DLEN_MASK: u64 = 0x0FFFFFFFFFFFFFFF;
     const NDELTA_MASK: u64 = 0xFFFFFFFF;
     const KLEN_SHIFT: u64 = 32;
 
@@ -246,7 +279,7 @@ impl DiskEntryZ {
         leaf[8..16].copy_from_slice(&DiskEntryZ::encode_hdr2(vlen, isd, false)?);
         leaf[16..24].copy_from_slice(&DiskEntryZ::encode_hdr3(seqno));
 
-        Ok(DiskEntryZ::L)
+        Ok(DiskEntryZ::EncL)
     }
 
     pub(crate) fn encode_ld<K, V>(
@@ -271,15 +304,15 @@ impl DiskEntryZ {
         let (vlen, isd, seqno) = DiskEntryZ::encode_value(entry, leaf)?;
         stats.valmem += vlen;
         // encode header.
-        let dlen = entry.to_delta_count();
-        leaf[..8].copy_from_slice(&DiskEntryZ::encode_hdr1(klen, dlen)?);
+        let ndeltas = entry.to_delta_count();
+        leaf[..8].copy_from_slice(&DiskEntryZ::encode_hdr1(klen, ndeltas)?);
         leaf[8..16].copy_from_slice(&DiskEntryZ::encode_hdr2(vlen, isd, false)?);
         leaf[16..24].copy_from_slice(&DiskEntryZ::encode_hdr3(seqno));
         // encode deltas
         let doff = leaf.len();
-        DiskEntryZ::encode_delta(entry, leaf, blob)?;
+        stats.diffmem += DiskEntryZ::encode_delta(entry, leaf, blob)?;
 
-        Ok(DiskEntryZ::LD { doff })
+        Ok(DiskEntryZ::EncLD { doff, ndeltas })
     }
 
     pub(crate) fn encode_lv<K, V>(
@@ -301,19 +334,19 @@ impl DiskEntryZ {
         leaf.resize(n + 24, 0);
         leaf.copy_within(m..n, 24);
         // encode value
-        let x = blob.len();
+        let pos = blob.len();
         let (vlen, isd, seqno) = DiskEntryZ::encode_value(entry, blob)?;
         stats.valmem += vlen;
         let voff = leaf.len();
-        let x: u64 = util::try_convert_int(x, "voff: usize->u64")?;
-        leaf.extend_from_slice(&x.to_be_bytes());
+        let pos: u64 = util::try_convert_int(pos, "voff-pos: usize->u64")?;
+        leaf.extend_from_slice(&pos.to_be_bytes());
         // encode header.
         let dlen = 0_usize;
         leaf[..8].copy_from_slice(&DiskEntryZ::encode_hdr1(klen, dlen)?);
         leaf[8..16].copy_from_slice(&DiskEntryZ::encode_hdr2(vlen, isd, true)?);
         leaf[16..24].copy_from_slice(&DiskEntryZ::encode_hdr3(seqno));
 
-        Ok(DiskEntryZ::LV { voff })
+        Ok(DiskEntryZ::EncLV { voff })
     }
 
     pub(crate) fn encode_lvd<K, V>(
@@ -335,22 +368,26 @@ impl DiskEntryZ {
         leaf.resize(n + 24, 0);
         leaf.copy_within(m..n, 24);
         // encode value
-        let x = blob.len();
+        let pos = blob.len();
         let (vlen, isd, seqno) = DiskEntryZ::encode_value(entry, blob)?;
         stats.valmem += vlen;
         let voff = leaf.len();
-        let x: u64 = util::try_convert_int(x, "voff: usize->u64")?;
-        leaf.extend_from_slice(&x.to_be_bytes());
+        let pos: u64 = util::try_convert_int(pos, "voff-pos: usize->u64")?;
+        leaf.extend_from_slice(&pos.to_be_bytes());
         // encode header.
-        let dlen = entry.to_delta_count();
-        leaf[..8].copy_from_slice(&DiskEntryZ::encode_hdr1(klen, dlen)?);
+        let ndeltas = entry.to_delta_count();
+        leaf[..8].copy_from_slice(&DiskEntryZ::encode_hdr1(klen, ndeltas)?);
         leaf[8..16].copy_from_slice(&DiskEntryZ::encode_hdr2(vlen, isd, true)?);
         leaf[16..24].copy_from_slice(&DiskEntryZ::encode_hdr3(seqno));
         // encode deltas
         let doff = leaf.len();
-        DiskEntryZ::encode_delta(entry, leaf, blob)?;
+        stats.diffmem += DiskEntryZ::encode_delta(entry, leaf, blob)?;
 
-        Ok(DiskEntryZ::LVD { voff, doff })
+        Ok(DiskEntryZ::EncLVD {
+            voff,
+            doff,
+            ndeltas,
+        })
     }
 
     #[inline]
@@ -386,10 +423,10 @@ impl DiskEntryZ {
         V: Clone + Diff,
     {
         let n = key.encode(buf);
-        if n < core::Entry::<i32, i32>::KEY_SIZE_LIMIT {
-            Ok(n)
-        } else {
+        if n > core::Entry::<i32, i32>::KEY_SIZE_LIMIT {
             Err(Error::KeySizeExceeded(n))
+        } else {
+            Ok(n)
         }
     }
 
@@ -429,53 +466,35 @@ impl DiskEntryZ {
 
     pub(crate) fn encode_fpos(&self, leaf: &mut Vec<u8>, vpos: u64) {
         match self {
-            DiskEntryZ::L { .. } => (),
-            &DiskEntryZ::LD { doff: d, .. } => {
+            DiskEntryZ::EncL => (),
+            &DiskEntryZ::EncLD { doff, ndeltas } => {
                 // re-encode delta file-position
-                let scratch: [u8; 8] = leaf[d + 16..d + 24].try_into().unwrap();
-                let mut fpos = u64::from_be_bytes(scratch);
-                fpos += vpos;
-                leaf[d + 16..d + 24].copy_from_slice(&fpos.to_be_bytes());
+                for i in 0..ndeltas {
+                    let n = doff + (i * 24);
+                    DiskDelta::encode_fpos(&mut leaf[n..], vpos);
+                }
             }
-            &DiskEntryZ::LV { voff, .. } => {
+            &DiskEntryZ::EncLV { voff } => {
                 // re-encode value file-position
                 let scratch: [u8; 8] = leaf[voff..voff + 8].try_into().unwrap();
-                let mut fpos = u64::from_be_bytes(scratch);
-                fpos += vpos;
+                let fpos = u64::from_be_bytes(scratch) + vpos;
                 leaf[voff..voff + 8].copy_from_slice(&fpos.to_be_bytes());
             }
-            &DiskEntryZ::LVD { voff, doff: d, .. } => {
+            &DiskEntryZ::EncLVD {
+                voff,
+                doff,
+                ndeltas,
+            } => {
                 // re-encode delta file-position
-                let scratch: [u8; 8] = leaf[d + 16..d + 24].try_into().unwrap();
-                let mut fpos = u64::from_be_bytes(scratch);
-                fpos += vpos;
-                leaf[d + 16..d + 24].copy_from_slice(&fpos.to_be_bytes());
+                for i in 0..ndeltas {
+                    let n = doff + (i * 24);
+                    DiskDelta::encode_fpos(&mut leaf[n..], vpos);
+                }
                 // re-encode value file-position
                 let scratch: [u8; 8] = leaf[voff..voff + 8].try_into().unwrap();
-                let mut fpos = u64::from_be_bytes(scratch);
-                fpos += vpos;
+                let fpos = u64::from_be_bytes(scratch) + vpos;
                 leaf[voff..voff + 8].copy_from_slice(&fpos.to_be_bytes());
             }
-        }
-    }
-
-    pub(crate) fn to_delta<V>(buf: &[u8]) -> Result<core::Delta<V>, Error>
-    where
-        V: Clone + Diff,
-    {
-        let hdr1 = u64::from_be_bytes(buf[0..8].try_into().unwrap());
-        let dlen = hdr1 & Self::DLEN_MASK;
-        let is_deleted = (hdr1 & Self::UPSERT_FLAG) == 0;
-
-        let seqno = u64::from_be_bytes(buf[8..16].try_into().unwrap());
-
-        let fpos = u64::from_be_bytes(buf[16..24].try_into().unwrap());
-
-        if is_deleted {
-            let delta = vlog::Delta::Reference { fpos, length: dlen };
-            Ok(core::Delta::new_upsert(delta, seqno))
-        } else {
-            Ok(core::Delta::new_delete(seqno))
         }
     }
 
@@ -485,7 +504,7 @@ impl DiskEntryZ {
         V: Clone + Diff + Serialize,
     {
         let hdr1 = u64::from_be_bytes(e[0..8].try_into().unwrap());
-        let n_deltas: usize = (hdr1 & Self::NDELTA_MASK).try_into().unwrap();
+        let ndeltas: usize = (hdr1 & Self::NDELTA_MASK).try_into().unwrap();
         let klen: usize = (hdr1 >> Self::KLEN_SHIFT).try_into().unwrap();
 
         let hdr2 = u64::from_be_bytes(e[8..16].try_into().unwrap());
@@ -499,7 +518,7 @@ impl DiskEntryZ {
         key.decode(&e[24..24 + klen])?;
 
         let n = 24 + klen;
-        let (n, value) = match (is_deleted, is_vlog) {
+        let (mut n, value) = match (is_deleted, is_vlog) {
             (true, _) => (n, core::Value::new_delete(seqno)),
             (false, true) => {
                 let fpos = u64::from_be_bytes(e[n..n + 8].try_into().unwrap());
@@ -518,8 +537,9 @@ impl DiskEntryZ {
         let mut entry = core::Entry::new(key, value);
 
         let mut deltas: Vec<core::Delta<V>> = vec![];
-        for i in 0..n_deltas {
-            deltas.push(Self::to_delta(&e[n + (i * 4)..n + (i * 4) + 24])?);
+        for _i in 0..ndeltas {
+            deltas.push(DiskDelta::to_delta(&e[n..])?);
+            n += 24;
         }
         entry.set_deltas(deltas);
         Ok(entry)

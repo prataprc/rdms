@@ -77,6 +77,10 @@ where
         Value::Native { value } => {
             let m = buf.len();
             let n = value.encode(buf);
+            if n > core::Entry::<i32, i32>::VALUE_SIZE_LIMIT {
+                return Err(Error::ValueSizeExceeded(n));
+            }
+
             buf.resize(m + n + 8, 0);
             buf.copy_within(m..n, m + 8);
 
@@ -84,11 +88,7 @@ where
             vlen |= Value::<V>::VALUE_FLAG;
             (&mut buf[m..m + 8]).copy_from_slice(&(vlen - 8).to_be_bytes());
 
-            if n < core::Entry::<i32, i32>::VALUE_SIZE_LIMIT {
-                Ok(n)
-            } else {
-                Err(Error::ValueSizeExceeded(n))
-            }
+            Ok(n)
         }
         _ => Err(Error::NotNativeValue),
     }
@@ -168,18 +168,19 @@ where
     match delta {
         Delta::Native { diff } => {
             let m = buf.len();
+
             let n = diff.encode(buf);
+            if n > core::Entry::<i32, i32>::DIFF_SIZE_LIMIT {
+                return Err(Error::DiffSizeExceeded(n));
+            }
+
             buf.resize(m + n + 8, 0);
             buf.copy_within(m..n, m + 8);
 
             let dlen: u64 = try_convert_int(n + 8, "diff-size: usize->u64")?;
             (&mut buf[m..m + 8]).copy_from_slice(&(dlen - 8).to_be_bytes());
 
-            if n < core::Entry::<i32, i32>::DIFF_SIZE_LIMIT {
-                Ok(n)
-            } else {
-                Err(Error::DiffSizeExceeded(n))
-            }
+            Ok(n)
         }
         _ => Err(Error::NotNativeDelta),
     }

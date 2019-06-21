@@ -4,6 +4,7 @@ use std::{
     borrow::Borrow,
     convert::{TryFrom, TryInto},
     fs, marker,
+    mem::ManuallyDrop,
     ops::Bound,
 };
 
@@ -46,14 +47,17 @@ where
         config: Config,
     },
     Decode {
+        #[allow(dead_code)] // block is only meant to drop offsets and entries
+        block: Vec<u8>,
         count: usize,
         adjust: usize,
-        offsets: Vec<u8>,
-        entries: Vec<u8>,
+        offsets: ManuallyDrop<Box<[u8]>>, // unsafe ownership into `block`
+        entries: ManuallyDrop<Box<[u8]>>, // unsafe ownership into `block`
         phantom_val: marker::PhantomData<V>,
     },
 }
 
+// Encode implementation
 impl<K, V> MBlock<K, V>
 where
     K: Default + Clone + Ord + Serialize,
@@ -94,10 +98,10 @@ where
 
     pub(crate) fn has_first_key(&self) -> bool {
         match self {
-            MBlock::Encode { first_key, .. } => match first_key {
-                Some(_) => true,
-                None => false,
-            },
+            MBlock::Encode {
+                first_key: Some(_), ..
+            } => true,
+            MBlock::Encode { .. } => false,
             MBlock::Decode { .. } => unreachable!(),
         }
     }
@@ -114,7 +118,7 @@ where
                 DiskEntryM::encode_m(Some(fpos), None, key, mblock)?;
                 let n = mblock.len();
                 if n < config.m_blocksize {
-                    offsets.push(m as u32);
+                    offsets.push(m.try_into().unwrap());
                     first_key.get_or_insert_with(|| key.clone());
                     Ok(offsets.len())
                 } else {
@@ -194,6 +198,7 @@ where
     }
 }
 
+// Decode implementation
 impl<K, V> MBlock<K, V>
 where
     K: Default + Clone + Ord + Serialize,
@@ -206,14 +211,28 @@ where
         config: &Config,
     ) -> Result<MBlock<K, V>, Error> {
         let n: u64 = config.m_blocksize.try_into().unwrap();
-        let block = util::read_buffer(fd, fpos, n, "reading mblock")?;
+        let mut block = util::read_buffer(fd, fpos, n, "reading mblock")?;
         let count = u32::from_be_bytes(block[..4].try_into().unwrap());
-        let adjust = (4 + (count * 4)) as usize;
+        let adjust: usize = (4 + (count * 4)).try_into().unwrap();
+
+        let (offsets, entries) = unsafe {
+            let ptr = block.as_mut_ptr();
+            let len = block.len();
+            let cap = block.capacity();
+
+            let (p, l, c) = (ptr.add(4), adjust - 4, adjust - 4);
+            let offsets = Vec::from_raw_parts(p, l, c).into_boxed_slice();
+            let (p, l, c) = (ptr.add(adjust), len - adjust, cap - adjust);
+            let entries = Vec::from_raw_parts(p, l, c).into_boxed_slice();
+            (ManuallyDrop::new(offsets), ManuallyDrop::new(entries))
+        };
+
         Ok(MBlock::Decode {
-            count: count as usize,
+            block,
+            count: count.try_into().unwrap(),
             adjust,
-            offsets: block[4..adjust].to_vec(),
-            entries: block[adjust..].to_vec(), // TODO: Avoid copy ?
+            offsets,
+            entries,
             phantom_val: marker::PhantomData,
         })
     }
@@ -313,11 +332,11 @@ where
 // *----------------------*
 // |    n-entry-offset    |
 // *-------------------*----------------------* 1-entry-offset
-// |                ZEntry-1                  |
+// |                Entry-1                   |
 // *-------------------*----------------------* ...
 // |                ........                  |
 // *-------------------*----------------------* n-entry-offset
-// |                ZEntry-n                  |
+// |                Entry-n                   |
 // *------------------------------------------*
 
 pub(crate) enum ZBlock<K, V>

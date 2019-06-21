@@ -18,6 +18,7 @@ pub struct Stats {
     pub n_deleted: usize,
     pub seqno: u64,
     pub keymem: usize,
+    pub diffmem: usize,
     pub valmem: usize,
     pub z_bytes: usize,
     pub v_bytes: usize,
@@ -44,6 +45,7 @@ impl From<Config> for Stats {
             n_deleted: Default::default(),
             seqno: Default::default(),
             keymem: Default::default(),
+            diffmem: Default::default(),
             valmem: Default::default(),
             z_bytes: Default::default(),
             v_bytes: Default::default(),
@@ -89,6 +91,7 @@ impl FromStr for Stats {
             n_deleted: to_usize("/n_deleted")?,
             seqno: to_u64("/seqno")?,
             keymem: to_usize("/keymem")?,
+            diffmem: to_usize("/diffmem")?,
             valmem: to_usize("/valmem")?,
             z_bytes: to_usize("/z_bytes")?,
             v_bytes: to_usize("/v_bytes")?,
@@ -119,6 +122,7 @@ impl Display for Stats {
         js.set("/n_deleted", Json::new(self.n_deleted)).ok();
         js.set("/seqno", Json::new(self.seqno)).ok();
         js.set("/keymem", Json::new(self.keymem)).ok();
+        js.set("/diffmem", Json::new(self.diffmem)).ok();
         js.set("/valmem", Json::new(self.valmem)).ok();
         js.set("/z_bytes", Json::new(self.z_bytes)).ok();
         js.set("/v_bytes", Json::new(self.v_bytes)).ok();

@@ -1,12 +1,6 @@
 // TODO: flush put blocks into tx channel. Right now we simply unwrap()
 
-use std::{
-    borrow::Borrow,
-    convert::{TryFrom, TryInto},
-    fs, marker,
-    mem::ManuallyDrop,
-    ops::Bound,
-};
+use std::{borrow::Borrow, cmp::Ordering, convert::TryInto, fs, marker, ops::Bound};
 
 use crate::core::{self, Diff, Serialize};
 use crate::error::Error;
@@ -47,12 +41,9 @@ where
         config: Config,
     },
     Decode {
-        #[allow(dead_code)] // block is only meant to drop offsets and entries
         block: Vec<u8>,
         count: usize,
-        adjust: usize,
-        offsets: ManuallyDrop<Box<[u8]>>, // unsafe ownership into `block`
-        entries: ManuallyDrop<Box<[u8]>>, // unsafe ownership into `block`
+        offsets: &'static [u8],
         phantom_val: marker::PhantomData<V>,
     },
 }
@@ -142,7 +133,7 @@ where
                 DiskEntryM::encode_m(None, Some(fpos), key, mblock)?;
                 let n = mblock.len();
                 if n < config.m_blocksize {
-                    offsets.push(m as u32);
+                    offsets.push(m.try_into().unwrap());
                     first_key.get_or_insert_with(|| key.clone());
                     Ok(offsets.len())
                 } else {
@@ -211,32 +202,20 @@ where
         config: &Config,
     ) -> Result<MBlock<K, V>, Error> {
         let n: u64 = config.m_blocksize.try_into().unwrap();
-        let mut block = util::read_buffer(fd, fpos, n, "reading mblock")?;
+        let block = util::read_buffer(fd, fpos, n, "reading mblock")?;
         let count = u32::from_be_bytes(block[..4].try_into().unwrap());
         let adjust: usize = (4 + (count * 4)).try_into().unwrap();
-
-        let (offsets, entries) = unsafe {
-            let ptr = block.as_mut_ptr();
-            let len = block.len();
-            let cap = block.capacity();
-
-            let (p, l, c) = (ptr.add(4), adjust - 4, adjust - 4);
-            let offsets = Vec::from_raw_parts(p, l, c).into_boxed_slice();
-            let (p, l, c) = (ptr.add(adjust), len - adjust, cap - adjust);
-            let entries = Vec::from_raw_parts(p, l, c).into_boxed_slice();
-            (ManuallyDrop::new(offsets), ManuallyDrop::new(entries))
-        };
+        let offsets = &block[4..adjust] as *const [u8];
 
         Ok(MBlock::Decode {
             block,
             count: count.try_into().unwrap(),
-            adjust,
-            offsets,
-            entries,
+            offsets: unsafe { offsets.as_ref().unwrap() },
             phantom_val: marker::PhantomData,
         })
     }
 
+    #[inline]
     pub(crate) fn len(&self) -> usize {
         match self {
             MBlock::Decode { count, .. } => *count,
@@ -250,27 +229,32 @@ where
         from: Bound<usize>,
         to: Bound<usize>,
     ) -> Result<DiskEntryM, Error> {
+        let f = match from {
+            Bound::Included(f) | Bound::Excluded(f) => f,
+            Bound::Unbounded => 0,
+        };
         let pivot = self.find_pivot(from, to)?;
-        match (pivot, from) {
-            (0, Bound::Included(f)) => self.to_entry(f),
-            (n, _) => {
-                if key.lt(self.to_key(n as usize)?.borrow()) {
-                    self.find(key, from, Bound::Excluded(pivot as usize))
-                } else {
-                    self.find(key, Bound::Included(pivot as usize), to)
-                }
-            }
+
+        match key.cmp(self.to_key(pivot)?.borrow()) {
+            // __LessThan is optimizing by containing the lookup within root,
+            Ordering::Less if pivot == 0 => Err(Error::__LessThan),
+            Ordering::Less if pivot == f => unreachable!(),
+            Ordering::Less => self.find(key, from, Bound::Excluded(pivot)),
+            Ordering::Equal => self.to_entry(pivot),
+            Ordering::Greater if pivot == f => self.to_entry(pivot),
+            Ordering::Greater => self.find(key, Bound::Included(pivot), to),
         }
     }
 
-    fn find_pivot(&self, from: Bound<usize>, to: Bound<usize>) -> Result<isize, Error> {
-        let count = match self {
-            MBlock::Decode { count, .. } => *count,
-            _ => unreachable!(),
-        };
+    fn find_pivot(
+        // [from, to)
+        &self,
+        from: Bound<usize>,
+        to: Bound<usize>,
+    ) -> Result<usize, Error> {
         let to = match to {
             Bound::Excluded(to) => to,
-            Bound::Unbounded => count,
+            Bound::Unbounded => self.len(),
             Bound::Included(_) => unreachable!(),
         };
         let from = match from {
@@ -278,26 +262,25 @@ where
             Bound::Unbounded => 0,
         };
         match to - from {
-            1 => Ok(0),
-            n => Ok((n / 2).try_into().unwrap()),
+            n if n < 1 => unreachable!(),
+            n => Ok(from + (n / 2)),
         }
     }
 
     pub fn to_entry(&self, index: usize) -> Result<DiskEntryM, Error> {
-        let (count, adjust, offsets, entries) = match self {
+        let (block, count, offsets) = match self {
             MBlock::Decode {
+                block,
                 count,
-                adjust,
                 offsets,
-                entries,
                 ..
-            } => (*count, *adjust, offsets, entries),
+            } => (block, *count, offsets),
             _ => unreachable!(),
         };
         if index < count {
             let offset = offsets[index..index + 4].try_into().unwrap();
-            let offset = u32::from_be_bytes(offset) as usize;
-            let mut mentry = DiskEntryM::to_entry(&entries[offset - adjust..])?;
+            let offset: usize = u32::from_be_bytes(offset).try_into().unwrap();
+            let mut mentry = DiskEntryM::to_entry(&block[offset..])?;
             mentry.set_index(index);
             Ok(mentry)
         } else {
@@ -306,18 +289,13 @@ where
     }
 
     fn to_key(&self, index: usize) -> Result<K, Error> {
-        let (adjust, offsets, entries) = match self {
-            MBlock::Decode {
-                adjust,
-                offsets,
-                entries,
-                ..
-            } => (*adjust, offsets, entries),
+        let (block, offsets) = match self {
+            MBlock::Decode { block, offsets, .. } => (block, offsets),
             _ => unreachable!(),
         };
         let offset = offsets[index..index + 4].try_into().unwrap();
-        let offset = u32::from_be_bytes(offset) as usize;
-        DiskEntryM::to_key(&entries[offset - adjust..])
+        let offset: usize = u32::from_be_bytes(offset).try_into().unwrap();
+        DiskEntryM::to_key(&block[offset..])
     }
 }
 
@@ -355,10 +333,9 @@ where
         config: Config,
     },
     Decode {
+        block: Vec<u8>,
         count: usize,
-        adjust: usize,
-        offsets: Vec<u8>,
-        entries: Vec<u8>,
+        offsets: &'static [u8],
         phantom_val: marker::PhantomData<V>,
     },
 }
@@ -423,8 +400,10 @@ where
     pub(crate) fn insert(
         &mut self,
         entry: &core::Entry<K, V>,
-        s: &mut Stats, // update build statistics
+        stats: &mut Stats, // update build statistics
     ) -> Result<usize, Error> {
+        use crate::robt_entry::DiskEntryZ as DZ;
+
         match self {
             ZBlock::Encode {
                 leaf,
@@ -437,16 +416,16 @@ where
             } => {
                 let (m, x) = (leaf.len(), blob.len());
                 let de = match (config.value_in_vlog, config.delta_ok) {
-                    (false, false) => DiskEntryZ::encode_l(entry, leaf, s)?,
-                    (false, true) => DiskEntryZ::encode_ld(entry, leaf, blob, s)?,
-                    (true, false) => DiskEntryZ::encode_lv(entry, leaf, blob, s)?,
-                    (true, true) => DiskEntryZ::encode_lvd(entry, leaf, blob, s)?,
+                    (false, false) => DZ::encode_l(entry, leaf, stats)?,
+                    (false, true) => DZ::encode_ld(entry, leaf, blob, stats)?,
+                    (true, false) => DZ::encode_lv(entry, leaf, blob, stats)?,
+                    (true, true) => DZ::encode_lvd(entry, leaf, blob, stats)?,
                 };
                 des.push(de);
 
                 let n = leaf.len();
                 if n < config.z_blocksize {
-                    offsets.push(m as u32);
+                    offsets.push(m.try_into().unwrap());
                     first_key.get_or_insert_with(|| entry.as_key().clone());
                     Ok(offsets.len())
                 } else {
@@ -471,13 +450,14 @@ where
                 ..
             } => {
                 let adjust = 4 + (offsets.len() * 4);
-                offsets.iter_mut().for_each(|i| *i += adjust as u32);
+                let x: u32 = adjust.try_into().unwrap();
+                offsets.iter_mut().for_each(|offset| *offset += x);
                 // adjust the offset and encode
                 let m = leaf.len();
                 leaf.resize(m + adjust, 0);
                 leaf.copy_within(0..m, adjust);
                 // encode offset header
-                let num = offsets.len() as u32;
+                let num: u32 = offsets.len().try_into().unwrap();
                 &leaf[..4].copy_from_slice(&num.to_be_bytes());
                 for (i, offset) in offsets.iter().enumerate() {
                     let x = (i + 1) * 4;
@@ -506,7 +486,7 @@ where
         match self {
             ZBlock::Encode { leaf, blob, .. } => {
                 i_flusher.send(leaf.clone());
-                v_flusher.map(|x| x.send(blob.clone()));
+                v_flusher.map(|flusher| flusher.send(blob.clone()));
             }
             ZBlock::Decode { .. } => unreachable!(),
         }
@@ -527,16 +507,18 @@ where
         let n: u64 = config.z_blocksize.try_into().unwrap();
         let block = util::read_buffer(fd, fpos, n, "reading zblock")?;
         let count = u32::from_be_bytes(block[..4].try_into().unwrap());
-        let adjust = 4 + (count * 4) as usize;
+        let adjust: usize = (4 + (count * 4)).try_into().unwrap();
+        let offsets = &block[4..adjust] as *const [u8];
+
         Ok(ZBlock::Decode {
-            count: count as usize,
-            adjust,
-            offsets: block[4..adjust].to_vec(),
-            entries: block[adjust..].to_vec(), // TODO: Avoid copy ?
+            block,
+            count: count.try_into().unwrap(),
+            offsets: unsafe { offsets.as_ref().unwrap() },
             phantom_val: marker::PhantomData,
         })
     }
 
+    #[inline]
     pub(crate) fn len(&self) -> usize {
         match self {
             ZBlock::Decode { count, .. } => *count,
@@ -551,27 +533,31 @@ where
         from: Bound<usize>,
         to: Bound<usize>,
     ) -> Result<(usize, core::Entry<K, V>), Error> {
+        let f = match from {
+            Bound::Included(f) | Bound::Excluded(f) => f,
+            Bound::Unbounded => 0,
+        };
         let pivot = self.find_pivot(from, to)?;
-        match (pivot, from) {
-            (0, Bound::Included(f)) => self.to_entry(f),
-            (n, _) => {
-                if key.lt(self.to_key(n as usize)?.borrow()) {
-                    self.find(key, from, Bound::Excluded(pivot as usize))
-                } else {
-                    self.find(key, Bound::Included(pivot as usize), to)
-                }
-            }
+
+        match key.cmp(self.to_key(pivot)?.borrow()) {
+            Ordering::Less if pivot == 0 => unreachable!(),
+            Ordering::Less if pivot == f => self.to_entry(pivot),
+            Ordering::Less => self.find(key, from, Bound::Excluded(pivot)),
+            Ordering::Equal => self.to_entry(pivot),
+            Ordering::Greater if pivot == f => Err(Error::__GreaterThan),
+            Ordering::Greater => self.find(key, Bound::Included(pivot), to),
         }
     }
 
-    fn find_pivot(&self, from: Bound<usize>, to: Bound<usize>) -> Result<isize, Error> {
-        let count = match self {
-            ZBlock::Decode { count, .. } => count,
-            _ => unreachable!(),
-        };
+    fn find_pivot(
+        // [from, to)
+        &self,
+        from: Bound<usize>,
+        to: Bound<usize>,
+    ) -> Result<usize, Error> {
         let to = match to {
-            Bound::Excluded(to) => to as usize,
-            Bound::Unbounded => *count,
+            Bound::Excluded(to) => to,
+            Bound::Unbounded => self.len(),
             Bound::Included(_) => unreachable!(),
         };
         let from = match from {
@@ -579,43 +565,42 @@ where
             Bound::Unbounded => 0,
         };
         match to - from {
-            1 => Ok(0),
-            n => Ok(isize::try_from(n).unwrap() / 2),
+            n if n < 1 => unreachable!(),
+            n => Ok(from + (n / 2)),
         }
     }
 
-    pub fn to_entry(&self, index: usize) -> Result<(usize, core::Entry<K, V>), Error> {
-        let (count, adjust, offsets, entries) = match self {
+    pub fn to_entry(
+        // return entry and index of the entry into zblock.
+        &self,
+        index: usize,
+    ) -> Result<(usize, core::Entry<K, V>), Error> {
+        let (block, count, offsets) = match self {
             ZBlock::Decode {
+                block,
                 count,
-                adjust,
                 offsets,
-                entries,
                 ..
-            } => (*count, *adjust, offsets, entries),
+            } => (block, *count, offsets),
             _ => unreachable!(),
         };
+
         if index < count {
-            let offset = &offsets[index..index + 4];
-            let offset = u32::from_be_bytes(offset.try_into().unwrap()) as usize;
-            Ok((index, DiskEntryZ::to_entry(&entries[offset - adjust..])?))
+            let offset = offsets[index..index + 4].try_into().unwrap();
+            let offset: usize = u32::from_be_bytes(offset).try_into().unwrap();
+            Ok((index, DiskEntryZ::to_entry(&block[offset..])?))
         } else {
             Err(Error::ZBlockExhausted)
         }
     }
 
     fn to_key(&self, index: usize) -> Result<K, Error> {
-        let (adjust, offsets, entries) = match self {
-            ZBlock::Decode {
-                adjust,
-                offsets,
-                entries,
-                ..
-            } => (*adjust, offsets, entries),
+        let (block, offsets) = match self {
+            ZBlock::Decode { block, offsets, .. } => (block, offsets),
             _ => unreachable!(),
         };
         let offset = offsets[index..index + 4].try_into().unwrap();
-        let offset = u32::from_be_bytes(offset) as usize;
-        DiskEntryZ::to_key(&entries[offset - adjust..])
+        let offset: usize = u32::from_be_bytes(offset).try_into().unwrap();
+        DiskEntryZ::to_key(&block[offset..])
     }
 }

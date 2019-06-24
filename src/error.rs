@@ -65,6 +65,10 @@ pub enum Error {
     Utf8Error(std::str::Utf8Error),
     ZBlockExhausted,
     MBlockExhausted,
+    // Local error, means, given key is less than the entire data set.
+    __LessThan,
+    // Local error, means, given key is greater than the entire data set.
+    __GreaterThan,
 }
 
 impl From<io::Error> for Error {

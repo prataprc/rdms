@@ -12,9 +12,9 @@ use crate::util;
 
 pub struct Builder<K, V>
 where
-    K: Default + Ord + Clone + Serialize,
-    V: Default + Clone + Diff + Serialize,
-    <V as Diff>::D: Default + Clone + Serialize,
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Serialize,
 {
     config: Config,
     i_flusher: FlushClient,
@@ -27,9 +27,9 @@ where
 
 impl<K, V> Builder<K, V>
 where
-    K: Default + Ord + Clone + Serialize,
-    V: Default + Clone + Diff + Serialize,
-    <V as Diff>::D: Default + Clone + Serialize,
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Serialize,
 {
     pub fn initial(config: Config) -> Result<Builder<K, V>, Error> {
         let index_file = config.to_index_file();
@@ -222,9 +222,9 @@ where
 
 pub struct BuildData<K, V>
 where
-    K: Default + Clone + Ord + Serialize,
-    V: Default + Clone + Diff + Serialize,
-    <V as Diff>::D: Default + Clone + Serialize,
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
 {
     z: ZBlock<K, V>,
     mstack: Vec<MBlock<K, V>>,
@@ -236,9 +236,9 @@ where
 
 impl<K, V> BuildData<K, V>
 where
-    K: Default + Clone + Ord + Serialize,
-    V: Default + Clone + Diff + Serialize,
-    <V as Diff>::D: Default + Clone + Serialize,
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
 {
     fn new(n_abytes: usize, config: Config) -> BuildData<K, V> {
         let vlog_fpos = n_abytes as u64;

@@ -28,12 +28,7 @@ use crate::util;
 // |                MEntry-n                  |
 // *------------------------------------------*
 
-pub(crate) enum MBlock<K, V>
-where
-    K: Default + Clone + Ord + Serialize,
-    V: Default + Clone + Diff + Serialize,
-    <V as Diff>::D: Default + Clone + Serialize,
-{
+pub(crate) enum MBlock<K, V> {
     Encode {
         mblock: Vec<u8>,
         offsets: Vec<u32>,
@@ -51,9 +46,7 @@ where
 // Encode implementation
 impl<K, V> MBlock<K, V>
 where
-    K: Default + Clone + Ord + Serialize,
-    V: Default + Clone + Diff + Serialize,
-    <V as Diff>::D: Default + Clone + Serialize,
+    K: Clone + Serialize,
 {
     pub(crate) fn new_encode(config: Config) -> MBlock<K, V> {
         MBlock::Encode {
@@ -192,9 +185,7 @@ where
 // Decode implementation
 impl<K, V> MBlock<K, V>
 where
-    K: Default + Clone + Ord + Serialize,
-    V: Default + Clone + Diff + Serialize,
-    <V as Diff>::D: Default + Clone + Serialize,
+    K: Ord + Serialize,
 {
     pub(crate) fn new_decode(
         fd: &mut fs::File,
@@ -317,12 +308,7 @@ where
 // |                Entry-n                   |
 // *------------------------------------------*
 
-pub(crate) enum ZBlock<K, V>
-where
-    K: Default + Clone + Ord + Serialize,
-    V: Default + Clone + Diff + Serialize,
-    <V as Diff>::D: Default + Clone + Serialize,
-{
+pub(crate) enum ZBlock<K, V> {
     Encode {
         leaf: Vec<u8>, // buffer for z_block
         blob: Vec<u8>, // buffer for vlog
@@ -342,9 +328,9 @@ where
 
 impl<K, V> ZBlock<K, V>
 where
-    K: Default + Clone + Ord + Serialize,
-    V: Default + Clone + Diff + Serialize,
-    <V as Diff>::D: Default + Clone + Serialize,
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Serialize,
 {
     pub(crate) fn new_encode(vpos: u64, config: Config) -> ZBlock<K, V> {
         ZBlock::Encode {
@@ -495,9 +481,8 @@ where
 
 impl<K, V> ZBlock<K, V>
 where
-    K: Default + Clone + Ord + Serialize,
-    V: Default + Clone + Diff + Serialize,
-    <V as Diff>::D: Default + Clone + Serialize,
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
 {
     pub(crate) fn new_decode(
         fd: &mut fs::File,

@@ -44,7 +44,7 @@ where
         let mut snap = Snapshot {
             metadata: Default::default(),
             stats: Default::default(),
-            config: Default::default(),
+            config: Config::new(dir, name),
             root: Default::default(),
             index_fd,
             vlog_fd: Default::default(),

@@ -264,7 +264,7 @@ impl DiskEntryZ {
         <V as Diff>::D: Serialize,
     {
         let m = leaf.len();
-        let klen = DiskEntryZ::encode_key::<K, V>(entry.as_key(), leaf)?;
+        let klen = DiskEntryZ::encode_key::<K>(entry.as_key(), leaf)?;
         stats.keymem += klen;
         let n = leaf.len();
         // adjust space for header.
@@ -294,7 +294,7 @@ impl DiskEntryZ {
         <V as Diff>::D: Serialize,
     {
         let m = leaf.len();
-        let klen = DiskEntryZ::encode_key::<K, V>(entry.as_key(), leaf)?;
+        let klen = DiskEntryZ::encode_key::<K>(entry.as_key(), leaf)?;
         stats.keymem += klen;
         let n = leaf.len();
         // adjust space for header.
@@ -327,7 +327,7 @@ impl DiskEntryZ {
         <V as Diff>::D: Serialize,
     {
         let m = leaf.len();
-        let klen = DiskEntryZ::encode_key::<K, V>(entry.as_key(), leaf)?;
+        let klen = DiskEntryZ::encode_key::<K>(entry.as_key(), leaf)?;
         stats.keymem += klen;
         let n = leaf.len();
         // adjust space for header.
@@ -361,7 +361,7 @@ impl DiskEntryZ {
         <V as Diff>::D: Serialize,
     {
         let m = leaf.len();
-        let klen = DiskEntryZ::encode_key::<K, V>(entry.as_key(), leaf)?;
+        let klen = DiskEntryZ::encode_key::<K>(entry.as_key(), leaf)?;
         stats.keymem += klen;
         let n = leaf.len();
         // adjust space for header.
@@ -414,13 +414,12 @@ impl DiskEntryZ {
         seqno.to_be_bytes()
     }
 
-    fn encode_key<K, V>(
+    fn encode_key<K>(
         key: &K,           // input
         buf: &mut Vec<u8>, // output
     ) -> Result<usize, Error>
     where
-        K: Ord + Clone + Serialize,
-        V: Clone + Diff,
+        K: Serialize,
     {
         let n = key.encode(buf);
         if n > core::Entry::<i32, i32>::KEY_SIZE_LIMIT {

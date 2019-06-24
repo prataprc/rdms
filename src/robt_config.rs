@@ -16,7 +16,7 @@ lazy_static! {
 }
 
 /// Configuration to build read-only btree.
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct Config {
     /// Directory where index file(s) shall be stored.
     pub dir: String,
@@ -44,6 +44,22 @@ pub struct Config {
     /// If true, then value shall be persisted in value log file. Otherwise
     /// value shall be saved in the index' leaf node.
     pub value_in_vlog: bool,
+}
+
+impl From<Stats> for Config {
+    fn from(stats: Stats) -> Config {
+        Config {
+            dir: Default::default(),
+            name: stats.name,
+            z_blocksize: stats.zblocksize,
+            m_blocksize: stats.mblocksize,
+            v_blocksize: stats.vblocksize,
+            tomb_purge: Default::default(),
+            delta_ok: stats.delta_ok,
+            vlog_file: stats.vlog_file,
+            value_in_vlog: stats.value_in_vlog,
+        }
+    }
 }
 
 impl Config {
@@ -147,22 +163,6 @@ impl Config {
             }
         }
         self
-    }
-}
-
-impl From<Stats> for Config {
-    fn from(stats: Stats) -> Config {
-        Config {
-            dir: Default::default(),
-            name: stats.name,
-            z_blocksize: stats.zblocksize,
-            m_blocksize: stats.mblocksize,
-            v_blocksize: stats.vblocksize,
-            tomb_purge: Default::default(),
-            delta_ok: stats.delta_ok,
-            vlog_file: stats.vlog_file,
-            value_in_vlog: stats.value_in_vlog,
-        }
     }
 }
 

@@ -1,6 +1,6 @@
 // TODO: flush put blocks into tx channel. Right now we simply unwrap()
 
-use std::sync::mpsc::{self, Receiver, SyncSender};
+use std::sync::mpsc;
 use std::{cmp, fs, io::Write, marker, mem, thread, time};
 
 use crate::core::{Diff, Entry, Serialize};
@@ -17,8 +17,8 @@ where
     <V as Diff>::D: Serialize,
 {
     config: Config,
-    i_flusher: FlushClient,
-    v_flusher: Option<FlushClient>,
+    iflusher: Flusher,
+    vflusher: Option<Flusher>,
     stats: Stats,
 
     phantom_key: marker::PhantomData<K>,
@@ -32,18 +32,18 @@ where
     <V as Diff>::D: Serialize,
 {
     pub fn initial(config: Config) -> Result<Builder<K, V>, Error> {
+        let (index_reuse, vlog_reuse) = (false, false);
         let index_file = config.to_index_file();
-        let i_flusher = FlushClient::new(index_file, false /*reuse*/)?;
-        let reuse = false;
-        let v_flusher = match config.to_value_log() {
-            Some(vlog_file) => Some(FlushClient::new(vlog_file, reuse)?),
+        let iflusher = Flusher::new(index_file, index_reuse)?;
+        let vflusher = match config.to_value_log() {
+            Some(vlog_file) => Some(Flusher::new(vlog_file, vlog_reuse)?),
             None => None,
         };
 
         Ok(Builder {
             config: config.clone(),
-            i_flusher,
-            v_flusher,
+            iflusher,
+            vflusher,
             stats: From::from(config),
             phantom_key: marker::PhantomData,
             phantom_val: marker::PhantomData,
@@ -51,23 +51,23 @@ where
     }
 
     pub fn incremental(config: Config) -> Result<Builder<K, V>, Error> {
+        let (index_reuse, vlog_reuse) = (false, true);
         let index_file = config.to_index_file();
-        let i_flusher = FlushClient::new(index_file, false /*reuse*/)?;
-        let reuse = true;
-        let v_flusher = match config.to_value_log() {
-            Some(vlog_file) => Some(FlushClient::new(vlog_file, reuse)?),
+        let iflusher = Flusher::new(index_file, index_reuse)?;
+        let vflusher = match config.to_value_log() {
+            Some(vlog_file) => Some(Flusher::new(vlog_file, vlog_reuse)?),
             None => None,
         };
 
         let mut stats: Stats = From::from(config.clone());
-        stats.n_abytes = v_flusher
+        stats.n_abytes = vflusher
             .as_ref()
             .map_or(Default::default(), |x| x.fpos as usize);
 
         Ok(Builder {
             config: config.clone(),
-            i_flusher,
-            v_flusher,
+            iflusher,
+            vflusher,
             stats,
             phantom_key: marker::PhantomData,
             phantom_val: marker::PhantomData,
@@ -90,12 +90,12 @@ where
                 Ok(_) => (),
                 Err(Error::ZBlockOverflow(_)) => {
                     let (zbytes, vbytes) = b.z.finalize(&mut self.stats);
-                    b.z.flush(&mut self.i_flusher, self.v_flusher.as_mut());
+                    b.z.flush(&mut self.iflusher, self.vflusher.as_mut());
                     b.update_z_flush(zbytes, vbytes);
                     let mut m = b.mstack.pop().unwrap();
                     if let Err(_) = m.insertz(b.z.as_first_key(), b.z_fpos) {
                         let mbytes = m.finalize(&mut self.stats);
-                        m.flush(&mut self.i_flusher);
+                        m.flush(&mut self.iflusher);
                         b.update_m_flush(mbytes);
                         self.insertms(m.as_first_key(), &mut b)?;
                         m.reset();
@@ -132,11 +132,11 @@ where
         // marker
         meta_items.push(MetaItem::Marker(MARKER_BLOCK.clone()));
         // flush them down
-        robt_config::write_meta_items(meta_items, &mut self.i_flusher);
+        robt_config::write_meta_items(meta_items, &mut self.iflusher);
 
         // flush marker block and close
-        self.i_flusher.close_wait();
-        self.v_flusher.take().map(|x| x.close_wait());
+        self.iflusher.close_wait();
+        self.vflusher.take().map(|x| x.close_wait());
 
         Ok(())
     }
@@ -155,7 +155,7 @@ where
         };
         if overflow {
             let mbytes = m0.finalize(&mut self.stats);
-            m0.flush(&mut self.i_flusher);
+            m0.flush(&mut self.iflusher);
             b.update_m_flush(mbytes);
             self.insertms(m0.as_first_key(), b)?;
             m0.reset();
@@ -168,12 +168,12 @@ where
     fn finalize1(&mut self, b: &mut BuildData<K, V>) -> Result<(), Error> {
         if b.z.has_first_key() {
             let (zbytes, vbytes) = b.z.finalize(&mut self.stats);
-            b.z.flush(&mut self.i_flusher, self.v_flusher.as_mut());
+            b.z.flush(&mut self.iflusher, self.vflusher.as_mut());
             b.update_z_flush(zbytes, vbytes);
             let mut m = b.mstack.pop().unwrap();
             if let Err(_) = m.insertz(b.z.as_first_key(), b.z_fpos) {
                 let mbytes = m.finalize(&mut self.stats);
-                m.flush(&mut self.i_flusher);
+                m.flush(&mut self.iflusher);
                 b.update_m_flush(mbytes);
                 self.insertms(m.as_first_key(), b)?;
 
@@ -190,7 +190,7 @@ where
         while let Some(mut m) = b.mstack.pop() {
             if m.has_first_key() {
                 let mbytes = m.finalize(&mut self.stats);
-                m.flush(&mut self.i_flusher);
+                m.flush(&mut self.iflusher);
                 b.update_m_flush(mbytes);
                 self.insertms(m.as_first_key(), b)?;
 
@@ -271,72 +271,54 @@ where
     }
 }
 
-pub(crate) struct FlushClient {
+pub(crate) struct Flusher {
     tx: mpsc::SyncSender<Vec<u8>>,
     handle: thread::JoinHandle<()>,
     fpos: u64,
 }
 
-impl FlushClient {
-    fn new(file: String, reuse: bool) -> Result<FlushClient, Error> {
-        let fd = util::open_file_w(&file, reuse)?;
-        let (flusher, tx, rx) = Flusher::new(file.clone(), fd);
+impl Flusher {
+    fn new(file: String, reuse: bool) -> Result<Flusher, Error> {
         let fpos = if reuse {
-            fs::metadata(file)?.len()
+            fs::metadata(&file)?.len()
         } else {
             Default::default()
         };
-        let handle = thread::spawn(move || flusher.run(rx));
-        Ok(FlushClient { tx, handle, fpos })
-    }
+        let fd = util::open_file_w(&file, reuse)?;
 
-    pub(crate) fn send(&mut self, block: Vec<u8>) {
-        self.tx.send(block).unwrap();
+        let (tx, rx) = mpsc::sync_channel(16); // TODO: No magic number
+        let handle = thread::spawn(move || flush_thread(file, fd, rx));
+
+        Ok(Flusher { tx, handle, fpos })
     }
 
     fn close_wait(self) {
         mem::drop(self.tx);
         self.handle.join().unwrap();
     }
+
+    pub(crate) fn send(&mut self, block: Vec<u8>) {
+        self.tx.send(block).unwrap();
+    }
 }
 
-struct Flusher {
-    file: String,
-    fd: fs::File,
+fn flush_thread(file: String, mut fd: fs::File, rx: mpsc::Receiver<Vec<u8>>) {
+    for data in rx.iter() {
+        if !flush_write_data(&file, &mut fd, &data) {
+            break;
+        }
+    }
+    // file descriptor and receiver channel shall be dropped.
 }
 
-impl Flusher {
-    fn new(
-        file: String, /* for logging purpose */
-        fd: fs::File,
-    ) -> (Flusher, SyncSender<Vec<u8>>, Receiver<Vec<u8>>) {
-        let (tx, rx) = mpsc::sync_channel(16); // TODO: No magic number
-        (Flusher { file, fd }, tx, rx)
-    }
-
-    fn run(mut self, rx: mpsc::Receiver<Vec<u8>>) {
-        for data in rx.iter() {
-            if !self.write_data(&data) {
-                break;
-            }
+fn flush_write_data(file: &str, fd: &mut fs::File, data: &[u8]) -> bool {
+    match fd.write(data) {
+        Err(err) => {
+            panic!("flusher: {:?} error {}...", file, err);
         }
-        // file descriptor and receiver channel shall be dropped.
-    }
-
-    fn write_data(&mut self, data: &[u8]) -> bool {
-        match self.fd.write(data) {
-            Err(err) => {
-                panic!("flusher: {:?} error {}...", self.file, err);
-            }
-            Ok(n) if n != data.len() => {
-                panic!(
-                    "flusher: {:?} partial write {}/{}...",
-                    self.file,
-                    n,
-                    data.len()
-                );
-            }
-            Ok(_) => true,
+        Ok(n) if n != data.len() => {
+            panic!("flusher: {:?} partial write {}/{}...", file, n, data.len());
         }
+        Ok(_) => true,
     }
 }

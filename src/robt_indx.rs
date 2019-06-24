@@ -4,7 +4,7 @@ use std::{borrow::Borrow, cmp::Ordering, convert::TryInto, fs, marker, ops::Boun
 
 use crate::core::{self, Diff, Serialize};
 use crate::error::Error;
-use crate::robt_build::FlushClient;
+use crate::robt_build::Flusher;
 use crate::robt_config::Config;
 use crate::robt_entry::{DiskEntryM, DiskEntryZ};
 use crate::robt_stats::Stats;
@@ -172,7 +172,7 @@ where
         }
     }
 
-    pub(crate) fn flush(&mut self, i_flusher: &mut FlushClient) {
+    pub(crate) fn flush(&mut self, i_flusher: &mut Flusher) {
         match self {
             MBlock::Encode { mblock, .. } => {
                 i_flusher.send(mblock.clone());
@@ -464,15 +464,11 @@ where
         }
     }
 
-    pub(crate) fn flush(
-        &mut self,
-        i_flusher: &mut FlushClient,
-        v_flusher: Option<&mut FlushClient>,
-    ) {
+    pub(crate) fn flush(&mut self, ifr: &mut Flusher, vfr: Option<&mut Flusher>) {
         match self {
             ZBlock::Encode { leaf, blob, .. } => {
-                i_flusher.send(leaf.clone());
-                v_flusher.map(|flusher| flusher.send(blob.clone()));
+                ifr.send(leaf.clone());
+                vfr.map(|flusher| flusher.send(blob.clone()));
             }
             ZBlock::Decode { .. } => unreachable!(),
         }

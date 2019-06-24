@@ -3,7 +3,7 @@ use std::{convert::TryInto, fmt, fs, path};
 use lazy_static::lazy_static;
 
 use crate::error::Error;
-use crate::robt_build::FlushClient;
+use crate::robt_build::Flusher;
 use crate::robt_stats::Stats;
 use crate::util;
 
@@ -184,7 +184,7 @@ impl fmt::Display for MetaItem {
     }
 }
 
-pub(crate) fn write_meta_items(items: Vec<MetaItem>, flusher: &mut FlushClient) {
+pub(crate) fn write_meta_items(items: Vec<MetaItem>, flusher: &mut Flusher) {
     for (i, item) in items.into_iter().enumerate() {
         match (i, item) {
             (0, MetaItem::Stats(stats)) => {

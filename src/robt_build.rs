@@ -1,7 +1,7 @@
 // TODO: flush put blocks into tx channel. Right now we simply unwrap()
 
 use std::sync::mpsc;
-use std::{cmp, fs, io::Write, marker, mem, thread, time};
+use std::{cmp, convert::TryInto, fs, io::Write, marker, mem, thread, time};
 
 use crate::core::{Diff, Entry, Serialize};
 use crate::error::Error;
@@ -33,8 +33,7 @@ where
 {
     pub fn initial(config: Config) -> Result<Builder<K, V>, Error> {
         let (index_reuse, vlog_reuse) = (false, false);
-        let index_file = config.to_index_file();
-        let iflusher = Flusher::new(index_file, index_reuse)?;
+        let iflusher = Flusher::new(config.to_index_file(), index_reuse)?;
         let vflusher = match config.to_value_log() {
             Some(vlog_file) => Some(Flusher::new(vlog_file, vlog_reuse)?),
             None => None,
@@ -52,17 +51,17 @@ where
 
     pub fn incremental(config: Config) -> Result<Builder<K, V>, Error> {
         let (index_reuse, vlog_reuse) = (false, true);
-        let index_file = config.to_index_file();
-        let iflusher = Flusher::new(index_file, index_reuse)?;
-        let vflusher = match config.to_value_log() {
-            Some(vlog_file) => Some(Flusher::new(vlog_file, vlog_reuse)?),
-            None => None,
+        let iflusher = Flusher::new(config.to_index_file(), index_reuse)?;
+        let (vflusher, n_abytes) = match config.to_value_log() {
+            Some(vlog_file) => {
+                let vf = Flusher::new(vlog_file, vlog_reuse)?;
+                let fpos: usize = vf.fpos.try_into().unwrap();
+                (Some(vf), fpos)
+            }
+            None => (None, usize::default()),
         };
-
         let mut stats: Stats = From::from(config.clone());
-        stats.n_abytes = vflusher
-            .as_ref()
-            .map_or(Default::default(), |x| x.fpos as usize);
+        stats.n_abytes += n_abytes;
 
         Ok(Builder {
             config: config.clone(),
@@ -74,63 +73,38 @@ where
         })
     }
 
-    pub fn build<I>(mut self, mut iter: I, metadata: Vec<u8>) -> Result<(), Error>
+    pub fn build<I>(mut self, iter: I, metadata: Vec<u8>) -> Result<(), Error>
     where
         I: Iterator<Item = Result<Entry<K, V>, Error>>,
     {
         let start = time::SystemTime::now();
-        let mut b = BuildData::new(self.stats.n_abytes, self.config.clone());
-        while let Some(entry) = iter.next() {
-            let mut entry = entry?;
-            if self.preprocess_entry(&mut entry) {
-                continue; // if true, this entry and all its versions purged
-            }
-
-            match b.z.insert(&entry, &mut self.stats) {
-                Ok(_) => (),
-                Err(Error::ZBlockOverflow(_)) => {
-                    let (zbytes, vbytes) = b.z.finalize(&mut self.stats);
-                    b.z.flush(&mut self.iflusher, self.vflusher.as_mut());
-                    b.update_z_flush(zbytes, vbytes);
-                    let mut m = b.mstack.pop().unwrap();
-                    if let Err(_) = m.insertz(b.z.as_first_key(), b.z_fpos) {
-                        let mbytes = m.finalize(&mut self.stats);
-                        m.flush(&mut self.iflusher);
-                        b.update_m_flush(mbytes);
-                        self.insertms(m.as_first_key(), &mut b)?;
-                        m.reset();
-                        m.insertz(b.z.as_first_key(), b.z_fpos)?;
-                    }
-                    b.mstack.push(m);
-                    b.reset();
-                    b.z.insert(&entry, &mut self.stats)?;
-                }
-                Err(_) => unreachable!(),
-            };
-            self.postprocess_entry(&mut entry);
-        }
-
-        // flush final set partial blocks
-        if self.stats.n_count > 0 {
-            self.finalize1(&mut b)?; // flush zblock
-            self.finalize2(&mut b)?; // flush mblocks
-        }
+        self.build_tree(iter)?;
+        let took: u64 = start.elapsed().unwrap().as_nanos().try_into().unwrap();
 
         // start building metadata items for index files
         let mut meta_items: Vec<MetaItem> = vec![];
 
         // meta-stats
-        self.stats.buildtime = start.elapsed().unwrap().as_nanos() as u64;
-        self.stats.epoch = time::UNIX_EPOCH.elapsed().unwrap().as_nanos() as i128;
+        self.stats.buildtime = took;
+        let epoch: i128 = time::UNIX_EPOCH
+            .elapsed()
+            .unwrap()
+            .as_nanos()
+            .try_into()
+            .unwrap();
+        self.stats.epoch = epoch;
         let stats = self.stats.to_string();
         if (stats.len() + 8) > self.config.m_blocksize {
-            panic!("impossible case");
+            panic!("stats({}) > {}", stats.len(), self.config.m_blocksize);
         }
         meta_items.push(MetaItem::Stats(stats));
+
         // metadata
         meta_items.push(MetaItem::Metadata(metadata));
+
         // marker
         meta_items.push(MetaItem::Marker(MARKER_BLOCK.clone()));
+
         // flush them down
         robt_config::write_meta_items(meta_items, &mut self.iflusher);
 
@@ -141,68 +115,137 @@ where
         Ok(())
     }
 
-    fn insertms(&mut self, key: &K, b: &mut BuildData<K, V>) -> Result<(), Error> {
-        let (mut m0, overflow, m_fpos) = match b.mstack.pop() {
-            Some(mut m0) => match m0.insertm(key, b.m_fpos) {
-                Ok(_) => (m0, false, b.m_fpos),
-                Err(_) => (m0, true, b.m_fpos),
-            },
-            None => {
-                let mut m0 = MBlock::new_encode(self.config.clone());
-                m0.insertm(key, b.m_fpos)?;
-                (m0, false, b.m_fpos)
-            }
-        };
-        if overflow {
-            let mbytes = m0.finalize(&mut self.stats);
-            m0.flush(&mut self.iflusher);
-            b.update_m_flush(mbytes);
-            self.insertms(m0.as_first_key(), b)?;
-            m0.reset();
-            m0.insertm(key, m_fpos)?;
-        }
-        b.mstack.push(m0);
-        Ok(())
-    }
+    fn build_tree<I>(&mut self, mut iter: I) -> Result<(), Error>
+    where
+        I: Iterator<Item = Result<Entry<K, V>, Error>>,
+    {
+        let mut vfpos: u64 = self.stats.n_abytes.try_into().unwrap();
+        let (mut fpos, mut zfpos) = (0_u64, 0_u64);
+        let mut ms: Vec<MBlock<K, V>> = vec![
+            // If there is atleat one z-block, there will be atleat one m-block
+            MBlock::new_encode(self.config.clone()),
+        ];
+        let mut z = ZBlock::new_encode(vfpos, self.config.clone());
 
-    fn finalize1(&mut self, b: &mut BuildData<K, V>) -> Result<(), Error> {
-        if b.z.has_first_key() {
-            let (zbytes, vbytes) = b.z.finalize(&mut self.stats);
-            b.z.flush(&mut self.iflusher, self.vflusher.as_mut());
-            b.update_z_flush(zbytes, vbytes);
-            let mut m = b.mstack.pop().unwrap();
-            if let Err(_) = m.insertz(b.z.as_first_key(), b.z_fpos) {
-                let mbytes = m.finalize(&mut self.stats);
+        for entry in iter.next() {
+            let mut entry = entry?;
+            if self.preprocess_entry(&mut entry) {
+                continue;
+            }
+
+            match z.insert(&entry, &mut self.stats) {
+                Ok(_) => (),
+                Err(Error::__ZBlockOverflow(_)) => {
+                    let (zbytes, vbytes) = z.finalize(&mut self.stats);
+                    z.flush(&mut self.iflusher, self.vflusher.as_mut());
+                    fpos += zbytes;
+                    vfpos += vbytes;
+
+                    let mut m = ms.pop().unwrap();
+                    if let Err(_) = m.insertz(z.as_first_key(), zfpos) {
+                        let x = m.finalize(&mut self.stats);
+                        m.flush(&mut self.iflusher);
+                        let mkey = m.as_first_key();
+                        let res = self.insertms(ms, fpos + x, mkey, fpos)?;
+                        ms = res.0;
+                        fpos = res.1;
+
+                        m.reset();
+                        m.insertz(z.as_first_key(), zfpos).unwrap();
+                    }
+                    ms.push(m);
+
+                    zfpos = fpos;
+                    z.reset(vfpos);
+
+                    z.insert(&entry, &mut self.stats).unwrap();
+                }
+                Err(_) => unreachable!(),
+            };
+
+            self.postprocess_entry(&mut entry);
+        }
+
+        // flush final z-block
+        if z.has_first_key() {
+            let (zbytes, _vbytes) = z.finalize(&mut self.stats);
+            z.flush(&mut self.iflusher, self.vflusher.as_mut());
+            fpos += zbytes;
+            // vfpos += vbytes; TODO: is this required ?
+
+            let mut m = ms.pop().unwrap();
+            if let Err(_) = m.insertz(z.as_first_key(), zfpos) {
+                let x = m.finalize(&mut self.stats);
                 m.flush(&mut self.iflusher);
-                b.update_m_flush(mbytes);
-                self.insertms(m.as_first_key(), b)?;
+                let mkey = m.as_first_key();
+                let res = self.insertms(ms, fpos + x, mkey, fpos)?;
+                ms = res.0;
+                fpos = res.1;
 
                 m.reset();
-                m.insertz(b.z.as_first_key(), b.z_fpos)?;
-                b.reset();
+                m.insertz(z.as_first_key(), zfpos)?;
             }
-            b.mstack.push(m);
-        };
-        Ok(())
-    }
-
-    fn finalize2(&mut self, b: &mut BuildData<K, V>) -> Result<(), Error> {
-        while let Some(mut m) = b.mstack.pop() {
-            if m.has_first_key() {
-                let mbytes = m.finalize(&mut self.stats);
-                m.flush(&mut self.iflusher);
-                b.update_m_flush(mbytes);
-                self.insertms(m.as_first_key(), b)?;
-
-                b.reset();
+            ms.push(m);
+        }
+        // flush final set of m-blocks
+        if ms.len() > 0 {
+            while let Some(mut m) = ms.pop() {
+                if m.has_first_key() {
+                    let x = m.finalize(&mut self.stats);
+                    m.flush(&mut self.iflusher);
+                    let mkey = m.as_first_key();
+                    let res = self.insertms(ms, fpos + x, mkey, fpos)?;
+                    ms = res.0;
+                    fpos = res.1
+                }
             }
         }
         Ok(())
     }
 
+    fn insertms(
+        &mut self,
+        mut ms: Vec<MBlock<K, V>>,
+        mut fpos: u64,
+        key: &K,
+        mfpos: u64,
+    ) -> Result<(Vec<MBlock<K, V>>, u64), Error> {
+        let m0 = ms.pop();
+        let m0 = match m0 {
+            None => {
+                let mut m0 = MBlock::new_encode(self.config.clone());
+                m0.insertm(key, mfpos).unwrap();
+                m0
+            }
+            Some(mut m0) => match m0.insertm(key, mfpos) {
+                Ok(_) => m0,
+                Err(_) => {
+                    let x = m0.finalize(&mut self.stats);
+                    m0.flush(&mut self.iflusher);
+                    let mkey = m0.as_first_key();
+                    let res = self.insertms(ms, fpos + x, mkey, fpos)?;
+                    ms = res.0;
+                    fpos = res.1;
+
+                    m0.reset();
+                    m0.insertm(key, mfpos).unwrap();
+                    m0
+                }
+            },
+        };
+        ms.push(m0);
+        Ok((ms, fpos))
+    }
+
+    // return whether this entry can be skipped.
     fn preprocess_entry(&mut self, entry: &mut Entry<K, V>) -> bool {
         self.stats.seqno = cmp::max(self.stats.seqno, entry.to_seqno());
-        self.purge_values(entry)
+
+        // if tombstone purge is configured, then purge.
+        match self.config.tomb_purge {
+            Some(before) => entry.purge(before),
+            _ => false,
+        }
     }
 
     fn postprocess_entry(&mut self, entry: &mut Entry<K, V>) {
@@ -210,64 +253,6 @@ where
         if entry.is_deleted() {
             self.stats.n_deleted += 1;
         }
-    }
-
-    fn purge_values(&self, entry: &mut Entry<K, V>) -> bool {
-        match self.config.tomb_purge {
-            Some(before) => entry.purge(before),
-            _ => false,
-        }
-    }
-}
-
-pub struct BuildData<K, V>
-where
-    K: Clone + Ord + Serialize,
-    V: Clone + Diff + Serialize,
-    <V as Diff>::D: Clone + Serialize,
-{
-    z: ZBlock<K, V>,
-    mstack: Vec<MBlock<K, V>>,
-    fpos: u64,
-    z_fpos: u64,
-    m_fpos: u64,
-    vlog_fpos: u64,
-}
-
-impl<K, V> BuildData<K, V>
-where
-    K: Clone + Ord + Serialize,
-    V: Clone + Diff + Serialize,
-    <V as Diff>::D: Clone + Serialize,
-{
-    fn new(n_abytes: usize, config: Config) -> BuildData<K, V> {
-        let vlog_fpos = n_abytes as u64;
-        let mut obj = BuildData {
-            z: ZBlock::new_encode(vlog_fpos, config.clone()),
-            mstack: vec![],
-            z_fpos: 0,
-            m_fpos: 0,
-            fpos: 0,
-            vlog_fpos,
-        };
-        obj.mstack.push(MBlock::new_encode(config));
-        obj
-    }
-
-    fn update_z_flush(&mut self, zbytes: usize, vbytes: usize) {
-        self.fpos += zbytes as u64;
-        self.vlog_fpos += vbytes as u64;
-    }
-
-    fn update_m_flush(&mut self, mbytes: usize) {
-        self.m_fpos = self.fpos;
-        self.fpos += mbytes as u64;
-    }
-
-    fn reset(&mut self) {
-        self.z_fpos = self.fpos;
-        self.m_fpos = self.fpos;
-        self.z.reset(self.vlog_fpos);
     }
 }
 
@@ -303,22 +288,23 @@ impl Flusher {
 }
 
 fn flush_thread(file: String, mut fd: fs::File, rx: mpsc::Receiver<Vec<u8>>) {
+    let write_data = |file: &str, fd: &mut fs::File, data: &[u8]| -> bool {
+        let res = match fd.write(data) {
+            Err(err) => {
+                panic!("flusher: {:?} error {}...", file, err);
+            }
+            Ok(n) if n != data.len() => {
+                panic!("flusher: {:?} write {}/{}...", file, n, data.len());
+            }
+            Ok(_) => true,
+        };
+        res
+    };
+
     for data in rx.iter() {
-        if !flush_write_data(&file, &mut fd, &data) {
+        if !write_data(&file, &mut fd, &data) {
             break;
         }
     }
     // file descriptor and receiver channel shall be dropped.
-}
-
-fn flush_write_data(file: &str, fd: &mut fs::File, data: &[u8]) -> bool {
-    match fd.write(data) {
-        Err(err) => {
-            panic!("flusher: {:?} error {}...", file, err);
-        }
-        Ok(n) if n != data.len() => {
-            panic!("flusher: {:?} partial write {}/{}...", file, n, data.len());
-        }
-        Ok(_) => true,
-    }
 }

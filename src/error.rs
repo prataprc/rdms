@@ -59,7 +59,6 @@ pub enum Error {
     IoError(io::Error),
     PartialWrite(usize, usize),
     ValueDecode(Vec<u8>),
-    ZBlockOverflow(usize),
     JsonError(jsondata::Error),
     InvalidSnapshot(String),
     Utf8Error(std::str::Utf8Error),
@@ -69,6 +68,10 @@ pub enum Error {
     __LessThan,
     // Local error, means, given key is greater than the entire data set.
     __GreaterThan,
+    // z-block of btree has overflowed.
+    __ZBlockOverflow(usize),
+    // m-block of btree has overflowed.
+    __MBlockOverflow(usize),
 }
 
 impl From<io::Error> for Error {

@@ -90,7 +90,7 @@ where
         }
     }
 
-    pub(crate) fn insertm(&mut self, key: &K, fpos: u64) -> Result<usize, Error> {
+    pub(crate) fn insertm(&mut self, key: &K, fpos: u64) -> Result<u64, Error> {
         match self {
             MBlock::Encode {
                 mblock,
@@ -104,17 +104,17 @@ where
                 if n < config.m_blocksize {
                     offsets.push(m.try_into().unwrap());
                     first_key.get_or_insert_with(|| key.clone());
-                    Ok(offsets.len())
+                    Ok(offsets.len().try_into().unwrap())
                 } else {
                     mblock.truncate(m);
-                    Err(Error::ZBlockOverflow(n))
+                    Err(Error::__MBlockOverflow(n))
                 }
             }
             MBlock::Decode { .. } => unreachable!(),
         }
     }
 
-    pub(crate) fn insertz(&mut self, key: &K, fpos: u64) -> Result<usize, Error> {
+    pub(crate) fn insertz(&mut self, key: &K, fpos: u64) -> Result<u64, Error> {
         match self {
             MBlock::Encode {
                 mblock,
@@ -128,17 +128,17 @@ where
                 if n < config.m_blocksize {
                     offsets.push(m.try_into().unwrap());
                     first_key.get_or_insert_with(|| key.clone());
-                    Ok(offsets.len())
+                    Ok(offsets.len().try_into().unwrap())
                 } else {
                     mblock.truncate(m);
-                    Err(Error::ZBlockOverflow(n))
+                    Err(Error::__MBlockOverflow(n))
                 }
             }
             MBlock::Decode { .. } => unreachable!(),
         }
     }
 
-    pub(crate) fn finalize(&mut self, stats: &mut Stats) -> usize {
+    pub(crate) fn finalize(&mut self, stats: &mut Stats) -> u64 {
         match self {
             MBlock::Encode {
                 mblock,
@@ -166,7 +166,7 @@ where
                 // align blocks
                 mblock.resize(config.m_blocksize, 0);
 
-                config.m_blocksize
+                config.m_blocksize.try_into().unwrap()
             }
             MBlock::Decode { .. } => unreachable!(),
         }
@@ -387,7 +387,7 @@ where
         &mut self,
         entry: &core::Entry<K, V>,
         stats: &mut Stats, // update build statistics
-    ) -> Result<usize, Error> {
+    ) -> Result<u64, Error> {
         use crate::robt_entry::DiskEntryZ as DZ;
 
         match self {
@@ -413,18 +413,18 @@ where
                 if n < config.z_blocksize {
                     offsets.push(m.try_into().unwrap());
                     first_key.get_or_insert_with(|| entry.as_key().clone());
-                    Ok(offsets.len())
+                    Ok(offsets.len().try_into().unwrap())
                 } else {
                     leaf.truncate(m);
                     blob.truncate(x);
-                    Err(Error::ZBlockOverflow(n))
+                    Err(Error::__ZBlockOverflow(n))
                 }
             }
             ZBlock::Decode { .. } => unreachable!(),
         }
     }
 
-    pub(crate) fn finalize(&mut self, stats: &mut Stats) -> (usize, usize) {
+    pub(crate) fn finalize(&mut self, stats: &mut Stats) -> (u64, u64) {
         match self {
             ZBlock::Encode {
                 leaf,
@@ -458,7 +458,10 @@ where
                 // align blocks
                 leaf.resize(config.z_blocksize, 0);
 
-                (config.z_blocksize, blob.len())
+                (
+                    config.z_blocksize.try_into().unwrap(), // full block
+                    blob.len().try_into().unwrap(),
+                )
             }
             ZBlock::Decode { .. } => unreachable!(),
         }

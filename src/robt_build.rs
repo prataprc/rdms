@@ -142,16 +142,20 @@ where
                     vfpos += vbytes;
 
                     let mut m = ms.pop().unwrap();
-                    if let Err(_) = m.insertz(z.as_first_key(), zfpos) {
-                        let x = m.finalize(&mut self.stats);
-                        m.flush(&mut self.iflusher);
-                        let mkey = m.as_first_key();
-                        let res = self.insertms(ms, fpos + x, mkey, fpos)?;
-                        ms = res.0;
-                        fpos = res.1;
+                    match m.insertz(z.as_first_key(), zfpos) {
+                        Ok(_) => (),
+                        Err(Error::__MBlockOverflow(_)) => {
+                            let x = m.finalize(&mut self.stats);
+                            m.flush(&mut self.iflusher);
+                            let mkey = m.as_first_key();
+                            let res = self.insertms(ms, fpos + x, mkey, fpos)?;
+                            ms = res.0;
+                            fpos = res.1;
 
-                        m.reset();
-                        m.insertz(z.as_first_key(), zfpos).unwrap();
+                            m.reset();
+                            m.insertz(z.as_first_key(), zfpos).unwrap();
+                        }
+                        _ => unreachable!(),
                     }
                     ms.push(m);
 
@@ -160,7 +164,7 @@ where
 
                     z.insert(&entry, &mut self.stats).unwrap();
                 }
-                Err(_) => unreachable!(),
+                _ => unreachable!(),
             };
 
             self.postprocess_entry(&mut entry);
@@ -174,16 +178,20 @@ where
             // vfpos += vbytes; TODO: is this required ?
 
             let mut m = ms.pop().unwrap();
-            if let Err(_) = m.insertz(z.as_first_key(), zfpos) {
-                let x = m.finalize(&mut self.stats);
-                m.flush(&mut self.iflusher);
-                let mkey = m.as_first_key();
-                let res = self.insertms(ms, fpos + x, mkey, fpos)?;
-                ms = res.0;
-                fpos = res.1;
+            match m.insertz(z.as_first_key(), zfpos) {
+                Ok(_) => (),
+                Err(Error::__MBlockOverflow(_)) => {
+                    let x = m.finalize(&mut self.stats);
+                    m.flush(&mut self.iflusher);
+                    let mkey = m.as_first_key();
+                    let res = self.insertms(ms, fpos + x, mkey, fpos)?;
+                    ms = res.0;
+                    fpos = res.1;
 
-                m.reset();
-                m.insertz(z.as_first_key(), zfpos)?;
+                    m.reset();
+                    m.insertz(z.as_first_key(), zfpos)?;
+                }
+                _ => unreachable!(),
             }
             ms.push(m);
         }
@@ -219,7 +227,7 @@ where
             }
             Some(mut m0) => match m0.insertm(key, mfpos) {
                 Ok(_) => m0,
-                Err(_) => {
+                Err(Error::__MBlockOverflow(_)) => {
                     let x = m0.finalize(&mut self.stats);
                     m0.flush(&mut self.iflusher);
                     let mkey = m0.as_first_key();
@@ -231,6 +239,7 @@ where
                     m0.insertm(key, mfpos).unwrap();
                     m0
                 }
+                _ => unreachable!(),
             },
         };
         ms.push(m0);

@@ -64,8 +64,6 @@ pub enum Error {
     Utf8Error(std::str::Utf8Error),
     // Local error, means, given key is less than the entire data set.
     __LessThan,
-    // Local error, means, given key is greater than the entire data set.
-    __GreaterThan,
     // z-block of btree has overflowed.
     __ZBlockOverflow(usize),
     // m-block of btree has overflowed.

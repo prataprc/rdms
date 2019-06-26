@@ -215,7 +215,9 @@ where
         }
     }
 
-    pub(crate) fn find<Q>(
+    // optimized version of find() for mblock. if key is less than the dataset
+    // immediately returns with failure.
+    pub(crate) fn get<Q>(
         &self,
         key: &Q,
         from: Bound<usize>,
@@ -233,6 +235,31 @@ where
 
         match key.cmp(self.to_key(pivot)?.borrow()) {
             Ordering::Less if pivot == 0 => Err(Error::__LessThan),
+            Ordering::Less if pivot == f => unreachable!(),
+            Ordering::Less => self.find(key, from, Bound::Excluded(pivot)),
+            Ordering::Equal => self.to_entry(pivot),
+            Ordering::Greater if pivot == f => self.to_entry(pivot),
+            Ordering::Greater => self.find(key, Bound::Included(pivot), to),
+        }
+    }
+
+    pub(crate) fn find<Q>(
+        &self,
+        key: &Q,
+        from: Bound<usize>,
+        to: Bound<usize>,
+    ) -> Result<DiskEntryM, Error>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        let f = match from {
+            Bound::Included(f) | Bound::Excluded(f) => f,
+            Bound::Unbounded => 0,
+        };
+        let pivot = self.find_pivot(from, to);
+
+        match key.cmp(self.to_key(pivot)?.borrow()) {
             Ordering::Less if pivot == f => unreachable!(),
             Ordering::Less => self.find(key, from, Bound::Excluded(pivot)),
             Ordering::Equal => self.to_entry(pivot),
@@ -528,11 +555,10 @@ where
         let pivot = self.find_pivot(from, to);
 
         match key.cmp(self.to_key(pivot)?.borrow()) {
-            Ordering::Less if pivot == 0 => unreachable!(),
-            Ordering::Less if pivot == f => self.to_entry(pivot),
+            Ordering::Less if pivot == f => unreachable!(),
             Ordering::Less => self.find(key, from, Bound::Excluded(pivot)),
             Ordering::Equal => self.to_entry(pivot),
-            Ordering::Greater if pivot == f => Err(Error::__GreaterThan),
+            Ordering::Greater if pivot == f => self.to_entry(pivot),
             Ordering::Greater => self.find(key, Bound::Included(pivot), to),
         }
     }

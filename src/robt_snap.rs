@@ -5,7 +5,7 @@
 
 use std::borrow::Borrow;
 use std::{
-    fs, marker,
+    cmp, fs, marker,
     ops::{Bound, RangeBounds},
     path,
 };
@@ -153,18 +153,18 @@ where
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
 {
-    fn find_zpos<Q>(&mut self, key: &Q, fpos: u64) -> Result<u64, Error>
+    fn get_zpos<Q>(&mut self, key: &Q, fpos: u64) -> Result<u64, Error>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
         let fd = &mut self.index_fd;
         let mblock = MBlock::<K, V>::new_decode(fd, fpos, &self.config)?;
-        match mblock.find(key, Bound::Unbounded, Bound::Unbounded) {
-            Ok(mentry) if mentry.is_zblock() => Ok(mentry.to_fpos()),
-            Ok(mentry) => self.find_zpos(key, mentry.to_fpos()),
+        match mblock.get(key, Bound::Unbounded, Bound::Unbounded) {
             Err(Error::__LessThan) => Err(Error::KeyNotFound),
             Err(Error::__MBlockExhausted(_)) => unreachable!(),
+            Ok(mentry) if mentry.is_zblock() => Ok(mentry.to_fpos()),
+            Ok(mentry) => self.get_zpos(key, mentry.to_fpos()),
             Err(err) => Err(err),
         }
     }
@@ -174,13 +174,18 @@ where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        let zfpos = self.find_zpos(key, self.root)?;
+        let zfpos = self.get_zpos(key, self.root)?;
 
         let fd = &mut self.index_fd;
         let zblock: ZBlock<K, V> = ZBlock::new_decode(fd, zfpos, &self.config)?;
         match zblock.find(key, Bound::Unbounded, Bound::Unbounded) {
-            Ok((_, entry)) => Ok(entry),
-            Err(Error::__GreaterThan) => Err(Error::KeyNotFound),
+            Ok((_, entry)) => {
+                if entry.as_key().borrow().eq(key) {
+                    Ok(entry)
+                } else {
+                    Err(Error::KeyNotFound)
+                }
+            }
             Err(Error::__ZBlockExhausted(_)) => unreachable!(),
             Err(err) => Err(err),
         }
@@ -208,12 +213,18 @@ where
                 false
             }
             Bound::Included(key) => {
-                self.build(key, &mut mzs)?;
-                false
+                let entry = self.build(key, &mut mzs)?;
+                match key.cmp(entry.as_key().borrow()) {
+                    cmp::Ordering::Greater => true,
+                    _ => false,
+                }
             }
             Bound::Excluded(key) => {
                 let entry = self.build(key, &mut mzs)?;
-                key.eq(entry.as_key().borrow())
+                match key.cmp(entry.as_key().borrow()) {
+                    cmp::Ordering::Equal | cmp::Ordering::Greater => true,
+                    _ => false,
+                }
             }
         };
         let mut r = Range {
@@ -228,43 +239,38 @@ where
         Ok(r)
     }
 
-    //pub fn reverse<'a>(
-    //    &'a mut self,
-    //    high: Bound<K>, // upper bound
-    //    low: Bound<K>,  // lower bound
-    //) -> Result<Reverse<'a, K, V>, Error> {
-    //    Ok(match high {
-    //        Bound::Unbounded => {
-    //            let mut mzs = vec![];
-    //            self.build_rev(self.root, &mut mzs)?;
-    //            Reverse {
-    //                snap: self,
-    //                mzs,
-    //                low,
-    //            }
-    //        }
-    //        Bound::Included(key) => {
-    //            let (mzs, _entry) = self.build(&key)?;
-    //            Reverse {
-    //                snap: self,
-    //                mzs,
-    //                low,
-    //            }
-    //        }
-    //        Bound::Excluded(key) => {
-    //            let (mzs, entry) = self.build(&key)?;
-    //            let mut r = Reverse {
-    //                snap: self,
-    //                mzs,
-    //                low,
-    //            };
-    //            if entry.as_key().eq(&key) {
-    //                r.next();
-    //            }
-    //            r
-    //        }
-    //    })
-    //}
+    pub fn reverse<R, Q>(&mut self, r: R) -> Result<Reverse<K, V, R, Q>, Error>
+    where
+        K: Borrow<Q>,
+        R: RangeBounds<Q>,
+        Q: Ord + ?Sized,
+    {
+        let mut mzs = vec![];
+        let skip_one = match r.end_bound() {
+            Bound::Unbounded => {
+                self.build_rev(self.root, &mut mzs)?;
+                false
+            }
+            Bound::Included(key) => {
+                self.build(&key, &mut mzs)?;
+                false
+            }
+            Bound::Excluded(key) => {
+                let entry = self.build(&key, &mut mzs)?;
+                key.eq(entry.as_key().borrow())
+            }
+        };
+        let mut rr = Reverse {
+            snap: self,
+            mzs,
+            range: r,
+            low: marker::PhantomData,
+        };
+        if skip_one {
+            rr.next();
+        }
+        Ok(rr)
+    }
 
     fn build_fwd(
         &mut self,
@@ -407,13 +413,18 @@ where
 
         let zfpos = loop {
             let mblock = MBlock::<K, V>::new_decode(fd, fpos, config)?;
-            let mentry = mblock.find(key, from, to)?;
-            if mentry.is_zblock() {
-                break mentry.to_fpos();
+            match mblock.find(key, from, to) {
+                Ok(mentry) => {
+                    if mentry.is_zblock() {
+                        break mentry.to_fpos();
+                    }
+                    let index = mentry.to_index();
+                    mzs.push(MZ::M { fpos, index });
+                    fpos = mentry.to_fpos();
+                }
+                Err(Error::__LessThan) => unreachable!(),
+                Err(err) => return Err(err),
             }
-            let index = mentry.to_index();
-            mzs.push(MZ::M { fpos, index });
-            fpos = mentry.to_fpos();
         };
 
         let zblock = ZBlock::new_decode(fd, zfpos, config)?;

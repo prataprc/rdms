@@ -4,7 +4,11 @@
 // TODO: cache root block.
 
 use std::borrow::Borrow;
-use std::{fs, marker, ops::Bound, path};
+use std::{
+    fs, marker,
+    ops::{Bound, RangeBounds},
+    path,
+};
 
 use crate::core::{Diff, Entry, Serialize};
 use crate::error::Error;
@@ -16,9 +20,9 @@ use crate::util;
 
 pub struct Snapshot<K, V>
 where
-    K: Default + Ord + Clone + Serialize,
-    V: Default + Clone + Diff + Serialize,
-    <V as Diff>::D: Default + Clone + Serialize,
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
 {
     config: Config,
     stats: Stats,
@@ -34,17 +38,17 @@ where
 // Construction methods.
 impl<K, V> Snapshot<K, V>
 where
-    K: Default + Ord + Clone + Serialize,
-    V: Default + Clone + Diff + Serialize,
-    <V as Diff>::D: Default + Clone + Serialize,
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
 {
     pub fn open(dir: &str, name: &str) -> Result<Snapshot<K, V>, Error> {
         let index_fd = util::open_file_r(&Config::stitch_index_file(dir, name))?;
 
         let mut snap = Snapshot {
-            metadata: Default::default(),
-            stats: Default::default(),
             config: Config::new(dir, name),
+            stats: Default::default(),
+            metadata: Default::default(),
             root: Default::default(),
             index_fd,
             vlog_fd: Default::default(),
@@ -53,56 +57,40 @@ where
             phantom_val: marker::PhantomData,
         };
 
-        let mut iter = robt_config::read_meta_items(dir, name)?.into_iter();
-        // read and discard marker
-        match iter.next() {
-            Some(MetaItem::Marker(_)) => (),
-            Some(item) => {
-                let err = format!("expected marker, found {}", item);
-                return Err(Error::InvalidSnapshot(err));
-            }
-            None => {
-                let err = "expected marker, eof".to_string();
-                return Err(Error::InvalidSnapshot(err));
+        let items = robt_config::read_meta_items(dir, name)?;
+
+        for (i, item) in items.into_iter().enumerate() {
+            match (i, item) {
+                (0, MetaItem::Marker(_)) => (),
+                (1, MetaItem::Metadata(metadata)) => {
+                    snap.metadata = metadata;
+                }
+                (2, MetaItem::Stats(stats)) => {
+                    snap.stats = stats.parse()?;
+                }
+                (3, MetaItem::Root(root)) => {
+                    snap.root = root;
+                }
+                (i, item) => {
+                    let err = format!("found {} at {}", item, i);
+                    return Err(Error::InvalidSnapshot(err));
+                }
             }
         }
-        // read metadata
-        snap.metadata = match iter.next() {
-            Some(MetaItem::Metadata(metadata)) => metadata,
-            Some(item) => {
-                let err = format!("expected metadata, found {}", item);
-                return Err(Error::InvalidSnapshot(err));
-            }
-            None => {
-                let err = "expected metadata, eof".to_string();
-                return Err(Error::InvalidSnapshot(err));
-            }
-        };
-        // read the statistics and information for this snapshot.
-        snap.stats = match iter.next() {
-            Some(MetaItem::Stats(stats)) => stats.parse()?,
-            Some(item) => {
-                let err = format!("expected metadata, found {}", item);
-                return Err(Error::InvalidSnapshot(err));
-            }
-            None => {
-                let err = "expected statistics".to_string();
-                return Err(Error::InvalidSnapshot(err));
-            }
-        };
+
         snap.config = snap.stats.clone().into();
         snap.config.dir = dir.to_string();
+
         snap.config.vlog_file = match snap.config.vlog_file.clone() {
             None => None,
-            Some(vlog_file_1) => {
-                let f = path::Path::new(&vlog_file_1).file_name().unwrap();
-                let ifile = Config::stitch_index_file(&dir, &name);
-                let mut file = path::PathBuf::new();
-                file.push(path::Path::new(&ifile).parent().unwrap());
-                file.push(f);
-                let vlog_file_2 = file.to_str().unwrap().to_string();
-                // TODO: verify whether both the file names are equal.
-                Some(vlog_file_2)
+            Some(vfile) => {
+                // stem the file name.
+                let vfile = path::Path::new(&vfile).file_name().unwrap();
+                let ipath = Config::stitch_index_file(&dir, &name);
+                let mut vpath = path::PathBuf::new();
+                vpath.push(path::Path::new(&ipath).parent().unwrap());
+                vpath.push(vfile);
+                Some(vpath.to_str().unwrap().to_string())
             }
         };
         snap.vlog_fd = snap
@@ -112,28 +100,12 @@ where
             .map(|s| util::open_file_r(s.as_str()))
             .transpose()?;
 
-        // read root
-        snap.root = match iter.next() {
-            Some(MetaItem::Root(root)) => root,
-            Some(item) => {
-                let err = format!("expected metadata, found {}", item);
-                return Err(Error::InvalidSnapshot(err));
-            }
-            None => {
-                let err = "expected statistics".to_string();
-                return Err(Error::InvalidSnapshot(err));
-            }
-        };
-        // make sure nothing is left !!
-        if let Some(item) = iter.next() {
-            let err = format!("expected eof, found {}", item);
-            return Err(Error::InvalidSnapshot(err));
-        }
         // validate snapshot
         if snap.stats.name != name {
             let err = format!("name mistmatch {} != {}", snap.stats.name, name);
             return Err(Error::InvalidSnapshot(err));
         }
+
         // Okey dockey
         Ok(snap)
     }
@@ -142,14 +114,10 @@ where
 // maintanence methods.
 impl<K, V> Snapshot<K, V>
 where
-    K: Default + Ord + Clone + Serialize,
-    V: Default + Clone + Diff + Serialize,
-    <V as Diff>::D: Default + Clone + Serialize,
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
 {
-    pub fn purge(&mut self) {
-        panic!("to-be-implemented")
-    }
-
     pub fn count(&self) -> u64 {
         self.stats.n_count
     }
@@ -176,214 +144,149 @@ where
     pub fn stats(&self) -> Stats {
         self.stats.clone()
     }
-
-    pub fn close(self) {
-        // TODO: can be implemented via Drop.
-        panic!("to-be-implemented")
-    }
 }
 
+// Read methods
 impl<K, V> Snapshot<K, V>
 where
-    K: Default + Ord + Clone + Serialize,
-    V: Default + Clone + Diff + Serialize,
-    <V as Diff>::D: Default + Clone + Serialize,
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
 {
-    pub fn get(&mut self, key: &K) -> Result<Entry<K, V>, Error> {
-        let fpos = self.root;
+    fn find_zpos<Q>(&mut self, key: &Q, fpos: u64) -> Result<u64, Error>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
         let fd = &mut self.index_fd;
-        let config = &self.config;
-        let (from, to) = (Bound::Unbounded, Bound::Unbounded);
-
-        let zblock_fpos = loop {
-            let mblock: MBlock<K, V> = MBlock::new_decode(fd, fpos, &config)?;
-            let mentry = mblock.find(key, from, to)?;
-            if mentry.is_zblock() {
-                break mentry.to_fpos();
-            }
-        };
-
-        let zblock: ZBlock<K, V> = ZBlock::new_decode(fd, zblock_fpos, &config)?;
-        let (_index, entry) = zblock.find(key, from, to)?;
-        if entry.as_key().borrow().eq(key) {
-            Ok(entry)
-        } else {
-            Err(Error::KeyNotFound)
+        let mblock = MBlock::<K, V>::new_decode(fd, fpos, &self.config)?;
+        match mblock.find(key, Bound::Unbounded, Bound::Unbounded) {
+            Ok(mentry) if mentry.is_zblock() => Ok(mentry.to_fpos()),
+            Ok(mentry) => self.find_zpos(key, mentry.to_fpos()),
+            Err(Error::__LessThan) => Err(Error::KeyNotFound),
+            Err(Error::__MBlockExhausted(_)) => unreachable!(),
+            Err(err) => Err(err),
         }
     }
 
-    pub fn iter<'a>(&'a mut self) -> Result<Iter<'a, K, V>, Error> {
+    pub fn get<Q>(&mut self, key: &Q) -> Result<Entry<K, V>, Error>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        let zfpos = self.find_zpos(key, self.root)?;
+
+        let fd = &mut self.index_fd;
+        let zblock: ZBlock<K, V> = ZBlock::new_decode(fd, zfpos, &self.config)?;
+        match zblock.find(key, Bound::Unbounded, Bound::Unbounded) {
+            Ok((_, entry)) => Ok(entry),
+            Err(Error::__GreaterThan) => Err(Error::KeyNotFound),
+            Err(Error::__ZBlockExhausted(_)) => unreachable!(),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub fn iter(&mut self) -> Result<Iter<K, V>, Error> {
         let mut mzs = vec![];
-        self.build_fwd(&mut mzs, self.root)?;
+        self.build_fwd(self.root, &mut mzs)?;
         Ok(Iter {
             snap: self,
             mzs: mzs,
         })
     }
 
-    pub fn range<'a>(
-        &'a mut self,
-        low: Bound<K>,  // upper bound
-        high: Bound<K>, // lower bound
-    ) -> Result<Range<'a, K, V>, Error> {
-        Ok(match low {
+    pub fn range<R, Q>(&mut self, range: R) -> Result<Range<K, V, R, Q>, Error>
+    where
+        K: Borrow<Q>,
+        R: RangeBounds<Q>,
+        Q: Ord + ?Sized,
+    {
+        let mut mzs = vec![];
+        let skip_one = match range.start_bound() {
             Bound::Unbounded => {
-                let mut mzs = vec![];
-                self.build_fwd(&mut mzs, self.root)?;
-                Range {
-                    snap: self,
-                    mzs,
-                    high,
-                }
+                self.build_fwd(self.root, &mut mzs)?;
+                false
             }
             Bound::Included(key) => {
-                let (mzs, _entry) = self.build(&key)?;
-                Range {
-                    snap: self,
-                    mzs,
-                    high,
-                }
+                self.build(key, &mut mzs)?;
+                false
             }
             Bound::Excluded(key) => {
-                let (mzs, entry) = self.build(&key)?;
-                let mut r = Range {
-                    snap: self,
-                    mzs,
-                    high,
-                };
-                if entry.as_key().eq(&key) {
-                    r.next();
-                }
-                r
+                let entry = self.build(key, &mut mzs)?;
+                key.eq(entry.as_key().borrow())
             }
-        })
+        };
+        let mut r = Range {
+            snap: self,
+            mzs,
+            range,
+            high: marker::PhantomData,
+        };
+        if skip_one {
+            r.next();
+        }
+        Ok(r)
     }
 
-    pub fn reverse<'a>(
-        &'a mut self,
-        high: Bound<K>, // upper bound
-        low: Bound<K>,  // lower bound
-    ) -> Result<Reverse<'a, K, V>, Error> {
-        Ok(match high {
-            Bound::Unbounded => {
-                let mut mzs = vec![];
-                self.build_rev(&mut mzs, self.root)?;
-                Reverse {
-                    snap: self,
-                    mzs,
-                    low,
-                }
-            }
-            Bound::Included(key) => {
-                let (mzs, _entry) = self.build(&key)?;
-                Reverse {
-                    snap: self,
-                    mzs,
-                    low,
-                }
-            }
-            Bound::Excluded(key) => {
-                let (mzs, entry) = self.build(&key)?;
-                let mut r = Reverse {
-                    snap: self,
-                    mzs,
-                    low,
-                };
-                if entry.as_key().eq(&key) {
-                    r.next();
-                }
-                r
-            }
-        })
-    }
+    //pub fn reverse<'a>(
+    //    &'a mut self,
+    //    high: Bound<K>, // upper bound
+    //    low: Bound<K>,  // lower bound
+    //) -> Result<Reverse<'a, K, V>, Error> {
+    //    Ok(match high {
+    //        Bound::Unbounded => {
+    //            let mut mzs = vec![];
+    //            self.build_rev(self.root, &mut mzs)?;
+    //            Reverse {
+    //                snap: self,
+    //                mzs,
+    //                low,
+    //            }
+    //        }
+    //        Bound::Included(key) => {
+    //            let (mzs, _entry) = self.build(&key)?;
+    //            Reverse {
+    //                snap: self,
+    //                mzs,
+    //                low,
+    //            }
+    //        }
+    //        Bound::Excluded(key) => {
+    //            let (mzs, entry) = self.build(&key)?;
+    //            let mut r = Reverse {
+    //                snap: self,
+    //                mzs,
+    //                low,
+    //            };
+    //            if entry.as_key().eq(&key) {
+    //                r.next();
+    //            }
+    //            r
+    //        }
+    //    })
+    //}
 
     fn build_fwd(
         &mut self,
-        mzs: &mut Vec<MZ<K, V>>,
-        mut fpos: u64, // from node
-    ) -> Result<Entry<K, V>, Error> {
+        mut fpos: u64,           // from node
+        mzs: &mut Vec<MZ<K, V>>, // output
+    ) -> Result<(), Error> {
         let fd = &mut self.index_fd;
         let config = &self.config;
 
-        let zblock_fpos = loop {
-            let mblock: MBlock<K, V> = MBlock::new_decode(fd, fpos, config)?;
+        let zfpos = loop {
+            let mblock = MBlock::<K, V>::new_decode(fd, fpos, config)?;
             let mentry = mblock.to_entry(0)?;
-            fpos = match (mentry.is_zblock(), mentry.to_fpos()) {
-                (false, fpos) => {
-                    mzs.push(MZ::M { fpos, index: 0 });
-                    fpos
-                }
-                (true, fpos) => {
-                    break fpos;
-                }
-            };
+            if mentry.is_zblock() {
+                break mentry.to_fpos();
+            }
+            mzs.push(MZ::M { fpos, index: 0 });
+            fpos = mentry.to_fpos();
         };
 
-        let zblock = ZBlock::new_decode(fd, zblock_fpos, config)?;
-        let (_index, entry) = zblock.to_entry(0)?;
+        let zblock = ZBlock::new_decode(fd, zfpos, config)?;
         mzs.push(MZ::Z { zblock, index: 0 });
-        Ok(entry)
-    }
-
-    fn build_rev(
-        &mut self,
-        mzs: &mut Vec<MZ<K, V>>,
-        mut fpos: u64, // from node
-    ) -> Result<Entry<K, V>, Error> {
-        let fd = &mut self.index_fd;
-        let config = &self.config;
-
-        let zblock_fpos = loop {
-            let mblock: MBlock<K, V> = MBlock::new_decode(fd, fpos, config)?;
-            let mentry = mblock.to_entry(mblock.len() - 1)?;
-            fpos = match (mentry.is_zblock(), mentry.to_fpos()) {
-                (false, fpos) => {
-                    mzs.push(MZ::M {
-                        fpos,
-                        index: mblock.len() - 1,
-                    });
-                    fpos
-                }
-                (true, fpos) => {
-                    break fpos;
-                }
-            };
-        };
-
-        let zblock = ZBlock::new_decode(fd, zblock_fpos, config)?;
-        let (index, entry) = zblock.to_entry(zblock.len() - 1)?;
-        mzs.push(MZ::Z { zblock, index });
-        Ok(entry)
-    }
-
-    fn build(&mut self, key: &K) -> Result<(Vec<MZ<K, V>>, Entry<K, V>), Error> {
-        let mut mzs = vec![];
-        let mut fpos = self.root;
-        let fd = &mut self.index_fd;
-        let config = &self.config;
-        let (from, to) = (Bound::Unbounded, Bound::Unbounded);
-
-        let zblock_fpos = loop {
-            let mblock: MBlock<K, V> = MBlock::new_decode(fd, fpos, config)?;
-            let mentry = mblock.find(key, from, to)?;
-            fpos = match (mentry.is_zblock(), mentry.to_fpos()) {
-                (false, fpos) => {
-                    mzs.push(MZ::M {
-                        fpos: fpos,
-                        index: mentry.to_index(),
-                    });
-                    fpos
-                }
-                (true, fpos) => {
-                    break fpos;
-                }
-            };
-        };
-
-        let zblock = ZBlock::new_decode(fd, zblock_fpos, config)?;
-        let (index, entry) = zblock.find(key, from, to)?;
-        mzs.push(MZ::Z { zblock, index });
-        Ok((mzs, entry))
+        Ok(())
     }
 
     fn rebuild_fwd(&mut self, mzs: &mut Vec<MZ<K, V>>) -> Result<(), Error> {
@@ -393,42 +296,60 @@ where
         match mzs.pop() {
             None => Ok(()),
             Some(MZ::Z { .. }) => unreachable!(),
-            Some(MZ::M { fpos, index }) => {
-                let mblock: MBlock<K, V> = MBlock::new_decode(fd, fpos, config)?;
-                match mblock.to_entry(index + 1) {
+            Some(MZ::M { fpos, mut index }) => {
+                let mblock = MBlock::<K, V>::new_decode(fd, fpos, config)?;
+                index += 1;
+                match mblock.to_entry(index) {
                     Ok(DiskEntryM::Entry {
                         z: true,
-                        fpos: zblock_fpos,
+                        fpos: zfpos,
                         ..
                     }) => {
-                        mzs.push(MZ::M {
-                            fpos,
-                            index: index + 1,
-                        });
+                        mzs.push(MZ::M { fpos, index });
 
-                        let zblock = ZBlock::new_decode(fd, zblock_fpos, config)?;
-                        zblock.to_entry(0)?;
+                        let zblock = ZBlock::new_decode(fd, zfpos, config)?;
                         mzs.push(MZ::Z { zblock, index: 0 });
                         Ok(())
                     }
                     Ok(DiskEntryM::Entry {
                         z: false,
-                        fpos: mblock_fpos,
+                        fpos: mfpos,
                         ..
                     }) => {
-                        mzs.push(MZ::M {
-                            fpos,
-                            index: index + 1,
-                        });
-
-                        self.build_fwd(mzs, mblock_fpos)?;
+                        mzs.push(MZ::M { fpos, index });
+                        self.build_fwd(mfpos, mzs)?;
                         Ok(())
                     }
-                    Err(Error::ZBlockExhausted) => self.rebuild_fwd(mzs),
+                    Err(Error::__ZBlockExhausted(_)) => self.rebuild_fwd(mzs),
                     _ => unreachable!(),
                 }
             }
         }
+    }
+
+    fn build_rev(
+        &mut self,
+        mut fpos: u64,           // from node
+        mzs: &mut Vec<MZ<K, V>>, // output
+    ) -> Result<(), Error> {
+        let fd = &mut self.index_fd;
+        let config = &self.config;
+
+        let zfpos = loop {
+            let mblock = MBlock::<K, V>::new_decode(fd, fpos, config)?;
+            let index = mblock.len() - 1;
+            let mentry = mblock.to_entry(index)?;
+            if mentry.is_zblock() {
+                break mentry.to_fpos();
+            }
+            mzs.push(MZ::M { fpos, index });
+            fpos = mentry.to_fpos();
+        };
+
+        let zblock = ZBlock::new_decode(fd, zfpos, config)?;
+        let index = zblock.len() - 1;
+        mzs.push(MZ::Z { zblock, index });
+        Ok(())
     }
 
     fn rebuild_rev(&mut self, mzs: &mut Vec<MZ<K, V>>) -> Result<(), Error> {
@@ -439,35 +360,29 @@ where
             None => Ok(()),
             Some(MZ::Z { .. }) => unreachable!(),
             Some(MZ::M { index: 0, .. }) => self.rebuild_rev(mzs),
-            Some(MZ::M { fpos, index }) => {
-                let mblock: MBlock<K, V> = MBlock::new_decode(fd, fpos, config)?;
-                match mblock.to_entry(index - 1) {
+            Some(MZ::M { fpos, mut index }) => {
+                let mblock = MBlock::<K, V>::new_decode(fd, fpos, config)?;
+                index -= 1;
+                match mblock.to_entry(index) {
                     Ok(DiskEntryM::Entry {
                         z: true,
-                        fpos: zblock_fpos,
+                        fpos: zfpos,
                         ..
                     }) => {
-                        mzs.push(MZ::M {
-                            fpos,
-                            index: index - 1,
-                        });
+                        mzs.push(MZ::M { fpos, index });
 
-                        let zblock = ZBlock::new_decode(fd, zblock_fpos, config)?;
-                        let (index, _) = zblock.to_entry(zblock.len() - 1)?;
+                        let zblock = ZBlock::new_decode(fd, zfpos, config)?;
+                        let index = zblock.len() - 1;
                         mzs.push(MZ::Z { zblock, index });
                         Ok(())
                     }
                     Ok(DiskEntryM::Entry {
                         z: false,
-                        fpos: mblock_fpos,
+                        fpos: mfpos,
                         ..
                     }) => {
-                        mzs.push(MZ::M {
-                            fpos,
-                            index: index - 1,
-                        });
-
-                        self.build_rev(mzs, mblock_fpos)?;
+                        mzs.push(MZ::M { fpos, index });
+                        self.build_rev(mfpos, mzs)?;
                         Ok(())
                     }
                     _ => unreachable!(),
@@ -475,13 +390,44 @@ where
             }
         }
     }
+
+    fn build<Q>(
+        &mut self,
+        key: &Q,
+        mzs: &mut Vec<MZ<K, V>>, // output
+    ) -> Result<Entry<K, V>, Error>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        let mut fpos = self.root;
+        let fd = &mut self.index_fd;
+        let config = &self.config;
+        let (from, to) = (Bound::Unbounded, Bound::Unbounded);
+
+        let zfpos = loop {
+            let mblock = MBlock::<K, V>::new_decode(fd, fpos, config)?;
+            let mentry = mblock.find(key, from, to)?;
+            if mentry.is_zblock() {
+                break mentry.to_fpos();
+            }
+            let index = mentry.to_index();
+            mzs.push(MZ::M { fpos, index });
+            fpos = mentry.to_fpos();
+        };
+
+        let zblock = ZBlock::new_decode(fd, zfpos, config)?;
+        let (index, entry) = zblock.find(key, from, to)?;
+        mzs.push(MZ::Z { zblock, index });
+        Ok(entry)
+    }
 }
 
 pub struct Iter<'a, K, V>
 where
-    K: Default + Ord + Clone + Serialize,
-    V: Default + Clone + Diff + Serialize,
-    <V as Diff>::D: Default + Clone + Serialize,
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
 {
     snap: &'a mut Snapshot<K, V>,
     mzs: Vec<MZ<K, V>>,
@@ -489,9 +435,9 @@ where
 
 impl<'a, K, V> Iterator for Iter<'a, K, V>
 where
-    K: Default + Ord + Clone + Serialize,
-    V: Default + Clone + Diff + Serialize,
-    <V as Diff>::D: Default + Clone + Serialize,
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
 {
     type Item = Result<Entry<K, V>, Error>;
 
@@ -499,7 +445,11 @@ where
         match self.mzs.pop() {
             None => None,
             Some(mut z) => match z.next() {
-                Some(entry) => {
+                Some(Err(err)) => {
+                    self.mzs.truncate(0);
+                    Some(Err(err))
+                }
+                Some(Ok(entry)) => {
                     self.mzs.push(z);
                     Some(Ok(entry))
                 }
@@ -512,37 +462,44 @@ where
     }
 }
 
-pub struct Range<'a, K, V>
+pub struct Range<'a, K, V, R, Q>
 where
-    K: Default + Ord + Clone + Serialize,
-    V: Default + Clone + Diff + Serialize,
-    <V as Diff>::D: Default + Clone + Serialize,
+    Q: Ord + ?Sized,
+    R: RangeBounds<Q>,
+    K: Clone + Ord + Borrow<Q> + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
 {
     snap: &'a mut Snapshot<K, V>,
     mzs: Vec<MZ<K, V>>,
-    high: Bound<K>,
+    range: R,
+    high: marker::PhantomData<Q>,
 }
 
-impl<'a, K, V> Range<'a, K, V>
+impl<'a, K, V, R, Q> Range<'a, K, V, R, Q>
 where
-    K: Default + Ord + Clone + Serialize,
-    V: Default + Clone + Diff + Serialize,
-    <V as Diff>::D: Default + Clone + Serialize,
+    Q: Ord + ?Sized,
+    R: RangeBounds<Q>,
+    K: Clone + Ord + Borrow<Q> + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
 {
     fn till_ok(&self, entry: &Entry<K, V>) -> bool {
-        match &self.high {
+        match self.range.end_bound() {
             Bound::Unbounded => true,
-            Bound::Included(key) => entry.as_key().le(key),
-            Bound::Excluded(key) => entry.as_key().lt(key),
+            Bound::Included(key) => entry.as_key().borrow().le(key),
+            Bound::Excluded(key) => entry.as_key().borrow().lt(key),
         }
     }
 }
 
-impl<'a, K, V> Iterator for Range<'a, K, V>
+impl<'a, K, V, R, Q> Iterator for Range<'a, K, V, R, Q>
 where
-    K: Default + Ord + Clone + Serialize,
-    V: Default + Clone + Diff + Serialize,
-    <V as Diff>::D: Default + Clone + Serialize,
+    Q: Ord + ?Sized,
+    R: RangeBounds<Q>,
+    K: Clone + Ord + Borrow<Q> + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
 {
     type Item = Result<Entry<K, V>, Error>;
 
@@ -550,7 +507,11 @@ where
         match self.mzs.pop() {
             None => None,
             Some(mut z) => match z.next() {
-                Some(entry) => {
+                Some(Err(err)) => {
+                    self.mzs.truncate(0);
+                    Some(Err(err))
+                }
+                Some(Ok(entry)) => {
                     if self.till_ok(&entry) {
                         self.mzs.push(z);
                         Some(Ok(entry))
@@ -568,37 +529,44 @@ where
     }
 }
 
-pub struct Reverse<'a, K, V>
+pub struct Reverse<'a, K, V, R, Q>
 where
-    K: Default + Ord + Clone + Serialize,
-    V: Default + Clone + Diff + Serialize,
-    <V as Diff>::D: Default + Clone + Serialize,
+    Q: Ord + ?Sized,
+    R: RangeBounds<Q>,
+    K: Clone + Ord + Borrow<Q> + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
 {
     snap: &'a mut Snapshot<K, V>,
     mzs: Vec<MZ<K, V>>,
-    low: Bound<K>,
+    range: R,
+    low: marker::PhantomData<Q>,
 }
 
-impl<'a, K, V> Reverse<'a, K, V>
+impl<'a, K, V, R, Q> Reverse<'a, K, V, R, Q>
 where
-    K: Default + Ord + Clone + Serialize,
-    V: Default + Clone + Diff + Serialize,
-    <V as Diff>::D: Default + Clone + Serialize,
+    Q: Ord + ?Sized,
+    R: RangeBounds<Q>,
+    K: Clone + Ord + Borrow<Q> + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
 {
     fn till_ok(&self, entry: &Entry<K, V>) -> bool {
-        match &self.low {
+        match self.range.start_bound() {
             Bound::Unbounded => true,
-            Bound::Included(key) => entry.as_key().ge(key),
-            Bound::Excluded(key) => entry.as_key().gt(key),
+            Bound::Included(key) => entry.as_key().borrow().ge(key),
+            Bound::Excluded(key) => entry.as_key().borrow().gt(key),
         }
     }
 }
 
-impl<'a, K, V> Iterator for Reverse<'a, K, V>
+impl<'a, K, V, R, Q> Iterator for Reverse<'a, K, V, R, Q>
 where
-    K: Default + Ord + Clone + Serialize,
-    V: Default + Clone + Diff + Serialize,
-    <V as Diff>::D: Default + Clone + Serialize,
+    Q: Ord + ?Sized,
+    R: RangeBounds<Q>,
+    K: Clone + Ord + Borrow<Q> + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
 {
     type Item = Result<Entry<K, V>, Error>;
 
@@ -606,7 +574,11 @@ where
         match self.mzs.pop() {
             None => None,
             Some(mut z) => match z.next_back() {
-                Some(entry) => {
+                Some(Err(err)) => {
+                    self.mzs.truncate(0);
+                    Some(Err(err))
+                }
+                Some(Ok(entry)) => {
                     if self.till_ok(&entry) {
                         self.mzs.push(z);
                         Some(Ok(entry))
@@ -626,9 +598,9 @@ where
 
 enum MZ<K, V>
 where
-    K: Default + Ord + Clone + Serialize,
-    V: Default + Clone + Diff + Serialize,
-    <V as Diff>::D: Default + Clone + Serialize,
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
 {
     M { fpos: u64, index: usize },
     Z { zblock: ZBlock<K, V>, index: usize },
@@ -636,21 +608,21 @@ where
 
 impl<K, V> Iterator for MZ<K, V>
 where
-    K: Default + Ord + Clone + Serialize,
-    V: Default + Clone + Diff + Serialize,
-    <V as Diff>::D: Default + Clone + Serialize,
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
 {
-    type Item = Entry<K, V>;
+    type Item = Result<Entry<K, V>, Error>;
 
-    fn next(&mut self) -> Option<Entry<K, V>> {
+    fn next(&mut self) -> Option<Result<Entry<K, V>, Error>> {
         match self {
             MZ::Z { zblock, index } => match zblock.to_entry(*index) {
-                Err(Error::ZBlockExhausted) => None,
                 Ok((_, entry)) => {
                     *index += 1;
-                    Some(entry)
+                    Some(Ok(entry))
                 }
-                _ => unreachable!(),
+                Err(Error::__ZBlockExhausted(_)) => None,
+                Err(err) => Some(Err(err)),
             },
             MZ::M { .. } => unreachable!(),
         }
@@ -659,19 +631,19 @@ where
 
 impl<K, V> DoubleEndedIterator for MZ<K, V>
 where
-    K: Default + Ord + Clone + Serialize,
-    V: Default + Clone + Diff + Serialize,
-    <V as Diff>::D: Default + Clone + Serialize,
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
 {
-    fn next_back(&mut self) -> Option<Entry<K, V>> {
+    fn next_back(&mut self) -> Option<Result<Entry<K, V>, Error>> {
         match self {
-            MZ::Z { index: 0, .. } => None,
             MZ::Z { zblock, index } => match zblock.to_entry(*index) {
                 Ok((_, entry)) => {
                     *index -= 1;
-                    Some(entry)
+                    Some(Ok(entry))
                 }
-                _ => unreachable!(),
+                Err(Error::__ZBlockExhausted(_)) => None,
+                Err(err) => Some(Err(err)),
             },
             MZ::M { .. } => unreachable!(),
         }

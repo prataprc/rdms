@@ -62,8 +62,6 @@ pub enum Error {
     JsonError(jsondata::Error),
     InvalidSnapshot(String),
     Utf8Error(std::str::Utf8Error),
-    ZBlockExhausted,
-    MBlockExhausted,
     // Local error, means, given key is less than the entire data set.
     __LessThan,
     // Local error, means, given key is greater than the entire data set.
@@ -72,6 +70,10 @@ pub enum Error {
     __ZBlockOverflow(usize),
     // m-block of btree has overflowed.
     __MBlockOverflow(usize),
+    // iteration exhausted in m-block entries.
+    __MBlockExhausted(usize),
+    // iteration exhausted in z-block entries.
+    __ZBlockExhausted(usize),
 }
 
 impl From<io::Error> for Error {

@@ -1,6 +1,7 @@
 // TODO: flush put blocks into tx channel. Right now we simply unwrap()
 
-use std::{borrow::Borrow, cmp::Ordering, convert::TryInto, fs, marker, ops::Bound};
+use std::ops::Bound;
+use std::{borrow::Borrow, cmp::Ordering, convert::TryInto, fs, marker};
 
 use crate::core::{self, Diff, Serialize};
 use crate::error::Error;
@@ -214,20 +215,23 @@ where
         }
     }
 
-    pub(crate) fn find(
+    pub(crate) fn find<Q>(
         &self,
-        key: &K,
+        key: &Q,
         from: Bound<usize>,
         to: Bound<usize>,
-    ) -> Result<DiskEntryM, Error> {
+    ) -> Result<DiskEntryM, Error>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
         let f = match from {
             Bound::Included(f) | Bound::Excluded(f) => f,
             Bound::Unbounded => 0,
         };
-        let pivot = self.find_pivot(from, to)?;
+        let pivot = self.find_pivot(from, to);
 
         match key.cmp(self.to_key(pivot)?.borrow()) {
-            // __LessThan is optimizing by containing the lookup within root,
             Ordering::Less if pivot == 0 => Err(Error::__LessThan),
             Ordering::Less if pivot == f => unreachable!(),
             Ordering::Less => self.find(key, from, Bound::Excluded(pivot)),
@@ -237,12 +241,8 @@ where
         }
     }
 
-    fn find_pivot(
-        // [from, to)
-        &self,
-        from: Bound<usize>,
-        to: Bound<usize>,
-    ) -> Result<usize, Error> {
+    // [from, to)
+    fn find_pivot(&self, from: Bound<usize>, to: Bound<usize>) -> usize {
         let to = match to {
             Bound::Excluded(to) => to,
             Bound::Unbounded => self.len(),
@@ -254,7 +254,7 @@ where
         };
         match to - from {
             n if n < 1 => unreachable!(),
-            n => Ok(from + (n / 2)),
+            n => from + (n / 2),
         }
     }
 
@@ -271,11 +271,11 @@ where
         if index < count {
             let offset = offsets[index..index + 4].try_into().unwrap();
             let offset: usize = u32::from_be_bytes(offset).try_into().unwrap();
-            let mut mentry = DiskEntryM::to_entry(&block[offset..])?;
+            let mut mentry = DiskEntryM::to_entry(&block[offset..]);
             mentry.set_index(index);
             Ok(mentry)
         } else {
-            Err(Error::MBlockExhausted)
+            Err(Error::__MBlockExhausted(index))
         }
     }
 
@@ -510,18 +510,22 @@ where
         }
     }
 
-    // return (index-to-entry, core::Entry)
-    pub(crate) fn find(
+    // return (index-to-entry, core::Entry), if None means key-not found
+    pub(crate) fn find<Q>(
         &self,
-        key: &K,
+        key: &Q,
         from: Bound<usize>,
         to: Bound<usize>,
-    ) -> Result<(usize, core::Entry<K, V>), Error> {
+    ) -> Result<(usize, core::Entry<K, V>), Error>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
         let f = match from {
             Bound::Included(f) | Bound::Excluded(f) => f,
             Bound::Unbounded => 0,
         };
-        let pivot = self.find_pivot(from, to)?;
+        let pivot = self.find_pivot(from, to);
 
         match key.cmp(self.to_key(pivot)?.borrow()) {
             Ordering::Less if pivot == 0 => unreachable!(),
@@ -533,12 +537,8 @@ where
         }
     }
 
-    fn find_pivot(
-        // [from, to)
-        &self,
-        from: Bound<usize>,
-        to: Bound<usize>,
-    ) -> Result<usize, Error> {
+    // [from, to)
+    fn find_pivot(&self, from: Bound<usize>, to: Bound<usize>) -> usize {
         let to = match to {
             Bound::Excluded(to) => to,
             Bound::Unbounded => self.len(),
@@ -550,12 +550,12 @@ where
         };
         match to - from {
             n if n < 1 => unreachable!(),
-            n => Ok(from + (n / 2)),
+            n => from + (n / 2),
         }
     }
 
     pub fn to_entry(
-        // return entry and index of the entry into zblock.
+        // fetch (index, entry)
         &self,
         index: usize,
     ) -> Result<(usize, core::Entry<K, V>), Error> {
@@ -574,7 +574,7 @@ where
             let offset: usize = u32::from_be_bytes(offset).try_into().unwrap();
             Ok((index, DiskEntryZ::to_entry(&block[offset..])?))
         } else {
-            Err(Error::ZBlockExhausted)
+            Err(Error::__ZBlockExhausted(index))
         }
     }
 

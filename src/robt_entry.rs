@@ -62,17 +62,15 @@ impl DiskEntryM {
         Ok(DiskEntryM::Enc)
     }
 
-    pub fn to_entry(entry: &[u8]) -> Result<DiskEntryM, Error> {
+    pub fn to_entry(entry: &[u8]) -> DiskEntryM {
         let hdr1 = u64::from_be_bytes(entry[0..8].try_into().unwrap());
         let z = (hdr1 & Self::ZBLOCK_FLAG) == Self::ZBLOCK_FLAG;
 
-        let fpos = u64::from_be_bytes(entry[8..16].try_into().unwrap());
-
-        Ok(DiskEntryM::Entry {
+        DiskEntryM::Entry {
             z,
-            fpos,
+            fpos: u64::from_be_bytes(entry[8..16].try_into().unwrap()),
             index: Default::default(),
-        })
+        }
     }
 
     pub(crate) fn to_key<K>(entry: &[u8]) -> Result<K, Error>
@@ -541,6 +539,7 @@ impl DiskEntryZ {
             n += 24;
         }
         entry.set_deltas(deltas);
+
         Ok(entry)
     }
 

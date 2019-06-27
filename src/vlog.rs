@@ -76,13 +76,12 @@ where
     match value {
         Value::Native { value } => {
             let m = buf.len();
+            buf.resize(m + 8, 0);
+
             let n = value.encode(buf);
             if n > core::Entry::<i32, i32>::VALUE_SIZE_LIMIT {
                 return Err(Error::ValueSizeExceeded(n));
             }
-
-            buf.resize(m + n + 8, 0);
-            buf.copy_within(m..n, m + 8);
 
             let mut vlen: u64 = try_convert_int(n + 8, "value-size: usize->u64")?;
             vlen |= Value::<V>::VALUE_FLAG;
@@ -168,14 +167,12 @@ where
     match delta {
         Delta::Native { diff } => {
             let m = buf.len();
+            buf.resize(m + 8, 0);
 
             let n = diff.encode(buf);
             if n > core::Entry::<i32, i32>::DIFF_SIZE_LIMIT {
                 return Err(Error::DiffSizeExceeded(n));
             }
-
-            buf.resize(m + n + 8, 0);
-            buf.copy_within(m..n, m + 8);
 
             let dlen: u64 = try_convert_int(n + 8, "diff-size: usize->u64")?;
             (&mut buf[m..m + 8]).copy_from_slice(&(dlen - 8).to_be_bytes());

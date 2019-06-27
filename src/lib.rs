@@ -22,8 +22,8 @@
 // TODO: Document work. Mvcc does not allow concurrent write access.
 // and doing so will panic.
 
-#![feature(rc_into_raw_non_null)]
 #![feature(copy_within)]
+#![feature(rc_into_raw_non_null)]
 #![feature(bind_by_move_pattern_guards)]
 
 extern crate jsondata;

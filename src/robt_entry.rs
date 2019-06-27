@@ -40,16 +40,14 @@ impl DiskEntryM {
     where
         K: Serialize,
     {
-        // encode key
         let m = mblock.len();
+        // adjust space for header.
+        mblock.resize(m + 16, 0);
+        // encode key
         let k = key.encode(mblock);
         if k > core::Entry::<i32, i32>::KEY_SIZE_LIMIT {
             return Err(Error::KeySizeExceeded(k));
         }
-        let n = mblock.len();
-        // adjust space for header.
-        mblock.resize(n + 16, 0);
-        mblock.copy_within(m..m + n, 16);
         // encode header
         let k: u64 = util::try_convert_int(k, "key-len: usize->u64")?;
         let (scratch, fpos) = match (mfpos, zfpos) {
@@ -261,13 +259,12 @@ impl DiskEntryZ {
         V: Clone + Diff + Serialize,
         <V as Diff>::D: Serialize,
     {
+        // adjust space for header.
         let m = leaf.len();
+        leaf.resize(m + 24, 0);
+        // encode key
         let klen = DiskEntryZ::encode_key::<K>(entry.as_key(), leaf)?;
         stats.keymem += klen;
-        let n = leaf.len();
-        // adjust space for header.
-        leaf.resize(n + 24, 0);
-        leaf.copy_within(m..n, 24);
         // encode value
         let (vlen, isd, seqno) = DiskEntryZ::encode_value(entry, leaf)?;
         stats.valmem += vlen;
@@ -291,13 +288,12 @@ impl DiskEntryZ {
         V: Clone + Diff + Serialize,
         <V as Diff>::D: Serialize,
     {
+        // adjust space for header.
         let m = leaf.len();
+        leaf.resize(m + 24, 0);
+        // encode key
         let klen = DiskEntryZ::encode_key::<K>(entry.as_key(), leaf)?;
         stats.keymem += klen;
-        let n = leaf.len();
-        // adjust space for header.
-        leaf.resize(n + 24, 0);
-        leaf.copy_within(m..n, 24);
         // encode value
         let (vlen, isd, seqno) = DiskEntryZ::encode_value(entry, leaf)?;
         stats.valmem += vlen;
@@ -324,13 +320,12 @@ impl DiskEntryZ {
         V: Clone + Diff + Serialize,
         <V as Diff>::D: Serialize,
     {
+        // adjust space for header.
         let m = leaf.len();
+        leaf.resize(m + 24, 0);
+        // encode key
         let klen = DiskEntryZ::encode_key::<K>(entry.as_key(), leaf)?;
         stats.keymem += klen;
-        let n = leaf.len();
-        // adjust space for header.
-        leaf.resize(n + 24, 0);
-        leaf.copy_within(m..n, 24);
         // encode value
         let pos = blob.len();
         let (vlen, isd, seqno) = DiskEntryZ::encode_value(entry, blob)?;
@@ -358,13 +353,12 @@ impl DiskEntryZ {
         V: Clone + Diff + Serialize,
         <V as Diff>::D: Serialize,
     {
+        // adjust space for header.
         let m = leaf.len();
+        leaf.resize(m + 24, 0);
+        // encode from key
         let klen = DiskEntryZ::encode_key::<K>(entry.as_key(), leaf)?;
         stats.keymem += klen;
-        let n = leaf.len();
-        // adjust space for header.
-        leaf.resize(n + 24, 0);
-        leaf.copy_within(m..n, 24);
         // encode value
         let pos = blob.len();
         let (vlen, isd, seqno) = DiskEntryZ::encode_value(entry, blob)?;

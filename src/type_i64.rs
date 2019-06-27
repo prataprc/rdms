@@ -23,12 +23,12 @@ impl Serialize for i64 {
         8
     }
 
-    fn decode(&mut self, buf: &[u8]) -> Result<(), Error> {
+    fn decode(&mut self, buf: &[u8]) -> Result<usize, Error> {
         if buf.len() >= 8 {
             let mut scratch = [0_u8; 8];
             scratch.copy_from_slice(&buf[..8]);
             *self = i64::from_be_bytes(scratch);
-            Ok(())
+            Ok(8)
         } else {
             Err(Error::DecodeFail(format!("i64 encoded len {}", buf.len())))
         }

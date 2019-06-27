@@ -23,12 +23,12 @@ impl Serialize for i32 {
         4
     }
 
-    fn decode(&mut self, buf: &[u8]) -> Result<(), Error> {
+    fn decode(&mut self, buf: &[u8]) -> Result<usize, Error> {
         if buf.len() >= 4 {
             let mut scratch = [0_u8; 4];
             scratch.copy_from_slice(&buf[..4]);
             *self = i32::from_be_bytes(scratch);
-            Ok(())
+            Ok(4)
         } else {
             Err(Error::DecodeFail(format!("i32 encoded len {}", buf.len())))
         }

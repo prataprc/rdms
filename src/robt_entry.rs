@@ -150,7 +150,7 @@ impl DiskDelta {
         <V as Diff>::D: Serialize,
     {
         match delta.as_ref() {
-            core::DeltaTuck::U { delta, seqno } => {
+            core::InnerDelta::U { delta, seqno } => {
                 let pos: u64 = util::try_convert_int(blob.len(), "pos: ->u64")?;
 
                 let n = vlog::encode_delta(&delta, blob)?;
@@ -162,7 +162,7 @@ impl DiskDelta {
                 leaf.extend_from_slice(&pos.to_be_bytes()); // fpos
                 Ok(n)
             }
-            core::DeltaTuck::D { deleted } => {
+            core::InnerDelta::D { deleted } => {
                 leaf.extend_from_slice(&0_u64.to_be_bytes()); // diff-len
                 leaf.extend_from_slice(&deleted.to_be_bytes());
                 leaf.extend_from_slice(&0_u64.to_be_bytes()); // fpos

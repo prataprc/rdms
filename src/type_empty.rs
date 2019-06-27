@@ -25,7 +25,7 @@ impl Serialize for Empty {
         0
     }
 
-    fn decode(&mut self, _buf: &[u8]) -> Result<(), Error> {
-        Ok(())
+    fn decode(&mut self, _buf: &[u8]) -> Result<usize, Error> {
+        Ok(0)
     }
 }

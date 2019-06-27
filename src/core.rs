@@ -25,18 +25,19 @@ pub trait Diff: Sized {
 
 /// Serialize types and values to binary sequence of bytes.
 pub trait Serialize: Sized {
-    /// Convert this value into binary equivalent. Return bytes encoded.
+    /// Convert this value into binary equivalent. Encoded bytes shall
+    /// appended to the input-buffer `buf`. Return bytes encoded.
     fn encode(&self, buf: &mut Vec<u8>) -> usize;
 
     /// Reverse process of encode, given the binary equivalent, `buf`,
     /// of a value, construct self.
-    fn decode(&mut self, buf: &[u8]) -> Result<(), Error>;
+    fn decode(&mut self, buf: &[u8]) -> Result<usize, Error>;
 }
 
 /// Delta maintains the older version of value, with necessary fields for
 /// log-structured-merge.
 #[derive(Clone)]
-pub(crate) enum DeltaTuck<V>
+pub(crate) enum InnerDelta<V>
 where
     V: Clone + Diff,
 {
@@ -49,7 +50,7 @@ pub struct Delta<V>
 where
     V: Clone + Diff,
 {
-    data: DeltaTuck<V>,
+    data: InnerDelta<V>,
 }
 
 // Delta construction methods.
@@ -59,38 +60,38 @@ where
 {
     pub(crate) fn new_upsert(delta: vlog::Delta<V>, seqno: u64) -> Delta<V> {
         Delta {
-            data: DeltaTuck::U { delta, seqno },
+            data: InnerDelta::U { delta, seqno },
         }
     }
 
     pub(crate) fn new_delete(deleted: u64) -> Delta<V> {
         Delta {
-            data: DeltaTuck::D { deleted },
+            data: InnerDelta::D { deleted },
         }
     }
 
     #[allow(dead_code)] // TODO: remove this once bogn is weaved-up.
     pub(crate) fn into_upserted(self) -> Option<(vlog::Delta<V>, u64)> {
         match self.data {
-            DeltaTuck::U { delta, seqno } => Some((delta, seqno)),
-            DeltaTuck::D { .. } => None,
+            InnerDelta::U { delta, seqno } => Some((delta, seqno)),
+            InnerDelta::D { .. } => None,
         }
     }
 
     #[allow(dead_code)] // TODO: remove this once bogn is weaved-up.
     pub(crate) fn into_deleted(self) -> Option<u64> {
         match self.data {
-            DeltaTuck::D { deleted } => Some(deleted),
-            DeltaTuck::U { .. } => None,
+            InnerDelta::D { deleted } => Some(deleted),
+            InnerDelta::U { .. } => None,
         }
     }
 }
 
-impl<V> AsRef<DeltaTuck<V>> for Delta<V>
+impl<V> AsRef<InnerDelta<V>> for Delta<V>
 where
     V: Clone + Diff,
 {
-    fn as_ref(&self) -> &DeltaTuck<V> {
+    fn as_ref(&self) -> &InnerDelta<V> {
         &self.data
     }
 }
@@ -103,8 +104,8 @@ where
     /// Return the underlying `difference` value for this delta.
     pub fn into_diff(self) -> Option<<V as Diff>::D> {
         match self.data {
-            DeltaTuck::D { .. } => None,
-            DeltaTuck::U { delta, .. } => delta.into_native(),
+            InnerDelta::D { .. } => None,
+            InnerDelta::U { delta, .. } => delta.into_native(),
         }
     }
 
@@ -114,8 +115,8 @@ where
     /// use born_seqno() and dead_seqno() methods respectively.
     pub fn to_seqno(&self) -> u64 {
         match &self.data {
-            DeltaTuck::U { seqno, .. } => *seqno,
-            DeltaTuck::D { deleted } => *deleted,
+            InnerDelta::U { seqno, .. } => *seqno,
+            InnerDelta::D { deleted } => *deleted,
         }
     }
 
@@ -124,8 +125,8 @@ where
     /// this version was deleted.
     pub fn to_seqno_state(&self) -> (bool, u64) {
         match &self.data {
-            DeltaTuck::U { seqno, .. } => (true, *seqno),
-            DeltaTuck::D { deleted } => (false, *deleted),
+            InnerDelta::U { seqno, .. } => (true, *seqno),
+            InnerDelta::D { deleted } => (false, *deleted),
         }
     }
 }
@@ -428,12 +429,12 @@ where
             }
             None => match (self.deltas.next().map(|x| x.data), self.curval.take()) {
                 (None, _) => None,
-                (Some(DeltaTuck::D { deleted }), _) => {
+                (Some(InnerDelta::D { deleted }), _) => {
                     // this entry is deleted.
                     let key = self.key.clone();
                     Some(Entry::new(key, Value::new_delete(deleted)))
                 }
-                (Some(DeltaTuck::U { delta, seqno }), None) => {
+                (Some(InnerDelta::U { delta, seqno }), None) => {
                     // previous entry was a delete.
                     let nv: V = From::from(delta.into_native().unwrap());
                     let key = self.key.clone();
@@ -443,7 +444,7 @@ where
                         Value::new_upsert(vlog::Value::new_native(nv), seqno),
                     ))
                 }
-                (Some(DeltaTuck::U { delta, seqno }), Some(curval)) => {
+                (Some(InnerDelta::U { delta, seqno }), Some(curval)) => {
                     // this and previous entry are create/update.
                     let nv = curval.merge(&delta.into_native().unwrap());
                     self.curval = Some(nv.clone());

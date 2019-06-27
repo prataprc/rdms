@@ -46,7 +46,7 @@ mod type_i32;
 mod type_i64;
 mod util;
 mod vlog;
-//mod wal;
+// mod wal_op;
 
 pub use crate::core::{Diff, Serialize};
 pub use crate::error::Error;

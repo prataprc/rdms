@@ -1,10 +1,30 @@
+use std::convert::TryInto;
+
+use crate::core::Serialize;
+use crate::error::Error;
+
 enum OpType {
     Set = 1,
     SetCAS,
     Delete,
 }
 
-enum Op<K, V> {
+impl From<u64> for OpType {
+    fn from(value: u64) -> OpType {
+        match value {
+            1 => OpType::Set,
+            2 => OpType::SetCAS,
+            3 => OpType::Delete,
+            _ => unreachable!(),
+        }
+    }
+}
+
+enum Op<K, V>
+where
+    K: Serialize,
+    V: Serialize,
+{
     Data { op: DataOp<K, V> },
     // Config { op: ConfigOp },
 }
@@ -37,8 +57,8 @@ where
     }
 
     fn op_type(buf: Vec<u8>) -> OpType {
-        let hdr1 = u64::from_be_bytes(&buf[..8]);
-        ((hdr1 >> 32) & 0x00FFFFFF) as OpType
+        let hdr1 = u64::from_be_bytes(buf[..8].try_into().unwrap());
+        ((hdr1 >> 32) & 0x00FFFFFF).into()
     }
 
     fn encode(&self, buf: &mut Vec<u8>) -> usize {
@@ -90,7 +110,6 @@ where
         let klen: u64 = key.encode(buf).try_into().unwrap();
         let vlen: u64 = value.encode(buf).try_into().unwrap();
 
-        let klen: u64 = key.encode(&buf).try_into().unwrap();
         let optype = OpType::Set as u64;
         let hdr1: u64 = (optype << 32) | klen;
         buf[..8].copy_from_slice(&hdr1.to_be_bytes());
@@ -101,8 +120,11 @@ where
     }
 
     fn decode_set(buf: &[u8], k: &mut K, v: &mut V) -> Result<usize, Error> {
-        let hdr1 = u64::from_be_bytes(&buf[..8]);
-        let vlen: usize = u64::from_be_bytes(&buf[8..16]).try_into().unwrap();
+        let hdr1 = u64::from_be_bytes(buf[..8].try_into().unwrap());
+        let vlen: usize = u64::from_be_bytes(buf[8..16].try_into().unwrap())
+            .try_into()
+            .unwrap();
+
         let klen: usize = (hdr1 & 0xFFFFFFFF).try_into().unwrap();
         k.decode(&buf[16..16 + klen])?;
         v.decode(&buf[16 + klen..16 + klen + vlen])?;
@@ -134,7 +156,6 @@ where
     V: Serialize,
 {
     fn encode_set_cas(
-        &self,
         buf: &mut Vec<u8>,
         key: &K,
         value: &V,
@@ -145,7 +166,6 @@ where
         let klen: u64 = key.encode(buf).try_into().unwrap();
         let vlen: u64 = value.encode(buf).try_into().unwrap();
 
-        let klen: u64 = key.encode(&buf).try_into().unwrap();
         let optype = OpType::SetCAS as u64;
         let hdr1: u64 = (optype << 32) | klen;
         buf[..8].copy_from_slice(&hdr1.to_be_bytes());
@@ -157,15 +177,17 @@ where
     }
 
     fn decode_set_cas(
-        &mut self,
         buf: &[u8],
         k: &mut K,
         v: &mut V,
-        cas: &mut u64,
-    ) -> Result<(), Error> {
-        let hdr1 = u64::from_be_bytes(&buf[..8]);
-        let vlen: usize = u64::from_be_bytes(&buf[8..16]).try_into().unwrap();
-        *cas = u64::from_be_bytes(&buf[16..24]);
+        cas: &mut u64, // reference
+    ) -> Result<usize, Error> {
+        let hdr1 = u64::from_be_bytes(buf[..8].try_into().unwrap());
+        let vlen: usize = u64::from_be_bytes(buf[8..16].try_into().unwrap())
+            .try_into()
+            .unwrap();
+        *cas = u64::from_be_bytes(buf[16..24].try_into().unwrap());
+
         let klen: usize = (hdr1 & 0xFFFFFFFF).try_into().unwrap();
         k.decode(&buf[24..24 + klen])?;
         v.decode(&buf[24 + klen..24 + klen + vlen])?;
@@ -187,6 +209,7 @@ where
 impl<K, V> DataOp<K, V>
 where
     K: Serialize,
+    V: Serialize,
 {
     fn encode_delete(buf: &mut Vec<u8>, key: &K) -> usize {
         buf.resize(8, 0);
@@ -201,7 +224,7 @@ where
     }
 
     fn decode_delete(buf: &[u8], key: &mut K) -> Result<usize, Error> {
-        let hdr1 = u64::from_be_bytes(&buf[..8]);
+        let hdr1 = u64::from_be_bytes(buf[..8].try_into().unwrap());
         let klen: usize = (hdr1 & 0xFFFFFFFF).try_into().unwrap();
         key.decode(&buf[8..8 + klen])?;
 

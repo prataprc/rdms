@@ -7,32 +7,48 @@ use crate::core::Serialize;
 use crate::error::Error;
 use crate::type_empty::Empty;
 
+const BatchMarker: &'static str = "vawval-treatment";
+
+// <{name}-shard-{num}>/
+// ..
+// <{name}-shard-{num}>/
+struct Wal<K, V>
+where
+    K: Serialize,
+    V: Serialize,
+{
+    name: String,
+    seqno: u64,
+    shards: Vec<Path>,
+}
+
+// <{name}-shard-{num}>/{name}-shard{num}-journal-{num}.log
+//                      ..
+//                      {name}-shard{num}-journal-{num}.log
+struct Shard<K, V>
+where
+    K: Serialize,
+    V: Serialize,
+{
+    num: usize,
+    journals: Vec<Journal>,
+}
+
+// <{name}-shard-{num}>/{name}-shard{num}-journal-{num}.log
 struct Journal<K, V>
 where
     K: Serialize,
     V: Serialize,
 {
+    num: usize,
     file: String,
     fd: fs::File,
     batches: Vec<Batch<K, V>>,
 }
 
-enum Batch<K, V>
-where
-    K: Serialize,
-    V: Serialize,
-{
-    Refer {
-        fpos: u64,
-    },
-    Data {
-        entries: Vec<Entry<K, V>>,
-        state: State,
-    },
-    Config {
-        entries: Vec<Entry<K, V>>,
-        state: State,
-    },
+struct Batch<K, V> {
+    entries: Vec<Entry<K, V>>,
+    state: State,
 }
 
 struct State {
@@ -52,24 +68,3 @@ struct State {
     // was created.
     votedfor: String,
 }
-
-struct Entry<K, V>
-where
-    K: Serialize,
-    V: Serialize,
-{
-    // Term in which the entry is created.
-    term: u64,
-    // Index seqno for this entry. This will be monotonically increasing
-    // number without any break.
-    index: u64,
-    // Id of client applying this entry. To deal with false negatives.
-    client_id: u64,
-    // Client seqno monotonically increasing number. To deal with
-    // false negatives.
-    client_seqno: u64,
-    // Operation on host data structure.
-    op: Op<K, V>,
-}
-
-const BatchMarker: &'static str = "vawval-treatment";

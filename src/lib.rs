@@ -27,6 +27,7 @@
 #![feature(bind_by_move_pattern_guards)]
 
 extern crate jsondata;
+extern crate llrb_index;
 
 mod core;
 mod error;
@@ -46,6 +47,7 @@ mod type_i32;
 mod type_i64;
 mod util;
 mod vlog;
+mod wal;
 mod wal_entry;
 
 pub use crate::core::{Diff, Serialize};

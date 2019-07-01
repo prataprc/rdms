@@ -27,6 +27,7 @@ structopt = { version = "0.2", default-features = false }
 lazy_static = "1.2.0"
 jsondata = "0.6.2"
 rand = "0.6.4"
+llrb-index = { path = "../llrb-index"}
 
 [dev-dependencies]
 rand = "0.6.4"

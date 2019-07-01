@@ -20,10 +20,11 @@ impl From<u64> for EntryType {
     }
 }
 
+#[derive(Clone)]
 pub(crate) enum Entry<K, V>
 where
-    K: Serialize,
-    V: Serialize,
+    K: Clone + Serialize,
+    V: Clone + Serialize,
 {
     Op {
         op: Op<K, V>,
@@ -54,8 +55,8 @@ where
 
 impl<K, V> Entry<K, V>
 where
-    K: Serialize,
-    V: Serialize,
+    K: Clone + Serialize,
+    V: Clone + Serialize,
 {
     pub(crate) fn new_op(op: Op<K, V>) -> Entry<K, V> {
         Entry::Op { op }
@@ -85,7 +86,14 @@ where
         let hdr1 = u64::from_be_bytes(buf[..8].try_into().unwrap());
         (hdr1 & 0x00000000000000FF).into()
     }
+}
 
+// Entry is always identified as {fpos, length} in serialized format.
+impl<K, V> Serialize for Entry<K, V>
+where
+    K: Clone + Serialize,
+    V: Clone + Serialize,
+{
     fn encode(&self, buf: &mut Vec<u8>) -> usize {
         match self {
             Entry::Op { op } => Self::encode_op(buf, op),
@@ -134,8 +142,8 @@ where
 // +----------------------------------------------------------------+
 impl<K, V> Entry<K, V>
 where
-    K: Serialize,
-    V: Serialize,
+    K: Clone + Serialize,
+    V: Clone + Serialize,
 {
     fn encode_op(buf: &mut Vec<u8>, op: &Op<K, V>) -> usize {
         let n = buf.len();
@@ -162,8 +170,8 @@ where
 // +----------------------------------------------------------------+
 impl<K, V> Entry<K, V>
 where
-    K: Serialize,
-    V: Serialize,
+    K: Clone + Serialize,
+    V: Clone + Serialize,
 {
     fn encode_term(
         buf: &mut Vec<u8>,
@@ -208,8 +216,8 @@ where
 // +----------------------------------------------------------------+
 impl<K, V> Entry<K, V>
 where
-    K: Serialize,
-    V: Serialize,
+    K: Clone + Serialize,
+    V: Clone + Serialize,
 {
     fn encode_client(
         buf: &mut Vec<u8>,
@@ -269,10 +277,11 @@ impl From<u64> for OpType {
     }
 }
 
+#[derive(Clone)]
 pub(crate) enum Op<K, V>
 where
-    K: Serialize,
-    V: Serialize,
+    K: Clone + Serialize,
+    V: Clone + Serialize,
 {
     // Data operations
     Set { key: K, value: V },
@@ -284,8 +293,8 @@ where
 
 impl<K, V> Op<K, V>
 where
-    K: Serialize,
-    V: Serialize,
+    K: Clone + Serialize,
+    V: Clone + Serialize,
 {
     pub(crate) fn new_set(key: K, value: V) -> Op<K, V> {
         Op::Set { key, value }
@@ -303,7 +312,13 @@ where
         let hdr1 = u64::from_be_bytes(buf[..8].try_into().unwrap());
         ((hdr1 >> 32) & 0x00FFFFFF).into()
     }
+}
 
+impl<K, V> Serialize for Op<K, V>
+where
+    K: Clone + Serialize,
+    V: Clone + Serialize,
+{
     fn encode(&self, buf: &mut Vec<u8>) -> usize {
         match self {
             Op::Set { key, value } => Self::encode_set(buf, key, value),
@@ -344,8 +359,8 @@ where
 //
 impl<K, V> Op<K, V>
 where
-    K: Serialize,
-    V: Serialize,
+    K: Clone + Serialize,
+    V: Clone + Serialize,
 {
     fn encode_set(buf: &mut Vec<u8>, key: &K, value: &V) -> usize {
         let n = buf.len();
@@ -396,8 +411,8 @@ where
 //
 impl<K, V> Op<K, V>
 where
-    K: Serialize,
-    V: Serialize,
+    K: Clone + Serialize,
+    V: Clone + Serialize,
 {
     fn encode_set_cas(
         buf: &mut Vec<u8>,
@@ -453,8 +468,8 @@ where
 //
 impl<K, V> Op<K, V>
 where
-    K: Serialize,
-    V: Serialize,
+    K: Clone + Serialize,
+    V: Clone + Serialize,
 {
     fn encode_delete(buf: &mut Vec<u8>, key: &K) -> usize {
         let n = buf.len();

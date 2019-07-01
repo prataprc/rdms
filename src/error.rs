@@ -62,6 +62,8 @@ pub enum Error {
     JsonError(jsondata::Error),
     InvalidSnapshot(String),
     Utf8Error(std::str::Utf8Error),
+    /// Invalid batch in WAL, write-ahead-log.
+    InvalidBatch(String),
     // Local error, means, given key is less than the entire data set.
     __LessThan,
     // z-block of btree has overflowed.

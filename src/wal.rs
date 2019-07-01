@@ -6,6 +6,7 @@ use std::{convert::TryInto, fs, mem, path};
 use crate::core::Serialize;
 use crate::error::Error;
 use crate::llrb_index::Llrb;
+use crate::util;
 use crate::wal_entry::Entry;
 
 const BATCH_MARKER: &'static str = "vawval-treatment";
@@ -62,7 +63,7 @@ where
 {
     Refer {
         fpos: u64,
-        len: usize,
+        length: usize,
         start_index: u64, // index-seqno of first entry in this journal
     },
     Native {
@@ -102,10 +103,10 @@ where
         }
     }
 
-    fn new_refer(fpos: u64, len: usize, index: u64) -> Batch<K, V> {
+    fn new_refer(fpos: u64, length: usize, index: u64) -> Batch<K, V> {
         Batch::Refer {
             fpos,
-            len,
+            length,
             start_index: index,
         }
     }
@@ -145,11 +146,12 @@ where
         self
     }
 
-    //fn fetch(self) -> Batch {
-    //    match self {
-    //        Batch::Native {
-    //    }
-    //}
+    fn start_index(&self) -> u64 {
+        match self {
+            Batch::Refer { start_index, .. } => *start_index,
+            Batch::Native { entries, .. } => entries[0].index(),
+        }
+    }
 }
 
 // +--------------------------------+-------------------------------+
@@ -161,33 +163,28 @@ where
 // +----------------------------------------------------------------+
 // |                            persisted                           |
 // +----------------------------------------------------------------+
+// |                           start_index                          |
+// +----------------------------------------------------------------+
+// |                             n-entries                          |
+// +----------------------------------------------------------------+
 // |                              config                            |
 // +----------------------------------------------------------------+
 // |                             votedfor                           |
-// +----------------------------------------------------------------+
-// |                             entry-len                          |
 // +--------------------------------+-------------------------------+
-// |                              entry                             |
-// +--------------------------------+-------------------------------+
-// |                            .........                           |
-// +--------------------------------+-------------------------------+
-// |                              .....                             |
-// +--------------------------------+-------------------------------+
-// |                             entry-len                          |
-// +--------------------------------+-------------------------------+
-// |                              entry                             |
+// |                              entries                           |
 // +--------------------------------+-------------------------------+
 // |                            BATCH_MARKER                        |
 // +----------------------------------------------------------------+
 // |                              length                            |
 // +----------------------------------------------------------------+
 //
-impl<K, V> Serialize for Batch<K, V>
+// NOTE: There should atleast one entry in the batch before it is persisted.
+impl<K, V> Batch<K, V>
 where
     K: Clone + Serialize,
     V: Clone + Serialize,
 {
-    fn encode(&self, buf: &mut Vec<u8>) -> usize {
+    fn encode_native(&self, buf: &mut Vec<u8>) -> usize {
         match self {
             Batch::Native {
                 term,
@@ -198,11 +195,15 @@ where
                 entries,
             } => {
                 let n = buf.len();
-                buf.resize(n + 32, 0);
+                buf.resize(n + 48, 0);
 
                 buf[n + 8..n + 16].copy_from_slice(&term.to_be_bytes());
                 buf[n + 16..n + 24].copy_from_slice(&committed.to_be_bytes());
                 buf[n + 24..n + 32].copy_from_slice(&persisted.to_be_bytes());
+                let start_index = entries[0].index();
+                buf[n + 32..n + 40].copy_from_slice(&start_index.to_be_bytes());
+                let nentries: u64 = entries.len().try_into().unwrap();
+                buf[n + 40..n + 48].copy_from_slice(&nentries.to_be_bytes());
 
                 let mut m = Self::encode_config(buf, config);
                 m += Self::encode_votedfor(buf, votedfor);
@@ -212,19 +213,61 @@ where
                 buf.extend_from_slice(BATCH_MARKER.as_bytes());
 
                 let length: u64 = m.try_into().unwrap();
-                let scratch = length.to_be_bytes();
-                buf[n..8].copy_from_slice(&scratch);
-                buf.extend_from_slice(&scratch);
+                buf.extend_from_slice(&length.to_be_bytes());
 
-                m + 32 + BATCH_MARKER.as_bytes().len() + 8
+                48 + m + BATCH_MARKER.as_bytes().len() + 8
             }
             _ => unreachable!(),
         }
     }
 
-    fn decode(&mut self, buf: &[u8]) -> Result<usize, Error> {
-        // TBD
-        Ok(0)
+    fn decode_refer(&mut self, buf: &[u8], fpos: u64) -> Result<usize, Error> {
+        util::check_remaining(buf, 40, "batch-refer-hdr")?;
+
+        let length = Self::validate(buf)?;
+        let start_index = u64::from_be_bytes(buf[32..40].try_into().unwrap());
+        *self = Batch::Refer {
+            fpos,
+            length,
+            start_index,
+        };
+        Ok(length)
+    }
+
+    fn decode_native(&mut self, buf: &[u8]) -> Result<usize, Error> {
+        util::check_remaining(buf, 48, "batch-native-hdr")?;
+
+        let length = Self::validate(buf)?;
+
+        let term = u64::from_be_bytes(buf[8..16].try_into().unwrap());
+        let committed = u64::from_be_bytes(buf[16..24].try_into().unwrap());
+        let persisted = u64::from_be_bytes(buf[24..32].try_into().unwrap());
+        let _start_index = u64::from_be_bytes(buf[32..40].try_into().unwrap());
+        let nentries = u64::from_be_bytes(buf[40..48].try_into().unwrap());
+        let mut n = 48;
+
+        let (config, m) = Self::decode_config(&buf[n..])?;
+        n += m;
+        let (votedfor, m) = Self::decode_votedfor(&buf[n..])?;
+        n += m;
+
+        let nentries: usize = nentries.try_into().unwrap();
+        let mut entries = Vec::with_capacity(nentries);
+        for _i in 0..nentries {
+            let mut entry: Entry<K, V> = unsafe { mem::zeroed() };
+            n += entry.decode(&buf[n..])?;
+            entries.push(entry);
+        }
+
+        *self = Batch::Native {
+            term,
+            committed,
+            persisted,
+            config,
+            votedfor,
+            entries,
+        };
+        Ok(length)
     }
 }
 
@@ -248,6 +291,24 @@ where
         n
     }
 
+    fn decode_config(buf: &[u8]) -> Result<(Vec<String>, usize), Error> {
+        util::check_remaining(buf, 2, "batch-config")?;
+        let count = u16::from_be_bytes(buf[..2].try_into().unwrap());
+        let mut config = Vec::with_capacity(count.try_into().unwrap());
+        let mut n = 2;
+        for _i in 0..count {
+            util::check_remaining(buf, n + 2, "batch-config")?;
+            let len = u16::from_be_bytes(buf[n..n + 2].try_into().unwrap());
+            n += 2;
+
+            util::check_remaining(buf, n + (len as usize), "batch-config")?;
+            let s = std::str::from_utf8(&buf[n..n + (len as usize)])?;
+            config.push(s.to_string());
+            n += len as usize;
+        }
+        Ok((config, n))
+    }
+
     fn encode_votedfor(buf: &mut Vec<u8>, s: &str) -> usize {
         let len: u16 = s.as_bytes().len().try_into().unwrap();
         let mut n = mem::size_of_val(&len);
@@ -257,7 +318,16 @@ where
         n
     }
 
-    fn validate(buf: &[u8]) -> Result<u64, Error> {
+    fn decode_votedfor(buf: &[u8]) -> Result<(String, usize), Error> {
+        util::check_remaining(buf, 2, "batch-votedfor")?;
+        let len = u16::from_be_bytes(buf[..2].try_into().unwrap());
+        let n = 2;
+        let len: usize = len.try_into().unwrap();
+        util::check_remaining(buf, n + len, "batch-votedfor")?;
+        Ok((std::str::from_utf8(&buf[n..n + len])?.to_string(), n + len))
+    }
+
+    fn validate(buf: &[u8]) -> Result<usize, Error> {
         let length = u64::from_be_bytes(buf[..8].try_into().unwrap());
 
         let (m, n) = (buf.len() - 8, buf.len());
@@ -273,6 +343,7 @@ where
             return Err(Error::InvalidBatch(msg));
         }
 
+        let length: usize = length.try_into().unwrap();
         Ok(length)
     }
 }

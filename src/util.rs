@@ -60,3 +60,14 @@ pub(crate) fn read_buffer(
         Err(Error::PartialRead(msg.to_string(), buf.len(), n))
     }
 }
+
+// TODO: can this be replaced as Macros.
+#[inline]
+pub(crate) fn check_remaining(buf: &[u8], want: usize, msg: &str) -> Result<(), Error> {
+    if buf.len() < want {
+        let msg = format!("{} unexpected buf size {} {}", msg, buf.len(), want);
+        Err(Error::DecodeFail(msg))
+    } else {
+        Ok(())
+    }
+}

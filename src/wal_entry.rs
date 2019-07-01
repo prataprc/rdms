@@ -2,19 +2,18 @@ use std::convert::TryInto;
 
 use crate::core::Serialize;
 use crate::error::Error;
+use crate::util;
 
 enum EntryType {
-    Op = 1,
-    Term,
+    Term = 1,
     Client,
 }
 
 impl From<u64> for EntryType {
     fn from(value: u64) -> EntryType {
         match value {
-            1 => EntryType::Op,
-            2 => EntryType::Term,
-            3 => EntryType::Client,
+            1 => EntryType::Term,
+            2 => EntryType::Client,
             _ => unreachable!(),
         }
     }
@@ -26,9 +25,6 @@ where
     K: Clone + Serialize,
     V: Clone + Serialize,
 {
-    Op {
-        op: Op<K, V>,
-    },
     Term {
         // Term in which the entry is created.
         term: u64,
@@ -58,10 +54,6 @@ where
     K: Clone + Serialize,
     V: Clone + Serialize,
 {
-    pub(crate) fn new_op(op: Op<K, V>) -> Entry<K, V> {
-        Entry::Op { op }
-    }
-
     pub(crate) fn new_term(op: Op<K, V>, term: u64, index: u64) -> Entry<K, V> {
         Entry::Term { op, term, index }
     }
@@ -82,13 +74,20 @@ where
         }
     }
 
-    fn entry_type(buf: Vec<u8>) -> EntryType {
+    fn entry_type(buf: Vec<u8>) -> Result<EntryType, Error> {
+        util::check_remaining(&buf, 8, "entry-type")?;
         let hdr1 = u64::from_be_bytes(buf[..8].try_into().unwrap());
-        (hdr1 & 0x00000000000000FF).into()
+        Ok((hdr1 & 0x00000000000000FF).into())
+    }
+
+    pub(crate) fn index(&self) -> u64 {
+        match self {
+            Entry::Term { index, .. } => *index,
+            Entry::Client { index, .. } => *index,
+        }
     }
 }
 
-// Entry is always identified as {fpos, length} in serialized format.
 impl<K, V> Serialize for Entry<K, V>
 where
     K: Clone + Serialize,
@@ -96,7 +95,6 @@ where
 {
     fn encode(&self, buf: &mut Vec<u8>) -> usize {
         match self {
-            Entry::Op { op } => Self::encode_op(buf, op),
             Entry::Term { op, term, index } => {
                 let n = Self::encode_term(buf, op, *term, *index);
                 n
@@ -116,7 +114,6 @@ where
 
     fn decode(&mut self, buf: &[u8]) -> Result<usize, Error> {
         match self {
-            Entry::Op { op } => Self::decode_op(buf, op),
             Entry::Term { op, term, index } => {
                 let res = Self::decode_term(buf, op, term, index);
                 res
@@ -132,30 +129,6 @@ where
                 res
             }
         }
-    }
-}
-
-// +------------------------------------------------------+---------+
-// |                            reserved                  |   type  |
-// +----------------------------------------------------------------+
-// |                           entry-bytes                          |
-// +----------------------------------------------------------------+
-impl<K, V> Entry<K, V>
-where
-    K: Clone + Serialize,
-    V: Clone + Serialize,
-{
-    fn encode_op(buf: &mut Vec<u8>, op: &Op<K, V>) -> usize {
-        let n = buf.len();
-        buf.resize(n + 8, 0);
-
-        buf[n..n + 8].copy_from_slice(&(EntryType::Op as u64).to_be_bytes());
-
-        op.encode(buf) + 8
-    }
-
-    fn decode_op(buf: &[u8], op: &mut Op<K, V>) -> Result<usize, Error> {
-        op.decode(&buf[8..])
     }
 }
 
@@ -195,8 +168,10 @@ where
         term: &mut u64,
         index: &mut u64,
     ) -> Result<usize, Error> {
+        util::check_remaining(buf, 40, "entry-term-hdr")?;
         *term = u64::from_be_bytes(buf[8..16].try_into().unwrap());
         *index = u64::from_be_bytes(buf[16..24].try_into().unwrap());
+
         op.decode(buf)
     }
 }
@@ -247,10 +222,12 @@ where
         id: &mut u64,
         ceqno: &mut u64,
     ) -> Result<usize, Error> {
+        util::check_remaining(buf, 40, "entry-client-hdr")?;
         *term = u64::from_be_bytes(buf[8..16].try_into().unwrap());
         *index = u64::from_be_bytes(buf[16..24].try_into().unwrap());
         *id = u64::from_be_bytes(buf[24..32].try_into().unwrap());
         *ceqno = u64::from_be_bytes(buf[32..40].try_into().unwrap());
+
         op.decode(buf)
     }
 }
@@ -308,9 +285,10 @@ where
         Op::Delete { key }
     }
 
-    fn op_type(buf: Vec<u8>) -> OpType {
+    fn op_type(buf: Vec<u8>) -> Result<OpType, Error> {
+        util::check_remaining(&buf, 8, "entry-type")?;
         let hdr1 = u64::from_be_bytes(buf[..8].try_into().unwrap());
-        ((hdr1 >> 32) & 0x00FFFFFF).into()
+        Ok(((hdr1 >> 32) & 0x00FFFFFF).into())
     }
 }
 
@@ -379,16 +357,22 @@ where
     }
 
     fn decode_set(buf: &[u8], k: &mut K, v: &mut V) -> Result<usize, Error> {
+        util::check_remaining(buf, 16, "op-set-hdr")?;
         let hdr1 = u64::from_be_bytes(buf[..8].try_into().unwrap());
         let vlen: usize = u64::from_be_bytes(buf[8..16].try_into().unwrap())
             .try_into()
             .unwrap();
+        let mut n = 16;
 
         let klen: usize = (hdr1 & 0xFFFFFFFF).try_into().unwrap();
-        k.decode(&buf[16..16 + klen])?;
-        v.decode(&buf[16 + klen..16 + klen + vlen])?;
+        util::check_remaining(buf, n + klen, "op-set-key")?;
+        n += klen;
+        k.decode(&buf[n..n + klen])?;
+        util::check_remaining(buf, n + vlen, "op-set-value")?;
+        v.decode(&buf[n..n + vlen])?;
+        n += vlen;
 
-        Ok((klen + vlen + 16).try_into().unwrap())
+        Ok(n.try_into().unwrap())
     }
 }
 
@@ -442,17 +426,23 @@ where
         v: &mut V,
         cas: &mut u64, // reference
     ) -> Result<usize, Error> {
+        util::check_remaining(buf, 24, "op-setcas-hdr")?;
         let hdr1 = u64::from_be_bytes(buf[..8].try_into().unwrap());
         let vlen: usize = u64::from_be_bytes(buf[8..16].try_into().unwrap())
             .try_into()
             .unwrap();
         *cas = u64::from_be_bytes(buf[16..24].try_into().unwrap());
+        let mut n = 24;
 
         let klen: usize = (hdr1 & 0xFFFFFFFF).try_into().unwrap();
-        k.decode(&buf[24..24 + klen])?;
-        v.decode(&buf[24 + klen..24 + klen + vlen])?;
+        util::check_remaining(buf, n + klen, "op-setcas-key")?;
+        k.decode(&buf[n..n + klen])?;
+        n += klen;
+        util::check_remaining(buf, n + vlen, "op-setcas-value")?;
+        v.decode(&buf[n..n + vlen])?;
+        n += vlen;
 
-        Ok((klen + vlen + 24).try_into().unwrap())
+        Ok(n.try_into().unwrap())
     }
 }
 
@@ -485,10 +475,15 @@ where
     }
 
     fn decode_delete(buf: &[u8], key: &mut K) -> Result<usize, Error> {
+        util::check_remaining(buf, 8, "op-delete-hdr1")?;
         let hdr1 = u64::from_be_bytes(buf[..8].try_into().unwrap());
-        let klen: usize = (hdr1 & 0xFFFFFFFF).try_into().unwrap();
-        key.decode(&buf[8..8 + klen])?;
+        let mut n = 8;
 
-        Ok((klen + 8).try_into().unwrap())
+        let klen: usize = (hdr1 & 0xFFFFFFFF).try_into().unwrap();
+        util::check_remaining(buf, n + klen, "op-delete-key")?;
+        key.decode(&buf[n..n + klen])?;
+        n += klen;
+
+        Ok(n.try_into().unwrap())
     }
 }

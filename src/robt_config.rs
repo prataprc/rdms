@@ -1,3 +1,5 @@
+// TODO: make dir, file, path into OsString and OsStr.
+
 use std::{convert::TryInto, fmt, fs, path};
 
 use lazy_static::lazy_static;
@@ -218,7 +220,7 @@ pub(crate) fn read_meta_items(
     name: &str, // name of index
 ) -> Result<Vec<MetaItem>, Error> {
     let index_file = Config::stitch_index_file(dir, name);
-    let mut fd = util::open_file_r(&index_file)?;
+    let mut fd = util::open_file_r(index_file.as_ref())?;
     let mut fpos = fs::metadata(&index_file)?.len();
 
     let mut metaitems: Vec<MetaItem> = vec![];

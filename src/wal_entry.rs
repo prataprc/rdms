@@ -152,14 +152,10 @@ where
         term: u64,
         index: u64,
     ) -> usize {
-        let n = buf.len();
-        buf.resize(n + 24, 0);
-
-        buf[n..n + 8].copy_from_slice(&(EntryType::Term as u64).to_be_bytes());
-        buf[n + 8..n + 16].copy_from_slice(&term.to_be_bytes());
-        buf[n + 16..n + 24].copy_from_slice(&index.to_be_bytes());
-
-        op.encode(buf) + 24
+        buf.extend_from_slice(&(EntryType::Term as u64).to_be_bytes());
+        buf.extend_from_slice(&term.to_be_bytes());
+        buf.extend_from_slice(&index.to_be_bytes());
+        24 + op.encode(buf)
     }
 
     fn decode_term(
@@ -168,11 +164,10 @@ where
         term: &mut u64,
         index: &mut u64,
     ) -> Result<usize, Error> {
-        util::check_remaining(buf, 40, "entry-term-hdr")?;
+        util::check_remaining(buf, 24, "entry-term-hdr")?;
         *term = u64::from_be_bytes(buf[8..16].try_into().unwrap());
         *index = u64::from_be_bytes(buf[16..24].try_into().unwrap());
-
-        op.decode(buf)
+        Ok(24 + op.decode(&buf[24..])?)
     }
 }
 
@@ -202,16 +197,12 @@ where
         id: u64,
         ceqno: u64,
     ) -> usize {
-        let n = buf.len();
-        buf.resize(n + 40, 0);
-
-        buf[n..n + 8].copy_from_slice(&(EntryType::Client as u64).to_be_bytes());
-        buf[n + 8..n + 16].copy_from_slice(&term.to_be_bytes());
-        buf[n + 16..n + 24].copy_from_slice(&index.to_be_bytes());
-        buf[n + 24..n + 32].copy_from_slice(&id.to_be_bytes());
-        buf[n + 32..n + 40].copy_from_slice(&ceqno.to_be_bytes());
-
-        op.encode(buf) + 40
+        buf.extend_from_slice(&(EntryType::Client as u64).to_be_bytes());
+        buf.extend_from_slice(&term.to_be_bytes());
+        buf.extend_from_slice(&index.to_be_bytes());
+        buf.extend_from_slice(&id.to_be_bytes());
+        buf.extend_from_slice(&ceqno.to_be_bytes());
+        40 + op.encode(buf)
     }
 
     fn decode_client(
@@ -227,8 +218,7 @@ where
         *index = u64::from_be_bytes(buf[16..24].try_into().unwrap());
         *id = u64::from_be_bytes(buf[24..32].try_into().unwrap());
         *ceqno = u64::from_be_bytes(buf[32..40].try_into().unwrap());
-
-        op.decode(buf)
+        Ok(40 + op.decode(&buf[40..])?)
     }
 }
 
@@ -366,8 +356,9 @@ where
 
         let klen: usize = (hdr1 & 0xFFFFFFFF).try_into().unwrap();
         util::check_remaining(buf, n + klen, "op-set-key")?;
-        n += klen;
         k.decode(&buf[n..n + klen])?;
+        n += klen;
+
         util::check_remaining(buf, n + vlen, "op-set-value")?;
         v.decode(&buf[n..n + vlen])?;
         n += vlen;
@@ -438,6 +429,7 @@ where
         util::check_remaining(buf, n + klen, "op-setcas-key")?;
         k.decode(&buf[n..n + klen])?;
         n += klen;
+
         util::check_remaining(buf, n + vlen, "op-setcas-value")?;
         v.decode(&buf[n..n + vlen])?;
         n += vlen;

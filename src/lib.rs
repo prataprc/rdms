@@ -49,6 +49,7 @@ mod util;
 mod vlog;
 mod wal;
 mod wal_entry;
+mod wal_thread;
 
 pub use crate::core::{Diff, Serialize};
 pub use crate::error::Error;

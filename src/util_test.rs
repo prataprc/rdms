@@ -70,7 +70,7 @@ fn test_open_file_rw() {
     );
 
     // case 6: read file.
-    let mut fd = util::open_file_r(file).expect("open-read");
+    let mut fd = util::open_file_r(file.as_ref()).expect("open-read");
     let mut txt = [0_u8; 36];
     fd.read(&mut txt).expect("read failed");
     assert_eq!(

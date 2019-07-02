@@ -1,7 +1,7 @@
 use std::convert::TryInto;
 use std::fmt::Display;
 use std::{
-    fs,
+    ffi, fs,
     io::{self, Read, Seek},
     path,
 };
@@ -28,7 +28,7 @@ pub(crate) fn open_file_w(file: &str, reuse: bool) -> Result<fs::File, Error> {
 
 // open file for reading.
 #[allow(dead_code)] // TODO: remove this once bogn is weaved-up.
-pub(crate) fn open_file_r(file: &str) -> Result<fs::File, Error> {
+pub(crate) fn open_file_r(file: &ffi::OsStr) -> Result<fs::File, Error> {
     let p = path::Path::new(file);
     let mut opts = fs::OpenOptions::new();
     Ok(opts.read(true).open(p)?)
@@ -57,7 +57,8 @@ pub(crate) fn read_buffer(
     if buf.len() == n {
         Ok(buf)
     } else {
-        Err(Error::PartialRead(msg.to_string(), buf.len(), n))
+        let msg = format!("{} partial read {} at {}", msg, fpos, n);
+        Err(Error::PartialRead(msg))
     }
 }
 

@@ -43,7 +43,8 @@ where
     <V as Diff>::D: Clone + Serialize,
 {
     pub fn open(dir: &str, name: &str) -> Result<Snapshot<K, V>, Error> {
-        let index_fd = util::open_file_r(&Config::stitch_index_file(dir, name))?;
+        let index_file = Config::stitch_index_file(dir, name);
+        let index_fd = util::open_file_r(&index_file.as_ref())?;
 
         let mut snap = Snapshot {
             config: Config::new(dir, name),
@@ -97,7 +98,7 @@ where
             .config
             .to_value_log()
             .as_ref()
-            .map(|s| util::open_file_r(s.as_str()))
+            .map(|s| util::open_file_r(s.as_ref()))
             .transpose()?;
 
         // validate snapshot

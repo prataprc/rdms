@@ -54,14 +54,15 @@ pub enum Error {
     /// De-serialization failed.
     DecodeFail(String),
     /// Unable to read expected bytes from file.
-    PartialRead(String, usize, usize),
+    PartialRead(String),
     InvalidFile(String),
     IoError(io::Error),
-    PartialWrite(usize, usize),
     ValueDecode(Vec<u8>),
     JsonError(jsondata::Error),
     InvalidSnapshot(String),
     Utf8Error(std::str::Utf8Error),
+    /// Invalid WAL
+    InvalidWAL(String),
     /// Invalid batch in WAL, write-ahead-log.
     InvalidBatch(String),
     // Local error, means, given key is less than the entire data set.

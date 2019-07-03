@@ -25,6 +25,7 @@
 #![feature(copy_within)]
 #![feature(rc_into_raw_non_null)]
 #![feature(bind_by_move_pattern_guards)]
+#![feature(drain_filter)]
 
 extern crate jsondata;
 extern crate llrb_index;

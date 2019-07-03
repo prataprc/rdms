@@ -12,7 +12,7 @@ use crate::wal_entry::Entry;
 
 const BATCH_MARKER: &'static str = "vawval-treatment";
 
-pub(crate) struct Shard<K, V>
+pub struct Shard<K, V>
 where
     K: Clone + Serialize,
     V: Clone + Serialize,
@@ -159,7 +159,7 @@ where
         self.id
     }
 
-    pub(crate) fn purge(&mut self) -> Result<(), Error> {
+    pub(crate) fn purge(self) -> Result<(), Error> {
         fs::remove_file(&self.path)?;
         Ok(())
     }

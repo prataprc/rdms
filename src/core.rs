@@ -34,6 +34,33 @@ pub trait Serialize: Sized {
     fn decode(&mut self, buf: &[u8]) -> Result<usize, Error>;
 }
 
+/// Writer methods on DB. Used to wire up WAL and in-memory DB.
+pub trait Writer<K, V>
+where
+    K: Ord + Clone,
+    V: Clone + Diff,
+{
+    /// Set {key, value} into the DB. Return older entry if present. Index
+    /// is seqno attached to this mutation.
+    fn set(&mut self, key: K, value: V, index: u64) -> Option<Entry<K, V>>;
+
+    /// Set {key, value} into the DB if an older entry exists with the
+    /// same ``cas`` value. To create a fresh entry, pass ``cas`` as ZERO.
+    /// Return the older entry if present. Index is seqno attached to this
+    /// mutation.
+    fn set_cas(
+        &mut self,
+        key: K,
+        value: V,
+        cas: u64,
+        index: u64,
+    ) -> Result<Option<Entry<K, V>>, Error>;
+
+    /// Delete key from DB. Return the entry if it is already present. Index
+    /// is seqno attached to this mutation.
+    fn delete<Q>(&mut self, key: &Q, index: u64) -> Option<Entry<K, V>>;
+}
+
 /// Delta maintains the older version of value, with necessary fields for
 /// log-structured-merge.
 #[derive(Clone)]

@@ -52,7 +52,7 @@ mod wal;
 mod wal_entry;
 mod wal_thread;
 
-pub use crate::core::{Diff, Serialize};
+pub use crate::core::{Diff, Serialize, Writer};
 pub use crate::error::Error;
 pub use crate::llrb::Llrb;
 pub use crate::llrb_node::LlrbStats;
@@ -61,6 +61,7 @@ pub use crate::robt_build::Builder;
 pub use crate::robt_config::Config;
 pub use crate::robt_snap::Snapshot;
 pub use crate::type_empty::Empty; // TODO: proper nomenclature.
+pub use crate::wal::Wal;
 
 #[cfg(test)]
 mod core_test;

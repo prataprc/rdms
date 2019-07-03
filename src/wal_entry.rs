@@ -54,6 +54,12 @@ where
     K: Clone + Serialize,
     V: Clone + Serialize,
 {
+    fn entry_type(buf: Vec<u8>) -> Result<EntryType, Error> {
+        util::check_remaining(&buf, 8, "entry-type")?;
+        let hdr1 = u64::from_be_bytes(buf[..8].try_into().unwrap());
+        Ok((hdr1 & 0x00000000000000FF).into())
+    }
+
     pub(crate) fn new_term(op: Op<K, V>, term: u64, index: u64) -> Entry<K, V> {
         Entry::Term { op, term, index }
     }
@@ -74,16 +80,17 @@ where
         }
     }
 
-    fn entry_type(buf: Vec<u8>) -> Result<EntryType, Error> {
-        util::check_remaining(&buf, 8, "entry-type")?;
-        let hdr1 = u64::from_be_bytes(buf[..8].try_into().unwrap());
-        Ok((hdr1 & 0x00000000000000FF).into())
-    }
-
     pub(crate) fn index(&self) -> u64 {
         match self {
             Entry::Term { index, .. } => *index,
             Entry::Client { index, .. } => *index,
+        }
+    }
+
+    pub(crate) fn into_op(self) -> Op<K, V> {
+        match self {
+            Entry::Term { op, .. } => op,
+            Entry::Client { op, .. } => op,
         }
     }
 }

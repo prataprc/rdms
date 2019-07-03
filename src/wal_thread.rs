@@ -2,7 +2,7 @@ use std::{
     convert::TryInto,
     ffi, fs,
     io::{self, Read, Seek},
-    mem, path,
+    mem, path, vec,
 };
 
 use crate::core::Serialize;
@@ -57,7 +57,6 @@ where
     // {name}-shard-{id}-journal-{num}.log
     path: ffi::OsString,
     fd: Option<fs::File>,
-    index: u64,                // first index-seqno in this journal.
     batches: Vec<Batch<K, V>>, // batches sorted by index-seqno.
 }
 
@@ -79,7 +78,6 @@ where
             num: 1,
             path: <String as AsRef<ffi::OsStr>>::as_ref(&path).to_os_string(),
             fd: Some(fd),
-            index: Default::default(),
             batches: vec![],
         })
     }
@@ -99,10 +97,8 @@ where
             num,
             path: file_path,
             fd: None,
-            index: Default::default(),
             batches: Default::default(),
         };
-        jrn.index = batches[0].start_index();
         jrn.batches = batches;
         Ok(Some(jrn))
     }
@@ -162,6 +158,51 @@ where
     pub(crate) fn purge(self) -> Result<(), Error> {
         fs::remove_file(&self.path)?;
         Ok(())
+    }
+
+    pub(crate) fn to_iter(&self) -> Result<JournalIter<K, V>, Error> {
+        let mut opts = fs::OpenOptions::new();
+        let fd = opts.append(true).create_new(true).open(&self.path)?;
+        Ok(JournalIter {
+            fd,
+            batches: self.batches.clone().into_iter(),
+            entries: vec![].into_iter(),
+        })
+    }
+}
+
+pub(crate) struct JournalIter<K, V>
+where
+    K: Clone + Serialize,
+    V: Clone + Serialize,
+{
+    fd: fs::File,
+    batches: vec::IntoIter<Batch<K, V>>,
+    entries: vec::IntoIter<Entry<K, V>>,
+}
+
+impl<K, V> Iterator for JournalIter<K, V>
+where
+    K: Clone + Serialize,
+    V: Clone + Serialize,
+{
+    type Item = Result<Entry<K, V>, Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.entries.next() {
+            None => match self.batches.next() {
+                None => None,
+                Some(batch) => {
+                    let batch = match batch.fetch(&mut self.fd) {
+                        Err(err) => return Some(Err(err)),
+                        Ok(batch) => batch,
+                    };
+                    self.entries = batch.into_entries().into_iter();
+                    self.next()
+                }
+            },
+            Some(entry) => Some(Ok(entry)),
+        }
     }
 }
 
@@ -294,6 +335,14 @@ where
             Batch::Refer { start_index, .. } => *start_index,
             Batch::Active { entries, .. } => entries[0].index(),
             Batch::Closed { entries, .. } => entries[0].index(),
+        }
+    }
+
+    fn into_entries(self) -> Vec<Entry<K, V>> {
+        match self {
+            Batch::Refer { .. } => unreachable!(),
+            Batch::Active { entries, .. } => entries,
+            Batch::Closed { entries, .. } => entries,
         }
     }
 

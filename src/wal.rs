@@ -4,8 +4,9 @@
 use std::sync::atomic::AtomicU64;
 use std::{collections::HashMap, ffi, fs};
 
-use crate::core::Serialize;
+use crate::core::{Diff, Serialize, Writer};
 use crate::error::Error;
+use crate::wal_entry::Op;
 use crate::wal_thread::{Journal, Shard};
 
 pub struct Wal<K, V>
@@ -14,7 +15,6 @@ where
     V: Clone + Serialize,
 {
     name: String,
-    dir: ffi::OsString,
     index: AtomicU64,
     nshards: (usize, usize), // (configured, active)
     journals: Vec<Journal<K, V>>,
@@ -41,7 +41,6 @@ where
         // create this WAL. later shards/journals can be added.
         Ok(Wal {
             name,
-            dir,
             index: AtomicU64::new(0),
             nshards: (nshards, 0),
             journals: vec![],
@@ -75,14 +74,13 @@ where
 
         Ok(Wal {
             name,
-            dir,
             index: AtomicU64::new(0),
             nshards: (shards.len(), 0),
             journals,
         })
     }
 
-    pub fn new_shard(&mut self) -> Result<Shard<K, V>, Error> {
+    pub fn spawn_shard(&mut self) -> Result<Shard<K, V>, Error> {
         if self.nshards.1 < self.nshards.0 {
             let id = self.nshards.1 + 1;
             let mut shard = Shard::<K, V>::new(self.name.clone(), id);
@@ -98,9 +96,40 @@ where
             Err(Error::InvalidWAL(format!("exceeding the shard limit")))
         }
     }
+}
 
-    //pub fn replay(self, ) -> impl Iterator<Item = Entry<K, V>> {
-    //}
+impl<K, V> Wal<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+{
+    pub fn replay<W: Writer<K, V>>(self, mut w: W) -> Result<usize, Error> {
+        let active = self.nshards.1;
+        if active > 0 {
+            let msg = format!("cannot replay with active shards {}", active);
+            return Err(Error::InvalidWAL(msg));
+        }
+        let mut nentries = 0;
+        for journal in self.journals.iter() {
+            for entry in journal.to_iter()? {
+                let entry = entry?;
+                let index = entry.index();
+                match entry.into_op() {
+                    Op::Set { key, value } => {
+                        w.set(key, value, index);
+                    }
+                    Op::SetCAS { key, value, cas } => {
+                        w.set_cas(key, value, cas, index).ok();
+                    }
+                    Op::Delete { key } => {
+                        w.delete(&key, index);
+                    }
+                }
+                nentries += 1;
+            }
+        }
+        Ok(nentries)
+    }
 
     pub fn purge(self) -> Result<(), Error> {
         for jrn in self.journals.into_iter() {

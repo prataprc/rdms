@@ -1,4 +1,5 @@
 use std::io;
+use std::sync::mpsc;
 
 use crate::jsondata;
 
@@ -55,12 +56,16 @@ pub enum Error {
     DecodeFail(String),
     /// Unable to read expected bytes from file.
     PartialRead(String),
+    /// Unable to write full buffer into file.
+    PartialWrite(String),
     InvalidFile(String),
     IoError(io::Error),
     ValueDecode(Vec<u8>),
     JsonError(jsondata::Error),
     InvalidSnapshot(String),
     Utf8Error(std::str::Utf8Error),
+    /// Inter-Process-Communication error
+    IPCFail(String),
     /// Invalid WAL
     InvalidWAL(String),
     /// Invalid batch in WAL, write-ahead-log.
@@ -80,6 +85,20 @@ pub enum Error {
 impl From<io::Error> for Error {
     fn from(err: io::Error) -> Error {
         Error::IoError(err)
+    }
+}
+
+impl<T> From<mpsc::SendError<T>> for Error {
+    fn from(err: mpsc::SendError<T>) -> Error {
+        let msg = format!("SendError: {:?}", err);
+        Error::IPCFail(msg)
+    }
+}
+
+impl<T> From<mpsc::RecvError<T>> for Error {
+    fn from(err: mpsc::SendError<T>) -> Error {
+        let msg = format!("RecvError: {:?}", err);
+        Error::IPCFail(msg)
     }
 }
 

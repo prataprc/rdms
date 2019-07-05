@@ -45,6 +45,7 @@ use std::convert::TryInto;
 use std::sync::atomic::AtomicU64;
 use std::{
     borrow::Borrow,
+    cmp,
     collections::HashMap,
     ffi, fs,
     io::{self, Read, Seek, Write},
@@ -67,26 +68,9 @@ where
 {
     name: String,
     index: Arc<Box<AtomicU64>>,
-    threads: Vec<thread::JoinHandle<()>>,
     shards: Vec<mpsc::Sender<Opreq<K, V>>>,
+    threads: Vec<thread::JoinHandle<Result<u64, Error>>>,
     journals: Vec<Journal<K, V>>,
-}
-
-impl<K, V> Drop for Wal<K, V>
-where
-    K: Clone + Send + Serialize,
-    V: Clone + Send + Serialize,
-{
-    fn drop(&mut self) {
-        // wait for the threads to exit.
-        while let Some(tx) = self.shards.pop() {
-            tx.send(Opreq::close());
-        }
-        // wait for the threads to exit.
-        while let Some(thread) = self.threads.pop() {
-            thread.join().expect("shard has panicked");
-        }
-    }
 }
 
 impl<K, V> Wal<K, V>
@@ -154,47 +138,8 @@ where
 
 impl<K, V> Wal<K, V>
 where
-    K: 'static + Clone + Send + Serialize,
-    V: 'static + Clone + Send + Serialize,
-{
-    pub fn spawn_writer(&mut self) -> Result<OpWriter<K, V>, Error> {
-        if self.threads.len() < self.threads.capacity() {
-            let (tx, rx) = mpsc::channel();
-
-            let id = self.threads.len() + 1;
-            let index = Arc::clone(&self.index);
-            let mut shard = Shard::<K, V>::new(self.name.clone(), id, index);
-            let writer = OpWriter::new(self.name.clone(), id, tx.clone());
-
-            // remove journals for this shard.
-            let journals: Vec<Journal<K, V>> =
-                self.journals.drain_filter(|jrn| jrn.id() == id).collect();
-            journals.into_iter().for_each(|jrn| shard.add_journal(jrn));
-
-            // spawn the shard
-            self.threads.push(shard.spawn(rx)?);
-            self.shards.push(tx);
-
-            Ok(writer)
-        } else {
-            Err(Error::InvalidWAL(format!("exceeding the shard limit")))
-        }
-    }
-
-    pub fn purge_before(&self, before: u64) -> Result<(), Error> {
-        for tx in self.shards.iter() {
-            let (tx, rx) = mpsc::sync_channel();
-            tx.send(Opreq::purge_before(before, tx))?
-            rx.recv()?
-        }
-        Ok(())
-    }
-}
-
-impl<K, V> Wal<K, V>
-where
-    K: Clone + Send + Ord + Serialize,
-    V: Clone + Send + Diff + Serialize,
+    K: Clone + Ord + Send + Serialize,
+    V: Clone + Diff + Send + Serialize,
 {
     pub fn replay<W: Writer<K, V>>(self, mut w: W) -> Result<usize, Error> {
         let active = self.threads.len();
@@ -223,6 +168,59 @@ where
         }
         Ok(nentries)
     }
+}
+
+impl<K, V> Wal<K, V>
+where
+    K: 'static + Clone + Send + Serialize,
+    V: 'static + Clone + Send + Serialize,
+{
+    pub fn spawn_writer(&mut self) -> Result<OpWriter<K, V>, Error> {
+        if self.threads.len() < self.threads.capacity() {
+            let (tx, rx) = mpsc::channel();
+
+            let id = self.threads.len() + 1;
+            let index = Arc::clone(&self.index);
+            let mut shard = Shard::<K, V>::new(self.name.clone(), id, index);
+            let writer = OpWriter::new(tx.clone());
+
+            // remove journals for this shard.
+            let journals: Vec<Journal<K, V>> =
+                self.journals.drain_filter(|jrn| jrn.id() == id).collect();
+            journals.into_iter().for_each(|jrn| shard.add_journal(jrn));
+
+            // spawn the shard
+            self.threads.push(shard.spawn(rx)?);
+            self.shards.push(tx);
+
+            Ok(writer)
+        } else {
+            Err(Error::InvalidWAL(format!("exceeding the shard limit")))
+        }
+    }
+
+    pub fn purge_before(&self, before: u64) -> Result<(), Error> {
+        for shard_tx in self.shards.iter() {
+            let (tx, rx) = mpsc::sync_channel(1);
+            shard_tx.send(Opreq::purge_before(before, tx))?;
+            rx.recv()?;
+        }
+        Ok(())
+    }
+
+    pub fn close(&mut self) -> Result<u64, Error> {
+        // wait for the threads to exit, note that threads could have ended
+        // when close() was called on WAL or OpWriter, or due panic or error.
+        while let Some(tx) = self.shards.pop() {
+            tx.send(Opreq::close()).ok(); // ignore if send returns an error
+        }
+        // wait for the threads to exit.
+        let mut index = 0_u64;
+        while let Some(thread) = self.threads.pop() {
+            index = cmp::max(index, thread.join()??);
+        }
+        Ok(index)
+    }
 
     pub fn purge(&mut self) -> Result<(), Error> {
         if self.threads.len() > 0 {
@@ -243,8 +241,6 @@ where
     K: Clone + Send + Serialize,
     V: Clone + Send + Serialize,
 {
-    name: String, // WAL name
-    id: usize,    // shard id
     tx: mpsc::Sender<Opreq<K, V>>,
 }
 
@@ -253,34 +249,36 @@ where
     K: Clone + Send + Serialize,
     V: Clone + Send + Serialize,
 {
-    fn new(
-        name: String,
-        id: usize,
-        tx: mpsc::Sender<Opreq<K, V>>, // communication with shard's thread
-    ) -> OpWriter<K, V> {
-        OpWriter { name, id, tx }
+    fn new(tx: mpsc::Sender<Opreq<K, V>>) -> OpWriter<K, V> {
+        OpWriter { tx }
     }
 
-    pub fn set(&self, key: K, value: V) -> Result<u64, mpsc::RecvError> {
+    pub fn set(&self, key: K, value: V) -> Result<u64, Error> {
         let (resp_tx, resp_rx) = mpsc::sync_channel(1);
-        self.tx.send(Opreq::set(key, value, resp_tx));
-        resp_rx.recv()
+        self.tx.send(Opreq::set(key, value, resp_tx))?;
+        match resp_rx.recv()? {
+            Opresp::Result(res) => res,
+        }
     }
 
-    pub fn set_cas(&self, key: K, value: V, cas: u64) -> Result<u64, mpsc::RecvError> {
+    pub fn set_cas(&self, key: K, value: V, cas: u64) -> Result<u64, Error> {
         let (resp_tx, resp_rx) = mpsc::sync_channel(1);
-        self.tx.send(Opreq::set_cas(key, value, cas, resp_tx));
-        resp_rx.recv()
+        self.tx.send(Opreq::set_cas(key, value, cas, resp_tx))?;
+        match resp_rx.recv()? {
+            Opresp::Result(res) => res,
+        }
     }
 
-    pub fn delete<Q>(&self, key: &Q) -> Result<u64, mpsc::RecvError>
+    pub fn delete<Q>(&self, key: &Q) -> Result<u64, Error>
     where
         K: Borrow<Q>,
-        Q: ToOwned<Owned = K> + Ord + ?Sized,
+        Q: ToOwned<Owned = K> + ?Sized,
     {
         let (resp_tx, resp_rx) = mpsc::sync_channel(1);
-        self.tx.send(Opreq::delete(key.to_owned(), resp_tx));
-        resp_rx.recv()
+        self.tx.send(Opreq::delete(key.to_owned(), resp_tx))?;
+        match resp_rx.recv()? {
+            Opresp::Result(res) => res,
+        }
     }
 }
 
@@ -316,10 +314,6 @@ where
         self.journals.push(jrn)
     }
 
-    fn id(&self) -> usize {
-        self.id
-    }
-
     fn last_journal_num(&self) -> usize {
         let n = self.journals.len();
         if n == 0 {
@@ -338,36 +332,58 @@ where
     fn spawn(
         mut self,
         rx: mpsc::Receiver<Opreq<K, V>>, // spawn thread to handle rx-msgs
-    ) -> Result<thread::JoinHandle<()>, Error> {
-        use std::sync::atomic::Ordering;
-
+    ) -> Result<thread::JoinHandle<Result<u64, Error>>, Error> {
         let (name, num) = (self.name.clone(), self.last_journal_num());
         self.active = Journal::create(name, self.id, num)?;
 
         Ok(thread::spawn(move || {
-            for cmd in rx {
-                match cmd {
-                    Opreq::PurgeBefore{ before, tx } => {
-                        self.purge_before(before).ok(); // TODO
-                        tx.send(true)
-                    },
-                    Opreq::Close => return (),
-                    cmd => {
-                        self.active.handle_op(
-                            self.wal_index.fetch_add(1, Ordering::Relaxed),
-                            cmd
-                        );
+            let mut index = 0_u64;
+            loop {
+                match rx.recv() {
+                    Ok(Opreq::Close) => break Ok(index),
+                    Ok(Opreq::PurgeBefore { before, tx }) => {
+                        match self.handle_purge_before(before) {
+                            resp @ Ok(_) => tx.send(Opresp::result(resp)),
+                            Err(err) => {
+                                // ignore IPC response error
+                                let resp = Opresp::result(Err(err));
+                                tx.send(resp).ok();
+                                break Ok(index);
+                            }
+                        };
                     }
+                    Ok(cmd) => {
+                        // ignore IPC response error
+                        index = self.handle_cmd(cmd).unwrap_or(index);
+                    }
+                    Err(err) => break Err(Error::from(err)),
                 }
             }
         }))
     }
 
-    fn handle_purge_before(&mut self, before: u64) -> Result<(), Error> {
-        let jrns = self.journals.drain_filter(|jrn| jrn.last_index < before);
-        for jrn in jrns.into_iter() {
-            jrn.purge()?
+    fn handle_purge_before(&mut self, before: u64) -> Result<u64, Error> {
+        let mut jrns = vec![];
+        for (i, journal) in self.journals.iter().enumerate() {
+            match journal.last_index() {
+                Some(last_index) if last_index < before => {
+                    journal.purge()?;
+                    jrns.push(i);
+                }
+                _ => (),
+            }
         }
+        jrns.into_iter().for_each(|i| {
+            self.journals.remove(i);
+        });
+        Ok(before)
+    }
+
+    fn handle_cmd(&mut self, cmd: Opreq<K, V>) -> Result<u64, Error> {
+        use std::sync::atomic::Ordering;
+
+        let index = self.wal_index.fetch_add(1, Ordering::Relaxed);
+        self.active.handle_op(index, cmd)
     }
 }
 
@@ -379,21 +395,21 @@ where
     Set {
         key: K,
         value: V,
-        tx: mpsc::SyncSender<u64>,
+        tx: mpsc::SyncSender<Opresp>,
     },
     SetCAS {
         key: K,
         value: V,
         cas: u64,
-        tx: mpsc::SyncSender<u64>,
+        tx: mpsc::SyncSender<Opresp>,
     },
     Delete {
         key: K,
-        tx: mpsc::SyncSender<u64>,
+        tx: mpsc::SyncSender<Opresp>,
     },
     PurgeBefore {
         before: u64,
-        tx: mpsc::SyncSender<bool>,
+        tx: mpsc::SyncSender<Opresp>,
     },
     Close,
 }
@@ -403,7 +419,7 @@ where
     K: Clone + Send + Serialize,
     V: Clone + Send + Serialize,
 {
-    fn set(key: K, value: V, tx: mpsc::SyncSender<u64>) -> Opreq<K, V> {
+    fn set(key: K, value: V, tx: mpsc::SyncSender<Opresp>) -> Opreq<K, V> {
         Opreq::Set { key, value, tx }
     }
 
@@ -411,7 +427,7 @@ where
         key: K,
         value: V,
         cas: u64,
-        tx: mpsc::SyncSender<u64>, // channel to receive response
+        tx: mpsc::SyncSender<Opresp>, // channel to receive response
     ) -> Opreq<K, V> {
         Opreq::SetCAS {
             key,
@@ -421,11 +437,11 @@ where
         }
     }
 
-    fn delete(key: K, tx: mpsc::SyncSender<u64>) -> Opreq<K, V> {
+    fn delete(key: K, tx: mpsc::SyncSender<Opresp>) -> Opreq<K, V> {
         Opreq::Delete { key, tx }
     }
 
-    fn purge_before(before: u64, tx: mpsc::SyncSender<bool>) -> Opreq<K, V> {
+    fn purge_before(before: u64, tx: mpsc::SyncSender<Opresp>) -> Opreq<K, V> {
         Opreq::PurgeBefore { before, tx }
     }
 
@@ -434,12 +450,21 @@ where
     }
 }
 
+enum Opresp {
+    Result(Result<u64, Error>),
+}
+
+impl Opresp {
+    fn result(res: Result<u64, Error>) -> Opresp {
+        Opresp::Result(res)
+    }
+}
+
 struct Journal<K, V>
 where
     K: Clone + Serialize,
     V: Clone + Serialize,
 {
-    name: String,
     id: usize,
     num: usize,
     // {name}-shard-{id}-journal-{num}.log
@@ -459,13 +484,12 @@ where
     fn create(
         name: String,
         id: usize,
-        num: usize, // monotonically increasing number for journal
+        num: usize, // journal number
     ) -> Result<Journal<K, V>, Error> {
         let path = format!("{}-shard-{}-journal-1", name, id);
         let mut opts = fs::OpenOptions::new();
         let fd = opts.append(true).create_new(true).open(&path)?;
         let jrn = Journal {
-            name,
             id,
             num,
             path: <String as AsRef<ffi::OsStr>>::as_ref(&path).to_os_string(),
@@ -487,7 +511,6 @@ where
         };
         let batches = Self::load_batches(&file_path)?;
         let mut jrn = Journal {
-            name,
             id,
             num,
             path: file_path,
@@ -558,12 +581,11 @@ where
     }
 
     fn start_index(&self) -> Option<u64> {
-        self.batches.first().map(|b| b.start_index())
+        self.batches.first()?.start_index()
     }
 
-    fn last_index(&self) -> Result<Option<u64>, Error> {
-        let fd = util::open_file_r(&path)?;
-        Ok(self.batches.last().map(|b| b.last_index(fd)))
+    fn last_index(&self) -> Option<u64> {
+        self.batches.last()?.last_index()
     }
 
     fn to_iter(&self) -> Result<JournalIter<K, V>, Error> {
@@ -576,7 +598,7 @@ where
         })
     }
 
-    fn purge(self) -> Result<(), Error> {
+    fn purge(&self) -> Result<(), Error> {
         fs::remove_file(&self.path)?;
         Ok(())
     }
@@ -584,14 +606,14 @@ where
 
 impl<K, V> Journal<K, V>
 where
-    K: Clone + Serialize,
-    V: Clone + Serialize,
+    K: Clone + Send + Serialize,
+    V: Clone + Send + Serialize,
 {
-    fn handle_op(&mut self, index: u64, cmd: Opreq<K, V>) -> bool {
+    fn handle_op(&mut self, index: u64, cmd: Opreq<K, V>) -> Result<u64, Error> {
         match cmd {
             Opreq::Set { key, value, tx } => {
-                handle_set(index, key, value, tx);
-                false
+                self.handle_set(index, key, value);
+                tx.send(Opresp::result(Ok(index)))?;
             }
             Opreq::SetCAS {
                 key,
@@ -599,48 +621,31 @@ where
                 cas,
                 tx,
             } => {
-                handle_set_cas(index, key, value, cas, tx);
-                false
+                self.handle_set_cas(index, key, value, cas);
+                tx.send(Opresp::result(Ok(index)))?;
             }
             Opreq::Delete { key, tx } => {
-                handle_delete(index, key, tx);
-                false
+                self.handle_delete(index, key);
+                tx.send(Opresp::result(Ok(index)))?;
             }
             _ => unreachable!(),
         }
+        Ok(index)
     }
 
-    fn handle_set(
-        &mut self,
-        index: u64,
-        key: K,
-        value: V,
-        tx: mpsc::SyncSender<u64>, // return index
-    ) {
+    fn handle_set(&mut self, index: u64, key: K, value: V) {
         let op = Op::new_set(key, value);
         let entry = Entry::new_term(op, self.current_term(), index);
         self.add_entry(entry);
     }
 
-    fn handle_set_cas(
-        &mut self,
-        index: u64,
-        key: K,
-        value: V,
-        cas: u64,
-        tx: mpsc::SyncSender<u64>, // return index
-    ) {
+    fn handle_set_cas(&mut self, index: u64, key: K, value: V, cas: u64) {
         let op = Op::new_set_cas(key, value, cas);
         let entry = Entry::new_term(op, self.current_term(), index);
         self.add_entry(entry);
     }
 
-    fn handle_delete(
-        &mut self,
-        index: u64,
-        key: K,
-        tx: mpsc::SyncSender<u64>, // return index
-    ) {
+    fn handle_delete(&mut self, index: u64, key: K) {
         let op = Op::new_delete(key);
         let entry = Entry::new_term(op, self.current_term(), index);
         self.add_entry(entry);
@@ -726,6 +731,8 @@ where
         length: usize,
         // index-seqno of first entry in this batch.
         start_index: u64,
+        // index-seqno of last entry in this batch.
+        last_index: u64,
     },
     Active {
         // state: term is current term for all entries in a batch.
@@ -803,7 +810,7 @@ where
 
     fn current_term(&self) -> u64 {
         match self {
-            Batch::Active { term } => *term,
+            Batch::Active { term, .. } => *term,
             _ => unreachable!(),
         }
     }
@@ -818,15 +825,18 @@ where
         match self {
             Batch::Refer { start_index, .. } => Some(*start_index),
             Batch::Active { entries, .. } => {
-                entries.first().map(|entry| entry.index())
+                let index = entries.first().map(|entry| entry.index());
+                index
             }
         }
     }
 
-    fn last_index(&self, mut fd: fs::File) -> Option<u64> {
-        match self.fetch(&mut fd) {
-            Batch::Active{ entries, .. } => {
-                entries.last().map(|entry| entry.index())
+    fn last_index(&self) -> Option<u64> {
+        match self {
+            Batch::Refer { last_index, .. } => Some(*last_index),
+            Batch::Active { entries, .. } => {
+                let index = entries.last().map(|entry| entry.index());
+                index
             }
         }
     }
@@ -863,6 +873,8 @@ where
 // +----------------------------------------------------------------+
 // |                           start_index                          |
 // +----------------------------------------------------------------+
+// |                           last_index                           |
+// +----------------------------------------------------------------+
 // |                            n-entries                           |
 // +----------------------------------------------------------------+
 // |                              config                            |
@@ -896,8 +908,10 @@ where
                 buf.extend_from_slice(&term.to_be_bytes());
                 buf.extend_from_slice(&committed.to_be_bytes());
                 buf.extend_from_slice(&persisted.to_be_bytes());
-                let start_index = entries[0].index();
-                buf.extend_from_slice(&start_index.to_be_bytes());
+                let sindex = entries.first().map(|e| e.index()).unwrap_or(0);
+                buf.extend_from_slice(&sindex.to_be_bytes());
+                let lindex = entries.last().map(|e| e.index()).unwrap_or(0);
+                buf.extend_from_slice(&lindex.to_be_bytes());
                 let nentries: u64 = entries.len().try_into().unwrap();
                 buf.extend_from_slice(&nentries.to_be_bytes());
 
@@ -908,7 +922,7 @@ where
 
                 buf.extend_from_slice(BATCH_MARKER.as_bytes());
 
-                let n = 48 + m + BATCH_MARKER.as_bytes().len() + 8;
+                let n = 56 + m + BATCH_MARKER.as_bytes().len() + 8;
                 let length: u64 = n.try_into().unwrap();
                 buf.extend_from_slice(&length.to_be_bytes());
                 buf[..8].copy_from_slice(&length.to_be_bytes());
@@ -923,10 +937,12 @@ where
         util::check_remaining(buf, 40, "batch-refer-hdr")?;
         let length = Self::validate(buf)?;
         let start_index = u64::from_be_bytes(buf[32..40].try_into().unwrap());
+        let last_index = u64::from_be_bytes(buf[40..48].try_into().unwrap());
         *self = Batch::Refer {
             fpos,
             length,
             start_index,
+            last_index,
         };
         Ok(length)
     }
@@ -938,6 +954,7 @@ where
         let committed = u64::from_be_bytes(buf[16..24].try_into().unwrap());
         let persisted = u64::from_be_bytes(buf[24..32].try_into().unwrap());
         let _start_index = u64::from_be_bytes(buf[32..40].try_into().unwrap());
+        let _last_index = u64::from_be_bytes(buf[40..48].try_into().unwrap());
         let nentries = u64::from_be_bytes(buf[40..48].try_into().unwrap());
         let mut n = 48;
 

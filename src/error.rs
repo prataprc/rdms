@@ -1,5 +1,5 @@
-use std::io;
 use std::sync::mpsc;
+use std::{any, io};
 
 use crate::jsondata;
 
@@ -95,10 +95,17 @@ impl<T> From<mpsc::SendError<T>> for Error {
     }
 }
 
-impl<T> From<mpsc::RecvError<T>> for Error {
-    fn from(err: mpsc::SendError<T>) -> Error {
+impl From<mpsc::RecvError> for Error {
+    fn from(err: mpsc::RecvError) -> Error {
         let msg = format!("RecvError: {:?}", err);
         Error::IPCFail(msg)
+    }
+}
+
+impl From<Box<dyn any::Any + Send>> for Error {
+    fn from(err: Box<dyn any::Any + Send>) -> Error {
+        let msg = format!("dynamic error: {:?}", err);
+        Error::InvalidWAL(msg)
     }
 }
 

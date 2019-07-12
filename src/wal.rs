@@ -7,39 +7,58 @@
 ///
 /// **Shards**:
 ///
-/// A single shard serializes all log-operations, batches them if possible
+/// A single shard serializes all log-operations, batches them if possible,
 /// flushes them and return a index-sequence-no for each operation back
-/// to the called. Given that, primary purpose of WAL is to add durability
-/// gaurantee to storage applications, flush operations to disk are
-/// synchronous and hence incures more delay. But with SSDs adding more
-/// shards can help because shards can concurrently flush to disk.
+/// to the caller.
 ///
 /// **Journals**:
 ///
 /// A shard of WAL is organized into ascending list of journal files,
 /// where each journal file do not exceed the configured size-limit.
 /// Journal files are append only and flushed in batches when ever
-/// possible. Journal files are purged once WAL notifies the shard
-/// about via persisted message.
+/// possible. Journal files are purged once WAL is notified about
+/// durability guarantee for a `before` index-sequence-no.
 ///
-/// Typical WAL cycles:
+/// A Typical WAL operations cycles fall under one of the following catogaries:
 ///
-/// **Wal::create() -> spawn_shard() -> drop()**
+/// a. Initial WAL cycle, when new WAL is created on disk.
+/// b. Reload WAL cycle, when opening an existing WAL on disk.
+/// c. Replay WAL cycle, when entries WAL needs to be replayed on DB.
+/// d. Purge WAL cycle, when an existing WAL needs to totally purged.
 ///
-/// Create a new WAL with ``nshards`` and spawn a thread for each shard.
-/// Spawning the shard return an ``OpWriter`` that can be used to log
-/// write operations like Set, SetCAS, Delete, etc.. Note that adding an
-/// operation into the log shall return a, monotonically increasing,
-/// index-sequence-number. Note that, creating a new WAL under a directory
-/// shall purge all existing journal files for that WAL, and journals are
-/// created afresh.
+/// **Initial WAL cycle**:
 ///
-/// **Wal::load() -> spawn_shard() -> drop()**
+/// ```
+///                                        +----------------+
+///     Wal::create() -> spawn_writer() -> | purge_before() |
+///                                        |    close()     |
+///                                        +----------------+
+/// ```
 ///
-/// **Wal::load() -> replay() -> drop()**
+/// **Reload WAL cycle**:
 ///
-/// **Wal::load() -> purge() -> drop()**
+/// ```
+///                                      +----------------+
+///     Wal::load() -> spawn_writer() -> | purge_before() |
+///                                      |    close()     |
+///                                      +----------------+
+/// ```
 ///
+/// **Replay WAL cycle**:
+///
+/// ```
+///     Wal::load() -> replay() -> close()
+/// ```
+///
+/// Purge cycle:
+///
+/// ```
+///     +---------------+
+///     | Wal::create() |
+///     |     or        | ---> Wal::purge()
+///     | Wal::load()   |
+///     +---------------+
+/// ```
 ///
 use std::convert::TryInto;
 use std::sync::atomic::AtomicU64;
@@ -57,9 +76,14 @@ use std::{
 use crate::core::{Diff, Serialize, Writer};
 use crate::{error::Error, util};
 
-const BATCH_MARKER: &'static str = "vawval-treatment";
+// TODO: marker text to validate each batch on disk.
+const BATCH_MARKER: &'static str = "yaamirukka bayamaen";
+// default node name.
 const DEFAULT_NODE: &'static str = "no-consensus";
-const FLUSH_SIZE: usize = 1 * 1024 * 1024; // 1 MB
+// default size for flush buffer.
+const FLUSH_SIZE: usize = 1 * 1024 * 1024;
+// default limit for each journal file size.
+const JOURNAL_LIMIT: usize = 1 * 1024 * 1024 * 1024;
 
 pub struct Wal<K, V>
 where
@@ -71,6 +95,8 @@ where
     shards: Vec<mpsc::Sender<Opreq<K, V>>>,
     threads: Vec<thread::JoinHandle<Result<u64, Error>>>,
     journals: Vec<Journal<K, V>>,
+    // configuration
+    journal_limit: usize,
 }
 
 impl<K, V> Wal<K, V>
@@ -86,8 +112,8 @@ where
         // purge existing journals for name.
         for item in fs::read_dir(&dir)? {
             let file_name = item?.file_name();
-            match Journal::<K, V>::load(name.clone(), file_name)? {
-                Some(jrn) => jrn.purge()?,
+            match Journal::<K, V>::shallow_load(name.clone(), file_name)? {
+                Some(journal) => journal.purge()?,
                 None => (),
             }
         }
@@ -98,6 +124,7 @@ where
             shards: vec![],
             threads: Vec::with_capacity(nshards),
             journals: vec![],
+            journal_limit: JOURNAL_LIMIT,
         })
     }
 
@@ -132,7 +159,13 @@ where
             shards: vec![],
             threads: Vec::with_capacity(ss.len()),
             journals,
+            journal_limit: JOURNAL_LIMIT,
         })
+    }
+
+    pub fn set_journal_limit(&mut self, limit: usize) -> &mut Self {
+        self.journal_limit = limit;
+        self
     }
 }
 
@@ -168,6 +201,18 @@ where
         }
         Ok(nentries)
     }
+
+    pub fn purge(&mut self) -> Result<(), Error> {
+        if self.threads.len() > 0 {
+            let msg = "cannot purge with active shards".to_string();
+            Err(Error::InvalidWAL(msg))
+        } else {
+            while let Some(journal) = self.journals.pop() {
+                journal.purge()?;
+            }
+            Ok(())
+        }
+    }
 }
 
 impl<K, V> Wal<K, V>
@@ -187,7 +232,29 @@ where
             // remove journals for this shard.
             let journals: Vec<Journal<K, V>> =
                 self.journals.drain_filter(|jrn| jrn.id() == id).collect();
-            journals.into_iter().for_each(|jrn| shard.add_journal(jrn));
+
+            // check whether journals are in proper order
+            if journals.len() > 0 {
+                let m = journals.len() - 1;
+                for (x, y) in journals[..m].iter().zip(journals[1..].iter()) {
+                    let a = x.start_index().unwrap_or(0);
+                    let b = x.last_index().unwrap_or(0);
+                    let c = y.start_index().unwrap_or(0);
+                    let d = y.last_index().unwrap_or(0);
+
+                    let yes = a > 0 && b > 0 && a > b;
+                    let yes = yes || c > 0 && d > 0 && c > d;
+                    let yes = yes || b > 0 && c > 0 && (b + 1) > c;
+                    if yes {
+                        let msg = format!("journals/batches are un-ordered");
+                        return Err(Error::InvalidWAL(msg));
+                    };
+                }
+            }
+
+            shard
+                .add_journals(journals)
+                .set_journal_limit(self.journal_limit);
 
             // spawn the shard
             self.threads.push(shard.spawn(rx)?);
@@ -199,7 +266,8 @@ where
         }
     }
 
-    pub fn purge_before(&self, before: u64) -> Result<(), Error> {
+    /// Purge all journal files `before` index-sequence-no.
+    pub fn purge_before(&mut self, before: u64) -> Result<(), Error> {
         for shard_tx in self.shards.iter() {
             let (tx, rx) = mpsc::sync_channel(1);
             shard_tx.send(Opreq::purge_before(before, tx))?;
@@ -220,19 +288,6 @@ where
             index = cmp::max(index, thread.join()??);
         }
         Ok(index)
-    }
-
-    pub fn purge(&mut self) -> Result<(), Error> {
-        if self.threads.len() > 0 {
-            Err(Error::InvalidWAL(
-                "cannot purge with active shards".to_string(),
-            ))
-        } else {
-            while let Some(jrn) = self.journals.pop() {
-                jrn.purge()?;
-            }
-            Ok(())
-        }
     }
 }
 
@@ -292,6 +347,7 @@ where
     wal_index: Arc<Box<AtomicU64>>,
     journals: Vec<Journal<K, V>>,
     active: Journal<K, V>,
+    journal_limit: usize,
 }
 
 impl<K, V> Shard<K, V>
@@ -307,11 +363,19 @@ where
             wal_index: index,
             journals: vec![],
             active: journal,
+            journal_limit: JOURNAL_LIMIT,
         }
     }
 
-    fn add_journal(&mut self, jrn: Journal<K, V>) {
-        self.journals.push(jrn)
+    fn add_journals(&mut self, mut journals: Vec<Journal<K, V>>) -> &mut Self {
+        journals.sort_by_key(|journal| journal.num);
+        self.journals = journals;
+        self
+    }
+
+    fn set_journal_limit(&mut self, limit: usize) -> &mut Self {
+        self.journal_limit = limit;
+        self
     }
 
     fn last_journal_num(&self) -> usize {
@@ -319,7 +383,7 @@ where
         if n == 0 {
             1
         } else {
-            self.journals[n - 1].num
+            self.journals[n - 1].num + 1
         }
     }
 }
@@ -338,30 +402,72 @@ where
 
         Ok(thread::spawn(move || {
             let mut index = 0_u64;
+            let mut cmds = vec![];
             loop {
-                match rx.recv() {
-                    Ok(Opreq::Close) => break Ok(index),
-                    Ok(Opreq::PurgeBefore { before, tx }) => {
-                        match self.handle_purge_before(before) {
-                            resp @ Ok(_) => tx.send(Opresp::result(resp)),
-                            Err(err) => {
-                                // ignore IPC response error
-                                let resp = Opresp::result(Err(err));
-                                tx.send(resp).ok();
-                                break Ok(index);
-                            }
-                        };
-                    }
-                    Ok(cmd) => {
-                        // ignore IPC response error
-                        index = self.handle_cmd(cmd).unwrap_or(index);
-                    }
-                    Err(err) => break Err(Error::from(err)),
+                let res = Self::receive_cmds(&rx, &mut cmds);
+                match self.do_cmds(&mut index, cmds) {
+                    Ok(false) => (),
+                    Ok(true) => break Ok(index),
+                    Err(err) => break Err(err),
+                }
+                cmds = vec![];
+                match res {
+                    Err(mpsc::TryRecvError::Empty) => match rx.recv() {
+                        Ok(cmd) => cmds.push(cmd),
+                        Err(_) => break Ok(index),
+                    },
+                    Err(mpsc::TryRecvError::Disconnected) => break Ok(index),
+                    _ => unreachable!(),
                 }
             }
         }))
     }
 
+    fn receive_cmds(
+        rx: &mpsc::Receiver<Opreq<K, V>>,
+        cmds: &mut Vec<Opreq<K, V>>,
+    ) -> Result<(), mpsc::TryRecvError> {
+        loop {
+            match rx.try_recv() {
+                Ok(cmd) => cmds.push(cmd),
+                Err(err) => break Err(err),
+            }
+        }
+    }
+
+    fn do_cmds(
+        &mut self,
+        index: &mut u64,
+        cmds: Vec<Opreq<K, V>>, // gather a batch of commands/entries
+    ) -> Result<bool, Error> {
+        use std::sync::atomic::Ordering;
+
+        for cmd in cmds {
+            match cmd {
+                Opreq::Close => {
+                    return Ok(true);
+                }
+                Opreq::PurgeBefore { before, tx } => {
+                    match self.handle_purge_before(before) {
+                        ok @ Ok(_) => tx.send(Opresp::result(ok)).ok(),
+                        Err(e) => {
+                            let s = format!("purge-before {}: {:?}", before, e);
+                            tx.send(Opresp::result(Err(e))).ok();
+                            return Err(Error::InvalidWAL(s));
+                        }
+                    };
+                }
+                cmd => {
+                    *index = self.wal_index.fetch_add(1, Ordering::Relaxed);
+                    self.active.handle_op(*index, cmd);
+                    self.active.flush()?;
+                }
+            }
+        }
+        Ok(false)
+    }
+
+    // return index or io::Error.
     fn handle_purge_before(&mut self, before: u64) -> Result<u64, Error> {
         let mut jrns = vec![];
         for (i, journal) in self.journals.iter().enumerate() {
@@ -377,13 +483,6 @@ where
             self.journals.remove(i);
         });
         Ok(before)
-    }
-
-    fn handle_cmd(&mut self, cmd: Opreq<K, V>) -> Result<u64, Error> {
-        use std::sync::atomic::Ordering;
-
-        let index = self.wal_index.fetch_add(1, Ordering::Relaxed);
-        self.active.handle_op(index, cmd)
     }
 }
 
@@ -472,7 +571,7 @@ where
     fd: Option<fs::File>,
     batches: Vec<Batch<K, V>>, // batches sorted by index-seqno.
     // working values.
-    active: Option<Batch<K, V>>,
+    active: Batch<K, V>,
     buffer: Vec<u8>,
 }
 
@@ -495,10 +594,29 @@ where
             path: <String as AsRef<ffi::OsStr>>::as_ref(&path).to_os_string(),
             fd: Some(fd),
             batches: Default::default(),
-            active: Some(Batch::new(vec![], 0, DEFAULT_NODE.to_string())),
+            active: Batch::new(vec![], 0, DEFAULT_NODE.to_string()),
             buffer: Vec::with_capacity(FLUSH_SIZE),
         };
         Ok(jrn)
+    }
+
+    fn shallow_load(
+        name: String,
+        file_path: ffi::OsString, // full path
+    ) -> Result<Option<Journal<K, V>>, Error> {
+        let (id, num) = match Self::file_parts(&file_path) {
+            Some((nm, id, num)) if nm == name => (id, num),
+            _ => return Ok(None),
+        };
+        Ok(Some(Journal {
+            id,
+            num,
+            path: file_path,
+            fd: Default::default(),
+            batches: Default::default(),
+            active: Batch::new(vec![], 0, DEFAULT_NODE.to_string()),
+            buffer: Vec::with_capacity(FLUSH_SIZE),
+        }))
     }
 
     fn load(
@@ -516,8 +634,8 @@ where
             path: file_path,
             fd: Default::default(),
             batches: Default::default(),
-            active: Default::default(),
-            buffer: Default::default(),
+            active: Batch::new(vec![], 0, DEFAULT_NODE.to_string()),
+            buffer: Vec::with_capacity(FLUSH_SIZE),
         };
         jrn.batches = batches;
         Ok(Some(jrn))
@@ -609,11 +727,11 @@ where
     K: Clone + Send + Serialize,
     V: Clone + Send + Serialize,
 {
-    fn handle_op(&mut self, index: u64, cmd: Opreq<K, V>) -> Result<u64, Error> {
+    fn handle_op(&mut self, index: u64, cmd: Opreq<K, V>) {
         match cmd {
             Opreq::Set { key, value, tx } => {
                 self.handle_set(index, key, value);
-                tx.send(Opresp::result(Ok(index)))?;
+                tx.send(Opresp::result(Ok(index))).ok();
             }
             Opreq::SetCAS {
                 key,
@@ -622,15 +740,14 @@ where
                 tx,
             } => {
                 self.handle_set_cas(index, key, value, cas);
-                tx.send(Opresp::result(Ok(index)))?;
+                tx.send(Opresp::result(Ok(index))).ok();
             }
             Opreq::Delete { key, tx } => {
                 self.handle_delete(index, key);
-                tx.send(Opresp::result(Ok(index)))?;
+                tx.send(Opresp::result(Ok(index))).ok();
             }
             _ => unreachable!(),
         }
-        Ok(index)
     }
 
     fn handle_set(&mut self, index: u64, key: K, value: V) {
@@ -652,27 +769,35 @@ where
     }
 
     fn current_term(&self) -> u64 {
-        self.active.as_ref().unwrap().current_term()
+        self.active.current_term()
     }
 
     fn add_entry(&mut self, entry: Entry<K, V>) {
-        self.active.as_mut().unwrap().add_entry(entry)
+        self.active.add_entry(entry)
     }
 
     fn flush(&mut self) -> Result<usize, Error> {
-        let n = self
-            .active
-            .as_ref()
-            .unwrap()
-            .encode_native(&mut self.buffer);
+        if self.active.len() == 0 {
+            return Ok(0);
+        }
+
+        let length = self.active.encode_native(&mut self.buffer);
+
         let fd = self.fd.as_mut().unwrap();
-        let written = fd.write(&self.buffer)?;
-        if n != written {
-            let msg = format!("wal-flush: {:?}, {}/{}", self.path, n, written);
+        let fpos = fd.metadata()?.len();
+        let start_index = self.active.start_index().unwrap();
+        let last_index = self.active.last_index().unwrap();
+
+        let n = fd.write(&self.buffer)?;
+        if length != n {
+            let msg = format!("wal-flush: {:?}, {}/{}", self.path, length, n);
             Err(Error::PartialWrite(msg))
         } else {
-            fd.sync_all(); // TODO: <- bottle-neck for disk latency/throughput.
-            Ok(n)
+            fd.sync_all()?; // TODO: <- bottle-neck for disk latency/throughput.
+            let b = Batch::new_refer(fpos, length, start_index, last_index);
+            self.batches.push(b);
+            self.active = Batch::new(vec![], 0, DEFAULT_NODE.to_string());
+            Ok(length)
         }
     }
 }
@@ -710,11 +835,6 @@ where
             Some(entry) => Some(Ok(entry)),
         }
     }
-}
-
-enum BatchType {
-    Refer = 1,
-    Active,
 }
 
 #[derive(Clone)]
@@ -771,6 +891,15 @@ where
         }
     }
 
+    fn new_refer(fpos: u64, length: usize, start: u64, last: u64) -> Batch<K, V> {
+        Batch::Refer {
+            fpos,
+            length,
+            start_index: start,
+            last_index: last,
+        }
+    }
+
     #[allow(dead_code)] // TODO: remove this once consensus in integrated.
     fn set_term(&mut self, t: u64, voted_for: String) -> &mut Batch<K, V> {
         match self {
@@ -807,13 +936,6 @@ where
             _ => unreachable!(),
         }
     }
-
-    fn current_term(&self) -> u64 {
-        match self {
-            Batch::Active { term, .. } => *term,
-            _ => unreachable!(),
-        }
-    }
 }
 
 impl<K, V> Batch<K, V>
@@ -838,6 +960,20 @@ where
                 let index = entries.last().map(|entry| entry.index());
                 index
             }
+        }
+    }
+
+    fn current_term(&self) -> u64 {
+        match self {
+            Batch::Active { term, .. } => *term,
+            _ => unreachable!(),
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Batch::Active { entries, .. } => entries.len(),
+            _ => unreachable!(),
         }
     }
 
@@ -1135,8 +1271,8 @@ where
         }
     }
 
-    fn entry_type(buf: Vec<u8>) -> Result<EntryType, Error> {
-        util::check_remaining(&buf, 8, "entry-type")?;
+    fn entry_type(buf: &[u8]) -> Result<EntryType, Error> {
+        util::check_remaining(buf, 8, "entry-type")?;
         let hdr1 = u64::from_be_bytes(buf[..8].try_into().unwrap());
         Ok((hdr1 & 0x00000000000000FF).into())
     }
@@ -1181,8 +1317,25 @@ where
     }
 
     fn decode(&mut self, buf: &[u8]) -> Result<usize, Error> {
+        *self = match Self::entry_type(buf)? {
+            EntryType::Term => {
+                let op: Op<K, V> = unsafe { mem::zeroed() };
+                let term: u64 = unsafe { mem::zeroed() };
+                let index: u64 = unsafe { mem::zeroed() };
+                Self::new_term(op, term, index)
+            }
+            EntryType::Client => {
+                let op: Op<K, V> = unsafe { mem::zeroed() };
+                let term: u64 = unsafe { mem::zeroed() };
+                let index: u64 = unsafe { mem::zeroed() };
+                let id: u64 = unsafe { mem::zeroed() };
+                let ceqno: u64 = unsafe { mem::zeroed() };
+                Self::new_client(op, term, index, id, ceqno)
+            }
+        };
+
         match self {
-            Entry::Term { op, term, index } => {
+            Entry::Term { term, index, op } => {
                 let res = Self::decode_term(buf, op, term, index);
                 res
             }
@@ -1343,8 +1496,8 @@ where
         Op::Delete { key }
     }
 
-    fn op_type(buf: Vec<u8>) -> Result<OpType, Error> {
-        util::check_remaining(&buf, 8, "entry-type")?;
+    fn op_type(buf: &[u8]) -> Result<OpType, Error> {
+        util::check_remaining(buf, 8, "op-type")?;
         let hdr1 = u64::from_be_bytes(buf[..8].try_into().unwrap());
         Ok(((hdr1 >> 32) & 0x00FFFFFF).into())
     }
@@ -1367,6 +1520,23 @@ where
     }
 
     fn decode(&mut self, buf: &[u8]) -> Result<usize, Error> {
+        *self = match Self::op_type(buf)? {
+            OpType::Set => {
+                let key: K = unsafe { mem::zeroed() };
+                let value: V = unsafe { mem::zeroed() };
+                Op::new_set(key, value)
+            }
+            OpType::SetCAS => {
+                let key: K = unsafe { mem::zeroed() };
+                let value: V = unsafe { mem::zeroed() };
+                let cas: u64 = unsafe { mem::zeroed() };
+                Op::new_set_cas(key, value, cas)
+            }
+            OpType::Delete => {
+                let key: K = unsafe { mem::zeroed() };
+                Op::new_delete(key)
+            }
+        };
         match self {
             Op::Set { key, value } => Self::decode_set(buf, key, value),
             Op::SetCAS { key, value, cas } => {

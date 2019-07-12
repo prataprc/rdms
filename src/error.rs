@@ -60,7 +60,6 @@ pub enum Error {
     PartialWrite(String),
     InvalidFile(String),
     IoError(io::Error),
-    ValueDecode(Vec<u8>),
     JsonError(jsondata::Error),
     InvalidSnapshot(String),
     Utf8Error(std::str::Utf8Error),

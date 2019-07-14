@@ -32,6 +32,7 @@ extern crate llrb_index;
 
 mod core;
 mod error;
+// TODO: mod latch_lock;
 mod llrb;
 mod llrb_node;
 mod mvcc;

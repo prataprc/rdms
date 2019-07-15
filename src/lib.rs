@@ -32,7 +32,7 @@ extern crate llrb_index;
 
 mod core;
 mod error;
-// TODO: mod latch_lock;
+mod gate;
 mod llrb;
 mod llrb_node;
 mod mvcc;
@@ -53,6 +53,7 @@ mod wal;
 
 pub use crate::core::{Diff, Serialize, Writer};
 pub use crate::error::Error;
+pub use crate::gate::Gate;
 pub use crate::llrb::Llrb;
 pub use crate::llrb_node::LlrbStats;
 pub use crate::mvcc::Mvcc;

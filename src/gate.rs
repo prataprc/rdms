@@ -30,6 +30,7 @@
 /// f. When trying to acquire read-permission or write-permission, the
 ///    caller thread shall spin until all the conditions from (a) to (e)
 ///    is met.
+///
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Gate implements latch-and-spin mechanism for non-blocking

@@ -187,18 +187,7 @@ where
     pub(crate) fn to_native_value(&self) -> Option<V> {
         match &self {
             Value::D { .. } => None,
-            Value::U {
-                value: vlog::Value::Native { value, .. },
-                ..
-            } => Some(value.clone()),
-            Value::U {
-                value: vlog::Value::Reference { .. },
-                ..
-            } => panic!("impossible situation, call the programmer"),
-            Value::U {
-                value: vlog::Value::Backup { .. },
-                ..
-            } => panic!("impossible situation, call the programmer"),
+            Value::U { value, .. } => value.to_native_value(),
         }
     }
 
@@ -244,7 +233,6 @@ where
         }
     }
 
-    #[allow(dead_code)] // TODO: remove this once bogn is weaved-up.
     pub(crate) fn set_deltas(&mut self, deltas: Vec<Delta<V>>) {
         self.deltas = deltas;
     }
@@ -256,7 +244,7 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    // Prepend a new version, also the lates version, for this entry.
+    // Prepend a new version, also the latest version, for this entry.
     // In non-lsm mode this is equivalent to over-writing previous value.
     pub(crate) fn prepend_version(&mut self, new_entry: Self, lsm: bool) {
         if lsm {
@@ -304,7 +292,7 @@ where
     // only lsm, if entry is already deleted this call becomes a no-op.
     pub(crate) fn delete(&mut self, seqno: u64) {
         match self.value.as_ref() {
-            Value::D { .. } => (),
+            Value::D { .. } => (), // NOOP
             Value::U {
                 value: vlog::Value::Native { value },
                 seqno,
@@ -333,7 +321,6 @@ where
         *self.value = Value::D { deleted: seqno };
     }
 
-    #[allow(dead_code)] // TODO: remove this once bogn is weaved-up.
     pub(crate) fn purge(&mut self, before: u64) -> bool {
         for i in 0..self.deltas.len() {
             if self.deltas[i].to_seqno() < before {

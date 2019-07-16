@@ -54,11 +54,23 @@ impl<V> Value<V> {
             length,
         }
     }
+}
 
+impl<V> Value<V>
+where
+    V: Clone,
+{
     #[allow(dead_code)] // TODO: remove this after wiring with bogn.
     pub(crate) fn into_native_value(self) -> Option<V> {
         match self {
             Value::Native { value } => Some(value),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn to_native_value(&self) -> Option<V> {
+        match self {
+            Value::Native { value } => Some(value.clone()),
             _ => None,
         }
     }

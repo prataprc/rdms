@@ -37,7 +37,7 @@ pub trait Serialize: Sized {
 /// Writer methods on DB. Used to wire up WAL and in-memory DB.
 pub trait Writer<K, V>
 where
-    K: Ord + Clone,
+    K: Clone + Ord,
     V: Clone + Diff,
 {
     /// Set {key, value} into the DB. Return older entry if present. Index
@@ -132,7 +132,7 @@ where
     pub fn into_diff(self) -> Option<<V as Diff>::D> {
         match self.data {
             InnerDelta::D { .. } => None,
-            InnerDelta::U { delta, .. } => delta.into_native(),
+            InnerDelta::U { delta, .. } => delta.into_native_delta(),
         }
     }
 
@@ -216,7 +216,7 @@ where
 #[derive(Clone)]
 pub struct Entry<K, V>
 where
-    K: Ord + Clone,
+    K: Clone + Ord,
     V: Clone + Diff,
 {
     key: K,
@@ -229,7 +229,7 @@ where
 // Entry construction methods.
 impl<K, V> Entry<K, V>
 where
-    K: Ord + Clone,
+    K: Clone + Ord,
     V: Clone + Diff,
 {
     pub const KEY_SIZE_LIMIT: usize = 1024 * 1024 * 1024; // 1GB
@@ -253,7 +253,7 @@ where
 // write/update methods.
 impl<K, V> Entry<K, V>
 where
-    K: Ord + Clone,
+    K: Clone + Ord,
     V: Clone + Diff,
 {
     // Prepend a new version, also the lates version, for this entry.
@@ -352,7 +352,7 @@ where
 // read methods.
 impl<K, V> Entry<K, V>
 where
-    K: Ord + Clone,
+    K: Clone + Ord,
     V: Clone + Diff,
 {
     #[inline]
@@ -463,7 +463,7 @@ where
                 }
                 (Some(InnerDelta::U { delta, seqno }), None) => {
                     // previous entry was a delete.
-                    let nv: V = From::from(delta.into_native().unwrap());
+                    let nv: V = From::from(delta.into_native_delta().unwrap());
                     let key = self.key.clone();
                     self.curval = Some(nv.clone());
                     Some(Entry::new(
@@ -473,7 +473,7 @@ where
                 }
                 (Some(InnerDelta::U { delta, seqno }), Some(curval)) => {
                     // this and previous entry are create/update.
-                    let nv = curval.merge(&delta.into_native().unwrap());
+                    let nv = curval.merge(&delta.into_native_delta().unwrap());
                     self.curval = Some(nv.clone());
                     let key = self.key.clone();
                     Some(Entry::new(

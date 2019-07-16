@@ -1,4 +1,4 @@
-// TODO: There are dead code meant for future use case.
+use std::convert::TryInto;
 
 use crate::core::{self, Diff, Serialize};
 use crate::error::Error;
@@ -41,12 +41,12 @@ impl<V> Value<V> {
         Value::Native { value }
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // TODO: remove this after wiring with bogn.
     pub(crate) fn new_reference(fpos: u64, length: u64) -> Value<V> {
         Value::Reference { fpos, length }
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // TODO: remove this after wiring with bogn.
     pub(crate) fn new_backup(file: &str, fpos: u64, length: u64) -> Value<V> {
         Value::Backup {
             file: file.to_string(),
@@ -55,8 +55,8 @@ impl<V> Value<V> {
         }
     }
 
-    #[allow(dead_code)] // TODO: remove this once bogn is weaved-up.
-    pub(crate) fn into_native(self) -> Option<V> {
+    #[allow(dead_code)] // TODO: remove this after wiring with bogn.
+    pub(crate) fn into_native_value(self) -> Option<V> {
         match self {
             Value::Native { value } => Some(value),
             _ => None,
@@ -64,32 +64,35 @@ impl<V> Value<V> {
     }
 }
 
-pub(crate) fn encode_value<V>(
-    value: &Value<V>, // encode if native value
-    buf: &mut Vec<u8>,
-) -> Result<usize, Error>
+impl<V> Value<V>
 where
     V: Serialize,
 {
-    use crate::util::try_convert_int;
+    pub(crate) fn encode(&self, buf: &mut Vec<u8>) -> Result<usize, Error>
+    where
+        V: Serialize,
+    {
+        match self {
+            Value::Native { value } => {
+                let m = buf.len();
+                buf.resize(m + 8, 0);
 
-    match value {
-        Value::Native { value } => {
-            let m = buf.len();
-            buf.resize(m + 8, 0);
+                let vlen = {
+                    let vlen = value.encode(buf);
+                    if vlen > core::Entry::<i32, i32>::VALUE_SIZE_LIMIT {
+                        return Err(Error::ValueSizeExceeded(vlen));
+                    };
+                    vlen
+                };
 
-            let n = value.encode(buf);
-            if n > core::Entry::<i32, i32>::VALUE_SIZE_LIMIT {
-                return Err(Error::ValueSizeExceeded(n));
+                let mut hdr1: u64 = vlen.try_into().unwrap();
+                hdr1 |= Value::<V>::VALUE_FLAG;
+                buf[m..m + 8].copy_from_slice(&hdr1.to_be_bytes());
+
+                Ok(vlen + 8)
             }
-
-            let mut vlen: u64 = try_convert_int(n + 8, "value-size: usize->u64")?;
-            vlen |= Value::<V>::VALUE_FLAG;
-            (&mut buf[m..m + 8]).copy_from_slice(&(vlen - 8).to_be_bytes());
-
-            Ok(n)
+            _ => Err(Error::NotNativeValue),
         }
-        _ => Err(Error::NotNativeValue),
     }
 }
 
@@ -106,8 +109,7 @@ where
 // * bit 63 reserved
 
 #[derive(Clone)]
-// TODO: figure out a way to make this crate private
-pub enum Delta<V>
+pub(crate) enum Delta<V>
 where
     V: Diff,
 {
@@ -136,17 +138,17 @@ where
         Delta::Native { diff }
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // TODO: remove this after wiring with bogn.
     pub(crate) fn new_reference(fpos: u64, length: u64) -> Delta<V> {
         Delta::Reference { fpos, length }
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // TODO: remove this after wiring with bogn.
     pub(crate) fn new_backup(file: String, fpos: u64, length: u64) -> Delta<V> {
         Delta::Backup { file, fpos, length }
     }
 
-    pub(crate) fn into_native(self) -> Option<<V as Diff>::D> {
+    pub(crate) fn into_native_delta(self) -> Option<<V as Diff>::D> {
         match self {
             Delta::Native { diff } => Some(diff),
             _ => None,
@@ -154,31 +156,34 @@ where
     }
 }
 
-pub(crate) fn encode_delta<V>(
-    delta: &Delta<V>, // encode if native diff
-    buf: &mut Vec<u8>,
-) -> Result<usize, Error>
+impl<V> Delta<V>
 where
     V: Diff,
-    <V as Diff>::D: Serialize,
 {
-    use crate::util::try_convert_int;
+    pub(crate) fn encode(&self, buf: &mut Vec<u8>) -> Result<usize, Error>
+    where
+        V: Diff,
+        <V as Diff>::D: Serialize,
+    {
+        match self {
+            Delta::Native { diff } => {
+                let m = buf.len();
+                buf.resize(m + 8, 0);
 
-    match delta {
-        Delta::Native { diff } => {
-            let m = buf.len();
-            buf.resize(m + 8, 0);
+                let dlen = {
+                    let dlen = diff.encode(buf);
+                    if dlen > core::Entry::<i32, i32>::DIFF_SIZE_LIMIT {
+                        return Err(Error::DiffSizeExceeded(dlen));
+                    };
+                    dlen
+                };
 
-            let n = diff.encode(buf);
-            if n > core::Entry::<i32, i32>::DIFF_SIZE_LIMIT {
-                return Err(Error::DiffSizeExceeded(n));
+                let hdr1: u64 = dlen.try_into().unwrap();
+                buf[m..m + 8].copy_from_slice(&hdr1.to_be_bytes());
+
+                Ok(dlen + 8)
             }
-
-            let dlen: u64 = try_convert_int(n + 8, "diff-size: usize->u64")?;
-            (&mut buf[m..m + 8]).copy_from_slice(&(dlen - 8).to_be_bytes());
-
-            Ok(n)
+            _ => Err(Error::NotNativeDelta),
         }
-        _ => Err(Error::NotNativeDelta),
     }
 }

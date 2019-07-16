@@ -7,7 +7,7 @@ use crate::core::{self, Diff, Serialize};
 use crate::error::Error;
 use crate::robt_build::Flusher;
 use crate::robt_config::Config;
-use crate::robt_entry::{DiskEntryM, DiskEntryZ};
+use crate::robt_entry::{MEntry, ZEntry};
 use crate::robt_stats::Stats;
 use crate::util;
 
@@ -39,7 +39,7 @@ pub(crate) enum MBlock<K, V> {
     Decode {
         block: Vec<u8>,
         count: usize,
-        offsets: &'static [u8],
+        offsets: &'static [u8], // point into block
         phantom_val: marker::PhantomData<V>,
     },
 }
@@ -99,15 +99,14 @@ where
                 first_key,
                 config,
             } => {
-                let m = mblock.len();
-                DiskEntryM::encode_m(Some(fpos), None, key, mblock)?;
-                let n = mblock.len();
-                if n < config.m_blocksize {
-                    offsets.push(m.try_into().unwrap());
+                let offset = mblock.len();
+                let n = MEntry::new_m(fpos, key).encode(mblock)?;
+                if (offset + n) < config.m_blocksize {
+                    offsets.push(offset.try_into().unwrap());
                     first_key.get_or_insert_with(|| key.clone());
                     Ok(offsets.len().try_into().unwrap())
                 } else {
-                    mblock.truncate(m);
+                    mblock.truncate(offset);
                     Err(Error::__MBlockOverflow(n))
                 }
             }
@@ -123,15 +122,14 @@ where
                 first_key,
                 config,
             } => {
-                let m = mblock.len();
-                DiskEntryM::encode_m(None, Some(fpos), key, mblock)?;
-                let n = mblock.len();
-                if n < config.m_blocksize {
-                    offsets.push(m.try_into().unwrap());
+                let offset = mblock.len();
+                let n = MEntry::new_z(fpos, key).encode(mblock)?;
+                if (offset + n) < config.m_blocksize {
+                    offsets.push(offset.try_into().unwrap());
                     first_key.get_or_insert_with(|| key.clone());
                     Ok(offsets.len().try_into().unwrap())
                 } else {
-                    mblock.truncate(m);
+                    mblock.truncate(offset);
                     Err(Error::__MBlockOverflow(n))
                 }
             }
@@ -147,19 +145,21 @@ where
                 config,
                 ..
             } => {
-                let adjust = 4 + (offsets.len() * 4);
-                let x: u32 = adjust.try_into().unwrap();
-                offsets.iter_mut().for_each(|offset| *offset += x);
-                // adjust space for offset header
-                let m = mblock.len();
-                mblock.resize(m + adjust, 0);
-                mblock.copy_within(0..m, adjust);
+                let adjust: u32 = {
+                    let m = mblock.len();
+                    let adjust = 4 + (offsets.len() * 4);
+                    mblock.resize(m + adjust, 0);
+                    mblock.copy_within(0..m, adjust);
+
+                    adjust.try_into().unwrap()
+                };
                 // encode offset header
                 let num: u32 = offsets.len().try_into().unwrap();
                 &mblock[..4].copy_from_slice(&num.to_be_bytes());
                 for (i, offset) in offsets.iter().enumerate() {
                     let x = (i + 1) * 4;
-                    mblock[x..x + 4].copy_from_slice(&offset.to_be_bytes());
+                    let offset = (offset + adjust).to_be_bytes();
+                    mblock[x..x + 4].copy_from_slice(&offset);
                 }
                 // update statistics
                 stats.padding += config.m_blocksize - mblock.len();
@@ -173,13 +173,17 @@ where
         }
     }
 
-    pub(crate) fn flush(&mut self, i_flusher: &mut Flusher) {
+    pub(crate) fn flush(
+        &mut self,
+        flusher: &mut Flusher, // flush to index file
+    ) -> &mut MBlock<K, V> {
         match self {
             MBlock::Encode { mblock, .. } => {
-                i_flusher.send(mblock.clone());
+                flusher.send(mblock.clone());
             }
             MBlock::Decode { .. } => unreachable!(),
         }
+        self
     }
 }
 
@@ -222,7 +226,7 @@ where
         key: &Q,
         from: Bound<usize>,
         to: Bound<usize>,
-    ) -> Result<DiskEntryM, Error>
+    ) -> Result<MEntry<K>, Error>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -248,7 +252,7 @@ where
         key: &Q,
         from: Bound<usize>,
         to: Bound<usize>,
-    ) -> Result<DiskEntryM, Error>
+    ) -> Result<MEntry<K>, Error>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -285,7 +289,7 @@ where
         }
     }
 
-    pub fn to_entry(&self, index: usize) -> Result<DiskEntryM, Error> {
+    pub fn to_entry(&self, index: usize) -> Result<MEntry<K>, Error> {
         let (block, count, offsets) = match self {
             MBlock::Decode {
                 block,
@@ -298,9 +302,7 @@ where
         if index < count {
             let offset = offsets[index..index + 4].try_into().unwrap();
             let offset: usize = u32::from_be_bytes(offset).try_into().unwrap();
-            let mut mentry = DiskEntryM::to_entry(&block[offset..]);
-            mentry.set_index(index);
-            Ok(mentry)
+            Ok(MEntry::decode_entry(&block[offset..], index))
         } else {
             Err(Error::__MBlockExhausted(index))
         }
@@ -313,7 +315,7 @@ where
         };
         let offset = offsets[index..index + 4].try_into().unwrap();
         let offset: usize = u32::from_be_bytes(offset).try_into().unwrap();
-        DiskEntryM::to_key(&block[offset..])
+        MEntry::decode_key(&block[offset..])
     }
 }
 
@@ -335,12 +337,17 @@ where
 // |                Entry-n                   |
 // *------------------------------------------*
 
-pub(crate) enum ZBlock<K, V> {
+pub(crate) enum ZBlock<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Serialize,
+{
     Encode {
         leaf: Vec<u8>, // buffer for z_block
         blob: Vec<u8>, // buffer for vlog
         offsets: Vec<u32>,
-        des: Vec<DiskEntryZ>,
+        zentries: Vec<ZEntry<K, V>>,
         vpos: u64,
         first_key: Option<K>,
         config: Config,
@@ -363,8 +370,8 @@ where
         ZBlock::Encode {
             leaf: Vec::with_capacity(config.z_blocksize),
             blob: Vec::with_capacity(config.v_blocksize),
-            offsets: Default::default(),
-            des: Default::default(),
+            offsets: Vec::with_capacity(64),  // TODO: no magic number
+            zentries: Vec::with_capacity(64), // TODO: no magic number
             vpos,
             first_key: Default::default(),
             config,
@@ -377,7 +384,7 @@ where
                 leaf,
                 blob,
                 offsets,
-                des,
+                zentries,
                 vpos: vpos_ref,
                 first_key,
                 ..
@@ -385,7 +392,7 @@ where
                 leaf.truncate(0);
                 blob.truncate(0);
                 offsets.truncate(0);
-                des.truncate(0);
+                zentries.truncate(0);
                 *vpos_ref = vpos;
                 first_key.take();
             }
@@ -415,34 +422,34 @@ where
         entry: &core::Entry<K, V>,
         stats: &mut Stats, // update build statistics
     ) -> Result<u64, Error> {
-        use crate::robt_entry::DiskEntryZ as DZ;
+        use crate::robt_entry::ZEntry as DZ;
 
         match self {
             ZBlock::Encode {
                 leaf,
                 blob,
                 offsets,
-                des,
+                zentries,
                 first_key,
                 config,
                 ..
             } => {
-                let (m, x) = (leaf.len(), blob.len());
+                let (offset, x) = (leaf.len(), blob.len());
                 let de = match (config.value_in_vlog, config.delta_ok) {
                     (false, false) => DZ::encode_l(entry, leaf, stats)?,
                     (false, true) => DZ::encode_ld(entry, leaf, blob, stats)?,
                     (true, false) => DZ::encode_lv(entry, leaf, blob, stats)?,
                     (true, true) => DZ::encode_lvd(entry, leaf, blob, stats)?,
                 };
-                des.push(de);
+                zentries.push(de);
 
                 let n = leaf.len();
                 if n < config.z_blocksize {
-                    offsets.push(m.try_into().unwrap());
+                    offsets.push(offset.try_into().unwrap());
                     first_key.get_or_insert_with(|| entry.as_key().clone());
                     Ok(offsets.len().try_into().unwrap())
                 } else {
-                    leaf.truncate(m);
+                    leaf.truncate(offset);
                     blob.truncate(x);
                     Err(Error::__ZBlockOverflow(n))
                 }
@@ -457,27 +464,31 @@ where
                 leaf,
                 blob,
                 offsets,
-                des,
+                zentries,
                 vpos,
                 config,
                 ..
             } => {
-                let adjust = 4 + (offsets.len() * 4);
-                let x: u32 = adjust.try_into().unwrap();
-                offsets.iter_mut().for_each(|offset| *offset += x);
-                // adjust the offset and encode
-                let m = leaf.len();
-                leaf.resize(m + adjust, 0);
-                leaf.copy_within(0..m, adjust);
+                let adjust: u32 = {
+                    let m = leaf.len();
+                    let adjust = 4 + (offsets.len() * 4);
+                    leaf.resize(m + adjust, 0);
+                    leaf.copy_within(0..m, adjust);
+
+                    adjust.try_into().unwrap()
+                };
                 // encode offset header
                 let num: u32 = offsets.len().try_into().unwrap();
                 &leaf[..4].copy_from_slice(&num.to_be_bytes());
                 for (i, offset) in offsets.iter().enumerate() {
                     let x = (i + 1) * 4;
-                    leaf[x..x + 4].copy_from_slice(&offset.to_be_bytes());
+                    let offset = (offset + adjust).to_be_bytes();
+                    leaf[x..x + 4].copy_from_slice(&offset);
                 }
                 // adjust file position offsets for value and delta in vlog.
-                des.iter().for_each(|de| de.encode_fpos(leaf, *vpos));
+                zentries
+                    .iter()
+                    .for_each(|de| de.re_encode_fpos(leaf, *vpos));
                 // update statistics
                 stats.padding += config.z_blocksize - leaf.len();
                 stats.z_bytes += config.z_blocksize;
@@ -494,14 +505,19 @@ where
         }
     }
 
-    pub(crate) fn flush(&mut self, ifr: &mut Flusher, vfr: Option<&mut Flusher>) {
+    pub(crate) fn flush(
+        &mut self,
+        x: &mut Flusher,         // flush to index file
+        y: Option<&mut Flusher>, // flush to data file
+    ) -> &mut ZBlock<K, V> {
         match self {
             ZBlock::Encode { leaf, blob, .. } => {
-                ifr.send(leaf.clone());
-                vfr.map(|flusher| flusher.send(blob.clone()));
+                x.send(leaf.clone());
+                y.map(|flusher| flusher.send(blob.clone()));
             }
             ZBlock::Decode { .. } => unreachable!(),
         }
+        self
     }
 }
 
@@ -509,6 +525,7 @@ impl<K, V> ZBlock<K, V>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
+    <V as Diff>::D: Serialize,
 {
     pub(crate) fn new_decode(
         fd: &mut fs::File,
@@ -598,7 +615,7 @@ where
         if index < count {
             let offset = offsets[index..index + 4].try_into().unwrap();
             let offset: usize = u32::from_be_bytes(offset).try_into().unwrap();
-            Ok((index, DiskEntryZ::to_entry(&block[offset..])?))
+            Ok((index, ZEntry::decode_entry(&block[offset..])?))
         } else {
             Err(Error::__ZBlockExhausted(index))
         }
@@ -611,6 +628,6 @@ where
         };
         let offset = offsets[index..index + 4].try_into().unwrap();
         let offset: usize = u32::from_be_bytes(offset).try_into().unwrap();
-        DiskEntryZ::to_key(&block[offset..])
+        ZEntry::<K, V>::decode_key(&block[offset..])
     }
 }

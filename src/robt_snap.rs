@@ -13,7 +13,7 @@ use std::{
 use crate::core::{Diff, Entry, Serialize};
 use crate::error::Error;
 use crate::robt_config::{self, Config, MetaItem};
-use crate::robt_entry::DiskEntryM;
+use crate::robt_entry::MEntry;
 use crate::robt_indx::{MBlock, ZBlock};
 use crate::robt_stats::Stats;
 use crate::util;
@@ -307,22 +307,14 @@ where
                 let mblock = MBlock::<K, V>::new_decode(fd, fpos, config)?;
                 index += 1;
                 match mblock.to_entry(index) {
-                    Ok(DiskEntryM::Entry {
-                        z: true,
-                        fpos: zfpos,
-                        ..
-                    }) => {
+                    Ok(MEntry::DecZ { fpos: zfpos, .. }) => {
                         mzs.push(MZ::M { fpos, index });
 
                         let zblock = ZBlock::new_decode(fd, zfpos, config)?;
                         mzs.push(MZ::Z { zblock, index: 0 });
                         Ok(())
                     }
-                    Ok(DiskEntryM::Entry {
-                        z: false,
-                        fpos: mfpos,
-                        ..
-                    }) => {
+                    Ok(MEntry::DecM { fpos: mfpos, .. }) => {
                         mzs.push(MZ::M { fpos, index });
                         self.build_fwd(mfpos, mzs)?;
                         Ok(())
@@ -371,11 +363,7 @@ where
                 let mblock = MBlock::<K, V>::new_decode(fd, fpos, config)?;
                 index -= 1;
                 match mblock.to_entry(index) {
-                    Ok(DiskEntryM::Entry {
-                        z: true,
-                        fpos: zfpos,
-                        ..
-                    }) => {
+                    Ok(MEntry::DecZ { fpos: zfpos, .. }) => {
                         mzs.push(MZ::M { fpos, index });
 
                         let zblock = ZBlock::new_decode(fd, zfpos, config)?;
@@ -383,11 +371,7 @@ where
                         mzs.push(MZ::Z { zblock, index });
                         Ok(())
                     }
-                    Ok(DiskEntryM::Entry {
-                        z: false,
-                        fpos: mfpos,
-                        ..
-                    }) => {
+                    Ok(MEntry::DecM { fpos: mfpos, .. }) => {
                         mzs.push(MZ::M { fpos, index });
                         self.build_rev(mfpos, mzs)?;
                         Ok(())

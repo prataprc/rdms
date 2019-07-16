@@ -18,9 +18,9 @@ include!("llrb_common.rs");
 /// **[LSM mode]**: Llrb index can support log-structured-merge while
 /// mutating the tree. In simple terms, this means that nothing shall be
 /// over-written in the tree and all the mutations for the same key shall
-/// be preserved until they are undone or purged. Although there is one
-/// exception to it, back-to-back deletes will collapse into a no-op and
-/// only the first delete shall be ingested.
+/// be preserved until they are purged. Though, there is one exception to
+/// it, back-to-back deletes will collapse into a no-op and only the
+/// first delete shall be ingested.
 ///
 /// [llrb]: https://en.wikipedia.org/wiki/Left-leaning_red-black_tree
 /// [LSM mode]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
@@ -165,7 +165,7 @@ where
     ///
     /// *LSM mode*: Add a new version for the key, perserving the old value.
     pub fn set(&mut self, key: K, value: V) -> Option<Entry<K, V>> {
-        let value = Value::new_upsert_value(value, self.seqno + 1);
+        let value = Box::new(Value::new_upsert_value(value, self.seqno + 1));
         let new_entry = Entry::new(key, value);
         match Llrb::upsert(self.root.take(), new_entry, self.lsm) {
             (Some(mut root), entry) => {
@@ -188,7 +188,7 @@ where
     ///
     /// *LSM mode*: Add a new version for the key, perserving the old value.
     pub fn set_cas(&mut self, key: K, value: V, cas: u64) -> Result<Option<Entry<K, V>>, Error> {
-        let value = Value::new_upsert_value(value, self.seqno + 1);
+        let value = Box::new(Value::new_upsert_value(value, self.seqno + 1));
         let new_entry = Entry::new(key, value);
         match Llrb::upsert_cas(self.root.take(), new_entry, cas, self.lsm) {
             (root, _, Some(err)) => {

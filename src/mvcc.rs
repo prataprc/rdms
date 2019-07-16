@@ -872,7 +872,7 @@ where
         let snapshot = Snapshot::clone(&self.index.snapshot);
 
         let (seqno, mut n_count) = (snapshot.seqno + 1, snapshot.n_count);
-        let value = Value::new_upsert_value(value, seqno);
+        let value = Box::new(Value::new_upsert_value(value, seqno));
         let new_entry = Entry::new(key, value);
 
         let root = snapshot.root_duplicate();
@@ -899,7 +899,7 @@ where
         let snapshot = Snapshot::clone(&self.index.snapshot);
 
         let (mut seqno, mut n_count) = (snapshot.seqno, snapshot.n_count);
-        let value = Value::new_upsert_value(value, seqno + 1);
+        let value = Box::new(Value::new_upsert_value(value, seqno + 1));
         let new_entry = Entry::new(key, value);
         let root = snapshot.root_duplicate();
         let mut rclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);

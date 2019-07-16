@@ -27,7 +27,7 @@ where
     // lsm delete.
     pub(crate) fn new_deleted(key: K, deleted: u64) -> Box<Node<K, V>> {
         let node = Box::new(Node {
-            entry: Entry::new(key, Value::new_delete(deleted)),
+            entry: Entry::new(key, Box::new(Value::new_delete(deleted))),
             black: false,
             dirty: true,
             left: None,

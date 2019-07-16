@@ -1,8 +1,9 @@
 /// Gate implements the idea of latch-and-spin mechanism normally
-/// used for non-blocking concurrency. Blocking concurrency can have
-/// impact on latency. On the other hand, when the operations are going
-/// to be quick and short, we can use non-blocking primitives like
-/// latch-and-spin.
+/// used for non-blocking concurrency.
+///
+/// Blocking concurrency can have impact on latency. On the other hand,
+/// when the operations are going to be quick and short, we can use
+/// non-blocking primitives like latch-and-spin.
 ///
 /// **What is Latch and spin ?**
 ///
@@ -34,12 +35,15 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Gate implements latch-and-spin mechanism for non-blocking
-/// concurrency. It uses AtomicU64 for:
+/// concurrency.
+///
+/// It uses AtomicU64 for:
 /// a. ref-count, bits [0-61].
 /// b. latch flag, bit 62.
 /// c. lock flag, bit 63.
 ///
 /// All atomic operations use Ordering::Relaxed.
+///
 pub struct Gate(AtomicU64);
 
 impl Gate {

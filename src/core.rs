@@ -220,7 +220,7 @@ where
     V: Clone + Diff,
 {
     key: K,
-    value: Value<V>,
+    value: Box<Value<V>>,
     deltas: Vec<Delta<V>>,
 }
 
@@ -236,7 +236,7 @@ where
     pub const DIFF_SIZE_LIMIT: usize = 1024 * 1024 * 1024 * 1024; // 1TB
     pub const VALUE_SIZE_LIMIT: usize = 1024 * 1024 * 1024 * 1024; // 1TB
 
-    pub(crate) fn new(key: K, value: Value<V>) -> Entry<K, V> {
+    pub(crate) fn new(key: K, value: Box<Value<V>>) -> Entry<K, V> {
         Entry {
             key,
             value,
@@ -271,7 +271,7 @@ where
     }
 
     fn prepend_version_lsm(&mut self, new_entry: Self) {
-        match &self.value {
+        match self.value.as_ref() {
             Value::D { deleted } => {
                 self.deltas.insert(0, Delta::new_delete(*deleted));
             }
@@ -303,7 +303,7 @@ where
 
     // only lsm, if entry is already deleted this call becomes a no-op.
     pub(crate) fn delete(&mut self, seqno: u64) {
-        match &self.value {
+        match self.value.as_ref() {
             Value::D { .. } => (),
             Value::U {
                 value: vlog::Value::Native { value },
@@ -330,7 +330,7 @@ where
                 panic!("impossible situation");
             }
         }
-        self.value = Value::D { deleted: seqno };
+        *self.value = Value::D { deleted: seqno };
     }
 
     #[allow(dead_code)] // TODO: remove this once bogn is weaved-up.
@@ -388,7 +388,7 @@ where
     /// Return the latest seqno that created/updated/deleted this entry.
     #[inline]
     pub fn to_seqno(&self) -> u64 {
-        match &self.value {
+        match self.value.as_ref() {
             Value::U { seqno, .. } => *seqno,
             Value::D { deleted, .. } => *deleted,
         }
@@ -399,7 +399,7 @@ where
     /// was deleted.
     #[inline]
     pub fn to_seqno_state(&self) -> (bool, u64) {
-        match &self.value {
+        match &self.value.as_ref() {
             Value::U { seqno, .. } => (true, *seqno),
             Value::D { deleted, .. } => (false, *deleted),
         }
@@ -419,12 +419,14 @@ where
 
     /// Return an iterator of previous versions.
     pub fn versions(&self) -> VersionIter<K, V> {
-        let entry = Some(self.clone());
-        let curval = self.to_native_value();
         VersionIter {
             key: self.key.clone(),
-            entry,
-            curval,
+            entry: Some(Entry {
+                key: self.key.clone(),
+                value: self.value.clone(),
+                deltas: Default::default(),
+            }),
+            curval: None,
             deltas: self.to_deltas().into_iter(),
         }
     }
@@ -449,39 +451,36 @@ where
     type Item = Entry<K, V>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match self.entry.take() {
-            Some(entry) => {
-                self.curval = entry.to_native_value();
-                Some(entry)
+        if let Some(entry) = self.entry.take() {
+            self.curval = entry.to_native_value();
+            return Some(entry);
+        }
+        match (self.deltas.next().map(|x| x.data), self.curval.take()) {
+            (None, _) => None,
+            (Some(InnerDelta::D { .. }), None) => {
+                panic!("consecutive versions can't be a delete");
             }
-            None => match (self.deltas.next().map(|x| x.data), self.curval.take()) {
-                (None, _) => None,
-                (Some(InnerDelta::D { deleted }), _) => {
-                    // this entry is deleted.
-                    let key = self.key.clone();
-                    Some(Entry::new(key, Value::new_delete(deleted)))
-                }
-                (Some(InnerDelta::U { delta, seqno }), None) => {
-                    // previous entry was a delete.
-                    let nv: V = From::from(delta.into_native_delta().unwrap());
-                    let key = self.key.clone();
-                    self.curval = Some(nv.clone());
-                    Some(Entry::new(
-                        key,
-                        Value::new_upsert(vlog::Value::new_native(nv), seqno),
-                    ))
-                }
-                (Some(InnerDelta::U { delta, seqno }), Some(curval)) => {
-                    // this and previous entry are create/update.
-                    let nv = curval.merge(&delta.into_native_delta().unwrap());
-                    self.curval = Some(nv.clone());
-                    let key = self.key.clone();
-                    Some(Entry::new(
-                        key,
-                        Value::new_upsert(vlog::Value::new_native(nv), seqno),
-                    ))
-                }
-            },
+            (Some(InnerDelta::D { deleted }), _) => {
+                // this entry is deleted.
+                let key = self.key.clone();
+                Some(Entry::new(key, Box::new(Value::new_delete(deleted))))
+            }
+            (Some(InnerDelta::U { delta, seqno }), None) => {
+                // previous entry was a delete.
+                let nv: V = From::from(delta.into_native_delta().unwrap());
+                let key = self.key.clone();
+                self.curval = Some(nv.clone());
+                let v = Value::new_upsert(vlog::Value::new_native(nv), seqno);
+                Some(Entry::new(key, Box::new(v)))
+            }
+            (Some(InnerDelta::U { delta, seqno }), Some(curval)) => {
+                // this and previous entry are create/update.
+                let nv = curval.merge(&delta.into_native_delta().unwrap());
+                self.curval = Some(nv.clone());
+                let key = self.key.clone();
+                let v = Value::new_upsert(vlog::Value::new_native(nv), seqno);
+                Some(Entry::new(key, Box::new(v)))
+            }
         }
     }
 }

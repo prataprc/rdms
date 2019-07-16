@@ -1,11 +1,11 @@
 //! Bogn provide a collection of algorithms for indexing data either
 //! in memory or in disk or in both. Bogn indexes are optimized for
-//! document databases and bigdata. This means:
+//! document databases and bigdata.
 //!
 //! Each index will carry a sequence-number as the count of mutations
 //! ingested by the index. For every successful mutation, the
-//! sequence-number will be incremented and the entry, on which the
-//! mutation was applied, shall be tagged with that sequence-number.
+//! sequence-number will be incremented and corresponding entry
+//! shall be tagged with that sequence-number.
 //!
 //! Log-Structured-Merge, [LSM], is a common technique used in managing
 //! heterogenous data-structures that are transparent to the index. In

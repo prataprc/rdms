@@ -222,10 +222,7 @@ impl LlrbStats {
     /// use bogn::Llrb;
     /// let mut llrb: Llrb<i64,i64> = Llrb::new("myinstance");
     ///
-    /// // size of key: 8 bytes
-    /// // size of value: 16 bytes
-    /// // overhead is 24 bytes
-    /// assert_eq!(llrb.stats().to_node_size(), 120);
+    /// assert_eq!(llrb.stats().to_node_size(), 64);
     /// ```
     pub fn to_node_size(&self) -> usize {
         match self {

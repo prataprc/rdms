@@ -10,7 +10,7 @@ fn test_delta_new_upsert() {
 
     match delta.clone().into_upserted() {
         Some((d, seqno)) => {
-            assert_eq!(d.into_native(), Some(100));
+            assert_eq!(d.into_native_delta(), Some(100));
             assert_eq!(seqno, 200);
         }
         None => assert!(false),
@@ -49,7 +49,7 @@ fn test_value_new_delete() {
 #[test]
 fn test_entry_new() {
     // testcase1 new
-    let value = Value::new_upsert(vlog::Value::new_native(10), 1000);
+    let value = Box::new(Value::new_upsert(vlog::Value::new_native(10), 1000));
     let mut entry1 = Entry::new(100, value);
     // verify latest entry
     assert_eq!(entry1.as_deltas().len(), 0);
@@ -61,7 +61,7 @@ fn test_entry_new() {
     assert!(vers.next().is_none());
 
     // testcase2 upsert
-    let value = Value::new_upsert(vlog::Value::new_native(20), 1001);
+    let value = Box::new(Value::new_upsert(vlog::Value::new_native(20), 1001));
     let entry2 = Entry::new(100, value);
     entry1.prepend_version(entry2, false /*lsm*/);
     // verify latest entry
@@ -92,7 +92,7 @@ fn test_entry_new() {
 #[test]
 fn test_entry_new_lsm() {
     // testcase1 new
-    let value = Value::new_upsert(vlog::Value::new_native(10), 1000);
+    let value = Box::new(Value::new_upsert(vlog::Value::new_native(10), 1000));
     let mut entry1 = Entry::new(100, value);
     // verify latest entry
     assert_eq!(entry1.as_deltas().len(), 0);
@@ -104,7 +104,7 @@ fn test_entry_new_lsm() {
     assert!(vers.next().is_none());
 
     // testcase2 upsert
-    let value = Value::new_upsert(vlog::Value::new_native(20), 1001);
+    let value = Box::new(Value::new_upsert(vlog::Value::new_native(20), 1001));
     let entry2 = Entry::new(100, value);
     entry1.prepend_version(entry2, true /*lsm*/);
     // verify latest entry
@@ -134,7 +134,7 @@ fn test_entry_new_lsm() {
     assert!(vers.next().is_none());
 
     // testcase4 upsert
-    let value = Value::new_upsert(vlog::Value::new_native(30), 1003);
+    let value = Box::new(Value::new_upsert(vlog::Value::new_native(30), 1003));
     let entry3 = Entry::new(100, value);
     entry1.prepend_version(entry3, true /*lsm*/);
     // verify latest entry

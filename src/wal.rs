@@ -30,7 +30,7 @@
 ///
 /// **Initial WAL cycle**:
 ///
-/// ```
+/// ```ignore
 ///                                        +----------------+
 ///     Wal::create() -> spawn_writer() -> | purge_before() |
 ///                                        |    close()     |
@@ -39,7 +39,7 @@
 ///
 /// **Reload WAL cycle**:
 ///
-/// ```
+/// ```ignore
 ///                                      +----------------+
 ///     Wal::load() -> spawn_writer() -> | purge_before() |
 ///                                      |    close()     |
@@ -48,13 +48,13 @@
 ///
 /// **Replay WAL cycle**:
 ///
-/// ```
+/// ```ignore
 ///     Wal::load() -> replay() -> close()
 /// ```
 ///
 /// Purge cycle:
 ///
-/// ```
+/// ```ignore
 ///     +---------------+
 ///     | Wal::create() |
 ///     |     or        | ---> Wal::purge()

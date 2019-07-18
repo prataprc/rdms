@@ -33,6 +33,7 @@
 ///    is met.
 ///
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::thread;
 
 /// Gate implements latch-and-spin mechanism for non-blocking
 /// concurrency.
@@ -57,53 +58,57 @@ impl Gate {
         Gate(AtomicU64::new(0))
     }
 
-    /// acquire for read permission
-    pub fn acquire_read(&self) -> Reader {
+    /// Acquire latch for read permission. If yield_ok is true, calling
+    /// thread will yield to scheduler before re-trying the latch.
+    pub fn acquire_read(&self, yield_ok: bool) -> Reader {
         loop {
             let c = self.0.load(Ordering::Relaxed);
-            if (c & Self::LATCH_LOCK_FLAG) != 0 {
-                // latch is acquired by a writer
-                continue;
+            if (c & Self::LATCH_LOCK_FLAG) == 0 {
+                // latch is not acquired by a writer
+                let n = c + 1;
+                if self.0.compare_and_swap(c, n, Ordering::Relaxed) == c {
+                    break Reader { door: self };
+                }
             }
-            let n = c + 1;
-            if self.0.compare_and_swap(c, n, Ordering::Relaxed) != c {
-                // unlucky, a concurrent thread has modified this latch-lock
-                continue;
+            if yield_ok {
+                thread::yield_now();
             }
-            break Reader { door: self };
         }
     }
 
-    /// acquire for write permission
-    pub fn acquire_write(&self) -> Writer {
+    /// Acquire latch for write permission. If yield_ok is true, calling
+    /// thread will yield to scheduler before re-trying the latch.
+    pub fn acquire_write(&self, yield_ok: bool) -> Writer {
         // acquire latch
         loop {
             let c = self.0.load(Ordering::Relaxed);
-            if (c & Self::LATCH_FLAG) != 0 {
-                // latch is acquired by a writer
-                continue;
+            if (c & Self::LATCH_FLAG) == 0 {
+                // latch is not acquired by a writer
+                if (c & Self::LOCK_FLAG) != 0 {
+                    panic!("if latch is flipped-off, lock can't be flipped-on !");
+                }
+                let n = c | Self::LATCH_FLAG;
+                if self.0.compare_and_swap(c, n, Ordering::Relaxed) == c {
+                    break;
+                }
             }
-            if (c & Self::LOCK_FLAG) != 0 {
-                panic!("if latch is flipped-off, lock can't be found-on !");
+            if yield_ok {
+                thread::yield_now();
             }
-            let n = c | Self::LATCH_FLAG;
-            if self.0.compare_and_swap(c, n, Ordering::Relaxed) != c {
-                // another concurrent thread has modified this latch-lock
-                continue;
-            }
-            break;
         }
         // acquire lock
         loop {
             let c = self.0.load(Ordering::Relaxed);
-            if (c & Self::READERS_FLAG) > 0 {
-                continue;
+            if (c & Self::READERS_FLAG) == 0 {
+                let n = c | Self::LOCK_FLAG;
+                if self.0.compare_and_swap(c, n, Ordering::Relaxed) == c {
+                    break Writer { door: self };
+                }
+                panic!("latch is acquired, ZERO readers, but unable to lock !")
             }
-            let n = c | Self::LOCK_FLAG;
-            if self.0.compare_and_swap(c, n, Ordering::Relaxed) != c {
-                panic!("latch is acquired, active readers exited, but locked !")
+            if yield_ok {
+                thread::yield_now();
             }
-            break Writer { door: self };
         }
     }
 }

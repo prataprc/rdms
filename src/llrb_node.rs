@@ -173,7 +173,7 @@ where
 }
 
 /// Statistics for [`Llrb`] and [`Mvcc`] tree.
-pub enum LlrbStats {
+pub enum Stats {
     /// full statisics via [`Llrb::validate`] method.
     Full {
         entries: usize,
@@ -185,9 +185,9 @@ pub enum LlrbStats {
     Partial { entries: usize, node_size: usize },
 }
 
-impl LlrbStats {
-    pub(crate) fn new_partial(entries: usize, node_size: usize) -> LlrbStats {
-        LlrbStats::Partial { entries, node_size }
+impl Stats {
+    pub(crate) fn new_partial(entries: usize, node_size: usize) -> Stats {
+        Stats::Partial { entries, node_size }
     }
 
     pub(crate) fn new_full(
@@ -195,8 +195,8 @@ impl LlrbStats {
         node_size: usize,
         blacks: usize,
         depths: LlrbDepth,
-    ) -> LlrbStats {
-        LlrbStats::Full {
+    ) -> Stats {
+        Stats::Full {
             entries,
             node_size,
             blacks,
@@ -208,8 +208,8 @@ impl LlrbStats {
     /// Return number entries in [`Llrb`] / [`Mvcc`] instance.
     pub fn to_entries(&self) -> usize {
         match self {
-            LlrbStats::Partial { entries, .. } => *entries,
-            LlrbStats::Full { entries, .. } => *entries,
+            Stats::Partial { entries, .. } => *entries,
+            Stats::Full { entries, .. } => *entries,
         }
     }
 
@@ -226,8 +226,8 @@ impl LlrbStats {
     /// ```
     pub fn to_node_size(&self) -> usize {
         match self {
-            LlrbStats::Partial { node_size, .. } => *node_size,
-            LlrbStats::Full { node_size, .. } => *node_size,
+            Stats::Partial { node_size, .. } => *node_size,
+            Stats::Full { node_size, .. } => *node_size,
         }
     }
 
@@ -236,16 +236,16 @@ impl LlrbStats {
     /// and right child.
     pub fn to_blacks(&self) -> Option<usize> {
         match self {
-            LlrbStats::Partial { .. } => None,
-            LlrbStats::Full { blacks, .. } => Some(*blacks),
+            Stats::Partial { .. } => None,
+            Stats::Full { blacks, .. } => Some(*blacks),
         }
     }
 
     /// Return [`LlrbDepth`] statistics.
     pub fn to_depths(&self) -> Option<LlrbDepth> {
         match self {
-            LlrbStats::Partial { .. } => None,
-            LlrbStats::Full { depths, .. } => Some(depths.clone()),
+            Stats::Partial { .. } => None,
+            Stats::Full { depths, .. } => Some(depths.clone()),
         }
     }
 }

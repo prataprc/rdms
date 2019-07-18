@@ -52,30 +52,38 @@ where
         Some(node) if node.dirty => Err(Error::DirtyNode),
         Some(_node) if fromred && red => Err(Error::ConsecutiveReds),
         Some(node) => {
-            if !red {
-                blacks += 1;
-            }
-            let (left, right) = (node.as_left_deref(), node.as_right_deref());
-            let l = validate_tree(left, red, blacks, depth + 1, depths)?;
-            let r = validate_tree(right, red, blacks, depth + 1, depths)?;
-            if l != r {
-                return Err(Error::UnbalancedBlacks(l, r));
-            }
-            if let Some(left) = left {
-                if left.as_key().ge(node.as_key()) {
-                    let left = format!("{:?}", left.as_key());
-                    let parent = format!("{:?}", node.as_key());
-                    return Err(Error::SortError(left, parent));
+            // confirm sort order in the tree.
+            let (left, right) = {
+                let left = node.as_left_deref();
+                let right = node.as_right_deref();
+                if let Some(left) = left {
+                    if left.as_key().ge(node.as_key()) {
+                        let left = format!("{:?}", left.as_key());
+                        let parent = format!("{:?}", node.as_key());
+                        return Err(Error::SortError(left, parent));
+                    }
                 }
-            }
-            if let Some(right) = right {
-                if right.as_key().le(node.as_key()) {
-                    let parent = format!("{:?}", node.as_key());
-                    let right = format!("{:?}", right.as_key());
-                    return Err(Error::SortError(parent, right));
+                if let Some(right) = right {
+                    if right.as_key().le(node.as_key()) {
+                        let parent = format!("{:?}", node.as_key());
+                        let right = format!("{:?}", right.as_key());
+                        return Err(Error::SortError(parent, right));
+                    }
                 }
+                (left, right)
+            };
+
+            {
+                if !red {
+                    blacks += 1;
+                }
+                let l = validate_tree(left, red, blacks, depth + 1, depths)?;
+                let r = validate_tree(right, red, blacks, depth + 1, depths)?;
+                if l != r {
+                    return Err(Error::UnbalancedBlacks(l, r));
+                }
+                Ok(l)
             }
-            Ok(l)
         }
         None => {
             depths.sample(depth);
@@ -98,13 +106,12 @@ where
     node.right.take().map(|right| drop_tree(right));
 }
 
-#[allow(dead_code)]
 pub struct Iter<'a, K, V>
 where
     K: Ord + Clone,
     V: Clone + Diff,
 {
-    arc: Arc<MvccRoot<K, V>>,
+    _arc: Arc<MvccRoot<K, V>>, // only used for ref-count-ing MVCC-snapshot.
     paths: Option<Vec<Fragment<'a, K, V>>>,
 }
 
@@ -124,16 +131,20 @@ where
             None => None,
             Some(mut path) => match (path.flag, path.nref) {
                 (IFlag::Left, nref) => {
-                    path.flag = IFlag::Center;
-                    paths.push(path);
-                    self.paths = Some(paths);
+                    self.paths = {
+                        path.flag = IFlag::Center;
+                        paths.push(path);
+                        Some(paths)
+                    };
                     Some(nref.entry.clone())
                 }
                 (IFlag::Center, nref) => {
-                    path.flag = IFlag::Right;
-                    paths.push(path);
-                    let rnref = nref.as_right_deref();
-                    self.paths = Some(build_iter(IFlag::Left, rnref, paths));
+                    self.paths = {
+                        path.flag = IFlag::Right;
+                        paths.push(path);
+                        let rnref = nref.as_right_deref();
+                        Some(build_iter(IFlag::Left, rnref, paths))
+                    };
                     self.next()
                 }
                 (_, _) => {
@@ -145,7 +156,6 @@ where
     }
 }
 
-#[allow(dead_code)]
 pub struct Range<'a, K, V, R, Q>
 where
     K: Ord + Clone + Borrow<Q>,
@@ -153,7 +163,7 @@ where
     R: RangeBounds<Q>,
     Q: Ord + ?Sized,
 {
-    arc: Arc<MvccRoot<K, V>>,
+    _arc: Arc<MvccRoot<K, V>>, // only used for ref-count-ing MVCC-snapshot.
     range: R,
     paths: Option<Vec<Fragment<'a, K, V>>>,
     high: marker::PhantomData<Q>,
@@ -178,16 +188,20 @@ where
             None => None,
             Some(mut path) => match (path.flag, path.nref) {
                 (IFlag::Left, nref) => {
-                    path.flag = IFlag::Center;
-                    paths.push(path);
-                    self.paths = Some(paths);
+                    self.paths = {
+                        path.flag = IFlag::Center;
+                        paths.push(path);
+                        Some(paths)
+                    };
                     Some(nref.entry.clone())
                 }
                 (IFlag::Center, nref) => {
-                    path.flag = IFlag::Right;
-                    paths.push(path);
-                    let rnref = nref.as_right_deref();
-                    self.paths = Some(build_iter(IFlag::Left, rnref, paths));
+                    self.paths = {
+                        path.flag = IFlag::Right;
+                        paths.push(path);
+                        let rnref = nref.as_right_deref();
+                        Some(build_iter(IFlag::Left, rnref, paths))
+                    };
                     self.next()
                 }
                 (_, _) => {
@@ -214,7 +228,6 @@ where
     }
 }
 
-#[allow(dead_code)]
 pub struct Reverse<'a, K, V, R, Q>
 where
     K: Ord + Clone,
@@ -222,7 +235,7 @@ where
     R: RangeBounds<Q>,
     Q: Ord + ?Sized,
 {
-    arc: Arc<MvccRoot<K, V>>,
+    _arc: Arc<MvccRoot<K, V>>, // only used for ref-count-ing MVCC-snapshot.
     range: R,
     paths: Option<Vec<Fragment<'a, K, V>>>,
     low: marker::PhantomData<Q>,
@@ -247,16 +260,20 @@ where
             None => None,
             Some(mut path) => match (path.flag, path.nref) {
                 (IFlag::Right, nref) => {
-                    path.flag = IFlag::Center;
-                    paths.push(path);
-                    self.paths = Some(paths);
+                    self.paths = {
+                        path.flag = IFlag::Center;
+                        paths.push(path);
+                        Some(paths)
+                    };
                     Some(nref.entry.clone())
                 }
                 (IFlag::Center, nref) => {
-                    path.flag = IFlag::Left;
-                    paths.push(path);
-                    let rnref = nref.as_left_deref();
-                    self.paths = Some(build_iter(IFlag::Right, rnref, paths));
+                    self.paths = {
+                        path.flag = IFlag::Left;
+                        paths.push(path);
+                        let rnref = nref.as_left_deref();
+                        Some(build_iter(IFlag::Right, rnref, paths))
+                    };
                     self.next()
                 }
                 (_, _) => {
@@ -283,11 +300,17 @@ where
     }
 }
 
+// We support continuous iteration without walking through the whole
+// tree from root. We do this by maintaining a FIFO queue of tree-path
+// to the previous iterated node. Each node in the FIFO queue is a tuple
+// of llrb-node and its current state (IFlag), together this tuple is
+// called as a Fragment.
+
 #[derive(Copy, Clone)]
 enum IFlag {
-    Left,
-    Center,
-    Right,
+    Left,   // left path is iterated.
+    Center, // current node is iterated.
+    Right,  // right paths is being iterated.
 }
 
 struct Fragment<'a, K, V>
@@ -338,13 +361,15 @@ where
         None => paths,
         Some(nref) => {
             let cmp = nref.as_key().borrow().cmp(low);
-            let flag = match cmp {
-                Ordering::Less => IFlag::Right,
-                Ordering::Equal if incl => IFlag::Left,
-                Ordering::Equal => IFlag::Center,
-                Ordering::Greater => IFlag::Left,
-            };
-            paths.push(Fragment { flag, nref });
+            paths.push(Fragment {
+                flag: match cmp {
+                    Ordering::Less => IFlag::Right,
+                    Ordering::Equal if incl => IFlag::Left,
+                    Ordering::Equal => IFlag::Center,
+                    Ordering::Greater => IFlag::Left,
+                },
+                nref,
+            });
             match cmp {
                 Ordering::Less => {
                     let nref = nref.as_right_deref();
@@ -375,13 +400,15 @@ where
         None => paths,
         Some(nref) => {
             let cmp = nref.as_key().borrow().cmp(high);
-            let flag = match cmp {
-                Ordering::Less => IFlag::Right,
-                Ordering::Equal if incl => IFlag::Right,
-                Ordering::Equal => IFlag::Center,
-                Ordering::Greater => IFlag::Left,
-            };
-            paths.push(Fragment { flag, nref });
+            paths.push(Fragment {
+                flag: match cmp {
+                    Ordering::Less => IFlag::Right,
+                    Ordering::Equal if incl => IFlag::Right,
+                    Ordering::Equal => IFlag::Center,
+                    Ordering::Greater => IFlag::Left,
+                },
+                nref,
+            });
             match cmp {
                 Ordering::Less => {
                     let nref = nref.as_right_deref();

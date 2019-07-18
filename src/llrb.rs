@@ -7,7 +7,7 @@ use std::{marker, mem};
 
 use crate::core::{Diff, Entry, Value};
 use crate::error::Error;
-use crate::llrb_node::{LlrbDepth, LlrbStats, Node};
+use crate::llrb_node::{LlrbDepth, Node, Stats};
 use crate::mvcc::MvccRoot;
 
 include!("llrb_common.rs");
@@ -62,7 +62,7 @@ where
     }
 }
 
-/// Construct new Llrb index.
+/// Different ways to construct a new Llrb index.
 impl<K, V> Llrb<K, V>
 where
     K: Clone + Ord,
@@ -147,9 +147,9 @@ where
     }
 
     /// Return quickly with basic statisics, only entries() method is valid
-    /// with this statisics. TODO: implement the same for MVCC.
-    pub fn stats(&self) -> LlrbStats {
-        LlrbStats::new_partial(self.n_count, mem::size_of::<Node<K, V>>())
+    /// with this statisics.
+    pub fn stats(&self) -> Stats {
+        Stats::new_partial(self.len(), mem::size_of::<Node<K, V>>())
     }
 }
 
@@ -209,7 +209,7 @@ where
     }
 
     /// Delete the given key. Note that back-to-back delete for the same
-    /// key shall collapse into a single delete, first deleted is ingested
+    /// key shall collapse into a single delete, first delete is ingested
     /// while the rest are ignored.
     ///
     /// *LSM mode*: Mark the entry as deleted along with seqno at which it
@@ -488,7 +488,7 @@ where
     pub fn iter(&self) -> Iter<K, V> {
         let node = self.root.as_ref().map(Deref::deref);
         Iter {
-            arc: Default::default(),
+            _arc: Default::default(),
             paths: Some(build_iter(IFlag::Left, node, vec![])),
         }
     }
@@ -507,7 +507,7 @@ where
             Bound::Excluded(low) => Some(find_start(root, low, false, vec![])),
         };
         Range {
-            arc: Default::default(),
+            _arc: Default::default(),
             range,
             paths,
             high: marker::PhantomData,
@@ -529,7 +529,7 @@ where
         };
         let low = marker::PhantomData;
         Reverse {
-            arc: Default::default(),
+            _arc: Default::default(),
             range,
             paths,
             low,
@@ -537,9 +537,7 @@ where
     }
 }
 
-/// Deep walk validate of Llrb index. Note that in addition to normal
-/// contraints to type parameter `K`, K-type shall also implement
-/// `Debug` trait.
+/// Deep walk validate of Llrb index.
 impl<K, V> Llrb<K, V>
 where
     K: Clone + Ord + Debug,
@@ -548,18 +546,18 @@ where
     /// Validate LLRB tree with following rules:
     ///
     /// * From root to any leaf, no consecutive reds allowed in its path.
-    /// * Number of blacks should be same on under left child and right child.
-    /// * Make sure that keys are in sorted order.
+    /// * Number of blacks should be same under left child and right child.
+    /// * Make sure that keys are in sort order.
     ///
-    /// Additionally return full statistics on the tree. Refer to [`LlrbStats`]
+    /// Additionally return full statistics on the tree. Refer to [`Stats`]
     /// for more information.
-    pub fn validate(&self) -> Result<LlrbStats, Error> {
+    pub fn validate(&self) -> Result<Stats, Error> {
         let root = self.root.as_ref().map(Deref::deref);
         let (red, blacks, depth) = (is_red(root), 0, 0);
         let mut depths: LlrbDepth = Default::default();
         let blacks = validate_tree(root, red, blacks, depth, &mut depths)?;
 
-        Ok(LlrbStats::new_full(
+        Ok(Stats::new_full(
             self.n_count,
             std::mem::size_of::<Node<K, V>>(),
             blacks,

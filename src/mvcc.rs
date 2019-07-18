@@ -1,20 +1,22 @@
 // TODO: unlike Llrb, Mvcc uses &self for write operation, it is better
 // to provide a writer constructor that will accept only &mut self.
 
-use std::borrow::Borrow;
-use std::cmp::{Ord, Ordering};
-use std::fmt::Debug;
-use std::marker;
-use std::ops::{Bound, Deref, DerefMut, RangeBounds};
-use std::sync::{
-    atomic::{AtomicPtr, AtomicU8, Ordering::Relaxed},
-    Arc,
+use std::{
+    borrow::Borrow,
+    cmp::{Ord, Ordering},
+    fmt::Debug,
+    marker, mem,
+    ops::{Bound, Deref, DerefMut, RangeBounds},
+    sync::{
+        atomic::{AtomicPtr, AtomicU8, Ordering::Relaxed},
+        Arc,
+    },
 };
 
 use crate::core::{Diff, Entry, Value};
 use crate::error::Error;
 use crate::llrb::Llrb;
-use crate::llrb_node::{LlrbDepth, LlrbStats, Node};
+use crate::llrb_node::{LlrbDepth, Node, Stats};
 
 const RECLAIM_CAP: usize = 128;
 
@@ -175,6 +177,12 @@ where
     #[inline]
     pub fn to_seqno(&self) -> u64 {
         Snapshot::clone(&self.snapshot).seqno
+    }
+
+    /// Return quickly with basic statisics, only entries() method is valid
+    /// with this statisics.
+    pub fn stats(&self) -> Stats {
+        Stats::new_partial(self.len(), mem::size_of::<Node<K, V>>())
     }
 }
 
@@ -459,11 +467,11 @@ where
 
     pub fn iter(&self) -> Iter<K, V> {
         let mut iter = Iter {
-            arc: Snapshot::clone(&self.snapshot),
+            _arc: Snapshot::clone(&self.snapshot),
             paths: Default::default(),
         };
         let root = iter
-            .arc
+            ._arc
             .as_ref()
             .root_duplicate()
             .map(|n| Box::leak(n) as &Node<K, V>);
@@ -478,13 +486,13 @@ where
         Q: Ord + ?Sized,
     {
         let mut r = Range {
-            arc: Snapshot::clone(&self.snapshot),
+            _arc: Snapshot::clone(&self.snapshot),
             range,
             paths: Default::default(),
             high: marker::PhantomData,
         };
         let root = r
-            .arc
+            ._arc
             .as_ref()
             .root_duplicate()
             .map(|n| Box::leak(n) as &Node<K, V>);
@@ -503,13 +511,13 @@ where
         Q: Ord + ?Sized,
     {
         let mut r = Reverse {
-            arc: Snapshot::clone(&self.snapshot),
+            _arc: Snapshot::clone(&self.snapshot),
             range,
             paths: Default::default(),
             low: marker::PhantomData,
         };
         let root = r
-            .arc
+            ._arc
             .as_ref()
             .root_duplicate()
             .map(|n| Box::leak(n) as &Node<K, V>);
@@ -536,16 +544,16 @@ where
     /// * Number of blacks should be same on under left child and right child.
     /// * Make sure that keys are in sorted order.
     ///
-    /// Additionally return full statistics on the tree. Refer to [`LlrbStats`]
+    /// Additionally return full statistics on the tree. Refer to [`Stats`]
     /// for more information.
-    pub fn validate(&self) -> Result<LlrbStats, Error> {
+    pub fn validate(&self) -> Result<Stats, Error> {
         let arc_mvcc = Snapshot::clone(&self.snapshot);
         let root = arc_mvcc.as_root();
         let (red, blacks, depth) = (is_red(root), 0, 0);
         let mut depths: LlrbDepth = Default::default();
         let blacks = validate_tree(root, red, blacks, depth, &mut depths)?;
 
-        Ok(LlrbStats::new_full(
+        Ok(Stats::new_full(
             arc_mvcc.n_count,
             std::mem::size_of::<Node<K, V>>(),
             blacks,

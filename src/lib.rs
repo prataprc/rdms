@@ -55,7 +55,6 @@ pub use crate::core::{Diff, Serialize, Writer};
 pub use crate::error::Error;
 pub use crate::gate::Gate;
 pub use crate::llrb::Llrb;
-pub use crate::llrb_node::LlrbStats;
 pub use crate::mvcc::Mvcc;
 pub use crate::robt_build::Builder;
 pub use crate::robt_config::Config;

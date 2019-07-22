@@ -65,6 +65,8 @@ pub use crate::wal::Wal;
 #[cfg(test)]
 mod core_test;
 #[cfg(test)]
+mod gate_test;
+#[cfg(test)]
 mod llrb_test;
 #[cfg(test)]
 mod mvcc_test;

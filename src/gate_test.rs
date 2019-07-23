@@ -1,6 +1,8 @@
 use std::sync::Arc;
 use std::{thread, time};
 
+use rand::prelude::random;
+
 use crate::gate::Gate;
 
 // TODO: yield_ok == true
@@ -9,9 +11,9 @@ use crate::gate::Gate;
 fn test_gate() {
     let g = Arc::new(Gate::new());
     let c = Context {
-        n_readers: 1,
-        n_writers: 0,
-        size: 1024 * 1024,
+        n_readers: 4,
+        n_writers: 4,
+        size: 1024,
     };
 
     let writer = |g: Arc<Gate>, mut data: Box<Data>, idx: usize, c: Context| {
@@ -53,6 +55,7 @@ fn test_gate() {
                 let _r = g.acquire_read(false);
                 assert_eq!(values[data.idx], data.value);
                 res[data.idx] += 1;
+                busy_loop(25);
             }
         }
         Box::leak(data);
@@ -134,4 +137,9 @@ fn print_r_res(r_res: Vec<Rc>) {
         .into_iter()
         .for_each(|(i, n)| println!("reader {} data {} ops {}", r, i, n));
     }
+}
+
+fn busy_loop(count: usize) -> u64 {
+    let acc: u64 = (0..count).map(|_| random::<u32>() as u64).sum();
+    acc
 }

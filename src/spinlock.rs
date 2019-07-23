@@ -1,4 +1,4 @@
-/// Gate implements the idea of latch-and-spin mechanism normally
+/// RWSpinlock implements the idea of latch-and-spin mechanism normally
 /// used for non-blocking concurrency.
 ///
 /// Blocking concurrency can have impact on latency. On the other hand,
@@ -35,7 +35,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::{fmt, thread};
 
-/// Gate implements latch-and-spin mechanism for non-blocking
+/// RWSpinlock implements latch-and-spin mechanism for non-blocking
 /// concurrency.
 ///
 /// It uses AtomicU64 for:
@@ -45,22 +45,22 @@ use std::{fmt, thread};
 ///
 /// All atomic operations use Ordering::Relaxed.
 ///
-pub struct Gate {
+pub struct RWSpinlock {
     value: AtomicU64,
     reads: AtomicU64,
     writes: AtomicU64,
     conflicts: AtomicU64,
 }
 
-impl Gate {
+impl RWSpinlock {
     const LATCH_FLAG: u64 = 0x4000000000000000;
     const LOCK_FLAG: u64 = 0x8000000000000000;
     const LATCH_LOCK_FLAG: u64 = 0xC000000000000000;
     const READERS_FLAG: u64 = 0x3FFFFFFFFFFFFFFF;
 
-    /// Create a new gate
-    pub fn new() -> Gate {
-        Gate {
+    /// Create a new RWSpinlock
+    pub fn new() -> RWSpinlock {
+        RWSpinlock {
             value: AtomicU64::new(0),
             reads: AtomicU64::new(0),
             writes: AtomicU64::new(0),
@@ -129,7 +129,7 @@ impl Gate {
 }
 
 pub struct Reader<'a> {
-    door: &'a Gate,
+    door: &'a RWSpinlock,
 }
 
 impl<'a> Drop for Reader<'a> {
@@ -139,13 +139,13 @@ impl<'a> Drop for Reader<'a> {
 }
 
 pub struct Writer<'a> {
-    door: &'a Gate,
+    door: &'a RWSpinlock,
 }
 
 impl<'a> Drop for Writer<'a> {
     fn drop(&mut self) {
         let c = self.door.value.load(Ordering::Relaxed);
-        if (c & Gate::READERS_FLAG) > 0 {
+        if (c & RWSpinlock::READERS_FLAG) > 0 {
             panic!("can't have active readers, when lock is held");
         }
         if self.door.value.compare_and_swap(c, 0, Ordering::Relaxed) != c {
@@ -154,7 +154,7 @@ impl<'a> Drop for Writer<'a> {
     }
 }
 
-impl fmt::Display for Gate {
+impl fmt::Display for RWSpinlock {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         write!(
             f,

@@ -32,7 +32,6 @@ extern crate llrb_index;
 
 mod core;
 mod error;
-mod gate;
 mod llrb;
 mod llrb_node;
 mod mvcc;
@@ -42,6 +41,7 @@ mod robt_entry;
 mod robt_indx;
 mod robt_snap;
 mod robt_stats;
+mod spinlock;
 mod sync_writer;
 mod type_bytes;
 mod type_empty;
@@ -53,23 +53,23 @@ mod wal;
 
 pub use crate::core::{Diff, Serialize, Writer};
 pub use crate::error::Error;
-pub use crate::gate::Gate;
 pub use crate::llrb::Llrb;
 pub use crate::mvcc::Mvcc;
 pub use crate::robt_build::Builder;
 pub use crate::robt_config::Config;
 pub use crate::robt_snap::Snapshot;
+pub use crate::spinlock::RWSpinlock;
 pub use crate::type_empty::Empty; // TODO: proper nomenclature.
 pub use crate::wal::Wal;
 
 #[cfg(test)]
 mod core_test;
 #[cfg(test)]
-mod gate_test;
-#[cfg(test)]
 mod llrb_test;
 #[cfg(test)]
 mod mvcc_test;
+#[cfg(test)]
+mod spinlock_test;
 #[cfg(test)]
 mod sync_writer_test;
 #[cfg(test)]

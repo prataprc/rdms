@@ -3,20 +3,20 @@ use std::{thread, time};
 
 use rand::prelude::random;
 
-use crate::gate::Gate;
+use crate::RWSpinlock;
 
 // TODO: yield_ok == true
 
 #[test]
-fn test_gate() {
-    let g = Arc::new(Gate::new());
+fn test_rw_spinlock() {
+    let g = Arc::new(RWSpinlock::new());
     let c = Context {
         n_readers: 4,
         n_writers: 4,
         size: 1024,
     };
 
-    let writer = |g: Arc<Gate>, mut data: Box<Data>, idx: usize, c: Context| {
+    let writer = |g: Arc<RWSpinlock>, mut data: Box<Data>, idx: usize, c: Context| {
         let mut res = Vec::with_capacity(c.n_writers);
         res.resize(res.capacity(), 0);
 
@@ -37,7 +37,7 @@ fn test_gate() {
         Rc::Ws(res)
     };
 
-    let reader = |g: Arc<Gate>, data: Box<Data>, c: Context| {
+    let reader = |g: Arc<RWSpinlock>, data: Box<Data>, c: Context| {
         let mut res = Vec::with_capacity(std::cmp::max(c.n_writers, 1));
         res.resize(res.capacity(), 0);
 
@@ -84,7 +84,7 @@ fn test_gate() {
 
     print_w_res(writers.into_iter().map(|w| w.join().unwrap()).collect());
     print_r_res(readers.into_iter().map(|r| r.join().unwrap()).collect());
-    println!("gate {}", g);
+    println!("RWSpinlock {}", g);
 }
 
 struct Data {

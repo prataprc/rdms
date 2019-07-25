@@ -30,6 +30,7 @@
 extern crate jsondata;
 extern crate llrb_index;
 
+mod bogn;
 mod core;
 mod error;
 mod llrb;
@@ -51,6 +52,7 @@ mod util;
 mod vlog;
 mod wal;
 
+pub use crate::bogn::Bogn;
 pub use crate::core::{Diff, Serialize, Writer};
 pub use crate::error::Error;
 pub use crate::llrb::Llrb;

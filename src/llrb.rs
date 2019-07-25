@@ -5,7 +5,7 @@ use std::ops::{Bound, Deref, DerefMut, RangeBounds};
 use std::sync::Arc;
 use std::{marker, mem};
 
-use crate::core::{Diff, Entry, Value};
+use crate::core::{Diff, Entry, Result, Value};
 use crate::error::Error;
 use crate::llrb_node::{LlrbDepth, Node, Stats};
 use crate::mvcc::MvccRoot;
@@ -32,8 +32,8 @@ where
     name: String,
     lsm: bool,
     root: Option<Box<Node<K, V>>>,
-    seqno: u64,     // starts from 0 and incr for every mutation.
-    n_count: usize, // number of entries in the tree.
+    seqno: u64,
+    n_count: usize,
 }
 
 impl<K, V> Drop for Llrb<K, V>
@@ -68,18 +68,9 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    /// Squash this index and return the root and its book-keeping.
-    /// IMPORTANT: after calling this method, value must be dropped.
-    pub(crate) fn squash(&mut self) -> (Option<Box<Node<K, V>>>, u64, usize) {
-        (self.root.take(), self.seqno, self.n_count)
-    }
-
     /// Create an empty Llrb index, identified by `name`.
     /// Applications can choose unique names.
-    pub fn new<S>(name: S) -> Llrb<K, V>
-    where
-        S: AsRef<str>,
-    {
+    pub fn new<S: AsRef<str>>(name: S) -> Llrb<K, V> {
         Llrb {
             name: name.as_ref().to_string(),
             lsm: false,
@@ -104,6 +95,12 @@ where
             seqno: 0,
             n_count: 0,
         }
+    }
+
+    /// Squash this index and return the root and its book-keeping.
+    /// IMPORTANT: after calling this method, value must be dropped.
+    pub(crate) fn squash(&mut self) -> (Option<Box<Node<K, V>>>, u64, usize) {
+        (self.root.take(), self.seqno, self.n_count)
     }
 }
 
@@ -164,7 +161,7 @@ where
     /// create a new entry.
     ///
     /// *LSM mode*: Add a new version for the key, perserving the old value.
-    pub fn set(&mut self, key: K, value: V) -> Option<Entry<K, V>> {
+    pub fn set(&mut self, key: K, value: V) -> Result<Option<Entry<K, V>>> {
         let value = Box::new(Value::new_upsert_value(value, self.seqno + 1));
         let new_entry = Entry::new(key, value);
         match Llrb::upsert(self.root.take(), new_entry, self.lsm) {
@@ -175,7 +172,7 @@ where
                 if entry.is_none() {
                     self.n_count += 1;
                 }
-                entry
+                Ok(entry)
             }
             _ => panic!("set: impossible case, call programmer"),
         }
@@ -187,7 +184,7 @@ where
     /// enforce a create operation.
     ///
     /// *LSM mode*: Add a new version for the key, perserving the old value.
-    pub fn set_cas(&mut self, key: K, value: V, cas: u64) -> Result<Option<Entry<K, V>>, Error> {
+    pub fn set_cas(&mut self, key: K, value: V, cas: u64) -> Result<Option<Entry<K, V>>> {
         let value = Box::new(Value::new_upsert_value(value, self.seqno + 1));
         let new_entry = Entry::new(key, value);
         match Llrb::upsert_cas(self.root.take(), new_entry, cas, self.lsm) {
@@ -218,7 +215,7 @@ where
     /// NOTE: K should be borrowable as &Q and Q must be converted to owned K.
     /// This is require in lsm mode, where owned K must be inserted into the
     /// tree.
-    pub fn delete<Q>(&mut self, key: &Q) -> Option<Entry<K, V>>
+    pub fn delete<Q>(&mut self, key: &Q) -> Result<Option<Entry<K, V>>>
     where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
@@ -234,13 +231,13 @@ where
                 None => {
                     self.n_count += 1;
                     self.seqno = seqno;
-                    None
+                    Ok(None)
                 }
                 Some(entry) if !entry.is_deleted() => {
                     self.seqno = seqno;
-                    Some(entry)
+                    Ok(Some(entry))
                 }
-                entry => entry,
+                entry => Ok(entry),
             };
         }
 
@@ -257,7 +254,7 @@ where
             self.n_count -= 1;
             self.seqno = seqno;
         }
-        entry
+        Ok(entry)
     }
 
     fn upsert(
@@ -476,7 +473,7 @@ where
     V: Clone + Diff,
 {
     /// Get the entry for `key`.
-    pub fn get<Q>(&self, key: &Q) -> Result<Entry<K, V>, Error>
+    pub fn get<Q>(&self, key: &Q) -> Result<Entry<K, V>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -551,7 +548,7 @@ where
     ///
     /// Additionally return full statistics on the tree. Refer to [`Stats`]
     /// for more information.
-    pub fn validate(&self) -> Result<Stats, Error> {
+    pub fn validate(&self) -> Result<Stats> {
         let root = self.root.as_ref().map(Deref::deref);
         let (red, blacks, depth) = (is_red(root), 0, 0);
         let mut depths: LlrbDepth = Default::default();

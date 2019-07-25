@@ -17,10 +17,7 @@ where
 }
 
 /// Get the latest version for key.
-fn get<K, V, Q>(
-    mut node: Option<&Node<K, V>>, // root
-    key: &Q,
-) -> Result<Entry<K, V>, Error>
+fn get<K, V, Q>(mut node: Option<&Node<K, V>>, key: &Q) -> Result<Entry<K, V>>
 where
     K: Clone + Ord + Borrow<Q>,
     V: Clone + Diff,
@@ -42,7 +39,7 @@ fn validate_tree<K, V>(
     mut blacks: usize,
     depth: usize,
     depths: &mut LlrbDepth,
-) -> Result<usize, Error>
+) -> Result<usize>
 where
     K: Ord + Clone + Debug,
     V: Clone + Diff,

@@ -1,5 +1,96 @@
+use std::borrow::Borrow;
+use std::ops::RangeBounds;
+
 use crate::error::Error;
 use crate::vlog;
+
+/// Result returned by bogn functions and methods.
+pub type Result<T> = std::result::Result<T, Error>;
+
+/// Index entry iterator.
+pub type IndexIter<K, V> = Box<dyn Iterator<Item = Entry<K, V>>>;
+
+pub trait Index<K, V>: Reader<K, V> + Writer<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    // TODO: fn make_new(&self) -> Self;
+}
+
+/// Index read operation.
+pub trait Reader<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    /// Get ``key`` from index.
+    fn get<Q>(&self, key: &Q) -> Result<Entry<K, V>>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized;
+
+    /// Iterate over all entries in this index.
+    fn iter(&self) -> Result<IndexIter<K, V>>;
+
+    /// Iterate from lower bound to upper bound.
+    fn range<R, Q>(&self, range: R) -> Result<IndexIter<K, V>>
+    where
+        K: Borrow<Q>,
+        R: RangeBounds<Q>,
+        Q: Ord + ?Sized;
+
+    /// Iterate from upper bound to lower bound.
+    fn reverse<R, Q>(&self, range: R) -> Result<IndexIter<K, V>>
+    where
+        K: Borrow<Q>,
+        R: RangeBounds<Q>,
+        Q: Ord + ?Sized;
+}
+
+/// Index write operations.
+pub trait Writer<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    /// Set {key, value} into the DB. Return older entry if present. Index
+    /// is seqno attached to this mutation.
+    fn set(&mut self, key: K, value: V) -> Result<Option<Entry<K, V>>>;
+
+    /// Set {key, value} into the DB if an older entry exists with the
+    /// same ``cas`` value. To create a fresh entry, pass ``cas`` as ZERO.
+    /// Return the older entry if present. Index is seqno attached to this
+    /// mutation.
+    fn set_cas(&mut self, key: K, value: V, cas: u64) -> Result<Option<Entry<K, V>>>;
+
+    /// Delete key from DB. Return the entry if it is already present. Index
+    /// is seqno attached to this mutation.
+    fn delete<Q>(&mut self, key: &Q) -> Result<Option<Entry<K, V>>>;
+}
+
+pub trait Replay<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    fn set(
+        &mut self,
+        key: K,
+        value: V,
+        index: u64, // replay seqno
+    ) -> Result<Entry<K, V>>;
+
+    fn set_cas(
+        &mut self,
+        key: K,
+        value: V,
+        cas: u64,
+        index: u64, // replay seqno
+    ) -> Result<Entry<K, V>>;
+
+    fn delete<Q>(&mut self, key: &Q, index: u64) -> Result<Entry<K, V>>;
+}
 
 /// Diffable values.
 ///
@@ -31,34 +122,7 @@ pub trait Serialize: Sized {
 
     /// Reverse process of encode, given the binary equivalent, `buf`,
     /// of a value, construct self.
-    fn decode(&mut self, buf: &[u8]) -> Result<usize, Error>;
-}
-
-/// Writer methods on DB. Used to wire up WAL and in-memory DB.
-pub trait Writer<K, V>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-{
-    /// Set {key, value} into the DB. Return older entry if present. Index
-    /// is seqno attached to this mutation.
-    fn set(&mut self, key: K, value: V, index: u64) -> Option<Entry<K, V>>;
-
-    /// Set {key, value} into the DB if an older entry exists with the
-    /// same ``cas`` value. To create a fresh entry, pass ``cas`` as ZERO.
-    /// Return the older entry if present. Index is seqno attached to this
-    /// mutation.
-    fn set_cas(
-        &mut self,
-        key: K,
-        value: V,
-        cas: u64,
-        index: u64,
-    ) -> Result<Option<Entry<K, V>>, Error>;
-
-    /// Delete key from DB. Return the entry if it is already present. Index
-    /// is seqno attached to this mutation.
-    fn delete<Q>(&mut self, key: &Q, index: u64) -> Option<Entry<K, V>>;
+    fn decode(&mut self, buf: &[u8]) -> Result<usize>;
 }
 
 /// Delta maintains the older version of value, with necessary fields for
@@ -69,7 +133,7 @@ where
     V: Clone + Diff,
 {
     U { delta: vlog::Delta<V>, seqno: u64 },
-    D { deleted: u64 },
+    D { seqno: u64 },
 }
 
 #[derive(Clone)]
@@ -91,9 +155,9 @@ where
         }
     }
 
-    pub(crate) fn new_delete(deleted: u64) -> Delta<V> {
+    pub(crate) fn new_delete(seqno: u64) -> Delta<V> {
         Delta {
-            data: InnerDelta::D { deleted },
+            data: InnerDelta::D { seqno },
         }
     }
 
@@ -108,7 +172,7 @@ where
     #[allow(dead_code)] // TODO: remove this once bogn is weaved-up.
     pub(crate) fn into_deleted(self) -> Option<u64> {
         match self.data {
-            InnerDelta::D { deleted } => Some(deleted),
+            InnerDelta::D { seqno } => Some(seqno),
             InnerDelta::U { .. } => None,
         }
     }
@@ -143,7 +207,7 @@ where
     pub fn to_seqno(&self) -> u64 {
         match &self.data {
             InnerDelta::U { seqno, .. } => *seqno,
-            InnerDelta::D { deleted } => *deleted,
+            InnerDelta::D { seqno } => *seqno,
         }
     }
 
@@ -153,7 +217,7 @@ where
     pub fn to_seqno_state(&self) -> (bool, u64) {
         match &self.data {
             InnerDelta::U { seqno, .. } => (true, *seqno),
-            InnerDelta::D { deleted } => (false, *deleted),
+            InnerDelta::D { seqno } => (false, *seqno),
         }
     }
 }
@@ -164,7 +228,7 @@ where
     V: Clone + Diff,
 {
     U { value: vlog::Value<V>, seqno: u64 },
-    D { deleted: u64 },
+    D { seqno: u64 },
 }
 
 impl<V> Value<V>
@@ -180,8 +244,8 @@ where
         Value::U { value, seqno }
     }
 
-    pub(crate) fn new_delete(deleted: u64) -> Value<V> {
-        Value::D { deleted }
+    pub(crate) fn new_delete(seqno: u64) -> Value<V> {
+        Value::D { seqno }
     }
 
     pub(crate) fn to_native_value(&self) -> Option<V> {
@@ -260,8 +324,8 @@ where
 
     fn prepend_version_lsm(&mut self, new_entry: Self) {
         match self.value.as_ref() {
-            Value::D { deleted } => {
-                self.deltas.insert(0, Delta::new_delete(*deleted));
+            Value::D { seqno } => {
+                self.deltas.insert(0, Delta::new_delete(*seqno));
             }
             Value::U {
                 value: vlog::Value::Native { value },
@@ -318,7 +382,7 @@ where
                 panic!("impossible situation");
             }
         }
-        *self.value = Value::D { deleted: seqno };
+        *self.value = Value::D { seqno };
     }
 
     pub(crate) fn purge(&mut self, before: u64) -> bool {
@@ -377,7 +441,7 @@ where
     pub fn to_seqno(&self) -> u64 {
         match self.value.as_ref() {
             Value::U { seqno, .. } => *seqno,
-            Value::D { deleted, .. } => *deleted,
+            Value::D { seqno, .. } => *seqno,
         }
     }
 
@@ -388,7 +452,7 @@ where
     pub fn to_seqno_state(&self) -> (bool, u64) {
         match &self.value.as_ref() {
             Value::U { seqno, .. } => (true, *seqno),
-            Value::D { deleted, .. } => (false, *deleted),
+            Value::D { seqno, .. } => (false, *seqno),
         }
     }
 
@@ -447,10 +511,10 @@ where
             (Some(InnerDelta::D { .. }), None) => {
                 panic!("consecutive versions can't be a delete");
             }
-            (Some(InnerDelta::D { deleted }), _) => {
+            (Some(InnerDelta::D { seqno }), _) => {
                 // this entry is deleted.
                 let key = self.key.clone();
-                Some(Entry::new(key, Box::new(Value::new_delete(deleted))))
+                Some(Entry::new(key, Box::new(Value::new_delete(seqno))))
             }
             (Some(InnerDelta::U { delta, seqno }), None) => {
                 // previous entry was a delete.

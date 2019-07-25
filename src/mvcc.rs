@@ -1,6 +1,3 @@
-// TODO: unlike Llrb, Mvcc uses &self for write operation, it is better
-// to provide a writer constructor that will accept only &mut self.
-
 use std::{
     borrow::Borrow,
     cmp::{Ord, Ordering},
@@ -13,7 +10,7 @@ use std::{
     },
 };
 
-use crate::core::{Diff, Entry, Value};
+use crate::core::{Diff, Entry, Result, Value};
 use crate::error::Error;
 use crate::llrb::Llrb;
 use crate::llrb_node::{LlrbDepth, Node, Stats};
@@ -457,7 +454,7 @@ where
     V: Clone + Diff,
 {
     /// Get the latest version for key.
-    pub fn get<Q>(&self, key: &Q) -> Result<Entry<K, V>, Error>
+    pub fn get<Q>(&self, key: &Q) -> Result<Entry<K, V>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -465,7 +462,7 @@ where
         get(Snapshot::clone(&self.snapshot).as_root(), key)
     }
 
-    pub fn iter(&self) -> Iter<K, V> {
+    pub fn iter(&self) -> Result<Iter<K, V>> {
         let mut iter = Iter {
             _arc: Snapshot::clone(&self.snapshot),
             paths: Default::default(),
@@ -476,10 +473,10 @@ where
             .root_duplicate()
             .map(|n| Box::leak(n) as &Node<K, V>);
         iter.paths = Some(build_iter(IFlag::Left, root, vec![]));
-        iter
+        Ok(iter)
     }
 
-    pub fn range<R, Q>(&self, range: R) -> Range<K, V, R, Q>
+    pub fn range<R, Q>(&self, range: R) -> Result<Range<K, V, R, Q>>
     where
         K: Borrow<Q>,
         R: RangeBounds<Q>,
@@ -501,10 +498,10 @@ where
             Bound::Included(low) => Some(find_start(root, low, true, vec![])),
             Bound::Excluded(low) => Some(find_start(root, low, false, vec![])),
         };
-        r
+        Ok(r)
     }
 
-    pub fn reverse<R, Q>(&self, range: R) -> Reverse<K, V, R, Q>
+    pub fn reverse<R, Q>(&self, range: R) -> Result<Reverse<K, V, R, Q>>
     where
         K: Borrow<Q>,
         R: RangeBounds<Q>,
@@ -526,7 +523,7 @@ where
             Bound::Included(high) => Some(find_end(root, high, true, vec![])),
             Bound::Excluded(high) => Some(find_end(root, high, false, vec![])),
         };
-        r
+        Ok(r)
     }
 }
 
@@ -546,7 +543,7 @@ where
     ///
     /// Additionally return full statistics on the tree. Refer to [`Stats`]
     /// for more information.
-    pub fn validate(&self) -> Result<Stats, Error> {
+    pub fn validate(&self) -> Result<Stats> {
         let arc_mvcc = Snapshot::clone(&self.snapshot);
         let root = arc_mvcc.as_root();
         let (red, blacks, depth) = (is_red(root), 0, 0);
@@ -875,7 +872,7 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    pub fn set(&mut self, key: K, value: V) -> Option<Entry<K, V>> {
+    pub fn set(&mut self, key: K, value: V) -> Result<Option<Entry<K, V>>> {
         let lsm = self.index.lsm;
         let snapshot = Snapshot::clone(&self.index.snapshot);
 
@@ -896,13 +893,13 @@ where
                 self.index
                     .snapshot
                     .shift_snapshot(Some(root), seqno, n_count, reclm);
-                entry
+                Ok(entry)
             }
             _ => unreachable!(),
         }
     }
 
-    pub fn set_cas(&mut self, key: K, value: V, cas: u64) -> Result<Option<Entry<K, V>>, Error> {
+    pub fn set_cas(&mut self, key: K, value: V, cas: u64) -> Result<Option<Entry<K, V>>> {
         let lsm = self.index.lsm;
         let snapshot = Snapshot::clone(&self.index.snapshot);
 
@@ -940,7 +937,7 @@ where
         entry
     }
 
-    pub fn delete<Q>(&mut self, key: &Q) -> Option<Entry<K, V>>
+    pub fn delete<Q>(&mut self, key: &Q) -> Result<Option<Entry<K, V>>>
     where
         // TODO: From<Q> and Clone will fail if V=String and Q=str
         K: Borrow<Q>,
@@ -997,7 +994,7 @@ where
         self.index
             .snapshot
             .shift_snapshot(root, seqno, n_count, reclm);
-        entry
+        Ok(entry)
     }
 }
 

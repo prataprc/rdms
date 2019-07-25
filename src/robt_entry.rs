@@ -185,9 +185,9 @@ where
                 leaf.extend_from_slice(&mpos.to_be_bytes()); // fpos
                 Ok(n)
             }
-            core::InnerDelta::D { deleted } => {
+            core::InnerDelta::D { seqno } => {
                 leaf.extend_from_slice(&0_u64.to_be_bytes()); // diff-len
-                leaf.extend_from_slice(&deleted.to_be_bytes());
+                leaf.extend_from_slice(&seqno.to_be_bytes());
                 leaf.extend_from_slice(&0_u64.to_be_bytes()); // fpos
                 Ok(0)
             }
@@ -445,7 +445,7 @@ where
                 let vlen = value.encode(blob)?;
                 Ok((vlen, false, *seqno))
             }
-            core::Value::D { deleted } => Ok((0, true, *deleted)),
+            core::Value::D { seqno } => Ok((0, true, *seqno)),
         }
     }
 

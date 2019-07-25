@@ -1,4 +1,4 @@
-// TODO: Is batch operation required on OpWriter ?
+// TODO: Is batch operation required on Writer ?
 
 /// Write-Ahead-Logging, WAL, takes care of batching entries,
 /// serializing and appending them to disk, commiting the appended
@@ -75,7 +75,7 @@ use std::{
     thread, vec,
 };
 
-use crate::core::{Diff, Serialize, Writer};
+use crate::core::{Diff, Replay, Serialize};
 use crate::{error::Error, util};
 
 // TODO: marker text to validate each batch on disk.
@@ -187,7 +187,7 @@ where
     K: Clone + Ord + Send + Serialize,
     V: Clone + Diff + Send + Serialize,
 {
-    pub fn replay<W: Writer<K, V>>(self, mut w: W) -> Result<usize, Error> {
+    pub fn replay<W: Replay<K, V>>(self, mut w: W) -> Result<usize, Error> {
         // validate
         let active = self.threads.len();
         if active > 0 {
@@ -202,13 +202,13 @@ where
                 let index = entry.to_index();
                 match entry.into_op() {
                     Op::Set { key, value } => {
-                        w.set(key, value, index);
+                        w.set(key, value, index)?;
                     }
                     Op::SetCAS { key, value, cas } => {
-                        w.set_cas(key, value, cas, index).ok();
+                        w.set_cas(key, value, cas, index)?;
                     }
                     Op::Delete { key } => {
-                        w.delete(&key, index);
+                        w.delete(&key, index)?;
                     }
                 }
                 nentries += 1;
@@ -235,14 +235,13 @@ where
     K: 'static + Send + Serialize,
     V: 'static + Send + Serialize,
 {
-    pub fn spawn_writer(&mut self) -> Result<OpWriter<K, V>, Error> {
+    pub fn spawn_writer(&mut self) -> Result<Writer<K, V>, Error> {
         if self.threads.len() < self.threads.capacity() {
             let (tx, rx) = mpsc::channel();
 
             let id = self.threads.len() + 1;
             let index = Arc::clone(&self.index);
             let mut shard = Shard::<K, V>::new(self.name.clone(), id, index);
-            let writer = OpWriter::new(tx.clone());
 
             // remove journals for this shard.
             let journals: Vec<Journal<K, V>> =
@@ -273,9 +272,9 @@ where
 
             // spawn the shard
             self.threads.push(shard.spawn(rx)?);
-            self.shards.push(tx);
+            self.shards.push(tx.clone());
 
-            Ok(writer)
+            Ok(Writer::new(tx))
         } else {
             Err(Error::InvalidWAL(format!("exceeding the shard limit")))
         }
@@ -293,7 +292,7 @@ where
 
     pub fn close(&mut self) -> Result<u64, Error> {
         // wait for the threads to exit, note that threads could have ended
-        // when close() was called on WAL or OpWriter, or due panic or error.
+        // when close() was called on WAL or Writer, or due panic or error.
         while let Some(tx) = self.shards.pop() {
             tx.send(Opreq::close()).ok(); // ignore if send returns an error
         }
@@ -306,7 +305,7 @@ where
     }
 }
 
-pub struct OpWriter<K, V>
+pub struct Writer<K, V>
 where
     K: Send + Serialize,
     V: Send + Serialize,
@@ -314,13 +313,13 @@ where
     tx: mpsc::Sender<Opreq<K, V>>,
 }
 
-impl<K, V> OpWriter<K, V>
+impl<K, V> Writer<K, V>
 where
     K: Send + Serialize,
     V: Send + Serialize,
 {
-    fn new(tx: mpsc::Sender<Opreq<K, V>>) -> OpWriter<K, V> {
-        OpWriter { tx }
+    fn new(tx: mpsc::Sender<Opreq<K, V>>) -> Writer<K, V> {
+        Writer { tx }
     }
 
     pub fn set(&self, key: K, value: V) -> Result<u64, Error> {

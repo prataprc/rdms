@@ -3,7 +3,7 @@ use std::cmp::{Ord, Ordering};
 use std::fmt::Debug;
 use std::ops::{Bound, Deref, DerefMut, RangeBounds};
 use std::sync::Arc;
-use std::{marker, mem};
+use std::{cmp, marker, mem};
 
 use crate::core::{Diff, Entry, Result, Value};
 use crate::error::Error;
@@ -162,20 +162,9 @@ where
     ///
     /// *LSM mode*: Add a new version for the key, perserving the old value.
     pub fn set(&mut self, key: K, value: V) -> Result<Option<Entry<K, V>>> {
-        let value = Box::new(Value::new_upsert_value(value, self.seqno + 1));
-        let new_entry = Entry::new(key, value);
-        match Llrb::upsert(self.root.take(), new_entry, self.lsm) {
-            (Some(mut root), entry) => {
-                root.set_black();
-                self.root = Some(root);
-                self.seqno += 1;
-                if entry.is_none() {
-                    self.n_count += 1;
-                }
-                Ok(entry)
-            }
-            _ => panic!("set: impossible case, call programmer"),
-        }
+        let res = self.set_index(key, value, self.seqno + 1);
+        self.seqno += 1;
+        res
     }
 
     /// Similar to set, but succeeds only when CAS matches with entry's
@@ -185,24 +174,9 @@ where
     ///
     /// *LSM mode*: Add a new version for the key, perserving the old value.
     pub fn set_cas(&mut self, key: K, value: V, cas: u64) -> Result<Option<Entry<K, V>>> {
-        let value = Box::new(Value::new_upsert_value(value, self.seqno + 1));
-        let new_entry = Entry::new(key, value);
-        match Llrb::upsert_cas(self.root.take(), new_entry, cas, self.lsm) {
-            (root, _, Some(err)) => {
-                self.root = root;
-                Err(err)
-            }
-            (Some(mut root), entry, None) => {
-                root.set_black();
-                self.root = Some(root);
-                self.seqno += 1;
-                if entry.is_none() {
-                    self.n_count += 1;
-                }
-                Ok(entry)
-            }
-            _ => panic!("set_cas: impossible case, call programmer"),
-        }
+        let (seqno, res) = self.set_cas_index(key, value, cas, self.seqno + 1);
+        self.seqno = cmp::max(seqno, self.seqno);
+        res
     }
 
     /// Delete the given key. Note that back-to-back delete for the same
@@ -220,8 +194,80 @@ where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
     {
-        let seqno = self.seqno + 1;
+        let (seqno, res) = self.delete_index(key, self.seqno + 1);
+        self.seqno = cmp::max(seqno, self.seqno);
+        res
+    }
+}
 
+/// Create/Update/Delete operations on Llrb index.
+impl<K, V> Llrb<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    pub(crate) fn set_index(
+        &mut self,
+        key: K,
+        value: V,
+        seqno: u64,
+    ) -> Result<Option<Entry<K, V>>> {
+        let value = Box::new(Value::new_upsert_value(value, seqno));
+        let new_entry = Entry::new(key, value);
+        match Llrb::upsert(self.root.take(), new_entry, self.lsm) {
+            (Some(mut root), entry) => {
+                root.set_black();
+                self.root = Some(root);
+                if entry.is_none() {
+                    self.n_count += 1;
+                }
+                Ok(entry)
+            }
+            _ => panic!("set: impossible case, call programmer"),
+        }
+    }
+
+    /// Similar to set, but succeeds only when CAS matches with entry's
+    /// last `seqno`. In other words, since seqno is unique to each mutation,
+    /// we use `seqno` of the mutation as the CAS value. Use CAS == 0 to
+    /// enforce a create operation.
+    ///
+    /// *LSM mode*: Add a new version for the key, perserving the old value.
+    pub fn set_cas_index(
+        &mut self,
+        key: K,
+        value: V,
+        cas: u64,
+        seqno: u64,
+    ) -> (u64, Result<Option<Entry<K, V>>>) {
+        let value = Box::new(Value::new_upsert_value(value, seqno));
+        let new_entry = Entry::new(key, value);
+        match Llrb::upsert_cas(self.root.take(), new_entry, cas, self.lsm) {
+            (root, _, Some(err)) => {
+                self.root = root;
+                (0, Err(err))
+            }
+            (Some(mut root), entry, None) => {
+                root.set_black();
+                self.root = Some(root);
+                if entry.is_none() {
+                    self.n_count += 1;
+                }
+                (seqno, Ok(entry))
+            }
+            _ => panic!("set_cas: impossible case, call programmer"),
+        }
+    }
+
+    pub fn delete_index<Q>(
+        &mut self,
+        key: &Q,
+        seqno: u64, // seqno for this delete
+    ) -> (u64, Result<Option<Entry<K, V>>>)
+    where
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
+    {
         if self.lsm {
             let (root, entry) = Llrb::delete_lsm(self.root.take(), key, seqno);
             self.root = root;
@@ -230,31 +276,28 @@ where
             return match entry {
                 None => {
                     self.n_count += 1;
-                    self.seqno = seqno;
-                    Ok(None)
+                    (seqno, Ok(None))
                 }
-                Some(entry) if !entry.is_deleted() => {
-                    self.seqno = seqno;
-                    Ok(Some(entry))
-                }
-                entry => Ok(entry),
+                Some(entry) if !entry.is_deleted() => (seqno, Ok(Some(entry))),
+                entry => (0, Ok(entry)),
             };
-        }
-
-        // in non-lsm mode remove the entry from the tree.
-        let (root, entry) = match Llrb::do_delete(self.root.take(), key) {
-            (None, entry) => (None, entry),
-            (Some(mut root), entry) => {
-                root.set_black();
-                (Some(root), entry)
+        } else {
+            // in non-lsm mode remove the entry from the tree.
+            let (root, entry) = match Llrb::do_delete(self.root.take(), key) {
+                (None, entry) => (None, entry),
+                (Some(mut root), entry) => {
+                    root.set_black();
+                    (Some(root), entry)
+                }
+            };
+            self.root = root;
+            if entry.is_some() {
+                self.n_count -= 1;
+                (seqno, Ok(entry))
+            } else {
+                (0, Ok(entry))
             }
-        };
-        self.root = root;
-        if entry.is_some() {
-            self.n_count -= 1;
-            self.seqno = seqno;
         }
-        Ok(entry)
     }
 
     fn upsert(
@@ -482,16 +525,16 @@ where
     }
 
     /// Return an iterator over all entries in this index.
-    pub fn iter(&self) -> Iter<K, V> {
+    pub fn iter(&self) -> Result<Iter<K, V>> {
         let node = self.root.as_ref().map(Deref::deref);
-        Iter {
+        Ok(Iter {
             _arc: Default::default(),
             paths: Some(build_iter(IFlag::Left, node, vec![])),
-        }
+        })
     }
 
     /// Range over all entries from low to high.
-    pub fn range<R, Q>(&self, range: R) -> Range<K, V, R, Q>
+    pub fn range<R, Q>(&self, range: R) -> Result<Range<K, V, R, Q>>
     where
         K: Borrow<Q>,
         R: RangeBounds<Q>,
@@ -503,16 +546,16 @@ where
             Bound::Included(low) => Some(find_start(root, low, true, vec![])),
             Bound::Excluded(low) => Some(find_start(root, low, false, vec![])),
         };
-        Range {
+        Ok(Range {
             _arc: Default::default(),
             range,
             paths,
             high: marker::PhantomData,
-        }
+        })
     }
 
     /// Reverse range over all entries from high to low.
-    pub fn reverse<R, Q>(&self, range: R) -> Reverse<K, V, R, Q>
+    pub fn reverse<R, Q>(&self, range: R) -> Result<Reverse<K, V, R, Q>>
     where
         K: Borrow<Q>,
         R: RangeBounds<Q>,
@@ -525,12 +568,12 @@ where
             Bound::Excluded(high) => Some(find_end(root, high, false, vec![])),
         };
         let low = marker::PhantomData;
-        Reverse {
+        Ok(Reverse {
             _arc: Default::default(),
             range,
             paths,
             low,
-        }
+        })
     }
 }
 

@@ -15,6 +15,7 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
+    // Make a new empty index of this type, with same configuration.
     // TODO: fn make_new(&self) -> Self;
 }
 
@@ -54,19 +55,35 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    /// Set {key, value} into the DB. Return older entry if present. Index
-    /// is seqno attached to this mutation.
-    fn set(&mut self, key: K, value: V) -> Result<Option<Entry<K, V>>>;
+    /// Set {key, value} in index. Return older entry if present.
+    fn set_index(
+        &mut self,
+        key: K,
+        value: V,
+        index: u64, // seqno for this mutation
+    ) -> Result<Option<Entry<K, V>>>;
 
-    /// Set {key, value} into the DB if an older entry exists with the
+    /// Set {key, value} in index if an older entry exists with the
     /// same ``cas`` value. To create a fresh entry, pass ``cas`` as ZERO.
-    /// Return the older entry if present. Index is seqno attached to this
-    /// mutation.
-    fn set_cas(&mut self, key: K, value: V, cas: u64) -> Result<Option<Entry<K, V>>>;
+    /// Return the seqno (index) for this mutation and older entry
+    /// if present. If operation was invalid or NOOP, returned seqno shall
+    /// be ZERO.
+    fn set_cas_index(
+        &mut self,
+        key: K,
+        value: V,
+        cas: u64,
+        index: u64,
+    ) -> (u64, Result<Option<Entry<K, V>>>);
 
-    /// Delete key from DB. Return the entry if it is already present. Index
-    /// is seqno attached to this mutation.
-    fn delete<Q>(&mut self, key: &Q) -> Result<Option<Entry<K, V>>>;
+    /// Delete key from DB. Return the seqno (index) for this mutation
+    /// and entry if present. If operation was invalid or NOOP, returned
+    /// seqno shall be ZERO.
+    fn delete_index<Q>(
+        &mut self,
+        key: &Q,
+        index: u64, // seqno for this mutation
+    ) -> (u64, Result<Option<Entry<K, V>>>);
 }
 
 pub trait Replay<K, V>

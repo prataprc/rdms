@@ -35,25 +35,25 @@ fn test_set() {
     let mut llrb: Llrb<i64, i64> = Llrb::new("test-llrb");
     let mut refns = RefNodes::new(false /*lsm*/, 10);
 
-    assert!(llrb.set(2, 10).is_none());
+    assert!(llrb.set(2, 10).unwrap().is_none());
     refns.set(2, 10);
-    assert!(llrb.set(1, 10).is_none());
+    assert!(llrb.set(1, 10).unwrap().is_none());
     refns.set(1, 10);
-    assert!(llrb.set(3, 10).is_none());
+    assert!(llrb.set(3, 10).unwrap().is_none());
     refns.set(3, 10);
-    assert!(llrb.set(6, 10).is_none());
+    assert!(llrb.set(6, 10).unwrap().is_none());
     refns.set(6, 10);
-    assert!(llrb.set(5, 10).is_none());
+    assert!(llrb.set(5, 10).unwrap().is_none());
     refns.set(5, 10);
-    assert!(llrb.set(4, 10).is_none());
+    assert!(llrb.set(4, 10).unwrap().is_none());
     refns.set(4, 10);
-    assert!(llrb.set(8, 10).is_none());
+    assert!(llrb.set(8, 10).unwrap().is_none());
     refns.set(8, 10);
-    assert!(llrb.set(0, 10).is_none());
+    assert!(llrb.set(0, 10).unwrap().is_none());
     refns.set(0, 10);
-    assert!(llrb.set(9, 10).is_none());
+    assert!(llrb.set(9, 10).unwrap().is_none());
     refns.set(9, 10);
-    assert!(llrb.set(7, 10).is_none());
+    assert!(llrb.set(7, 10).unwrap().is_none());
     refns.set(7, 10);
 
     assert_eq!(llrb.len(), 10);
@@ -67,7 +67,7 @@ fn test_set() {
         check_node(entry.ok(), refn);
     }
     // test iter
-    let (mut iter, mut iter_ref) = (llrb.iter(), refns.iter());
+    let (mut iter, mut iter_ref) = (llrb.iter().unwrap(), refns.iter());
     loop {
         if check_node(iter.next(), iter_ref.next().cloned()) == false {
             break;
@@ -80,25 +80,25 @@ fn test_cas_lsm() {
     let mut llrb: Llrb<i64, i64> = Llrb::new_lsm("test-llrb");
     let mut refns = RefNodes::new(true /*lsm*/, 11);
 
-    assert!(llrb.set(2, 100).is_none());
+    assert!(llrb.set(2, 100).unwrap().is_none());
     refns.set(2, 100);
-    assert!(llrb.set(1, 100).is_none());
+    assert!(llrb.set(1, 100).unwrap().is_none());
     refns.set(1, 100);
-    assert!(llrb.set(3, 100).is_none());
+    assert!(llrb.set(3, 100).unwrap().is_none());
     refns.set(3, 100);
-    assert!(llrb.set(6, 100).is_none());
+    assert!(llrb.set(6, 100).unwrap().is_none());
     refns.set(6, 100);
-    assert!(llrb.set(5, 100).is_none());
+    assert!(llrb.set(5, 100).unwrap().is_none());
     refns.set(5, 100);
-    assert!(llrb.set(4, 100).is_none());
+    assert!(llrb.set(4, 100).unwrap().is_none());
     refns.set(4, 100);
-    assert!(llrb.set(8, 100).is_none());
+    assert!(llrb.set(8, 100).unwrap().is_none());
     refns.set(8, 100);
-    assert!(llrb.set(0, 100).is_none());
+    assert!(llrb.set(0, 100).unwrap().is_none());
     refns.set(0, 100);
-    assert!(llrb.set(9, 100).is_none());
+    assert!(llrb.set(9, 100).unwrap().is_none());
     refns.set(9, 100);
-    assert!(llrb.set(7, 100).is_none());
+    assert!(llrb.set(7, 100).unwrap().is_none());
     refns.set(7, 100);
 
     // repeated mutations on same key
@@ -150,7 +150,7 @@ fn test_cas_lsm() {
         check_node(entry.ok(), refn);
     }
     // test iter
-    let (mut iter, mut iter_ref) = (llrb.iter(), refns.iter());
+    let (mut iter, mut iter_ref) = (llrb.iter().unwrap(), refns.iter());
     loop {
         if check_node(iter.next(), iter_ref.next().cloned()) == false {
             break;
@@ -163,29 +163,29 @@ fn test_delete() {
     let mut llrb: Llrb<i64, i64> = Llrb::new("test-llrb");
     let mut refns = RefNodes::new(false /*lsm*/, 11);
 
-    assert!(llrb.set(2, 100).is_none());
+    assert!(llrb.set(2, 100).unwrap().is_none());
     refns.set(2, 100);
-    assert!(llrb.set(1, 100).is_none());
+    assert!(llrb.set(1, 100).unwrap().is_none());
     refns.set(1, 100);
-    assert!(llrb.set(3, 100).is_none());
+    assert!(llrb.set(3, 100).unwrap().is_none());
     refns.set(3, 100);
-    assert!(llrb.set(6, 100).is_none());
+    assert!(llrb.set(6, 100).unwrap().is_none());
     refns.set(6, 100);
-    assert!(llrb.set(5, 100).is_none());
+    assert!(llrb.set(5, 100).unwrap().is_none());
     refns.set(5, 100);
-    assert!(llrb.set(4, 100).is_none());
+    assert!(llrb.set(4, 100).unwrap().is_none());
     refns.set(4, 100);
-    assert!(llrb.set(8, 100).is_none());
+    assert!(llrb.set(8, 100).unwrap().is_none());
     refns.set(8, 100);
-    assert!(llrb.set(0, 100).is_none());
+    assert!(llrb.set(0, 100).unwrap().is_none());
     refns.set(0, 100);
-    assert!(llrb.set(9, 100).is_none());
+    assert!(llrb.set(9, 100).unwrap().is_none());
     refns.set(9, 100);
-    assert!(llrb.set(7, 100).is_none());
+    assert!(llrb.set(7, 100).unwrap().is_none());
     refns.set(7, 100);
 
     // delete a missing node.
-    assert!(llrb.delete(&10).is_none());
+    assert!(llrb.delete(&10).unwrap().is_none());
     assert!(refns.delete(10).is_none());
 
     assert_eq!(llrb.len(), 10);
@@ -195,7 +195,7 @@ fn test_delete() {
     // test iter
     //println!("start loop");
     {
-        let (mut iter, mut iter_ref) = (llrb.iter(), refns.iter());
+        let (mut iter, mut iter_ref) = (llrb.iter().unwrap(), refns.iter());
         loop {
             let entry = iter.next();
             let refn = iter_ref.next().cloned();
@@ -208,7 +208,7 @@ fn test_delete() {
 
     // delete all entry. and set new entries
     for i in 0..10 {
-        let entry = llrb.delete(&i);
+        let entry = llrb.delete(&i).unwrap();
         let refn = refns.delete(i);
         check_node(entry, refn);
     }
@@ -216,7 +216,7 @@ fn test_delete() {
     assert_eq!(llrb.len(), 0);
     assert!(llrb.validate().is_ok());
     // test iter
-    assert!(llrb.iter().next().is_none());
+    assert!(llrb.iter().unwrap().next().is_none());
 }
 
 #[test]
@@ -224,25 +224,25 @@ fn test_iter() {
     let mut llrb: Llrb<i64, i64> = Llrb::new("test-llrb");
     let mut refns = RefNodes::new(false /*lsm*/, 10);
 
-    assert!(llrb.set(2, 10).is_none());
+    assert!(llrb.set(2, 10).unwrap().is_none());
     refns.set(2, 10);
-    assert!(llrb.set(1, 10).is_none());
+    assert!(llrb.set(1, 10).unwrap().is_none());
     refns.set(1, 10);
-    assert!(llrb.set(3, 10).is_none());
+    assert!(llrb.set(3, 10).unwrap().is_none());
     refns.set(3, 10);
-    assert!(llrb.set(6, 10).is_none());
+    assert!(llrb.set(6, 10).unwrap().is_none());
     refns.set(6, 10);
-    assert!(llrb.set(5, 10).is_none());
+    assert!(llrb.set(5, 10).unwrap().is_none());
     refns.set(5, 10);
-    assert!(llrb.set(4, 10).is_none());
+    assert!(llrb.set(4, 10).unwrap().is_none());
     refns.set(4, 10);
-    assert!(llrb.set(8, 10).is_none());
+    assert!(llrb.set(8, 10).unwrap().is_none());
     refns.set(8, 10);
-    assert!(llrb.set(0, 10).is_none());
+    assert!(llrb.set(0, 10).unwrap().is_none());
     refns.set(0, 10);
-    assert!(llrb.set(9, 10).is_none());
+    assert!(llrb.set(9, 10).unwrap().is_none());
     refns.set(9, 10);
-    assert!(llrb.set(7, 10).is_none());
+    assert!(llrb.set(7, 10).unwrap().is_none());
     refns.set(7, 10);
 
     assert_eq!(llrb.len(), 10);
@@ -250,7 +250,7 @@ fn test_iter() {
 
     assert_eq!(refns.to_seqno(), llrb.to_seqno());
     // test iter
-    let (mut iter, mut iter_ref) = (llrb.iter(), refns.iter());
+    let (mut iter, mut iter_ref) = (llrb.iter().unwrap(), refns.iter());
     loop {
         match (iter.next(), iter_ref.next()) {
             (None, None) => break,
@@ -267,25 +267,25 @@ fn test_range() {
     let mut llrb: Llrb<i64, i64> = Llrb::new("test-llrb");
     let mut refns = RefNodes::new(false /*lsm*/, 10);
 
-    assert!(llrb.set(2, 10).is_none());
+    assert!(llrb.set(2, 10).unwrap().is_none());
     refns.set(2, 10);
-    assert!(llrb.set(1, 10).is_none());
+    assert!(llrb.set(1, 10).unwrap().is_none());
     refns.set(1, 10);
-    assert!(llrb.set(3, 10).is_none());
+    assert!(llrb.set(3, 10).unwrap().is_none());
     refns.set(3, 10);
-    assert!(llrb.set(6, 10).is_none());
+    assert!(llrb.set(6, 10).unwrap().is_none());
     refns.set(6, 10);
-    assert!(llrb.set(5, 10).is_none());
+    assert!(llrb.set(5, 10).unwrap().is_none());
     refns.set(5, 10);
-    assert!(llrb.set(4, 10).is_none());
+    assert!(llrb.set(4, 10).unwrap().is_none());
     refns.set(4, 10);
-    assert!(llrb.set(8, 10).is_none());
+    assert!(llrb.set(8, 10).unwrap().is_none());
     refns.set(8, 10);
-    assert!(llrb.set(0, 10).is_none());
+    assert!(llrb.set(0, 10).unwrap().is_none());
     refns.set(0, 10);
-    assert!(llrb.set(9, 10).is_none());
+    assert!(llrb.set(9, 10).unwrap().is_none());
     refns.set(9, 10);
-    assert!(llrb.set(7, 10).is_none());
+    assert!(llrb.set(7, 10).unwrap().is_none());
     refns.set(7, 10);
 
     assert_eq!(llrb.len(), 10);
@@ -296,7 +296,7 @@ fn test_range() {
     for _ in 0..1_000 {
         let (low, high) = random_low_high(llrb.len());
 
-        let mut iter = llrb.range((low, high));
+        let mut iter = llrb.range((low, high)).unwrap();
         let mut iter_ref = refns.range(low, high);
         loop {
             match (iter.next(), iter_ref.next()) {
@@ -308,7 +308,7 @@ fn test_range() {
         assert!(iter.next().is_none());
         assert!(iter.next().is_none());
 
-        let mut iter = llrb.reverse((low, high));
+        let mut iter = llrb.reverse((low, high)).unwrap();
         let mut iter_ref = refns.reverse(low, high);
         loop {
             match (iter.next(), iter_ref.next()) {
@@ -335,7 +335,7 @@ fn test_crud() {
         //println!("key {} value {} op {}", key, value, op);
         match op {
             0 => {
-                let entry = llrb.set(key, value);
+                let entry = llrb.set(key, value).unwrap();
                 let refn = refns.set(key, value);
                 check_node(entry, refn);
                 false
@@ -355,7 +355,7 @@ fn test_crud() {
                 false
             }
             2 => {
-                let entry = llrb.delete(&key);
+                let entry = llrb.delete(&key).unwrap();
                 let refn = refns.delete(key);
                 check_node(entry, refn);
                 true
@@ -370,7 +370,7 @@ fn test_crud() {
 
     assert_eq!(refns.to_seqno(), llrb.to_seqno());
     // test iter
-    let (mut iter, mut iter_ref) = (llrb.iter(), refns.iter());
+    let (mut iter, mut iter_ref) = (llrb.iter().unwrap(), refns.iter());
     loop {
         if check_node(iter.next(), iter_ref.next().cloned()) == false {
             break;
@@ -382,7 +382,7 @@ fn test_crud() {
         let (low, high) = random_low_high(size);
         //println!("test loop {:?} {:?}", low, high);
 
-        let mut iter = llrb.range((low, high));
+        let mut iter = llrb.range((low, high)).unwrap();
         let mut iter_ref = refns.range(low, high);
         loop {
             if check_node(iter.next(), iter_ref.next().cloned()) == false {
@@ -390,7 +390,7 @@ fn test_crud() {
             }
         }
 
-        let mut iter = llrb.reverse((low, high));
+        let mut iter = llrb.reverse((low, high)).unwrap();
         let mut iter_ref = refns.reverse(low, high);
         loop {
             if check_node(iter.next(), iter_ref.next().cloned()) == false {
@@ -413,7 +413,7 @@ fn test_crud_lsm() {
         // println!("op {} on {}", op, key);
         match op {
             0 => {
-                let entry = llrb.set(key, value);
+                let entry = llrb.set(key, value).unwrap();
                 let refn = refns.set(key, value);
                 check_node(entry, refn);
                 false
@@ -434,7 +434,7 @@ fn test_crud_lsm() {
                 false
             }
             2 => {
-                let entry = llrb.delete(&key);
+                let entry = llrb.delete(&key).unwrap();
                 let refn = refns.delete(key);
                 check_node(entry, refn);
                 true
@@ -449,7 +449,7 @@ fn test_crud_lsm() {
 
     assert_eq!(refns.to_seqno(), llrb.to_seqno());
     // test iter
-    let (mut iter, mut iter_ref) = (llrb.iter(), refns.iter());
+    let (mut iter, mut iter_ref) = (llrb.iter().unwrap(), refns.iter());
     loop {
         if check_node(iter.next(), iter_ref.next().cloned()) == false {
             break;
@@ -461,7 +461,7 @@ fn test_crud_lsm() {
         let (low, high) = random_low_high(size as usize);
         //println!("test loop {:?} {:?}", low, high);
 
-        let mut iter = llrb.range((low, high));
+        let mut iter = llrb.range((low, high)).unwrap();
         let mut iter_ref = refns.range(low, high);
         loop {
             if check_node(iter.next(), iter_ref.next().cloned()) == false {
@@ -469,7 +469,7 @@ fn test_crud_lsm() {
             }
         }
 
-        let mut iter = llrb.reverse((low, high));
+        let mut iter = llrb.reverse((low, high)).unwrap();
         let mut iter_ref = refns.reverse(low, high);
         loop {
             if check_node(iter.next(), iter_ref.next().cloned()) == false {

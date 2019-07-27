@@ -12,6 +12,8 @@ Code Review checklist
       is a scope for `AsRef` or `Borrow` constraints.
 * [ ] Document error variants.
 * [ ] Check for dangling links in rustdoc.
+* [ ] 80-column width.
+* [ ] Copyright and License notice.
 
 Release Checklist
 =================

@@ -103,6 +103,10 @@ where
     node.right.take().map(|right| drop_tree(right));
 }
 
+/// Full table scan for [`Llrb`] and [Mvcc] index.
+///
+/// [Llrb]: crate::llrb::Llrb
+/// [Mvcc]: crate::mvcc::Mvcc
 pub struct Iter<'a, K, V>
 where
     K: Ord + Clone,
@@ -153,6 +157,11 @@ where
     }
 }
 
+/// Range scan between `lower-bound` and `higher-bound` for [`Llrb`] and
+/// [Mvcc] index.
+///
+/// [Llrb]: crate::llrb::Llrb
+/// [Mvcc]: crate::mvcc::Mvcc
 pub struct Range<'a, K, V, R, Q>
 where
     K: Ord + Clone + Borrow<Q>,
@@ -225,6 +234,11 @@ where
     }
 }
 
+/// Reverse range scan between `higher-bound` and `lower-bound` for [`Llrb`]
+/// and [Mvcc] index.
+///
+/// [Llrb]: crate::llrb::Llrb
+/// [Mvcc]: crate::mvcc::Mvcc
 pub struct Reverse<'a, K, V, R, Q>
 where
     K: Ord + Clone,

@@ -1,3 +1,6 @@
+//! Single threaded, in-memory index using [left-leaning-red-black][llrb] tree.
+//!
+//! [llrb]: https://en.wikipedia.org/wiki/Left-leaning_red-black_tree
 use std::borrow::Borrow;
 use std::cmp::{Ord, Ordering};
 use std::fmt::Debug;
@@ -12,8 +15,7 @@ use crate::mvcc::MvccRoot;
 
 include!("llrb_common.rs");
 
-/// Llrb manage a single instance of in-memory index using
-/// [left-leaning-red-black][llrb] tree.
+/// Single threaded, in-memory index using [left-leaning-red-black][llrb] tree.
 ///
 /// **[LSM mode]**: Llrb index can support log-structured-merge while
 /// mutating the tree. In simple terms, this means that nothing shall be

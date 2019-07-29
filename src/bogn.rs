@@ -1,9 +1,14 @@
+// TODO: Is it possible to avoid Bogn type-parameters M and D, and hide
+// Index, Reader and Writer traits as crate-only traits.
+
 use std::borrow::Borrow;
 use std::ops::RangeBounds;
 use std::{cmp, marker};
 
 use crate::core::{Diff, Entry, Index, IndexIter, Result};
 
+/// Index keys and corresponding values. Check module documentation for
+/// the full set of features.
 pub struct Bogn<K, V, M>
 where
     K: Clone + Ord,

@@ -2,7 +2,7 @@ use std::ops::Deref;
 
 use crate::core::{Diff, Entry, Value};
 #[allow(unused_imports)]
-use crate::{Llrb, Mvcc};
+use crate::llrb::Llrb;
 
 /// Node corresponds to a single entry in Llrb instance.
 #[derive(Clone)]
@@ -219,7 +219,7 @@ impl Stats {
     /// on key and value types. EG:
     ///
     /// ```
-    /// use bogn::Llrb;
+    /// use bogn::llrb::Llrb;
     /// let mut llrb: Llrb<i64,i64> = Llrb::new("myinstance");
     ///
     /// assert_eq!(llrb.stats().to_node_size(), 64);

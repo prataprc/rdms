@@ -1,67 +1,68 @@
 // TODO: Is batch operation required on Writer ?
 
-/// Write-Ahead-Logging, WAL, takes care of batching entries,
-/// serializing and appending them to disk, commiting the appended
-/// batch(es).
-///
-/// A single WAL can be managed using ``nshards``. Each shard manage the
-/// log as a set journal-files.
-///
-/// **Shards**:
-///
-/// A single shard serializes all log-operations, batches them if possible,
-/// flushes them and return a index-sequence-no for each operation back
-/// to the caller.
-///
-/// **Journals**:
-///
-/// A shard of WAL is organized into ascending list of journal files,
-/// where each journal file do not exceed the configured size-limit.
-/// Journal files are append only and flushed in batches when ever
-/// possible. Journal files are purged once WAL is notified about
-/// durability guarantee for a `before` index-sequence-no.
-///
-/// A Typical WAL operations cycles fall under one of the following catogaries:
-///
-/// a. Initial WAL cycle, when new WAL is created on disk.
-/// b. Reload WAL cycle, when opening an existing WAL on disk.
-/// c. Replay WAL cycle, when entries WAL needs to be replayed on DB.
-/// d. Purge WAL cycle, when an existing WAL needs to totally purged.
-///
-/// **Initial WAL cycle**:
-///
-/// ```ignore
-///                                        +----------------+
-///     Wal::create() -> spawn_writer() -> | purge_before() |
-///                                        |    close()     |
-///                                        +----------------+
-/// ```
-///
-/// **Reload WAL cycle**:
-///
-/// ```ignore
-///                                      +----------------+
-///     Wal::load() -> spawn_writer() -> | purge_before() |
-///                                      |    close()     |
-///                                      +----------------+
-/// ```
-///
-/// **Replay WAL cycle**:
-///
-/// ```ignore
-///     Wal::load() -> replay() -> close()
-/// ```
-///
-/// Purge cycle:
-///
-/// ```ignore
-///     +---------------+
-///     | Wal::create() |
-///     |     or        | ---> Wal::purge()
-///     | Wal::load()   |
-///     +---------------+
-/// ```
-///
+//! Write-Ahead-Logging for Bogn index.
+//!
+//! Takes care of batching entries, serializing and appending
+//! them to disk, commiting the appended batch(es).
+//!
+//! A single WAL can be managed using ``nshards``. Each shard manage the
+//! log as a set journal-files.
+//!
+//! **Shards**:
+//!
+//! A single shard serializes all log-operations, batches them if possible,
+//! flushes them and return a index-sequence-no for each operation back
+//! to the caller.
+//!
+//! **Journals**:
+//!
+//! A shard of WAL is organized into ascending list of journal files,
+//! where each journal file do not exceed the configured size-limit.
+//! Journal files are append only and flushed in batches when ever
+//! possible. Journal files are purged once WAL is notified about
+//! durability guarantee for a `before` index-sequence-no.
+//!
+//! A Typical WAL operations cycles fall under one of the following catogaries:
+//!
+//! a. Initial WAL cycle, when new WAL is created on disk.
+//! b. Reload WAL cycle, when opening an existing WAL on disk.
+//! c. Replay WAL cycle, when entries WAL needs to be replayed on DB.
+//! d. Purge WAL cycle, when an existing WAL needs to totally purged.
+//!
+//! **Initial WAL cycle**:
+//!
+//! ```ignore
+//!                                        +----------------+
+//!     Wal::create() -> spawn_writer() -> | purge_before() |
+//!                                        |    close()     |
+//!                                        +----------------+
+//! ```
+//!
+//! **Reload WAL cycle**:
+//!
+//! ```ignore
+//!                                      +----------------+
+//!     Wal::load() -> spawn_writer() -> | purge_before() |
+//!                                      |    close()     |
+//!                                      +----------------+
+//! ```
+//!
+//! **Replay WAL cycle**:
+//!
+//! ```ignore
+//!     Wal::load() -> replay() -> close()
+//! ```
+//!
+//! Purge cycle:
+//!
+//! ```ignore
+//!     +---------------+
+//!     | Wal::create() |
+//!     |     or        | ---> Wal::purge()
+//!     | Wal::load()   |
+//!     +---------------+
+//! ```
+//!
 use std::convert::TryInto;
 use std::sync::atomic::AtomicU64;
 use std::{

@@ -1,3 +1,8 @@
+//! [LLRB][llrb] index for concurrent readers, single writer using
+//! [Multi-Version-Concurrency-Control][mvcc].
+//!
+//! [mvcc]: https://en.wikipedia.org/wiki/Multiversion_concurrency_control
+//! [llrb]: https://en.wikipedia.org/wiki/Left-leaning_red-black_tree
 use std::{
     borrow::Borrow,
     cmp::{Ord, Ordering},
@@ -19,6 +24,11 @@ const RECLAIM_CAP: usize = 128;
 
 include!("llrb_common.rs");
 
+/// [LLRB][llrb] index for concurrent readers, single writer using
+/// [Multi-Version-Concurrency-Control][mvcc].
+///
+/// [mvcc]: https://en.wikipedia.org/wiki/Multiversion_concurrency_control
+/// [llrb]: https://en.wikipedia.org/wiki/Left-leaning_red-black_tree
 pub struct Mvcc<K, V>
 where
     K: Clone + Ord,
@@ -783,7 +793,7 @@ where
     }
 }
 
-pub struct MvccRoot<K, V>
+pub(crate) struct MvccRoot<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff,
@@ -859,6 +869,12 @@ where
     }
 }
 
+/// Writer handle for [`Mvcc`] index.
+///
+/// Note that only one writer handle can be active at any given time to write into
+/// Mvcc index.
+///
+/// [Mvcc]: crate::mvcc::Mvcc
 pub struct Writer<'a, K, V>
 where
     K: Clone + Ord,

@@ -12,7 +12,7 @@ use crate::util;
 
 include!("robt_marker.rs");
 
-/// Configuration to build read-only btree.
+/// Configuration options for Read Only BTree.
 #[derive(Clone)]
 pub struct Config {
     /// Name of the index.
@@ -260,19 +260,30 @@ pub(crate) fn read_meta_items(
         .collect();
 
     let mut metaitems: Vec<MetaItem> = vec![];
-    let mut off = 32;
-    metaitems.push(MetaItem::Marker(block[off..off + n_marker].to_vec()));
-    off += n_marker;
-    metaitems.push(MetaItem::Metadata(block[off..off + n_md].to_vec()));
-    off += n_md;
-    metaitems.push(MetaItem::Stats(
-        std::str::from_utf8(&block[off..off + n_stats])?.to_string(),
-    ));
-    metaitems.push(MetaItem::Root(root));
+    let (marker, mut off) = {
+        let marker = block[32..32 + n_marker].to_vec();
+        metaitems.push(MetaItem::Marker(marker.clone()));
+        (marker, 32 + n_marker)
+    };
+    off += {
+        metaitems.push(MetaItem::Metadata(block[off..off + n_md].to_vec()));
+        n_md
+    };
+    {
+        metaitems.push(MetaItem::Stats(
+            std::str::from_utf8(&block[off..off + n_stats])?.to_string(),
+        ));
+    }
+    {
+        metaitems.push(MetaItem::Root(root));
+    }
 
     // validate and return
     if (m - n) != root {
         let msg = format!("expected root at {}, found {}", root, (m - n));
+        Err(Error::InvalidSnapshot(msg))
+    } else if marker.ne(&ROOT_MARKER.as_slice()) {
+        let msg = format!("unexpected marker at {:?}", marker);
         Err(Error::InvalidSnapshot(msg))
     } else {
         Ok(metaitems)

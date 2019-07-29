@@ -10,6 +10,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// Index entry iterator.
 pub type IndexIter<K, V> = Box<dyn Iterator<Item = Entry<K, V>>>;
 
+/// Index operations.
 pub trait Index<K, V>: Reader<K, V> + Writer<K, V>
 where
     K: Clone + Ord,
@@ -86,6 +87,7 @@ where
     ) -> (u64, Result<Option<Entry<K, V>>>);
 }
 
+/// Replay WAL (Write-Ahead-Log) entries on index.
 pub trait Replay<K, V>
 where
     K: Clone + Ord,
@@ -154,7 +156,7 @@ where
 }
 
 #[derive(Clone)]
-pub struct Delta<V>
+pub(crate) struct Delta<V>
 where
     V: Clone + Diff,
 {
@@ -280,9 +282,11 @@ where
     }
 }
 
-/// Entry, the covering structure for a {Key, value} pair
-/// indexed by bogn. It is a user facing structure and also
-/// used in stitching together different components of Bogn.
+/// Entry is the covering structure for a {Key, value} pair
+/// indexed by bogn.
+///
+/// It is a user facing structure, also used in stitching together
+/// different components of Bogn.
 #[derive(Clone)]
 pub struct Entry<K, V>
 where
@@ -481,7 +485,7 @@ where
 
     /// Return the previous versions of this entry as Deltas.
     #[inline]
-    pub fn to_deltas(&self) -> Vec<Delta<V>> {
+    pub(crate) fn to_deltas(&self) -> Vec<Delta<V>> {
         self.deltas.clone()
     }
 
@@ -500,6 +504,7 @@ where
     }
 }
 
+/// Iterate from latest to oldest available version for this entry.
 pub struct VersionIter<K, V>
 where
     K: Clone + Ord,

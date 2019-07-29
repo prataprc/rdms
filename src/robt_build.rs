@@ -10,9 +10,7 @@ use crate::robt_indx::{MBlock, ZBlock};
 use crate::robt_stats::Stats;
 use crate::util;
 
-/// Build a new instance of Read-Only-BTree. ROBT instances shall have
-/// an index file and an optional value-log-file, refer to [``Config``]
-/// for more information.
+/// Build a new instance of Read-Only-BTree.
 pub struct Builder<K, V>
 where
     K: Clone + Ord + Serialize,
@@ -115,7 +113,7 @@ where
             MetaItem::Stats(stats),
             MetaItem::Root(root),
         ];
-        // flush them down
+        // flush them to disk
         robt_config::write_meta_items(meta_items, &mut self.iflusher)?;
 
         // flush marker block and close
@@ -154,7 +152,7 @@ where
         };
 
         for entry in iter.next() {
-            let mut entry = match self.preprocess_entry(entry?) {
+            let mut entry = match self.preprocess(entry?) {
                 Some(entry) => entry,
                 None => continue,
             };
@@ -193,7 +191,7 @@ where
                 _ => unreachable!(),
             };
 
-            self.postprocess_entry(&mut entry);
+            self.postprocess(&mut entry);
         }
 
         // flush final z-block
@@ -273,7 +271,7 @@ where
     }
 
     // return whether this entry can be skipped.
-    fn preprocess_entry(&mut self, mut entry: Entry<K, V>) -> Option<Entry<K, V>> {
+    fn preprocess(&mut self, mut entry: Entry<K, V>) -> Option<Entry<K, V>> {
         self.stats.seqno = cmp::max(self.stats.seqno, entry.to_seqno());
 
         // if tombstone purge is configured, then purge.
@@ -289,7 +287,7 @@ where
         }
     }
 
-    fn postprocess_entry(&mut self, entry: &mut Entry<K, V>) {
+    fn postprocess(&mut self, entry: &mut Entry<K, V>) {
         self.stats.n_count += 1;
         if entry.is_deleted() {
             self.stats.n_deleted += 1;

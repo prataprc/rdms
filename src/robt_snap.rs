@@ -18,6 +18,9 @@ use crate::robt_indx::{MBlock, ZBlock};
 use crate::robt_stats::Stats;
 use crate::util;
 
+/// A read only snapshot of BTree built using [robt] index.
+///
+/// [robt]: crate::robt
 pub struct Snapshot<K, V>
 where
     K: Clone + Ord + Serialize,
@@ -25,11 +28,11 @@ where
     <V as Diff>::D: Clone + Serialize,
 {
     config: Config,
-    stats: Stats,
     metadata: Vec<u8>,
     root: u64,
     index_fd: fs::File,
     vlog_fd: Option<fs::File>,
+    stats: Stats,
 
     phantom_key: marker::PhantomData<K>,
     phantom_val: marker::PhantomData<V>,

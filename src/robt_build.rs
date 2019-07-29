@@ -3,13 +3,16 @@
 use std::sync::mpsc;
 use std::{cmp, convert::TryInto, fs, io::Write, marker, mem, thread, time};
 
-use crate::core::{Diff, Entry, Serialize};
+use crate::core::{Diff, Entry, Result, Serialize};
 use crate::error::Error;
 use crate::robt_config::{self, Config, MetaItem, MARKER_BLOCK};
 use crate::robt_indx::{MBlock, ZBlock};
 use crate::robt_stats::Stats;
 use crate::util;
 
+/// Build a new instance of Read-Only-BTree. ROBT instances shall have
+/// an index file and an optional value-log-file, refer to [``Config``]
+/// for more information.
 pub struct Builder<K, V>
 where
     K: Clone + Ord + Serialize,
@@ -31,13 +34,17 @@ where
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
 {
-    pub fn initial(config: Config) -> Result<Builder<K, V>, Error> {
-        let (index_reuse, vlog_reuse) = (false, false);
-        let iflusher = Flusher::new(config.to_index_file(), index_reuse)?;
-        let vflusher = match config.to_value_log() {
-            Some(vlog_file) => Some(Flusher::new(vlog_file, vlog_reuse)?),
-            None => None,
+    /// For initial builds, index file and value-log-file, if any,
+    /// are always created new.
+    pub fn initial(config: Config) -> Result<Builder<K, V>> {
+        let iflusher = {
+            let file = config.to_index_file();
+            Flusher::new(file, config.clone(), false /*reuse*/)?
         };
+        let vflusher = config
+            .to_value_log()
+            .map(|file| Flusher::new(file, config.clone(), false /*reuse*/))
+            .transpose()?;
 
         Ok(Builder {
             config: config.clone(),
@@ -49,19 +56,20 @@ where
         })
     }
 
-    pub fn incremental(config: Config) -> Result<Builder<K, V>, Error> {
-        let (index_reuse, vlog_reuse) = (false, true);
-        let iflusher = Flusher::new(config.to_index_file(), index_reuse)?;
-        let (vflusher, n_abytes) = match config.to_value_log() {
-            Some(vlog_file) => {
-                let vf = Flusher::new(vlog_file, vlog_reuse)?;
-                let fpos: usize = vf.fpos.try_into().unwrap();
-                (Some(vf), fpos)
-            }
-            None => (None, usize::default()),
+    /// For incremental build, index file is created new, while
+    /// value-log-file, if any, is appended to older version.
+    pub fn incremental(config: Config) -> Result<Builder<K, V>> {
+        let iflusher = {
+            let file = config.to_index_file();
+            Flusher::new(file, config.clone(), false /*reuse*/)?
         };
+        let vflusher = config
+            .to_value_log()
+            .map(|file| Flusher::new(file, config.clone(), true /*reuse*/))
+            .transpose()?;
+
         let mut stats: Stats = From::from(config.clone());
-        stats.n_abytes += n_abytes;
+        stats.n_abytes += vflusher.as_ref().map_or(0, |vf| vf.fpos) as usize;
 
         Ok(Builder {
             config: config.clone(),
@@ -73,9 +81,10 @@ where
         })
     }
 
-    pub fn build<I>(mut self, iter: I, metadata: Vec<u8>) -> Result<(), Error>
+    /// Build a new index.
+    pub fn build<I>(mut self, iter: I, metadata: Vec<u8>) -> Result<()>
     where
-        I: Iterator<Item = Result<Entry<K, V>, Error>>,
+        I: Iterator<Item = Result<Entry<K, V>>>,
     {
         let start = time::SystemTime::now();
         self.build_tree(iter)?;
@@ -106,18 +115,18 @@ where
         meta_items.push(MetaItem::Marker(MARKER_BLOCK.clone()));
 
         // flush them down
-        robt_config::write_meta_items(meta_items, &mut self.iflusher);
+        robt_config::write_meta_items(meta_items, &mut self.iflusher)?;
 
         // flush marker block and close
-        self.iflusher.close_wait();
-        self.vflusher.take().map(|x| x.close_wait());
+        self.iflusher.close_wait()?;
+        self.vflusher.take().map(|x| x.close_wait()).transpose()?;
 
         Ok(())
     }
 
-    fn build_tree<I>(&mut self, mut iter: I) -> Result<(), Error>
+    fn build_tree<I>(&mut self, mut iter: I) -> Result<()>
     where
-        I: Iterator<Item = Result<Entry<K, V>, Error>>,
+        I: Iterator<Item = Result<Entry<K, V>>>,
     {
         let mut vfpos: u64 = self.stats.n_abytes.try_into().unwrap();
         let (mut fpos, mut zfpos) = (0_u64, 0_u64);
@@ -137,7 +146,7 @@ where
                 Ok(_) => (),
                 Err(Error::__ZBlockOverflow(_)) => {
                     let (zbytes, vbytes) = z.finalize(&mut self.stats);
-                    z.flush(&mut self.iflusher, self.vflusher.as_mut());
+                    z.flush(&mut self.iflusher, self.vflusher.as_mut())?;
                     fpos += zbytes;
                     vfpos += vbytes;
 
@@ -146,7 +155,7 @@ where
                         Ok(_) => (),
                         Err(Error::__MBlockOverflow(_)) => {
                             let x = m.finalize(&mut self.stats);
-                            m.flush(&mut self.iflusher);
+                            m.flush(&mut self.iflusher)?;
                             let mkey = m.as_first_key();
                             let res = self.insertms(ms, fpos + x, mkey, fpos)?;
                             ms = res.0;
@@ -173,7 +182,7 @@ where
         // flush final z-block
         if z.has_first_key() {
             let (zbytes, _vbytes) = z.finalize(&mut self.stats);
-            z.flush(&mut self.iflusher, self.vflusher.as_mut());
+            z.flush(&mut self.iflusher, self.vflusher.as_mut())?;
             fpos += zbytes;
             // vfpos += vbytes; TODO: is this required ?
 
@@ -182,7 +191,7 @@ where
                 Ok(_) => (),
                 Err(Error::__MBlockOverflow(_)) => {
                     let x = m.finalize(&mut self.stats);
-                    m.flush(&mut self.iflusher);
+                    m.flush(&mut self.iflusher)?;
                     let mkey = m.as_first_key();
                     let res = self.insertms(ms, fpos + x, mkey, fpos)?;
                     ms = res.0;
@@ -200,7 +209,7 @@ where
             while let Some(mut m) = ms.pop() {
                 if m.has_first_key() {
                     let x = m.finalize(&mut self.stats);
-                    m.flush(&mut self.iflusher);
+                    m.flush(&mut self.iflusher)?;
                     let mkey = m.as_first_key();
                     let res = self.insertms(ms, fpos + x, mkey, fpos)?;
                     ms = res.0;
@@ -217,7 +226,7 @@ where
         mut fpos: u64,
         key: &K,
         mfpos: u64,
-    ) -> Result<(Vec<MBlock<K, V>>, u64), Error> {
+    ) -> Result<(Vec<MBlock<K, V>>, u64)> {
         let m0 = ms.pop();
         let m0 = match m0 {
             None => {
@@ -229,7 +238,7 @@ where
                 Ok(_) => m0,
                 Err(Error::__MBlockOverflow(_)) => {
                     let x = m0.finalize(&mut self.stats);
-                    m0.flush(&mut self.iflusher);
+                    m0.flush(&mut self.iflusher)?;
                     let mkey = m0.as_first_key();
                     let res = self.insertms(ms, fpos + x, mkey, fpos)?;
                     ms = res.0;
@@ -266,54 +275,66 @@ where
 }
 
 pub(crate) struct Flusher {
-    tx: mpsc::SyncSender<Vec<u8>>,
-    handle: thread::JoinHandle<()>,
+    tx: mpsc::SyncSender<(Vec<u8>, mpsc::SyncSender<Result<()>>)>,
+    handle: thread::JoinHandle<Result<()>>,
     fpos: u64,
 }
 
 impl Flusher {
-    fn new(file: String, reuse: bool) -> Result<Flusher, Error> {
+    fn new(file: String, config: Config, reuse: bool) -> Result<Flusher> {
+        let fd = util::open_file_w(&file, reuse)?;
         let fpos = if reuse {
             fs::metadata(&file)?.len()
         } else {
             Default::default()
         };
-        let fd = util::open_file_w(&file, reuse)?;
 
-        let (tx, rx) = mpsc::sync_channel(16); // TODO: No magic number
+        let (tx, rx) = mpsc::sync_channel(config.flush_queue_size);
         let handle = thread::spawn(move || flush_thread(file, fd, rx));
 
         Ok(Flusher { tx, handle, fpos })
     }
 
-    fn close_wait(self) {
+    // return the cause thread failure if there is a failure, or return
+    // a known error like io::Error or PartialWrite.
+    fn close_wait(self) -> Result<()> {
         mem::drop(self.tx);
-        self.handle.join().unwrap();
+        match self.handle.join() {
+            Ok(res) => res,
+            Err(err) => match err.downcast_ref::<String>() {
+                Some(msg) => Err(Error::ThreadFail(msg.to_string())),
+                None => Err(Error::ThreadFail("unknown error".to_string())),
+            },
+        }
     }
 
-    pub(crate) fn send(&mut self, block: Vec<u8>) {
-        self.tx.send(block).unwrap();
+    // return error if flush thread has exited/paniced.
+    pub(crate) fn send(&mut self, block: Vec<u8>) -> Result<()> {
+        let (tx, rx) = mpsc::sync_channel(0);
+        self.tx.send((block, tx))?;
+        rx.recv()?
     }
 }
 
-fn flush_thread(file: String, mut fd: fs::File, rx: mpsc::Receiver<Vec<u8>>) {
-    let write_data = |file: &str, fd: &mut fs::File, data: &[u8]| -> bool {
-        let res = match fd.write(data) {
-            Err(err) => {
-                panic!("flusher: {:?} error {}...", file, err);
-            }
-            Ok(n) if n != data.len() => {
-                panic!("flusher: {:?} write {}/{}...", file, n, data.len());
-            }
-            Ok(_) => true,
-        };
-        res
+fn flush_thread(
+    file: String, // for debuging purpose
+    mut fd: fs::File,
+    rx: mpsc::Receiver<(Vec<u8>, mpsc::SyncSender<Result<()>>)>,
+) -> Result<()> {
+    let mut write_data = |data: &[u8]| -> Result<()> {
+        let n = fd.write(data)?;
+        if n == data.len() {
+            Ok(())
+        } else {
+            let msg = format!("flusher: {:?} {}/{}...", &file, data.len(), n);
+            Err(Error::PartialWrite(msg))
+        }
     };
 
-    for data in rx.iter() {
-        if !write_data(&file, &mut fd, &data) {
-            break;
-        }
+    for (data, tx) in rx.iter() {
+        write_data(&data)?;
+        tx.send(Ok(()))?;
     }
     // file descriptor and receiver channel shall be dropped.
+    Ok(())
 }

@@ -62,6 +62,7 @@ pub enum Error {
     InvalidFile(String),
     IoError(io::Error),
     JsonError(jsondata::Error),
+    ThreadFail(String),
     InvalidSnapshot(String),
     Utf8Error(std::str::Utf8Error),
     /// Inter-Process-Communication error

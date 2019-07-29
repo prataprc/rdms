@@ -3,7 +3,7 @@
 use std::ops::Bound;
 use std::{borrow::Borrow, cmp::Ordering, convert::TryInto, fs, marker};
 
-use crate::core::{self, Diff, Serialize};
+use crate::core::{self, Diff, Result, Serialize};
 use crate::error::Error;
 use crate::robt_build::Flusher;
 use crate::robt_config::Config;
@@ -91,7 +91,7 @@ where
         }
     }
 
-    pub(crate) fn insertm(&mut self, key: &K, fpos: u64) -> Result<u64, Error> {
+    pub(crate) fn insertm(&mut self, key: &K, fpos: u64) -> Result<u64> {
         match self {
             MBlock::Encode {
                 mblock,
@@ -114,7 +114,7 @@ where
         }
     }
 
-    pub(crate) fn insertz(&mut self, key: &K, fpos: u64) -> Result<u64, Error> {
+    pub(crate) fn insertz(&mut self, key: &K, fpos: u64) -> Result<u64> {
         match self {
             MBlock::Encode {
                 mblock,
@@ -173,17 +173,11 @@ where
         }
     }
 
-    pub(crate) fn flush(
-        &mut self,
-        flusher: &mut Flusher, // flush to index file
-    ) -> &mut MBlock<K, V> {
+    pub(crate) fn flush(&mut self, flusher: &mut Flusher) -> Result<()> {
         match self {
-            MBlock::Encode { mblock, .. } => {
-                flusher.send(mblock.clone());
-            }
+            MBlock::Encode { mblock, .. } => flusher.send(mblock.clone()),
             MBlock::Decode { .. } => unreachable!(),
         }
-        self
     }
 }
 
@@ -196,7 +190,7 @@ where
         fd: &mut fs::File,
         fpos: u64,
         config: &Config,
-    ) -> Result<MBlock<K, V>, Error> {
+    ) -> Result<MBlock<K, V>> {
         let n: u64 = config.m_blocksize.try_into().unwrap();
         let block = util::read_buffer(fd, fpos, n, "reading mblock")?;
         let count = u32::from_be_bytes(block[..4].try_into().unwrap());
@@ -221,12 +215,7 @@ where
 
     // optimized version of find() for mblock. if key is less than the dataset
     // immediately returns with failure.
-    pub(crate) fn get<Q>(
-        &self,
-        key: &Q,
-        from: Bound<usize>,
-        to: Bound<usize>,
-    ) -> Result<MEntry<K>, Error>
+    pub(crate) fn get<Q>(&self, key: &Q, from: Bound<usize>, to: Bound<usize>) -> Result<MEntry<K>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -247,12 +236,7 @@ where
         }
     }
 
-    pub(crate) fn find<Q>(
-        &self,
-        key: &Q,
-        from: Bound<usize>,
-        to: Bound<usize>,
-    ) -> Result<MEntry<K>, Error>
+    pub(crate) fn find<Q>(&self, key: &Q, from: Bound<usize>, to: Bound<usize>) -> Result<MEntry<K>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -289,7 +273,7 @@ where
         }
     }
 
-    pub fn to_entry(&self, index: usize) -> Result<MEntry<K>, Error> {
+    pub fn to_entry(&self, index: usize) -> Result<MEntry<K>> {
         let (block, count, offsets) = match self {
             MBlock::Decode {
                 block,
@@ -308,7 +292,7 @@ where
         }
     }
 
-    fn to_key(&self, index: usize) -> Result<K, Error> {
+    fn to_key(&self, index: usize) -> Result<K> {
         let (block, offsets) = match self {
             MBlock::Decode { block, offsets, .. } => (block, offsets),
             _ => unreachable!(),
@@ -421,7 +405,7 @@ where
         &mut self,
         entry: &core::Entry<K, V>,
         stats: &mut Stats, // update build statistics
-    ) -> Result<u64, Error> {
+    ) -> Result<u64> {
         use crate::robt_entry::ZEntry as DZ;
 
         match self {
@@ -509,15 +493,15 @@ where
         &mut self,
         x: &mut Flusher,         // flush to index file
         y: Option<&mut Flusher>, // flush to data file
-    ) -> &mut ZBlock<K, V> {
+    ) -> Result<()> {
         match self {
             ZBlock::Encode { leaf, blob, .. } => {
-                x.send(leaf.clone());
-                y.map(|flusher| flusher.send(blob.clone()));
+                x.send(leaf.clone())?;
+                y.map(|flusher| flusher.send(blob.clone())).transpose()?;
             }
             ZBlock::Decode { .. } => unreachable!(),
         }
-        self
+        Ok(())
     }
 }
 
@@ -531,7 +515,7 @@ where
         fd: &mut fs::File,
         fpos: u64,
         config: &Config, // open from configuration
-    ) -> Result<ZBlock<K, V>, Error> {
+    ) -> Result<ZBlock<K, V>> {
         let n: u64 = config.z_blocksize.try_into().unwrap();
         let block = util::read_buffer(fd, fpos, n, "reading zblock")?;
         let count = u32::from_be_bytes(block[..4].try_into().unwrap());
@@ -560,7 +544,7 @@ where
         key: &Q,
         from: Bound<usize>,
         to: Bound<usize>,
-    ) -> Result<(usize, core::Entry<K, V>), Error>
+    ) -> Result<(usize, core::Entry<K, V>)>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -601,7 +585,7 @@ where
         // fetch (index, entry)
         &self,
         index: usize,
-    ) -> Result<(usize, core::Entry<K, V>), Error> {
+    ) -> Result<(usize, core::Entry<K, V>)> {
         let (block, count, offsets) = match self {
             ZBlock::Decode {
                 block,
@@ -621,7 +605,7 @@ where
         }
     }
 
-    fn to_key(&self, index: usize) -> Result<K, Error> {
+    fn to_key(&self, index: usize) -> Result<K> {
         let (block, offsets) = match self {
             ZBlock::Decode { block, offsets, .. } => (block, offsets),
             _ => unreachable!(),

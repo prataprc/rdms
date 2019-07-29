@@ -14,10 +14,9 @@ pub(crate) fn open_file_w(file: &str, reuse: bool) -> Result<fs::File, Error> {
     Ok(match reuse {
         false => {
             let mut opts = fs::OpenOptions::new();
-            let err = Error::InvalidFile(file.to_string());
-            let parent = p.parent().ok_or(err)?;
+            let parent = p.parent().ok_or(Error::InvalidFile(file.to_string()))?;
             fs::create_dir_all(parent)?;
-            fs::remove_file(p).ok();
+            fs::remove_file(p).ok(); // NOTE: ignore remove errors.
             opts.append(true).create_new(true).open(p)?
         }
         true => {

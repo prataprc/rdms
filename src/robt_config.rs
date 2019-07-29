@@ -1,10 +1,10 @@
 // TODO: make dir, file, path into OsString and OsStr.
 
-use std::{convert::TryInto, fmt, fs, path};
+use std::{convert::TryInto, fmt, fs, path, result};
 
 use lazy_static::lazy_static;
 
-use crate::error::Error;
+use crate::core::Result;
 use crate::robt_build::Flusher;
 use crate::robt_stats::Stats;
 use crate::util;
@@ -20,10 +20,10 @@ lazy_static! {
 /// Configuration to build read-only btree.
 #[derive(Clone)]
 pub struct Config {
+    /// Name of the index.
+    pub name: String,
     /// Directory where index file(s) shall be stored.
     pub dir: String,
-    /// Name of the index file(s) under `dir`.
-    pub name: String,
     /// Leaf block size in btree index.
     pub z_blocksize: usize,
     /// Intemediate block size in btree index.
@@ -46,6 +46,8 @@ pub struct Config {
     /// If true, then value shall be persisted in value log file. Otherwise
     /// value shall be saved in the index' leaf node.
     pub value_in_vlog: bool,
+    /// Flush queue size.
+    pub flush_queue_size: usize,
 }
 
 impl From<Stats> for Config {
@@ -60,6 +62,7 @@ impl From<Stats> for Config {
             delta_ok: stats.delta_ok,
             vlog_file: stats.vlog_file,
             value_in_vlog: stats.value_in_vlog,
+            flush_queue_size: Self::FLUSH_QUEUE_SIZE,
         }
     }
 }
@@ -70,36 +73,7 @@ impl Config {
     pub const VBLOCKSIZE: usize = 4 * 1024; // ~ 4KB of blobs.
     const MARKER_BLOCK_SIZE: usize = 1024 * 4;
     const MARKER_BYTE: u8 = 0xAB;
-
-    pub(crate) fn stitch_index_file(dir: &str, name: &str) -> String {
-        let mut index_file = path::PathBuf::from(dir);
-        index_file.push(format!("robt-{}.indx", name));
-        index_file.to_str().unwrap().to_string()
-    }
-
-    pub(crate) fn stitch_vlog_file(dir: &str, name: &str) -> String {
-        let mut vlog_file = path::PathBuf::from(dir);
-        vlog_file.push(format!("robt-{}.vlog", name));
-        vlog_file.to_str().unwrap().to_string()
-    }
-
-    pub(crate) fn compute_metadata_len(n: usize) -> usize {
-        let n_blocks = ((n + 8) / Config::MARKER_BLOCK_SIZE) + 1;
-        n_blocks * Config::MARKER_BLOCK_SIZE
-    }
-
-    /// Return the index file under configured directory.
-    pub fn to_index_file(&self) -> String {
-        Self::stitch_index_file(&self.dir, &self.name)
-    }
-
-    /// Return the value-log file, if enabled, under configured directory.
-    pub fn to_value_log(&self) -> Option<String> {
-        match &self.vlog_file {
-            Some(file) => Some(file.clone()),
-            None => Some(Self::stitch_vlog_file(&self.dir, &self.name)),
-        }
-    }
+    const FLUSH_QUEUE_SIZE: usize = 16;
 
     /// New configuration with default parameters:
     ///
@@ -119,6 +93,7 @@ impl Config {
             delta_ok: true,
             vlog_file: Default::default(),
             value_in_vlog: false,
+            flush_queue_size: Self::FLUSH_QUEUE_SIZE,
         }
     }
 
@@ -166,6 +141,45 @@ impl Config {
         }
         self
     }
+
+    /// Set flush queue size, increasing the queue size will improve batch
+    /// flushing.
+    pub fn set_flush_queue_size(mut self, size: usize) -> Config {
+        self.flush_queue_size = size;
+        self
+    }
+}
+
+impl Config {
+    pub(crate) fn stitch_index_file(dir: &str, name: &str) -> String {
+        let mut index_file = path::PathBuf::from(dir);
+        index_file.push(format!("robt-{}.indx", name));
+        index_file.to_str().unwrap().to_string()
+    }
+
+    pub(crate) fn stitch_vlog_file(dir: &str, name: &str) -> String {
+        let mut vlog_file = path::PathBuf::from(dir);
+        vlog_file.push(format!("robt-{}.vlog", name));
+        vlog_file.to_str().unwrap().to_string()
+    }
+
+    pub(crate) fn compute_metadata_len(n: usize) -> usize {
+        let n_blocks = ((n + 8) / Config::MARKER_BLOCK_SIZE) + 1;
+        n_blocks * Config::MARKER_BLOCK_SIZE
+    }
+
+    /// Return the index file under configured directory.
+    pub fn to_index_file(&self) -> String {
+        Self::stitch_index_file(&self.dir, &self.name)
+    }
+
+    /// Return the value-log file, if enabled, under configured directory.
+    pub fn to_value_log(&self) -> Option<String> {
+        match &self.vlog_file {
+            Some(file) => Some(file.clone()),
+            None => Some(Self::stitch_vlog_file(&self.dir, &self.name)),
+        }
+    }
 }
 
 pub(crate) enum MetaItem {
@@ -176,7 +190,7 @@ pub(crate) enum MetaItem {
 }
 
 impl fmt::Display for MetaItem {
-    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
         match self {
             MetaItem::Marker(_) => write!(f, "MetaItem::Marker"),
             MetaItem::Metadata(_) => write!(f, "MetaItem::Metadata"),
@@ -186,7 +200,10 @@ impl fmt::Display for MetaItem {
     }
 }
 
-pub(crate) fn write_meta_items(items: Vec<MetaItem>, flusher: &mut Flusher) {
+pub(crate) fn write_meta_items(
+    items: Vec<MetaItem>,
+    flusher: &mut Flusher, // index file
+) -> Result<()> {
     for (i, item) in items.into_iter().enumerate() {
         match (i, item) {
             (0, MetaItem::Stats(stats)) => {
@@ -195,7 +212,7 @@ pub(crate) fn write_meta_items(items: Vec<MetaItem>, flusher: &mut Flusher) {
                 let m: u64 = stats.len().try_into().unwrap();
                 block.extend_from_slice(&m.to_be_bytes());
                 block.extend_from_slice(stats.as_bytes());
-                flusher.send(block);
+                flusher.send(block)?;
             }
             (1, MetaItem::Metadata(metadata)) => {
                 let n = Config::compute_metadata_len(metadata.len());
@@ -205,20 +222,21 @@ pub(crate) fn write_meta_items(items: Vec<MetaItem>, flusher: &mut Flusher) {
                 blocks.resize(blocks.capacity(), 0);
                 let m: u64 = metadata.len().try_into().unwrap();
                 blocks[n - 8..].copy_from_slice(&m.to_be_bytes());
-                flusher.send(blocks);
+                flusher.send(blocks)?;
             }
             (2, MetaItem::Marker(block)) => {
-                flusher.send(block);
+                flusher.send(block)?;
             }
             _ => unreachable!(),
         }
     }
+    Ok(())
 }
 
 pub(crate) fn read_meta_items(
     dir: &str,  // directory of index
     name: &str, // name of index
-) -> Result<Vec<MetaItem>, Error> {
+) -> Result<Vec<MetaItem>> {
     let index_file = Config::stitch_index_file(dir, name);
     let mut fd = util::open_file_r(index_file.as_ref())?;
     let mut fpos = fs::metadata(&index_file)?.len();

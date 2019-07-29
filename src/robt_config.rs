@@ -5,17 +5,12 @@ use std::{convert::TryInto, fmt, fs, path, result};
 use lazy_static::lazy_static;
 
 use crate::core::Result;
+use crate::error::Error;
 use crate::robt_build::Flusher;
 use crate::robt_stats::Stats;
 use crate::util;
 
-lazy_static! {
-    pub static ref MARKER_BLOCK: Vec<u8> = {
-        let mut block: Vec<u8> = Vec::with_capacity(Config::MARKER_BLOCK_SIZE);
-        block.resize(Config::MARKER_BLOCK_SIZE, Config::MARKER_BYTE);
-        block
-    };
-}
+include!("robt_marker.rs");
 
 /// Configuration to build read-only btree.
 #[derive(Clone)]
@@ -72,7 +67,6 @@ impl Config {
     pub const MBLOCKSIZE: usize = 4 * 1024; // 4KB intermediate node
     pub const VBLOCKSIZE: usize = 4 * 1024; // ~ 4KB of blobs.
     const MARKER_BLOCK_SIZE: usize = 1024 * 4;
-    const MARKER_BYTE: u8 = 0xAB;
     const FLUSH_QUEUE_SIZE: usize = 16;
 
     /// New configuration with default parameters:
@@ -163,9 +157,12 @@ impl Config {
         vlog_file.to_str().unwrap().to_string()
     }
 
-    pub(crate) fn compute_metadata_len(n: usize) -> usize {
-        let n_blocks = ((n + 8) / Config::MARKER_BLOCK_SIZE) + 1;
-        n_blocks * Config::MARKER_BLOCK_SIZE
+    pub(crate) fn compute_root_block(n: usize) -> usize {
+        if (n % Config::MARKER_BLOCK_SIZE) == 0 {
+            n
+        } else {
+            ((n / Config::MARKER_BLOCK_SIZE) + 1) * Config::MARKER_BLOCK_SIZE
+        }
     }
 
     /// Return the index file under configured directory.
@@ -182,11 +179,104 @@ impl Config {
     }
 }
 
+// Disk-Format:
+//
+// *------------------------------------------* SeekFrom::End(0)
+// |                marker-length             |
+// *------------------------------------------* SeekFrom::End(-8)
+// |               metadata-length            |
+// *------------------------------------------* SeekFrom::End(-16)
+// |                stats-length              |
+// *------------------------------------------* SeekFrom::End(-24)
+// |                  root-fpos               |
+// *------------------------------------------* SeekFrom::MetaBlock
+//
 pub(crate) enum MetaItem {
     Marker(Vec<u8>),
     Metadata(Vec<u8>),
     Stats(String),
     Root(u64),
+}
+
+pub(crate) fn write_meta_items(
+    items: Vec<MetaItem>,
+    flusher: &mut Flusher, // index file
+) -> Result<u64> {
+    let mut block = vec![];
+    block.resize(32, 0);
+
+    for (i, item) in items.into_iter().enumerate() {
+        match (i, item) {
+            (0, MetaItem::Marker(data)) => {
+                block[..8].copy_from_slice(&(data.len() as u64).to_be_bytes());
+                block.extend_from_slice(&data);
+            }
+            (1, MetaItem::Metadata(md)) => {
+                block[8..16].copy_from_slice(&(md.len() as u64).to_be_bytes());
+                block.extend_from_slice(&md);
+            }
+            (2, MetaItem::Stats(s)) => {
+                block[16..24].copy_from_slice(&(s.len() as u64).to_be_bytes());
+                block.extend_from_slice(s.as_bytes());
+            }
+            (3, MetaItem::Root(fpos)) => {
+                block[24..32].copy_from_slice(&fpos.to_be_bytes());
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    Ok({
+        let n = Config::compute_root_block(block.len());
+        block.resize(n, 0);
+        let block: Vec<u8> = block.into_iter().rev().collect();
+        flusher.send(block)?;
+        n.try_into().unwrap()
+    })
+}
+
+pub(crate) fn read_meta_items(
+    dir: &str,  // directory of index
+    name: &str, // name of index
+) -> Result<Vec<MetaItem>> {
+    let index_file = Config::stitch_index_file(dir, name);
+    let m = fs::metadata(&index_file)?.len();
+    let mut fd = util::open_file_r(index_file.as_ref())?;
+
+    // read header
+    let hdr = util::read_buffer(&mut fd, m - 32, 32, "read root-block header")?;
+    let root = u64::from_be_bytes(hdr[..8].try_into().unwrap());
+    let n_stats = u64::from_be_bytes(hdr[8..16].try_into().unwrap()) as usize;
+    let n_md = u64::from_be_bytes(hdr[16..24].try_into().unwrap()) as usize;
+    let n_marker = u64::from_be_bytes(hdr[24..32].try_into().unwrap()) as usize;
+
+    // read block
+    let n = Config::compute_root_block(n_stats + n_md + n_marker + 32)
+        .try_into()
+        .unwrap();
+    let block: Vec<u8> = util::read_buffer(&mut fd, m - n, n, "read root-block")?
+        .into_iter()
+        .rev()
+        .collect();
+
+    let mut metaitems: Vec<MetaItem> = vec![];
+    let mut off = 32;
+    metaitems.push(MetaItem::Marker(block[off..off + n_marker].to_vec()));
+    off += n_marker;
+    metaitems.push(MetaItem::Metadata(block[off..off + n_md].to_vec()));
+    off += n_md;
+    metaitems.push(MetaItem::Stats(
+        std::str::from_utf8(&block[off..off + n_stats])?.to_string(),
+    ));
+    metaitems.push(MetaItem::Root(root));
+
+    // validate and return
+    if (m - n) != root {
+        let msg = format!("expected root at {}, found {}", root, (m - n));
+        Err(Error::InvalidSnapshot(msg))
+    } else {
+        Ok(metaitems)
+    }
 }
 
 impl fmt::Display for MetaItem {
@@ -198,87 +288,4 @@ impl fmt::Display for MetaItem {
             MetaItem::Root(_) => write!(f, "MetaItem::Root"),
         }
     }
-}
-
-pub(crate) fn write_meta_items(
-    items: Vec<MetaItem>,
-    flusher: &mut Flusher, // index file
-) -> Result<()> {
-    for (i, item) in items.into_iter().enumerate() {
-        match (i, item) {
-            (0, MetaItem::Stats(stats)) => {
-                let n = Config::MARKER_BLOCK_SIZE;
-                let mut block: Vec<u8> = Vec::with_capacity(n);
-                let m: u64 = stats.len().try_into().unwrap();
-                block.extend_from_slice(&m.to_be_bytes());
-                block.extend_from_slice(stats.as_bytes());
-                flusher.send(block)?;
-            }
-            (1, MetaItem::Metadata(metadata)) => {
-                let n = Config::compute_metadata_len(metadata.len());
-
-                let mut blocks: Vec<u8> = Vec::with_capacity(n);
-                blocks.extend_from_slice(&metadata);
-                blocks.resize(blocks.capacity(), 0);
-                let m: u64 = metadata.len().try_into().unwrap();
-                blocks[n - 8..].copy_from_slice(&m.to_be_bytes());
-                flusher.send(blocks)?;
-            }
-            (2, MetaItem::Marker(block)) => {
-                flusher.send(block)?;
-            }
-            _ => unreachable!(),
-        }
-    }
-    Ok(())
-}
-
-pub(crate) fn read_meta_items(
-    dir: &str,  // directory of index
-    name: &str, // name of index
-) -> Result<Vec<MetaItem>> {
-    let index_file = Config::stitch_index_file(dir, name);
-    let mut fd = util::open_file_r(index_file.as_ref())?;
-    let mut fpos = fs::metadata(&index_file)?.len();
-
-    let mut metaitems: Vec<MetaItem> = vec![];
-
-    // read marker block
-    fpos -= Config::MARKER_BLOCK_SIZE as u64;
-    metaitems.push(MetaItem::Marker(util::read_buffer(
-        &mut fd,
-        fpos,
-        Config::MARKER_BLOCK_SIZE as u64,
-        "reading marker block",
-    )?));
-
-    // read metadata blocks
-    let buf = util::read_buffer(&mut fd, fpos - 8, 8, "reading metablock len")?;
-    let m: usize = u64::from_be_bytes(buf.as_slice().try_into().unwrap())
-        .try_into()
-        .unwrap();
-    let n: u64 = Config::compute_metadata_len(m).try_into().unwrap();
-    fpos -= n;
-
-    let mut blocks = util::read_buffer(&mut fd, fpos, n, "reading metablocks")?;
-    blocks.resize(m, 0);
-    metaitems.push(MetaItem::Metadata(blocks));
-
-    // read stats block
-    let n = Config::MARKER_BLOCK_SIZE.try_into().unwrap();
-    fpos -= n;
-    let block = util::read_buffer(&mut fd, fpos, n, "reading stats")?;
-    let m: usize = u64::from_be_bytes(block[..8].try_into().unwrap())
-        .try_into()
-        .unwrap();
-    let block = &block[8..8 + m];
-    let s = std::str::from_utf8(block)?.to_string();
-    let stats: Stats = s.parse()?;
-    metaitems.push(MetaItem::Stats(s));
-
-    // root item
-    let m: u64 = stats.mblocksize.try_into().unwrap();
-    metaitems.push(MetaItem::Root(fpos - m));
-
-    Ok(metaitems)
 }

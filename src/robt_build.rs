@@ -5,7 +5,7 @@ use std::{cmp, convert::TryInto, fs, io::Write, marker, mem, thread, time};
 
 use crate::core::{Diff, Entry, Result, Serialize};
 use crate::error::Error;
-use crate::robt_config::{self, Config, MetaItem, MARKER_BLOCK};
+use crate::robt_config::{self, Config, MetaItem, ROOT_MARKER};
 use crate::robt_indx::{MBlock, ZBlock};
 use crate::robt_stats::Stats;
 use crate::util;
@@ -86,34 +86,35 @@ where
     where
         I: Iterator<Item = Result<Entry<K, V>>>,
     {
-        let start = time::SystemTime::now();
-        self.build_tree(iter)?;
-        let took: u64 = start.elapsed().unwrap().as_nanos().try_into().unwrap();
-
-        // start building metadata items for index files
-        let mut meta_items: Vec<MetaItem> = vec![];
+        let (took, root): (u64, u64) = {
+            let start = time::SystemTime::now();
+            let root = self.build_tree(iter)?;
+            (
+                start.elapsed().unwrap().as_nanos().try_into().unwrap(),
+                root,
+            )
+        };
 
         // meta-stats
-        self.stats.buildtime = took;
-        let epoch: i128 = time::UNIX_EPOCH
-            .elapsed()
-            .unwrap()
-            .as_nanos()
-            .try_into()
-            .unwrap();
-        self.stats.epoch = epoch;
-        let stats = self.stats.to_string();
-        if (stats.len() + 8) > self.config.m_blocksize {
-            panic!("stats({}) > {}", stats.len(), self.config.m_blocksize);
-        }
-        meta_items.push(MetaItem::Stats(stats));
+        let stats = {
+            self.stats.buildtime = took;
+            let epoch: i128 = time::UNIX_EPOCH
+                .elapsed()
+                .unwrap()
+                .as_nanos()
+                .try_into()
+                .unwrap();
+            self.stats.epoch = epoch;
+            self.stats.to_string()
+        };
 
-        // metadata
-        meta_items.push(MetaItem::Metadata(metadata));
-
-        // marker
-        meta_items.push(MetaItem::Marker(MARKER_BLOCK.clone()));
-
+        // start building metadata items for index files
+        let meta_items: Vec<MetaItem> = vec![
+            MetaItem::Marker(ROOT_MARKER.clone()),
+            MetaItem::Metadata(metadata),
+            MetaItem::Stats(stats),
+            MetaItem::Root(root),
+        ];
         // flush them down
         robt_config::write_meta_items(meta_items, &mut self.iflusher)?;
 
@@ -124,54 +125,70 @@ where
         Ok(())
     }
 
-    fn build_tree<I>(&mut self, mut iter: I) -> Result<()>
+    fn build_tree<I>(&mut self, mut iter: I) -> Result<u64>
+    // return root
     where
         I: Iterator<Item = Result<Entry<K, V>>>,
     {
-        let mut vfpos: u64 = self.stats.n_abytes.try_into().unwrap();
-        let (mut fpos, mut zfpos) = (0_u64, 0_u64);
-        let mut ms: Vec<MBlock<K, V>> = vec![
-            // If there is atleat one z-block, there will be atleat one m-block
-            MBlock::new_encode(self.config.clone()),
-        ];
-        let mut z = ZBlock::new_encode(vfpos, self.config.clone());
+        struct Context<K, V>
+        where
+            K: Clone + Ord + Serialize,
+            V: Clone + Diff + Serialize,
+            <V as Diff>::D: Serialize,
+        {
+            fpos: u64,
+            zfpos: u64,
+            vfpos: u64,
+            z: ZBlock<K, V>,
+            ms: Vec<MBlock<K, V>>,
+        };
+        let mut c = {
+            let vfpos = self.stats.n_abytes.try_into().unwrap();
+            Context {
+                fpos: 0,
+                zfpos: 0,
+                vfpos,
+                z: ZBlock::new_encode(vfpos, self.config.clone()),
+                ms: vec![MBlock::new_encode(self.config.clone())],
+            }
+        };
 
         for entry in iter.next() {
-            let mut entry = entry?;
-            if self.preprocess_entry(&mut entry) {
-                continue;
-            }
+            let mut entry = match self.preprocess_entry(entry?) {
+                Some(entry) => entry,
+                None => continue,
+            };
 
-            match z.insert(&entry, &mut self.stats) {
+            match c.z.insert(&entry, &mut self.stats) {
                 Ok(_) => (),
                 Err(Error::__ZBlockOverflow(_)) => {
-                    let (zbytes, vbytes) = z.finalize(&mut self.stats);
-                    z.flush(&mut self.iflusher, self.vflusher.as_mut())?;
-                    fpos += zbytes;
-                    vfpos += vbytes;
+                    let (zbytes, vbytes) = c.z.finalize(&mut self.stats);
+                    c.z.flush(&mut self.iflusher, self.vflusher.as_mut())?;
+                    c.fpos += zbytes;
+                    c.vfpos += vbytes;
 
-                    let mut m = ms.pop().unwrap();
-                    match m.insertz(z.as_first_key(), zfpos) {
+                    let mut m = c.ms.pop().unwrap();
+                    match m.insertz(c.z.as_first_key(), c.zfpos) {
                         Ok(_) => (),
                         Err(Error::__MBlockOverflow(_)) => {
                             let x = m.finalize(&mut self.stats);
                             m.flush(&mut self.iflusher)?;
-                            let mkey = m.as_first_key();
-                            let res = self.insertms(ms, fpos + x, mkey, fpos)?;
-                            ms = res.0;
-                            fpos = res.1;
+                            let k = m.as_first_key();
+                            let r = self.insertms(c.ms, c.fpos + x, k, c.fpos)?;
+                            c.ms = r.0;
+                            c.fpos = r.1;
 
                             m.reset();
-                            m.insertz(z.as_first_key(), zfpos).unwrap();
+                            m.insertz(c.z.as_first_key(), c.zfpos).unwrap();
                         }
                         _ => unreachable!(),
                     }
-                    ms.push(m);
+                    c.ms.push(m);
 
-                    zfpos = fpos;
-                    z.reset(vfpos);
+                    c.zfpos = c.fpos;
+                    c.z.reset(c.vfpos);
 
-                    z.insert(&entry, &mut self.stats).unwrap();
+                    c.z.insert(&entry, &mut self.stats).unwrap();
                 }
                 _ => unreachable!(),
             };
@@ -180,44 +197,44 @@ where
         }
 
         // flush final z-block
-        if z.has_first_key() {
-            let (zbytes, _vbytes) = z.finalize(&mut self.stats);
-            z.flush(&mut self.iflusher, self.vflusher.as_mut())?;
-            fpos += zbytes;
+        if c.z.has_first_key() {
+            let (zbytes, _vbytes) = c.z.finalize(&mut self.stats);
+            c.z.flush(&mut self.iflusher, self.vflusher.as_mut())?;
+            c.fpos += zbytes;
             // vfpos += vbytes; TODO: is this required ?
 
-            let mut m = ms.pop().unwrap();
-            match m.insertz(z.as_first_key(), zfpos) {
+            let mut m = c.ms.pop().unwrap();
+            match m.insertz(c.z.as_first_key(), c.zfpos) {
                 Ok(_) => (),
                 Err(Error::__MBlockOverflow(_)) => {
                     let x = m.finalize(&mut self.stats);
                     m.flush(&mut self.iflusher)?;
                     let mkey = m.as_first_key();
-                    let res = self.insertms(ms, fpos + x, mkey, fpos)?;
-                    ms = res.0;
-                    fpos = res.1;
+                    let res = self.insertms(c.ms, c.fpos + x, mkey, c.fpos)?;
+                    c.ms = res.0;
+                    c.fpos = res.1;
 
                     m.reset();
-                    m.insertz(z.as_first_key(), zfpos)?;
+                    m.insertz(c.z.as_first_key(), c.zfpos)?;
                 }
                 _ => unreachable!(),
             }
-            ms.push(m);
+            c.ms.push(m);
         }
         // flush final set of m-blocks
-        if ms.len() > 0 {
-            while let Some(mut m) = ms.pop() {
+        if c.ms.len() > 0 {
+            while let Some(mut m) = c.ms.pop() {
                 if m.has_first_key() {
                     let x = m.finalize(&mut self.stats);
                     m.flush(&mut self.iflusher)?;
                     let mkey = m.as_first_key();
-                    let res = self.insertms(ms, fpos + x, mkey, fpos)?;
-                    ms = res.0;
-                    fpos = res.1
+                    let res = self.insertms(c.ms, c.fpos + x, mkey, c.fpos)?;
+                    c.ms = res.0;
+                    c.fpos = res.1
                 }
             }
         }
-        Ok(())
+        Ok(c.fpos)
     }
 
     fn insertms(
@@ -256,13 +273,19 @@ where
     }
 
     // return whether this entry can be skipped.
-    fn preprocess_entry(&mut self, entry: &mut Entry<K, V>) -> bool {
+    fn preprocess_entry(&mut self, mut entry: Entry<K, V>) -> Option<Entry<K, V>> {
         self.stats.seqno = cmp::max(self.stats.seqno, entry.to_seqno());
 
         // if tombstone purge is configured, then purge.
         match self.config.tomb_purge {
-            Some(before) => entry.purge(before),
-            _ => false,
+            Some(before) => {
+                if entry.purge(before) {
+                    None
+                } else {
+                    Some(entry)
+                }
+            }
+            _ => Some(entry),
         }
     }
 

@@ -1,3 +1,6 @@
+// TODO: bogn mem/disk indexes, change from M,D type parameters
+// to trait objects.
+
 use std::sync::{atomic::AtomicPtr, atomic::Ordering, mpsc, Arc};
 use std::{mem, thread};
 

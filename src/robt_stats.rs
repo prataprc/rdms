@@ -6,7 +6,6 @@ use crate::robt_config::Config;
 
 #[derive(Clone, Default)]
 pub struct Stats {
-    pub name: String,
     pub zblocksize: usize,
     pub mblocksize: usize,
     pub vblocksize: usize,
@@ -33,7 +32,6 @@ pub struct Stats {
 impl From<Config> for Stats {
     fn from(config: Config) -> Stats {
         Stats {
-            name: config.name,
             zblocksize: config.z_blocksize,
             mblocksize: config.m_blocksize,
             vblocksize: config.v_blocksize,
@@ -79,7 +77,6 @@ impl FromStr for Stats {
 
         Ok(Stats {
             // config fields.
-            name: js.get("/name")?.string().unwrap(),
             zblocksize: to_usize("/zblocksize")?,
             mblocksize: to_usize("/mblocksize")?,
             vblocksize: to_usize("/vblocksize")?,
@@ -109,7 +106,6 @@ impl Display for Stats {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         let mut js = Json::new::<Vec<Property>>(vec![]);
 
-        js.set("/name", Json::new(self.name.clone())).ok();
         js.set("/zblocksize", Json::new(self.zblocksize)).ok();
         js.set("/mblocksize", Json::new(self.mblocksize)).ok();
         js.set("/vblocksize", Json::new(self.vblocksize)).ok();

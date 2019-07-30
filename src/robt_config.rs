@@ -15,11 +15,6 @@ include!("robt_marker.rs");
 /// Configuration options for Read Only BTree.
 #[derive(Clone)]
 pub struct Config {
-    /// Name of the index.
-    pub name: String,
-    /// Directory where index file(s) shall be stored.
-    pub dir: String,
-    /// Leaf block size in btree index.
     pub z_blocksize: usize,
     /// Intemediate block size in btree index.
     pub m_blocksize: usize,
@@ -48,8 +43,6 @@ pub struct Config {
 impl From<Stats> for Config {
     fn from(stats: Stats) -> Config {
         Config {
-            dir: Default::default(),
-            name: stats.name,
             z_blocksize: stats.zblocksize,
             m_blocksize: stats.mblocksize,
             v_blocksize: stats.vblocksize,
@@ -76,10 +69,8 @@ impl Config {
     /// * LSM entries are preserved.
     /// * Deltas are persisted in default value-log-file.
     /// * Main index is persisted in default index-file.
-    pub fn new(dir: &str, name: &str) -> Config {
+    pub fn new() -> Config {
         Config {
-            dir: dir.to_string(),
-            name: name.to_string(),
             z_blocksize: Self::ZBLOCKSIZE,
             v_blocksize: Self::VBLOCKSIZE,
             m_blocksize: Self::MBLOCKSIZE,
@@ -166,15 +157,15 @@ impl Config {
     }
 
     /// Return the index file under configured directory.
-    pub fn to_index_file(&self) -> String {
-        Self::stitch_index_file(&self.dir, &self.name)
+    pub fn to_index_file(&self, dir: &str, name: &str) -> String {
+        Self::stitch_index_file(&dir, &name)
     }
 
     /// Return the value-log file, if enabled, under configured directory.
-    pub fn to_value_log(&self) -> Option<String> {
+    pub fn to_value_log(&self, dir: &str, name: &str) -> Option<String> {
         match &self.vlog_file {
             Some(file) => Some(file.clone()),
-            None => Some(Self::stitch_vlog_file(&self.dir, &self.name)),
+            None => Some(Self::stitch_vlog_file(&dir, &name)),
         }
     }
 }

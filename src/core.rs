@@ -212,7 +212,8 @@ where
     V: Clone + Diff,
 {
     /// Return the underlying `difference` value for this delta.
-    pub fn into_diff(self) -> Option<<V as Diff>::D> {
+    #[allow(dead_code)] // TODO: remove if not required.
+    pub(crate) fn into_diff(self) -> Option<<V as Diff>::D> {
         match self.data {
             InnerDelta::D { .. } => None,
             InnerDelta::U { delta, .. } => delta.into_native_delta(),
@@ -223,7 +224,8 @@ where
     /// which includes Create and Delete operations.
     /// To differentiate between Create and Delete operations
     /// use born_seqno() and dead_seqno() methods respectively.
-    pub fn to_seqno(&self) -> u64 {
+    #[allow(dead_code)] // TODO: remove if not required.
+    pub(crate) fn to_seqno(&self) -> u64 {
         match &self.data {
             InnerDelta::U { seqno, .. } => *seqno,
             InnerDelta::D { seqno } => *seqno,
@@ -233,7 +235,8 @@ where
     /// Return the seqno and the state of modification. `true` means
     /// this version was a create/update, and `false` means
     /// this version was deleted.
-    pub fn to_seqno_state(&self) -> (bool, u64) {
+    #[allow(dead_code)] // TODO: remove if not required.
+    pub(crate) fn to_seqno_state(&self) -> (bool, u64) {
         match &self.data {
             InnerDelta::U { seqno, .. } => (true, *seqno),
             InnerDelta::D { seqno } => (false, *seqno),

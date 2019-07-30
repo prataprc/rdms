@@ -27,6 +27,8 @@ where
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
 {
+    dir: String,
+    name: String,
     config: Config,
     metadata: Vec<u8>,
     root: u64,
@@ -50,7 +52,9 @@ where
         let index_fd = util::open_file_r(&index_file.as_ref())?;
 
         let mut snap = Snapshot {
-            config: Config::new(dir, name),
+            dir: dir.to_string(),
+            name: name.to_string(),
+            config: Config::new(),
             stats: Default::default(),
             metadata: Default::default(),
             root: Default::default(),
@@ -83,7 +87,6 @@ where
         }
 
         snap.config = snap.stats.clone().into();
-        snap.config.dir = dir.to_string();
 
         snap.config.vlog_file = match snap.config.vlog_file.clone() {
             None => None,
@@ -99,16 +102,10 @@ where
         };
         snap.vlog_fd = snap
             .config
-            .to_value_log()
+            .to_value_log(dir, name)
             .as_ref()
             .map(|s| util::open_file_r(s.as_ref()))
             .transpose()?;
-
-        // validate snapshot
-        if snap.stats.name != name {
-            let err = format!("name mistmatch {} != {}", snap.stats.name, name);
-            return Err(Error::InvalidSnapshot(err));
-        }
 
         // Okey dockey
         Ok(snap)
@@ -127,10 +124,11 @@ where
     }
 
     pub fn footprint(&self) -> u64 {
-        let index_file = self.config.to_index_file();
+        let (dir, name) = (self.dir.as_str(), self.name.as_str());
+        let index_file = self.config.to_index_file(dir, name);
         let mut footprint = fs::metadata(index_file).unwrap().len();
 
-        footprint += match self.config.to_value_log() {
+        footprint += match self.config.to_value_log(dir, name) {
             Some(vlog_file) => fs::metadata(vlog_file).unwrap().len(),
             None => 0,
         };

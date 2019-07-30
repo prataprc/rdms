@@ -34,13 +34,13 @@ where
 {
     /// For initial builds, index file and value-log-file, if any,
     /// are always created new.
-    pub fn initial(config: Config) -> Result<Builder<K, V>> {
+    pub fn initial(config: Config, dir: &str, name: &str) -> Result<Builder<K, V>> {
         let iflusher = {
-            let file = config.to_index_file();
+            let file = config.to_index_file(dir, name);
             Flusher::new(file, config.clone(), false /*reuse*/)?
         };
         let vflusher = config
-            .to_value_log()
+            .to_value_log(dir, name)
             .map(|file| Flusher::new(file, config.clone(), false /*reuse*/))
             .transpose()?;
 
@@ -56,13 +56,13 @@ where
 
     /// For incremental build, index file is created new, while
     /// value-log-file, if any, is appended to older version.
-    pub fn incremental(config: Config) -> Result<Builder<K, V>> {
+    pub fn incremental(config: Config, dir: &str, name: &str) -> Result<Builder<K, V>> {
         let iflusher = {
-            let file = config.to_index_file();
+            let file = config.to_index_file(dir, name);
             Flusher::new(file, config.clone(), false /*reuse*/)?
         };
         let vflusher = config
-            .to_value_log()
+            .to_value_log(dir, name)
             .map(|file| Flusher::new(file, config.clone(), true /*reuse*/))
             .transpose()?;
 
@@ -296,9 +296,9 @@ where
 }
 
 pub(crate) struct Flusher {
-    tx: mpsc::SyncSender<(Vec<u8>, mpsc::SyncSender<Result<()>>)>,
-    handle: thread::JoinHandle<Result<()>>,
     fpos: u64,
+    thread: thread::JoinHandle<Result<()>>,
+    tx: mpsc::SyncSender<(Vec<u8>, mpsc::SyncSender<Result<()>>)>,
 }
 
 impl Flusher {
@@ -311,16 +311,16 @@ impl Flusher {
         };
 
         let (tx, rx) = mpsc::sync_channel(config.flush_queue_size);
-        let handle = thread::spawn(move || flush_thread(file, fd, rx));
+        let thread = thread::spawn(move || thread_flush(file, fd, rx));
 
-        Ok(Flusher { tx, handle, fpos })
+        Ok(Flusher { tx, thread, fpos })
     }
 
     // return the cause thread failure if there is a failure, or return
     // a known error like io::Error or PartialWrite.
     fn close_wait(self) -> Result<()> {
         mem::drop(self.tx);
-        match self.handle.join() {
+        match self.thread.join() {
             Ok(res) => res,
             Err(err) => match err.downcast_ref::<String>() {
                 Some(msg) => Err(Error::ThreadFail(msg.to_string())),
@@ -337,7 +337,7 @@ impl Flusher {
     }
 }
 
-fn flush_thread(
+fn thread_flush(
     file: String, // for debuging purpose
     mut fd: fs::File,
     rx: mpsc::Receiver<(Vec<u8>, mpsc::SyncSender<Result<()>>)>,

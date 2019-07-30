@@ -316,6 +316,13 @@ impl Flusher {
         Ok(Flusher { tx, thread, fpos })
     }
 
+    // return error if flush thread has exited/paniced.
+    pub(crate) fn send(&mut self, block: Vec<u8>) -> Result<()> {
+        let (tx, rx) = mpsc::sync_channel(0);
+        self.tx.send((block, tx))?;
+        rx.recv()?
+    }
+
     // return the cause thread failure if there is a failure, or return
     // a known error like io::Error or PartialWrite.
     fn close_wait(self) -> Result<()> {
@@ -327,13 +334,6 @@ impl Flusher {
                 None => Err(Error::ThreadFail("unknown error".to_string())),
             },
         }
-    }
-
-    // return error if flush thread has exited/paniced.
-    pub(crate) fn send(&mut self, block: Vec<u8>) -> Result<()> {
-        let (tx, rx) = mpsc::sync_channel(0);
-        self.tx.send((block, tx))?;
-        rx.recv()?
     }
 }
 

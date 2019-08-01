@@ -180,7 +180,6 @@ Misc.
 * Delta variants, memory index, for different configurations:
 
 Native : "memory", "backup", "random-dgm", "working-set-dgm"
-Backup : "backup"
 
 * Delta variants, disk index:
 
@@ -190,7 +189,6 @@ Reference : Constructed during lambda-merge, when re-using vlog file.
 * Value variants, memory index, for different configurations:
 
 Native    : "memory", "backup", "random-dgm", "working-set-dgm"
-Backup    : "backup"
 
 * Value variants, disk index:
 

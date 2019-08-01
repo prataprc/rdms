@@ -18,20 +18,9 @@ use crate::error::Error;
 #[derive(Clone)]
 pub(crate) enum Value<V> {
     // Native value, already de-serialized.
-    Native {
-        value: V,
-    },
+    Native { value: V },
     // Refers to serialized value on disk, either index-file or vlog-file
-    Reference {
-        fpos: u64,
-        length: u64,
-    },
-    // Refers to serialized value on disk, either index-file or vlog-file.
-    Backup {
-        file: String,
-        fpos: u64,
-        length: u64,
-    },
+    Reference { fpos: u64, length: u64 },
 }
 
 impl<V> Value<V> {
@@ -44,15 +33,6 @@ impl<V> Value<V> {
     #[allow(dead_code)] // TODO: remove this after wiring with bogn.
     pub(crate) fn new_reference(fpos: u64, length: u64) -> Value<V> {
         Value::Reference { fpos, length }
-    }
-
-    #[allow(dead_code)] // TODO: remove this after wiring with bogn.
-    pub(crate) fn new_backup(file: &str, fpos: u64, length: u64) -> Value<V> {
-        Value::Backup {
-            file: file.to_string(),
-            fpos,
-            length,
-        }
     }
 }
 
@@ -126,20 +106,9 @@ where
     V: Diff,
 {
     // Native diff, already de-serialized.
-    Native {
-        diff: <V as Diff>::D,
-    },
+    Native { diff: <V as Diff>::D },
     // Refers to serialized diff on disk, either index-file or vlog-file
-    Reference {
-        fpos: u64,
-        length: u64,
-    },
-    // Refers to serialized value on disk, either index-file or vlog-file.
-    Backup {
-        file: String,
-        fpos: u64,
-        length: u64,
-    },
+    Reference { fpos: u64, length: u64 },
 }
 
 impl<V> Delta<V>
@@ -153,11 +122,6 @@ where
     #[allow(dead_code)] // TODO: remove this after wiring with bogn.
     pub(crate) fn new_reference(fpos: u64, length: u64) -> Delta<V> {
         Delta::Reference { fpos, length }
-    }
-
-    #[allow(dead_code)] // TODO: remove this after wiring with bogn.
-    pub(crate) fn new_backup(file: String, fpos: u64, length: u64) -> Delta<V> {
-        Delta::Backup { file, fpos, length }
     }
 
     pub(crate) fn into_native_delta(self) -> Option<<V as Diff>::D> {

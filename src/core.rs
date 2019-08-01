@@ -369,16 +369,6 @@ where
                 self.deltas.insert(0, Delta::new_upsert(delta, *seqno));
             }
             Value::U {
-                value: vlog::Value::Backup { .. },
-                ..
-            } => {
-                // TODO: Figure out a way to use {file, fpos, length} to
-                // get the entry details from disk. Note that disk index
-                // can have different formats based on configuration.
-                // Take that into account.
-                panic!("TBD")
-            }
-            Value::U {
                 value: vlog::Value::Reference { .. },
                 ..
             } => panic!("impossible situation"),
@@ -397,16 +387,6 @@ where
                 let d: <V as Diff>::D = From::from(value.clone());
                 let delta = vlog::Delta::new_native(d);
                 self.deltas.insert(0, Delta::new_upsert(delta, *seqno));
-            }
-            Value::U {
-                value: vlog::Value::Backup { .. },
-                ..
-            } => {
-                // TODO: Figure out a way to use {file, fpos, length} to
-                // get the entry details from disk. Note that disk index
-                // can have different formats based on configuration.
-                // Take that into account.
-                panic!("TBD");
             }
             Value::U {
                 value: vlog::Value::Reference { .. },

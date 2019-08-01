@@ -10,9 +10,6 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// Index entry iterator.
 pub type IndexIter<K, V> = Box<dyn Iterator<Item = Entry<K, V>> + Send>;
 
-/// Object type for in-memory index.
-pub type MemFactory<K, V> = fn() -> Box<dyn Index<K, V> + Send>;
-
 /// Index operations.
 pub trait Index<K, V>: Reader<K, V> + Writer<K, V>
 where
@@ -40,6 +37,14 @@ where
 
     /// Iterate from lower bound to upper bound.
     fn range<R, Q>(&self, range: R) -> Result<IndexIter<K, V>>
+    where
+        K: Borrow<Q>,
+        R: RangeBounds<Q>,
+        Q: Ord + ?Sized;
+
+    /// Iterate from lower bound to upper bound, including only those
+    /// entry-versions that are updated ``after`` seqno.
+    fn range_after<R, Q>(&self, range: R, after: u64) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
         R: RangeBounds<Q>,
@@ -412,18 +417,23 @@ where
         *self.value = Value::D { seqno };
     }
 
+    // purge all versions whose seqno is <= ``before``
     pub(crate) fn purge(&mut self, before: u64) -> bool {
         for i in 0..self.deltas.len() {
-            if self.deltas[i].to_seqno() < before {
+            if self.deltas[i].to_seqno() <= before {
                 self.deltas.truncate(i); // purge everything from i..len
                 break;
             }
         }
-        if self.to_seqno() < before {
+        if self.to_seqno() <= before {
             true
         } else {
             false
         }
+    }
+
+    pub(crate) fn dry_purge(&self, before: u64) -> bool {
+        self.to_seqno() <= before
     }
 }
 

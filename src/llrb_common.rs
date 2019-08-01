@@ -124,35 +124,108 @@ where
     type Item = Entry<K, V>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let mut paths = match self.paths.take() {
-            Some(paths) => paths,
-            None => return None,
-        };
-        match paths.pop() {
-            None => None,
-            Some(mut path) => match (path.flag, path.nref) {
-                (IFlag::Left, nref) => {
-                    self.paths = {
-                        path.flag = IFlag::Center;
-                        paths.push(path);
-                        Some(paths)
-                    };
-                    Some(nref.entry.clone())
+        loop {
+            let mut paths = match self.paths.take() {
+                Some(paths) => paths,
+                None => {
+                    break None;
                 }
-                (IFlag::Center, nref) => {
-                    self.paths = {
-                        path.flag = IFlag::Right;
-                        paths.push(path);
-                        let rnref = nref.as_right_deref();
-                        Some(build_iter(IFlag::Left, rnref, paths))
-                    };
-                    self.next()
+            };
+
+            match paths.pop() {
+                None => {
+                    break None;
                 }
-                (_, _) => {
-                    self.paths = Some(paths);
-                    self.next()
+                Some(mut path) => match (path.flag, path.nref) {
+                    (IFlag::Left, nref) => {
+                        self.paths = {
+                            path.flag = IFlag::Center;
+                            paths.push(path);
+                            Some(paths)
+                        };
+                        break Some(nref.entry.clone());
+                    }
+                    (IFlag::Center, nref) => {
+                        self.paths = {
+                            path.flag = IFlag::Right;
+                            paths.push(path);
+                            let rnref = nref.as_right_deref();
+                            Some(build_iter(IFlag::Left, rnref, paths))
+                        };
+                    }
+                    (_, _) => self.paths = Some(paths),
+                },
+            }
+        }
+    }
+}
+
+/// IterAfter scan from `lower-bound` for [`Llrb`] and [Mvcc] index,
+/// including only those entry-versions that are updated ``after`` seqno.
+///
+/// [Llrb]: crate::llrb::Llrb
+/// [Mvcc]: crate::mvcc::Mvcc
+pub struct IterAfter<'a, K, V, R, Q>
+where
+    K: Ord + Clone + Borrow<Q>,
+    V: Clone + Diff,
+    R: RangeBounds<Q>,
+    Q: Ord + ?Sized,
+{
+    _arc: Arc<MvccRoot<K, V>>, // only used for ref-count-ing MVCC-snapshot.
+    range: R,
+    after: u64,
+    paths: Option<Vec<Fragment<'a, K, V>>>,
+    high: marker::PhantomData<Q>,
+}
+
+impl<'a, K, V, R, Q> Iterator for IterAfter<'a, K, V, R, Q>
+where
+    K: Ord + Clone + Borrow<Q>,
+    V: Clone + Diff,
+    R: RangeBounds<Q>,
+    Q: Ord + ?Sized,
+{
+    type Item = Entry<K, V>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let mut paths = match self.paths.take() {
+                Some(paths) => paths,
+                None => {
+                    break None;
                 }
-            },
+            };
+
+            match paths.pop() {
+                None => {
+                    break None;
+                }
+                Some(mut path) => match (path.flag, path.nref) {
+                    (IFlag::Left, nref) => {
+                        self.paths = {
+                            path.flag = IFlag::Center;
+                            paths.push(path);
+                            Some(paths)
+                        };
+                        // if this entry and its versions are already seen, skip
+                        if nref.entry.dry_purge(self.after) == false {
+                            let mut entry = nref.entry.clone();
+                            entry.purge(self.after);
+                            break Some(entry);
+                        }
+                    }
+                    (IFlag::Center, nref) => {
+                        self.paths = {
+                            path.flag = IFlag::Right;
+                            paths.push(path);
+                            let rnref = nref.as_right_deref();
+                            Some(build_iter(IFlag::Left, rnref, paths))
+                        };
+                    }
+                    (_, _) => self.paths = Some(paths),
+                },
+            };
         }
     }
 }
@@ -185,45 +258,48 @@ where
     type Item = Entry<K, V>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let mut paths = match self.paths.take() {
-            Some(paths) => paths,
-            None => return None,
+        let item = loop {
+            let mut paths = match self.paths.take() {
+                Some(paths) => paths,
+                None => {
+                    break None;
+                }
+            };
+
+            match paths.pop() {
+                None => {
+                    break None;
+                }
+                Some(mut path) => match (path.flag, path.nref) {
+                    (IFlag::Left, nref) => {
+                        self.paths = {
+                            path.flag = IFlag::Center;
+                            paths.push(path);
+                            Some(paths)
+                        };
+                        break Some(nref.entry.clone());
+                    }
+                    (IFlag::Center, nref) => {
+                        self.paths = {
+                            path.flag = IFlag::Right;
+                            paths.push(path);
+                            let rnref = nref.as_right_deref();
+                            Some(build_iter(IFlag::Left, rnref, paths))
+                        };
+                    }
+                    (_, _) => self.paths = Some(paths),
+                },
+            };
         };
 
-        let item = match paths.pop() {
-            None => None,
-            Some(mut path) => match (path.flag, path.nref) {
-                (IFlag::Left, nref) => {
-                    self.paths = {
-                        path.flag = IFlag::Center;
-                        paths.push(path);
-                        Some(paths)
-                    };
-                    Some(nref.entry.clone())
-                }
-                (IFlag::Center, nref) => {
-                    self.paths = {
-                        path.flag = IFlag::Right;
-                        paths.push(path);
-                        let rnref = nref.as_right_deref();
-                        Some(build_iter(IFlag::Left, rnref, paths))
-                    };
-                    self.next()
-                }
-                (_, _) => {
-                    self.paths = Some(paths);
-                    self.next()
-                }
-            },
-        };
         match item {
             None => None,
             Some(entry) => {
                 let qey = entry.as_key().borrow();
                 match self.range.end_bound() {
+                    Bound::Unbounded => Some(entry),
                     Bound::Included(high) if qey.le(high) => Some(entry),
                     Bound::Excluded(high) if qey.lt(high) => Some(entry),
-                    Bound::Unbounded => Some(entry),
                     Bound::Included(_) | Bound::Excluded(_) => {
                         self.paths.take();
                         None
@@ -262,37 +338,40 @@ where
     type Item = Entry<K, V>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let mut paths = match self.paths.take() {
-            Some(paths) => paths,
-            None => return None,
+        let item = loop {
+            let mut paths = match self.paths.take() {
+                Some(paths) => paths,
+                None => {
+                    break None;
+                }
+            };
+
+            match paths.pop() {
+                None => {
+                    break None;
+                }
+                Some(mut path) => match (path.flag, path.nref) {
+                    (IFlag::Right, nref) => {
+                        self.paths = {
+                            path.flag = IFlag::Center;
+                            paths.push(path);
+                            Some(paths)
+                        };
+                        break Some(nref.entry.clone());
+                    }
+                    (IFlag::Center, nref) => {
+                        self.paths = {
+                            path.flag = IFlag::Left;
+                            paths.push(path);
+                            let rnref = nref.as_left_deref();
+                            Some(build_iter(IFlag::Right, rnref, paths))
+                        };
+                    }
+                    (_, _) => self.paths = Some(paths),
+                },
+            };
         };
 
-        let item = match paths.pop() {
-            None => None,
-            Some(mut path) => match (path.flag, path.nref) {
-                (IFlag::Right, nref) => {
-                    self.paths = {
-                        path.flag = IFlag::Center;
-                        paths.push(path);
-                        Some(paths)
-                    };
-                    Some(nref.entry.clone())
-                }
-                (IFlag::Center, nref) => {
-                    self.paths = {
-                        path.flag = IFlag::Left;
-                        paths.push(path);
-                        let rnref = nref.as_left_deref();
-                        Some(build_iter(IFlag::Right, rnref, paths))
-                    };
-                    self.next()
-                }
-                (_, _) => {
-                    self.paths = Some(paths);
-                    self.next()
-                }
-            },
-        };
         match item {
             None => None,
             Some(entry) => {

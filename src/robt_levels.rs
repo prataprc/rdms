@@ -1,7 +1,7 @@
 use std::sync::{atomic::AtomicPtr, atomic::Ordering, mpsc, Arc};
 use std::{mem, thread};
 
-use crate::core::{Diff, Entry, Result, Serialize};
+use crate::core::{self, Diff, Result, Serialize};
 use crate::error::Error;
 use crate::robt_config::Config;
 use crate::robt_snap::Snapshot;
@@ -26,40 +26,38 @@ where
         unsafe { Arc::clone(self.0.load(Ordering::Relaxed).as_ref().unwrap()) }
     }
 
-    fn set_snapshots(&self, new_snapshots: Vec<Snapshot<K, V>>) {
+    fn compare_swap_snapshots(&self, new_snapshots: Vec<Snapshot<K, V>>) {
         let _olds = unsafe { Box::from_raw(self.0.load(Ordering::Relaxed)) };
         let new_snapshots = Box::leak(Box::new(Arc::new(new_snapshots)));
         self.0.store(new_snapshots, Ordering::Relaxed);
     }
 }
 
-pub(crate) struct Robts<I, K, V>
+pub(crate) struct Robts<K, V>
 where
     K: 'static + Clone + Ord + Serialize,
     V: 'static + Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
-    I: 'static + Send + Iterator<Item = Result<Entry<K, V>>>,
 {
     config: Config,
     mem_ratio: f64,
     disk_ratio: f64,
     levels: Levels<K, V>,
-    todisk: MemToDisk<I, K, V>,
-    tocompact: DiskCompact<I, K, V>,
+    todisk: MemToDisk<K, V>,
+    tocompact: DiskCompact<K, V>,
 }
 
 // new instance of multi-level Robt indexes.
-impl<I, K, V> Robts<I, K, V>
+impl<K, V> Robts<K, V>
 where
     K: 'static + Clone + Ord + Serialize,
     V: 'static + Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
-    I: 'static + Send + Iterator<Item = Result<Entry<K, V>>>,
 {
     const MEM_RATIO: f64 = 0.2;
     const DISK_RATIO: f64 = 0.5;
 
-    pub(crate) fn new(config: Config) -> Robts<I, K, V> {
+    pub(crate) fn new(config: Config) -> Robts<K, V> {
         Robts {
             config: config.clone(),
             mem_ratio: Self::MEM_RATIO,
@@ -70,79 +68,75 @@ where
         }
     }
 
-    pub(crate) fn set_mem_ratio(mut self, ratio: f64) -> Robts<I, K, V> {
+    pub(crate) fn set_mem_ratio(mut self, ratio: f64) -> Robts<K, V> {
         self.mem_ratio = ratio;
         self
     }
 
-    pub(crate) fn set_disk_ratio(mut self, ratio: f64) -> Robts<I, K, V> {
+    pub(crate) fn set_disk_ratio(mut self, ratio: f64) -> Robts<K, V> {
         self.disk_ratio = ratio;
         self
     }
 }
 
 // add new levels.
-impl<I, K, V> Robts<I, K, V>
+impl<K, V> Robts<K, V>
 where
     K: 'static + Clone + Ord + Serialize,
     V: 'static + Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
-    I: 'static + Send + Iterator<Item = Result<Entry<K, V>>>,
 {
     pub(crate) fn flush_to_disk(
         &mut self,
-        iter: I, // full table scan over mem-index
+        iter: core::IndexIter<K, V>, // full table scan over mem-index
         metadata: Vec<u8>,
-    ) -> Result<()>
-    where
-        I: 'static + Send + Iterator<Item = Result<Entry<K, V>>>,
-    {
+    ) -> Result<()> {
         let _resp = self.todisk.send(Request::MemFlush { iter, metadata })?;
         Ok(())
     }
 }
 
-enum Request<I, K, V>
+enum Request<K, V>
 where
     K: 'static + Clone + Ord + Serialize,
     V: 'static + Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
-    I: 'static + Send + Iterator<Item = Result<Entry<K, V>>>,
 {
-    MemFlush { iter: I, metadata: Vec<u8> },
+    MemFlush {
+        iter: core::IndexIter<K, V>,
+        metadata: Vec<u8>,
+    },
 }
 
 enum Response {
     Ok,
 }
 
-struct MemToDisk<I, K, V>
+struct MemToDisk<K, V>
 where
     K: 'static + Clone + Ord + Serialize,
     V: 'static + Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
-    I: 'static + Send + Iterator<Item = Result<Entry<K, V>>>,
 {
     config: Config,
     thread: thread::JoinHandle<Result<()>>,
-    tx: mpsc::SyncSender<(Request<I, K, V>, mpsc::SyncSender<Response>)>,
+    tx: mpsc::SyncSender<(Request<K, V>, mpsc::SyncSender<Response>)>,
 }
 
-impl<I, K, V> MemToDisk<I, K, V>
+impl<K, V> MemToDisk<K, V>
 where
     K: 'static + Clone + Ord + Serialize,
     V: 'static + Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
-    I: 'static + Send + Iterator<Item = Result<Entry<K, V>>>,
 {
-    fn new(config: Config) -> MemToDisk<I, K, V> {
+    fn new(config: Config) -> MemToDisk<K, V> {
         let (tx, rx) = mpsc::sync_channel(1);
         let conf = config.clone();
         let thread = thread::spawn(move || thread_mem_to_disk(conf, rx));
         MemToDisk { config, thread, tx }
     }
 
-    fn send(&mut self, req: Request<I, K, V>) -> Result<Response> {
+    fn send(&mut self, req: Request<K, V>) -> Result<Response> {
         let (tx, rx) = mpsc::sync_channel(0);
         self.tx.send((req, tx))?;
         Ok(rx.recv()?)
@@ -160,47 +154,44 @@ where
     }
 }
 
-fn thread_mem_to_disk<I, K, V>(
+fn thread_mem_to_disk<K, V>(
     _config: Config,
-    _rx: mpsc::Receiver<(Request<I, K, V>, mpsc::SyncSender<Response>)>,
+    _rx: mpsc::Receiver<(Request<K, V>, mpsc::SyncSender<Response>)>,
 ) -> Result<()>
 where
     K: 'static + Clone + Ord + Serialize,
     V: 'static + Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
-    I: 'static + Send + Iterator<Item = Result<Entry<K, V>>>,
 {
     // TBD
     Ok(())
 }
 
-struct DiskCompact<I, K, V>
+struct DiskCompact<K, V>
 where
     K: 'static + Clone + Ord + Serialize,
     V: 'static + Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
-    I: 'static + Send + Iterator<Item = Result<Entry<K, V>>>,
 {
     config: Config,
     thread: thread::JoinHandle<Result<()>>,
-    tx: mpsc::SyncSender<(Request<I, K, V>, mpsc::SyncSender<Response>)>,
+    tx: mpsc::SyncSender<(Request<K, V>, mpsc::SyncSender<Response>)>,
 }
 
-impl<I, K, V> DiskCompact<I, K, V>
+impl<K, V> DiskCompact<K, V>
 where
     K: 'static + Clone + Ord + Serialize,
     V: 'static + Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
-    I: 'static + Send + Iterator<Item = Result<Entry<K, V>>>,
 {
-    fn new(config: Config) -> DiskCompact<I, K, V> {
+    fn new(config: Config) -> DiskCompact<K, V> {
         let (tx, rx) = mpsc::sync_channel(1);
         let conf = config.clone();
         let thread = thread::spawn(move || thread_disk_compact(conf, rx));
         DiskCompact { config, thread, tx }
     }
 
-    fn send(&mut self, req: Request<I, K, V>) -> Result<Response> {
+    fn send(&mut self, req: Request<K, V>) -> Result<Response> {
         let (tx, rx) = mpsc::sync_channel(0);
         self.tx.send((req, tx))?;
         Ok(rx.recv()?)
@@ -218,15 +209,14 @@ where
     }
 }
 
-fn thread_disk_compact<I, K, V>(
+fn thread_disk_compact<K, V>(
     _config: Config,
-    _rx: mpsc::Receiver<(Request<I, K, V>, mpsc::SyncSender<Response>)>,
+    _rx: mpsc::Receiver<(Request<K, V>, mpsc::SyncSender<Response>)>,
 ) -> Result<()>
 where
     K: 'static + Clone + Ord + Serialize,
     V: 'static + Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
-    I: 'static + Send + Iterator<Item = Result<Entry<K, V>>>,
 {
     // TBD
     Ok(())

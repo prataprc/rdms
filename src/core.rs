@@ -8,7 +8,10 @@ use crate::vlog;
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Index entry iterator.
-pub type IndexIter<K, V> = Box<dyn Iterator<Item = Entry<K, V>>>;
+pub type IndexIter<K, V> = Box<dyn Iterator<Item = Entry<K, V>> + Send>;
+
+/// Object type for in-memory index.
+pub type MemFactory<K, V> = fn() -> Box<dyn Index<K, V> + Send>;
 
 /// Index operations.
 pub trait Index<K, V>: Reader<K, V> + Writer<K, V>
@@ -17,7 +20,7 @@ where
     V: Clone + Diff,
 {
     // Make a new empty index of this type, with same configuration.
-    // TODO: fn make_new(&self) -> Self;
+    fn make_new(&self) -> Self;
 }
 
 /// Index read operation.

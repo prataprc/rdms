@@ -22,9 +22,9 @@ pub struct Config {
     pub v_blocksize: usize,
     /// Tombstone purge. For LSM based index older entries can quickly bloat
     /// system. To avoid this, it is a good idea to purge older versions of
-    /// an entry which doesn't matter any more. When configured with
-    /// `Some(seqno)`, all iterated entries, whose seqno is older than
-    /// configured seqno, shall be ignored.
+    /// an entry that are seen by all participating entities. When configured
+    /// with `Some(seqno)`, all iterated entries whose seqno is ``<=``
+    /// configured seqno shall be ignored.
     pub tomb_purge: Option<u64>,
     /// Include delta as part of entry. Note that delta values are always
     /// stored in separate value-log file.

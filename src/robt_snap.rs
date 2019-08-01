@@ -10,7 +10,7 @@ use std::{
     path,
 };
 
-use crate::core::{Diff, Entry, Serialize};
+use crate::core::{Diff, Entry, Result, Serialize};
 use crate::error::Error;
 use crate::robt_config::{self, Config, MetaItem};
 use crate::robt_entry::MEntry;
@@ -29,12 +29,11 @@ where
 {
     dir: String,
     name: String,
+    meta: Vec<MetaItem>,
+    // working fields
     config: Config,
-    metadata: Vec<u8>,
-    root: u64,
     index_fd: fs::File,
     vlog_fd: Option<fs::File>,
-    stats: Stats,
 
     phantom_key: marker::PhantomData<K>,
     phantom_val: marker::PhantomData<V>,
@@ -47,59 +46,32 @@ where
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
 {
-    pub fn open(dir: &str, name: &str) -> Result<Snapshot<K, V>, Error> {
-        let index_file = Config::stitch_index_file(dir, name);
-        let index_fd = util::open_file_r(&index_file.as_ref())?;
-
+    pub fn open(dir: &str, name: &str) -> Result<Snapshot<K, V>> {
+        let meta_items = robt_config::read_meta_items(dir, name)?;
         let mut snap = Snapshot {
             dir: dir.to_string(),
             name: name.to_string(),
+            meta: meta_items,
             config: Config::new(),
-            stats: Default::default(),
-            metadata: Default::default(),
-            root: Default::default(),
-            index_fd,
+            index_fd: {
+                let index_file = Config::stitch_index_file(dir, name);
+                util::open_file_r(&index_file.as_ref())?
+            },
             vlog_fd: Default::default(),
 
             phantom_key: marker::PhantomData,
             phantom_val: marker::PhantomData,
         };
-
-        let items = robt_config::read_meta_items(dir, name)?;
-
-        for (i, item) in items.into_iter().enumerate() {
-            match (i, item) {
-                (0, MetaItem::Marker(_)) => (),
-                (1, MetaItem::Metadata(metadata)) => {
-                    snap.metadata = metadata;
-                }
-                (2, MetaItem::Stats(stats)) => {
-                    snap.stats = stats.parse()?;
-                }
-                (3, MetaItem::Root(root)) => {
-                    snap.root = root;
-                }
-                (i, item) => {
-                    let err = format!("found {} at {}", item, i);
-                    return Err(Error::InvalidSnapshot(err));
-                }
-            }
-        }
-
-        snap.config = snap.stats.clone().into();
-
-        snap.config.vlog_file = match snap.config.vlog_file.clone() {
-            None => None,
-            Some(vfile) => {
-                // stem the file name.
-                let vfile = path::Path::new(&vfile).file_name().unwrap();
-                let ipath = Config::stitch_index_file(&dir, &name);
-                let mut vpath = path::PathBuf::new();
-                vpath.push(path::Path::new(&ipath).parent().unwrap());
-                vpath.push(vfile);
-                Some(vpath.to_str().unwrap().to_string())
-            }
-        };
+        snap.config = snap.to_stats()?.into();
+        snap.config.vlog_file = snap.config.vlog_file.map(|vfile| {
+            // stem the file name.
+            let vfile = path::Path::new(&vfile).file_name().unwrap();
+            let ipath = Config::stitch_index_file(&dir, &name);
+            let mut vpath = path::PathBuf::new();
+            vpath.push(path::Path::new(&ipath).parent().unwrap());
+            vpath.push(vfile);
+            vpath.to_str().unwrap().to_string()
+        });
         snap.vlog_fd = snap
             .config
             .to_value_log(dir, name)
@@ -107,8 +79,7 @@ where
             .map(|s| util::open_file_r(s.as_ref()))
             .transpose()?;
 
-        // Okey dockey
-        Ok(snap)
+        Ok(snap) // Okey dockey
     }
 }
 
@@ -119,15 +90,15 @@ where
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
 {
-    pub fn count(&self) -> u64 {
-        self.stats.n_count
+    pub fn len(&self) -> u64 {
+        self.to_stats().unwrap().n_count
     }
 
     pub fn footprint(&self) -> u64 {
         let (dir, name) = (self.dir.as_str(), self.name.as_str());
-        let index_file = self.config.to_index_file(dir, name);
-        let mut footprint = fs::metadata(index_file).unwrap().len();
-
+        let mut footprint = fs::metadata(self.config.to_index_file(dir, name))
+            .unwrap()
+            .len();
         footprint += match self.config.to_value_log(dir, name) {
             Some(vlog_file) => fs::metadata(vlog_file).unwrap().len(),
             None => 0,
@@ -135,16 +106,36 @@ where
         footprint
     }
 
-    pub fn get_seqno(&self) -> u64 {
-        self.stats.seqno
+    pub fn to_seqno(&self) -> u64 {
+        self.to_stats().unwrap().seqno
     }
 
-    pub fn metadata(&self) -> Vec<u8> {
-        self.metadata.clone()
+    pub fn to_metadata(&self) -> Result<Vec<u8>> {
+        if let MetaItem::Metadata(data) = &self.meta[1] {
+            Ok(data.clone())
+        } else {
+            Err(Error::InvalidSnapshot(
+                "snapshot metadata missing".to_string(),
+            ))
+        }
     }
 
-    pub fn stats(&self) -> Stats {
-        self.stats.clone()
+    pub fn to_stats(&self) -> Result<Stats> {
+        if let MetaItem::Stats(stats) = &self.meta[2] {
+            Ok(stats.parse()?)
+        } else {
+            Err(Error::InvalidSnapshot(
+                "snapshot statistics missing".to_string(),
+            ))
+        }
+    }
+
+    pub fn to_root(&self) -> Result<u64> {
+        if let MetaItem::Root(root) = self.meta[3] {
+            Ok(root)
+        } else {
+            Err(Error::InvalidSnapshot("snapshot root missing".to_string()))
+        }
     }
 }
 
@@ -155,7 +146,7 @@ where
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
 {
-    fn get_zpos<Q>(&mut self, key: &Q, fpos: u64) -> Result<u64, Error>
+    fn get_zpos<Q>(&mut self, key: &Q, fpos: u64) -> Result<u64>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -171,12 +162,12 @@ where
         }
     }
 
-    pub fn get<Q>(&mut self, key: &Q) -> Result<Entry<K, V>, Error>
+    pub fn get<Q>(&mut self, key: &Q) -> Result<Entry<K, V>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        let zfpos = self.get_zpos(key, self.root)?;
+        let zfpos = self.get_zpos(key, self.to_root().unwrap())?;
 
         let fd = &mut self.index_fd;
         let zblock: ZBlock<K, V> = ZBlock::new_decode(fd, zfpos, &self.config)?;
@@ -193,16 +184,16 @@ where
         }
     }
 
-    pub fn iter(&mut self) -> Result<Iter<K, V>, Error> {
+    pub fn iter(&mut self) -> Result<Iter<K, V>> {
         let mut mzs = vec![];
-        self.build_fwd(self.root, &mut mzs)?;
+        self.build_fwd(self.to_root().unwrap(), &mut mzs)?;
         Ok(Iter {
             snap: self,
             mzs: mzs,
         })
     }
 
-    pub fn range<R, Q>(&mut self, range: R) -> Result<Range<K, V, R, Q>, Error>
+    pub fn range<R, Q>(&mut self, range: R) -> Result<Range<K, V, R, Q>>
     where
         K: Borrow<Q>,
         R: RangeBounds<Q>,
@@ -211,7 +202,7 @@ where
         let mut mzs = vec![];
         let skip_one = match range.start_bound() {
             Bound::Unbounded => {
-                self.build_fwd(self.root, &mut mzs)?;
+                self.build_fwd(self.to_root().unwrap(), &mut mzs)?;
                 false
             }
             Bound::Included(key) => {
@@ -241,7 +232,7 @@ where
         Ok(r)
     }
 
-    pub fn reverse<R, Q>(&mut self, r: R) -> Result<Reverse<K, V, R, Q>, Error>
+    pub fn reverse<R, Q>(&mut self, r: R) -> Result<Reverse<K, V, R, Q>>
     where
         K: Borrow<Q>,
         R: RangeBounds<Q>,
@@ -250,7 +241,7 @@ where
         let mut mzs = vec![];
         let skip_one = match r.end_bound() {
             Bound::Unbounded => {
-                self.build_rev(self.root, &mut mzs)?;
+                self.build_rev(self.to_root().unwrap(), &mut mzs)?;
                 false
             }
             Bound::Included(key) => {
@@ -278,7 +269,7 @@ where
         &mut self,
         mut fpos: u64,           // from node
         mzs: &mut Vec<MZ<K, V>>, // output
-    ) -> Result<(), Error> {
+    ) -> Result<()> {
         let fd = &mut self.index_fd;
         let config = &self.config;
 
@@ -297,7 +288,7 @@ where
         Ok(())
     }
 
-    fn rebuild_fwd(&mut self, mzs: &mut Vec<MZ<K, V>>) -> Result<(), Error> {
+    fn rebuild_fwd(&mut self, mzs: &mut Vec<MZ<K, V>>) -> Result<()> {
         let fd = &mut self.index_fd;
         let config = &self.config;
 
@@ -331,7 +322,7 @@ where
         &mut self,
         mut fpos: u64,           // from node
         mzs: &mut Vec<MZ<K, V>>, // output
-    ) -> Result<(), Error> {
+    ) -> Result<()> {
         let fd = &mut self.index_fd;
         let config = &self.config;
 
@@ -352,7 +343,7 @@ where
         Ok(())
     }
 
-    fn rebuild_rev(&mut self, mzs: &mut Vec<MZ<K, V>>) -> Result<(), Error> {
+    fn rebuild_rev(&mut self, mzs: &mut Vec<MZ<K, V>>) -> Result<()> {
         let fd = &mut self.index_fd;
         let config = &self.config;
 
@@ -387,12 +378,12 @@ where
         &mut self,
         key: &Q,
         mzs: &mut Vec<MZ<K, V>>, // output
-    ) -> Result<Entry<K, V>, Error>
+    ) -> Result<Entry<K, V>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        let mut fpos = self.root;
+        let mut fpos = self.to_root().unwrap();
         let fd = &mut self.index_fd;
         let config = &self.config;
         let (from, to) = (Bound::Unbounded, Bound::Unbounded);
@@ -436,9 +427,9 @@ where
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
 {
-    type Item = Result<Entry<K, V>, Error>;
+    type Item = Result<Entry<K, V>>;
 
-    fn next(&mut self) -> Option<Result<Entry<K, V>, Error>> {
+    fn next(&mut self) -> Option<Result<Entry<K, V>>> {
         match self.mzs.pop() {
             None => None,
             Some(mut z) => match z.next() {
@@ -498,9 +489,9 @@ where
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
 {
-    type Item = Result<Entry<K, V>, Error>;
+    type Item = Result<Entry<K, V>>;
 
-    fn next(&mut self) -> Option<Result<Entry<K, V>, Error>> {
+    fn next(&mut self) -> Option<Result<Entry<K, V>>> {
         match self.mzs.pop() {
             None => None,
             Some(mut z) => match z.next() {
@@ -565,9 +556,9 @@ where
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
 {
-    type Item = Result<Entry<K, V>, Error>;
+    type Item = Result<Entry<K, V>>;
 
-    fn next(&mut self) -> Option<Result<Entry<K, V>, Error>> {
+    fn next(&mut self) -> Option<Result<Entry<K, V>>> {
         match self.mzs.pop() {
             None => None,
             Some(mut z) => match z.next_back() {
@@ -609,9 +600,9 @@ where
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
 {
-    type Item = Result<Entry<K, V>, Error>;
+    type Item = Result<Entry<K, V>>;
 
-    fn next(&mut self) -> Option<Result<Entry<K, V>, Error>> {
+    fn next(&mut self) -> Option<Result<Entry<K, V>>> {
         match self {
             MZ::Z { zblock, index } => match zblock.to_entry(*index) {
                 Ok((_, entry)) => {
@@ -632,7 +623,7 @@ where
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
 {
-    fn next_back(&mut self) -> Option<Result<Entry<K, V>, Error>> {
+    fn next_back(&mut self) -> Option<Result<Entry<K, V>>> {
         match self {
             MZ::Z { zblock, index } => match zblock.to_entry(*index) {
                 Ok((_, entry)) => {

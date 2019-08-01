@@ -160,30 +160,32 @@ where
     }
 }
 
-/// IterAfter scan from `lower-bound` for [`Llrb`] and [Mvcc] index,
-/// including only those entry-versions that are updated ``after`` seqno.
+/// IterWithin scan from `lower-bound` for [`Llrb`] and [Mvcc] index,
+/// that includes entry versions whose modified seqno is <= ``before``.
 ///
 /// [Llrb]: crate::llrb::Llrb
 /// [Mvcc]: crate::mvcc::Mvcc
-pub struct IterAfter<'a, K, V, R, Q>
+pub struct IterWithin<'a, K, V, R, G, Q>
 where
     K: Ord + Clone + Borrow<Q>,
-    V: Clone + Diff,
+    V: Clone + Diff + From<<V as Diff>::D>,
     R: RangeBounds<Q>,
+    G: Clone + RangeBounds<u64>,
     Q: Ord + ?Sized,
 {
     _arc: Arc<MvccRoot<K, V>>, // only used for ref-count-ing MVCC-snapshot.
     range: R,
-    after: u64,
+    within: G,
     paths: Option<Vec<Fragment<'a, K, V>>>,
     high: marker::PhantomData<Q>,
 }
 
-impl<'a, K, V, R, Q> Iterator for IterAfter<'a, K, V, R, Q>
+impl<'a, K, V, R, G, Q> Iterator for IterWithin<'a, K, V, R, G, Q>
 where
     K: Ord + Clone + Borrow<Q>,
-    V: Clone + Diff,
+    V: Clone + Diff + From<<V as Diff>::D>,
     R: RangeBounds<Q>,
+    G: Clone + RangeBounds<u64>,
     Q: Ord + ?Sized,
 {
     type Item = Entry<K, V>;
@@ -208,11 +210,10 @@ where
                             paths.push(path);
                             Some(paths)
                         };
-                        // if this entry and its versions are already seen, skip
-                        if nref.entry.dry_purge(self.after) == false {
-                            let mut entry = nref.entry.clone();
-                            entry.purge(self.after);
-                            break Some(entry);
+                        // include if entry was within the visible time-range
+                        match nref.entry.pick_within(self.within.clone()) {
+                            Some(entry) => break Some(entry),
+                            None => (),
                         }
                     }
                     (IFlag::Center, nref) => {

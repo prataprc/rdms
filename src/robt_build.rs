@@ -1,5 +1,6 @@
 // TODO: flush put blocks into tx channel. Right now we simply unwrap()
 
+use std::ops::Bound;
 use std::sync::mpsc;
 use std::{cmp, convert::TryInto, fs, io::Write, marker, mem, thread, time};
 
@@ -277,7 +278,7 @@ where
         // if tombstone purge is configured, then purge.
         match self.config.tomb_purge {
             Some(before) => {
-                if entry.purge(before) {
+                if entry.purge_todo(Bound::Included(before)) {
                     None
                 } else {
                     Some(entry)

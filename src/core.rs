@@ -1,5 +1,5 @@
 use std::borrow::Borrow;
-use std::ops::RangeBounds;
+use std::ops::{Bound, RangeBounds};
 
 use crate::error::Error;
 use crate::vlog;
@@ -35,16 +35,17 @@ where
     /// Iterate over all entries in this index.
     fn iter(&self) -> Result<IndexIter<K, V>>;
 
-    /// Iterate from lower bound to upper bound.
-    fn range<R, Q>(&self, range: R) -> Result<IndexIter<K, V>>
+    /// Return an iterator over entries that meet following properties
+    /// * Only entries greater than range.start_bound().
+    /// * Only entries whose modified seqno is within seqno-range.
+    fn iter_within<R, Q>(&self, range: R, before: u64) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
         R: RangeBounds<Q>,
         Q: Ord + ?Sized;
 
-    /// Iterate from lower bound to upper bound, including only those
-    /// entry-versions that are updated ``after`` seqno.
-    fn range_after<R, Q>(&self, range: R, after: u64) -> Result<IndexIter<K, V>>
+    /// Iterate from lower bound to upper bound.
+    fn range<R, Q>(&self, range: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
         R: RangeBounds<Q>,
@@ -417,23 +418,105 @@ where
         *self.value = Value::D { seqno };
     }
 
-    // purge all versions whose seqno is <= ``before``
-    pub(crate) fn purge(&mut self, before: u64) -> bool {
+    // purge all versions whose seqno is ``before``.
+    pub(crate) fn purge_todo(&mut self, before: Bound<u64>) -> bool {
         for i in 0..self.deltas.len() {
-            if self.deltas[i].to_seqno() <= before {
+            let seqno = self.deltas[i].to_seqno();
+            let ok = match before {
+                Bound::Included(before) if seqno <= before => true,
+                Bound::Excluded(before) if seqno < before => true,
+                _ => false,
+            };
+            if ok {
                 self.deltas.truncate(i); // purge everything from i..len
                 break;
             }
         }
-        if self.to_seqno() <= before {
-            true
+        let seqno = self.to_seqno();
+        match before {
+            Bound::Included(before) if seqno <= before => true,
+            Bound::Excluded(before) if seqno < before => true,
+            _ => false,
+        }
+    }
+}
+
+impl<K, V> Entry<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff + From<<V as Diff>::D>,
+{
+    // pick all versions whose seqno is within the range of [from, to], with
+    // inclusive bounds.
+    pub(crate) fn pick_within<R>(&self, range: R) -> Option<Entry<K, V>>
+    where
+        R: RangeBounds<u64>,
+    {
+        let e = self.to_seqno();
+        let s = self.deltas.last().map_or(e, |d| d.to_seqno());
+        let ok1 = match range.end_bound() {
+            Bound::Included(re) if s > *re => false,
+            Bound::Excluded(re) if s >= *re => false,
+            _ => true,
+        };
+        let ok2 = match range.start_bound() {
+            Bound::Included(rs) if e < *rs => false,
+            Bound::Excluded(rs) if e <= *rs => false,
+            _ => true,
+        };
+        if ok1 || ok2 {
+            let entry = self.clone();
+            let deltas = entry.deltas;
+            let entry = Entry::new(entry.key, entry.value);
+            let mut entry = entry.skip_till(range.end_bound(), deltas).unwrap();
+            entry.purge_todo(match range.start_bound() {
+                Bound::Included(x) => Bound::Included(*x),
+                Bound::Excluded(x) => Bound::Excluded(*x),
+                Bound::Unbounded => Bound::Unbounded,
+            });
+            Some(entry)
         } else {
-            false
+            None
         }
     }
 
-    pub(crate) fn dry_purge(&self, before: u64) -> bool {
-        self.to_seqno() <= before
+    fn skip_till(
+        mut self,
+        end: Bound<&u64>, // skip till end
+        deltas: Vec<Delta<V>>,
+    ) -> Option<Entry<K, V>> {
+        let mut iter = deltas.into_iter();
+        while let Some(delta) = iter.next() {
+            let seqno = self.to_seqno();
+            let ok = match end {
+                Bound::Included(re) if seqno <= *re => true,
+                Bound::Excluded(re) if seqno < *re => true,
+                _ => false,
+            };
+            if ok {
+                self.deltas = iter.collect();
+                return Some(self);
+            }
+            match (delta.data, self.to_native_value()) {
+                (InnerDelta::D { seqno }, Some(_)) => {
+                    self.value = Box::new(Value::new_delete(seqno));
+                }
+                (InnerDelta::U { delta, seqno }, None) => {
+                    let nv: V = From::from(delta.into_native_delta().unwrap());
+                    let value = vlog::Value::new_native(nv);
+                    self.value = Box::new(Value::new_upsert(value, seqno));
+                }
+                (InnerDelta::U { delta, seqno }, Some(nv)) => {
+                    let nv = nv.merge(&delta.into_native_delta().unwrap());
+                    let value = vlog::Value::new_native(nv);
+                    self.value = Box::new(Value::new_upsert(value, seqno))
+                }
+                (InnerDelta::D { .. }, None) => {
+                    panic!("consecutive versions can't be a delete");
+                }
+            }
+        }
+        None
     }
 }
 

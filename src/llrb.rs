@@ -535,37 +535,6 @@ where
         })
     }
 
-    /// Return an iterator starting from lower-bound, that only includes
-    /// entry versions whose modified seqno is > after
-    pub fn iter_after<R, Q>(&self, range: R, after: u64) -> Result<IterAfter<K, V, R, Q>>
-    where
-        K: Borrow<Q>,
-        R: RangeBounds<Q>,
-        Q: Ord + ?Sized,
-    {
-        // validate arguments.
-        match range.end_bound() {
-            Bound::Unbounded => (),
-            Bound::Included(_) | Bound::Excluded(_) => {
-                panic!("iter_after cannot have an upper-bound !!");
-            }
-        }
-        // similar to range pre-processing
-        let root = self.root.as_ref().map(Deref::deref);
-        let paths = match range.start_bound() {
-            Bound::Unbounded => Some(build_iter(IFlag::Left, root, vec![])),
-            Bound::Included(low) => Some(find_start(root, low, true, vec![])),
-            Bound::Excluded(low) => Some(find_start(root, low, false, vec![])),
-        };
-        Ok(IterAfter {
-            _arc: Default::default(),
-            range,
-            after,
-            paths,
-            high: marker::PhantomData,
-        })
-    }
-
     /// Range over all entries from low to high.
     pub fn range<R, Q>(&self, range: R) -> Result<Range<K, V, R, Q>>
     where
@@ -606,6 +575,45 @@ where
             range,
             paths,
             low,
+        })
+    }
+}
+
+impl<K, V> Llrb<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff + From<<V as Diff>::D>,
+{
+    /// Return an iterator over entries that meet following properties
+    /// * Only entries greater than range.start_bound().
+    /// * Only entries whose modified seqno is within seqno-range.
+    pub fn iter_within<R, G, Q>(&self, range: R, within: G) -> Result<IterWithin<K, V, R, G, Q>>
+    where
+        K: Borrow<Q>,
+        R: RangeBounds<Q>,
+        G: Clone + RangeBounds<u64>,
+        Q: Ord + ?Sized,
+    {
+        // validate arguments.
+        match range.end_bound() {
+            Bound::Unbounded => (),
+            Bound::Included(_) | Bound::Excluded(_) => {
+                panic!("iter_before cannot have an upper-bound !!");
+            }
+        }
+        // similar to range pre-processing
+        let root = self.root.as_ref().map(Deref::deref);
+        let paths = match range.start_bound() {
+            Bound::Unbounded => Some(build_iter(IFlag::Left, root, vec![])),
+            Bound::Included(low) => Some(find_start(root, low, true, vec![])),
+            Bound::Excluded(low) => Some(find_start(root, low, false, vec![])),
+        };
+        Ok(IterWithin {
+            _arc: Default::default(),
+            range,
+            within,
+            paths,
+            high: marker::PhantomData,
         })
     }
 }

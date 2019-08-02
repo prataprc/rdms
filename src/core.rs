@@ -205,6 +205,16 @@ where
             InnerDelta::U { .. } => None,
         }
     }
+
+    pub(crate) fn is_reference(&self) -> bool {
+        match self.data {
+            InnerDelta::U {
+                delta: vlog::Delta::Reference { .. },
+                ..
+            } => true,
+            _ => false,
+        }
+    }
 }
 
 impl<V> AsRef<InnerDelta<V>> for Delta<V>
@@ -293,6 +303,16 @@ where
             Value::D { .. } => true,
         }
     }
+
+    pub(crate) fn is_reference(&self) -> bool {
+        match self {
+            Value::U {
+                value: vlog::Value::Reference { .. },
+                ..
+            } => true,
+            _ => false,
+        }
+    }
 }
 
 /// Entry is the covering structure for a {Key, value} pair
@@ -365,14 +385,16 @@ where
                 value: vlog::Value::Native { value },
                 seqno,
             } => {
-                let d = new_entry.to_native_value().unwrap().diff(value);
-                let delta = vlog::Delta::new_native(d);
+                let delta = {
+                    let d = new_entry.to_native_value().unwrap().diff(value);
+                    vlog::Delta::new_native(d)
+                };
                 self.deltas.insert(0, Delta::new_upsert(delta, *seqno));
             }
             Value::U {
                 value: vlog::Value::Reference { .. },
                 ..
-            } => panic!("impossible situation"),
+            } => unreachable!(),
         }
         self.prepend_version_nolsm(new_entry)
     }
@@ -385,40 +407,41 @@ where
                 value: vlog::Value::Native { value },
                 seqno,
             } => {
-                let d: <V as Diff>::D = From::from(value.clone());
-                let delta = vlog::Delta::new_native(d);
+                let delta = {
+                    let d: <V as Diff>::D = From::from(value.clone());
+                    vlog::Delta::new_native(d)
+                };
                 self.deltas.insert(0, Delta::new_upsert(delta, *seqno));
             }
             Value::U {
                 value: vlog::Value::Reference { .. },
                 ..
-            } => {
-                panic!("impossible situation");
-            }
+            } => unreachable!(),
         }
         *self.value = Value::D { seqno };
     }
 
-    // purge all versions whose seqno is ``before``.
-    pub(crate) fn purge(&mut self, before: Bound<u64>) -> bool {
-        for i in 0..self.deltas.len() {
-            let seqno = self.deltas[i].to_seqno();
-            let ok = match before {
-                Bound::Included(before) if seqno <= before => true,
-                Bound::Excluded(before) if seqno < before => true,
-                _ => false,
-            };
-            if ok {
-                self.deltas.truncate(i); // purge everything from i..len
-                break;
-            }
+    // purge all versions whose seqno < or <= ``before``.
+    pub(crate) fn purge(mut self, start: Bound<u64>) -> Option<Entry<K, V>> {
+        let e = self.to_seqno();
+        match start {
+            Bound::Included(start) if e < start => return None,
+            Bound::Excluded(start) if e <= start => return None,
+            _ => (),
         }
-        let seqno = self.to_seqno();
-        match before {
-            Bound::Included(before) if seqno <= before => true,
-            Bound::Excluded(before) if seqno < before => true,
-            _ => false,
-        }
+        self.deltas = self
+            .deltas
+            .into_iter()
+            .take_while(|d| {
+                let seqno = d.to_seqno();
+                match start {
+                    Bound::Included(start) if seqno >= start => true,
+                    Bound::Excluded(start) if seqno > start => true,
+                    _ => false,
+                }
+            })
+            .collect();
+        Some(self)
     }
 }
 
@@ -427,78 +450,97 @@ where
     K: Clone + Ord,
     V: Clone + Diff + From<<V as Diff>::D>,
 {
-    // pick all versions whose seqno is within the range of [from, to], with
-    // inclusive bounds.
-    pub(crate) fn pick_within<R>(&self, range: R) -> Option<Entry<K, V>>
+    // pick all versions whose seqno is within the specified range.
+    pub(crate) fn pick_within<R>(&self, within: R) -> Option<Entry<K, V>>
     where
-        R: RangeBounds<u64>,
+        R: Clone + RangeBounds<u64>,
     {
-        let e = self.to_seqno();
-        let s = self.deltas.last().map_or(e, |d| d.to_seqno());
-        let ok1 = match range.end_bound() {
-            Bound::Included(re) if s > *re => false,
-            Bound::Excluded(re) if s >= *re => false,
-            _ => true,
-        };
-        let ok2 = match range.start_bound() {
-            Bound::Included(rs) if e < *rs => false,
-            Bound::Excluded(rs) if e <= *rs => false,
-            _ => true,
-        };
-        if ok1 || ok2 {
-            let entry = self.clone();
-            let deltas = entry.deltas;
-            let entry = Entry::new(entry.key, entry.value);
-            let mut entry = entry.skip_till(range.end_bound(), deltas).unwrap();
-            entry.purge(match range.start_bound() {
-                Bound::Included(x) => Bound::Included(*x),
-                Bound::Excluded(x) => Bound::Excluded(*x),
-                Bound::Unbounded => Bound::Unbounded,
-            });
-            Some(entry)
-        } else {
-            None
-        }
+        // skip versions newer than requested range.
+        let entry = self.skip_till(within.clone())?;
+        // purge versions older than request range.
+        entry.purge(match within.start_bound() {
+            Bound::Included(x) => Bound::Included(*x),
+            Bound::Excluded(x) => Bound::Excluded(*x),
+            Bound::Unbounded => Bound::Unbounded,
+        })
     }
 
-    fn skip_till(
-        mut self,
-        end: Bound<&u64>, // skip till end
-        deltas: Vec<Delta<V>>,
-    ) -> Option<Entry<K, V>> {
-        let mut iter = deltas.into_iter();
+    fn skip_till<R>(&self, within: R) -> Option<Entry<K, V>>
+    where
+        R: Clone + RangeBounds<u64>,
+    {
+        // skip entire entry if it is before the specified range.
+        let e = self.to_seqno();
+        match within.start_bound() {
+            Bound::Included(s_seqno) if e < *s_seqno => return None,
+            Bound::Excluded(s_seqno) if e <= *s_seqno => return None,
+            _ => (),
+        }
+        // skip the entire entry if it is after the specified range.
+        let s = self.deltas.last().map_or(e, |d| d.to_seqno());
+        match within.end_bound() {
+            Bound::Included(e_seqno) if s > *e_seqno => return None,
+            Bound::Excluded(e_seqno) if s >= *e_seqno => return None,
+            Bound::Included(e_seqno) if e <= *e_seqno => return Some(self.clone()),
+            Bound::Included(e_seqno) if e < *e_seqno => return Some(self.clone()),
+            _ => (),
+        };
+
+        // partial skip.
+        let mut entry = self.clone();
+        let mut iter = entry.deltas.into_iter();
         while let Some(delta) = iter.next() {
-            let seqno = self.to_seqno();
-            let ok = match end {
-                Bound::Included(re) if seqno <= *re => true,
-                Bound::Excluded(re) if seqno < *re => true,
-                _ => false,
-            };
-            if ok {
-                self.deltas = iter.collect();
-                return Some(self);
-            }
-            match (delta.data, self.to_native_value()) {
+            let seqno = match (delta.data, entry.value.to_native_value()) {
                 (InnerDelta::D { seqno }, Some(_)) => {
-                    self.value = Box::new(Value::new_delete(seqno));
+                    entry.value = Box::new(Value::new_delete(seqno));
+                    seqno
                 }
                 (InnerDelta::U { delta, seqno }, None) => {
-                    let nv: V = From::from(delta.into_native_delta().unwrap());
-                    let value = vlog::Value::new_native(nv);
-                    self.value = Box::new(Value::new_upsert(value, seqno));
+                    entry.value = {
+                        let value = {
+                            let nd = delta.into_native_delta().unwrap();
+                            let nv: V = From::from(nd);
+                            vlog::Value::new_native(nv)
+                        };
+                        Box::new(Value::new_upsert(value, seqno))
+                    };
+                    seqno
                 }
                 (InnerDelta::U { delta, seqno }, Some(nv)) => {
-                    let nv = nv.merge(&delta.into_native_delta().unwrap());
-                    let value = vlog::Value::new_native(nv);
-                    self.value = Box::new(Value::new_upsert(value, seqno))
+                    entry.value = {
+                        let value = {
+                            let nd = delta.into_native_delta().unwrap();
+                            let nv = nv.merge(&nd);
+                            vlog::Value::new_native(nv)
+                        };
+                        Box::new(Value::new_upsert(value, seqno))
+                    };
+                    seqno
                 }
                 (InnerDelta::D { .. }, None) => {
                     panic!("consecutive versions can't be a delete");
                 }
+            };
+            let ok = match within.end_bound() {
+                Bound::Included(e_seqno) if seqno <= *e_seqno => true,
+                Bound::Excluded(e_seqno) if seqno < *e_seqno => true,
+                _ => false,
+            };
+            if ok {
+                entry.deltas = iter.collect();
+                return Some(entry);
             }
         }
-        None
+        unreachable!()
     }
+
+    //pub(crate) fn merge(&self, entry: &Entry<K, V>) -> Entry<K, V> {
+    //    let mut entries: Vec<Entry<K, V>> = {
+    //        self.versions().collect();
+    //        let othr_entries: Vec<Entry<K, V>> = entry.versions().collect();
+    //        entries.extend_from_slice(&other_entries);
+    //    }
+    //}
 }
 
 // read methods.
@@ -579,7 +621,7 @@ where
                 deltas: Default::default(),
             }),
             curval: None,
-            deltas: self.to_deltas().into_iter(),
+            deltas: Some(self.to_deltas().into_iter()),
         }
     }
 }
@@ -593,7 +635,7 @@ where
     key: K,
     entry: Option<Entry<K, V>>,
     curval: Option<V>,
-    deltas: std::vec::IntoIter<Delta<V>>,
+    deltas: Option<std::vec::IntoIter<Delta<V>>>,
 }
 
 impl<K, V> Iterator for VersionIter<K, V>
@@ -604,21 +646,42 @@ where
     type Item = Entry<K, V>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        // first iteration
         if let Some(entry) = self.entry.take() {
-            self.curval = entry.to_native_value();
-            return Some(entry);
+            if entry.value.is_reference() {
+                self.deltas.take();
+                return None;
+            } else {
+                self.curval = entry.to_native_value();
+                return Some(entry);
+            }
         }
-        match (self.deltas.next().map(|x| x.data), self.curval.take()) {
-            (None, _) => None,
-            (Some(InnerDelta::D { .. }), None) => {
+        // remaining iterations
+        let delta = {
+            match &mut self.deltas {
+                Some(deltas) => match deltas.next() {
+                    None => {
+                        return None;
+                    }
+                    Some(delta) if delta.is_reference() => {
+                        self.deltas.take();
+                        return None;
+                    }
+                    Some(delta) => delta,
+                },
+                None => return None,
+            }
+        };
+        match (delta.data, self.curval.take()) {
+            (InnerDelta::D { .. }, None) => {
                 panic!("consecutive versions can't be a delete");
             }
-            (Some(InnerDelta::D { seqno }), _) => {
+            (InnerDelta::D { seqno }, _) => {
                 // this entry is deleted.
                 let key = self.key.clone();
                 Some(Entry::new(key, Box::new(Value::new_delete(seqno))))
             }
-            (Some(InnerDelta::U { delta, seqno }), None) => {
+            (InnerDelta::U { delta, seqno }, None) => {
                 // previous entry was a delete.
                 let nv: V = From::from(delta.into_native_delta().unwrap());
                 let key = self.key.clone();
@@ -626,7 +689,7 @@ where
                 let v = Value::new_upsert(vlog::Value::new_native(nv), seqno);
                 Some(Entry::new(key, Box::new(v)))
             }
-            (Some(InnerDelta::U { delta, seqno }), Some(curval)) => {
+            (InnerDelta::U { delta, seqno }, Some(curval)) => {
                 // this and previous entry are create/update.
                 let nv = curval.merge(&delta.into_native_delta().unwrap());
                 self.curval = Some(nv.clone());

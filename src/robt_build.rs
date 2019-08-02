@@ -272,18 +272,13 @@ where
     }
 
     // return whether this entry can be skipped.
-    fn preprocess(&mut self, mut entry: Entry<K, V>) -> Option<Entry<K, V>> {
+    fn preprocess(&mut self, entry: Entry<K, V>) -> Option<Entry<K, V>> {
         self.stats.seqno = cmp::max(self.stats.seqno, entry.to_seqno());
 
-        // if tombstone purge is configured, then purge.
+        // if tombstone purge is configured, then purge all versions on or
+        // before the purge-seqno.
         match self.config.tomb_purge {
-            Some(before) => {
-                if entry.purge(Bound::Included(before)) {
-                    None
-                } else {
-                    Some(entry)
-                }
-            }
+            Some(before) => entry.purge(Bound::Excluded(before)),
             _ => Some(entry),
         }
     }

@@ -20,7 +20,7 @@ pub(crate) enum Value<V> {
     // Native value, already de-serialized.
     Native { value: V },
     // Refers to serialized value on disk, either index-file or vlog-file
-    Reference { fpos: u64, length: u64 },
+    Reference { fpos: u64, length: u64, seqno: u64 },
 }
 
 impl<V> Value<V> {
@@ -31,8 +31,12 @@ impl<V> Value<V> {
     }
 
     #[allow(dead_code)] // TODO: remove this after wiring with bogn.
-    pub(crate) fn new_reference(fpos: u64, length: u64) -> Value<V> {
-        Value::Reference { fpos, length }
+    pub(crate) fn new_reference(fpos: u64, length: u64, seqno: u64) -> Value<V> {
+        Value::Reference {
+            fpos,
+            length,
+            seqno,
+        }
     }
 }
 
@@ -108,7 +112,7 @@ where
     // Native diff, already de-serialized.
     Native { diff: <V as Diff>::D },
     // Refers to serialized diff on disk, either index-file or vlog-file
-    Reference { fpos: u64, length: u64 },
+    Reference { fpos: u64, length: u64, seqno: u64 },
 }
 
 impl<V> Delta<V>
@@ -120,8 +124,12 @@ where
     }
 
     #[allow(dead_code)] // TODO: remove this after wiring with bogn.
-    pub(crate) fn new_reference(fpos: u64, length: u64) -> Delta<V> {
-        Delta::Reference { fpos, length }
+    pub(crate) fn new_reference(fpos: u64, length: u64, seqno: u64) -> Delta<V> {
+        Delta::Reference {
+            fpos,
+            length,
+            seqno,
+        }
     }
 
     pub(crate) fn into_native_delta(self) -> Option<<V as Diff>::D> {

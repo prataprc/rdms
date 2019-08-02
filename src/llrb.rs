@@ -587,7 +587,7 @@ where
     /// Return an iterator over entries that meet following properties
     /// * Only entries greater than range.start_bound().
     /// * Only entries whose modified seqno is within seqno-range.
-    pub fn iter_within<R, G, Q>(&self, range: R, within: G) -> Result<IterWithin<K, V, R, G, Q>>
+    pub fn iter_within<R, G, Q>(&self, range: R, within: G) -> Result<IterWithin<K, V, G>>
     where
         K: Borrow<Q>,
         R: RangeBounds<Q>,
@@ -610,10 +610,8 @@ where
         };
         Ok(IterWithin {
             _arc: Default::default(),
-            range,
             within,
             paths,
-            high: marker::PhantomData,
         })
     }
 }

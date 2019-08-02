@@ -8,7 +8,7 @@ use crate::vlog;
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Index entry iterator.
-pub type IndexIter<K, V> = Box<dyn Iterator<Item = Entry<K, V>> + Send>;
+pub type IndexIter<K, V> = Box<dyn Iterator<Item = Result<Entry<K, V>>> + Send>;
 
 /// Index operations.
 pub trait Index<K, V>: Reader<K, V> + Writer<K, V>

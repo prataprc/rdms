@@ -545,7 +545,7 @@ where
     /// Return an iterator over entries that meet following properties
     /// * Only entries greater than range.start_bound().
     /// * Only entries whose modified seqno is within seqno-range.
-    pub fn iter_within<R, G, Q>(&self, range: R, within: G) -> Result<IterWithin<K, V, R, G, Q>>
+    pub fn iter_within<R, G, Q>(&self, range: R, within: G) -> Result<IterWithin<K, V, G>>
     where
         K: Borrow<Q>,
         R: RangeBounds<Q>,
@@ -562,17 +562,15 @@ where
         // similar to range pre-processing
         let mut iter = IterWithin {
             _arc: Snapshot::clone(&self.snapshot),
-            range,
             within,
             paths: Default::default(),
-            high: marker::PhantomData,
         };
         let root = iter
             ._arc
             .as_ref()
             .root_duplicate()
             .map(|n| Box::leak(n) as &Node<K, V>);
-        iter.paths = match iter.range.start_bound() {
+        iter.paths = match range.start_bound() {
             Bound::Unbounded => Some(build_iter(IFlag::Left, root, vec![])),
             Bound::Included(low) => Some(find_start(root, low, true, vec![])),
             Bound::Excluded(low) => Some(find_start(root, low, false, vec![])),

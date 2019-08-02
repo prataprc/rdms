@@ -32,11 +32,16 @@ extern crate llrb_index;
 mod bogn;
 mod core;
 mod error;
-mod skip_scan;
 mod spinlock;
 mod sync_writer;
 mod util;
 mod vlog;
+
+pub use crate::bogn::Bogn;
+pub use crate::core::{Diff, Entry, Replay, Result, Serialize, VersionIter};
+pub use crate::core::{Index, IndexIter, Reader, Writer};
+pub use crate::error::Error;
+pub use crate::spinlock::RWSpinlock;
 
 mod robt_build;
 mod robt_config;
@@ -45,15 +50,6 @@ mod robt_indx;
 mod robt_levels;
 mod robt_snap;
 mod robt_stats;
-
-mod type_bytes;
-mod type_empty;
-mod type_i32;
-mod type_i64;
-
-pub mod llrb;
-mod llrb_node;
-pub mod mvcc;
 /// Read Only BTree for disk based indexes.
 ///
 /// ROBT instances shall have an index file and an optional value-log-file,
@@ -65,14 +61,19 @@ pub mod robt {
     pub use crate::robt_config::Config;
     pub use crate::robt_snap::Snapshot;
 }
-pub mod wal;
 
-pub use crate::bogn::Bogn;
-pub use crate::core::{Diff, Entry, Replay, Result, Serialize, VersionIter};
-pub use crate::core::{Index, IndexIter, Reader, Writer};
-pub use crate::error::Error;
-pub use crate::spinlock::RWSpinlock;
+mod type_bytes;
+mod type_empty;
+mod type_i32;
+mod type_i64;
 pub use crate::type_empty::Empty; // TODO: proper nomenclature.
+
+pub mod llrb;
+mod llrb_node;
+pub mod lsm;
+pub mod mvcc;
+pub mod skip_scan;
+pub mod wal;
 
 #[cfg(test)]
 mod core_test;

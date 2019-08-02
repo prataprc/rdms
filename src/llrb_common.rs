@@ -165,28 +165,22 @@ where
 ///
 /// [Llrb]: crate::llrb::Llrb
 /// [Mvcc]: crate::mvcc::Mvcc
-pub struct IterWithin<'a, K, V, R, G, Q>
+pub struct IterWithin<'a, K, V, G>
 where
-    K: Ord + Clone + Borrow<Q>,
+    K: Ord + Clone,
     V: Clone + Diff + From<<V as Diff>::D>,
-    R: RangeBounds<Q>,
     G: Clone + RangeBounds<u64>,
-    Q: Ord + ?Sized,
 {
     _arc: Arc<MvccRoot<K, V>>, // only used for ref-count-ing MVCC-snapshot.
-    range: R,
     within: G,
     paths: Option<Vec<Fragment<'a, K, V>>>,
-    high: marker::PhantomData<Q>,
 }
 
-impl<'a, K, V, R, G, Q> Iterator for IterWithin<'a, K, V, R, G, Q>
+impl<'a, K, V, G> Iterator for IterWithin<'a, K, V, G>
 where
-    K: Ord + Clone + Borrow<Q>,
+    K: Ord + Clone,
     V: Clone + Diff + From<<V as Diff>::D>,
-    R: RangeBounds<Q>,
     G: Clone + RangeBounds<u64>,
-    Q: Ord + ?Sized,
 {
     type Item = Entry<K, V>;
 

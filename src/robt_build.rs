@@ -278,7 +278,7 @@ where
         // if tombstone purge is configured, then purge.
         match self.config.tomb_purge {
             Some(before) => {
-                if entry.purge_todo(Bound::Included(before)) {
+                if entry.purge(Bound::Included(before)) {
                     None
                 } else {
                     Some(entry)

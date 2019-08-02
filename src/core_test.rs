@@ -1,3 +1,5 @@
+use std::ops::Bound;
+
 use crate::core::{Delta, Entry, Value};
 use crate::vlog;
 
@@ -74,7 +76,7 @@ fn test_entry_new() {
     assert!(vers.next().is_none());
 
     // testcase3 purge noop
-    assert!(!entry1.purge(1000 /*before*/));
+    assert!(!entry1.purge(Bound::Included(1000)));
     // verify latest entry
     assert_eq!(entry1.as_deltas().len(), 0);
     verify_latest(&entry1, 100, Some(20), 1001, false);
@@ -85,7 +87,7 @@ fn test_entry_new() {
     assert!(vers.next().is_none());
 
     // testcase4 actual purge
-    assert!(entry1.purge(1002 /*before*/));
+    assert!(entry1.purge(Bound::Included(1002)));
     assert_eq!(entry1.as_deltas().len(), 0);
 }
 
@@ -153,7 +155,7 @@ fn test_entry_new_lsm() {
     assert!(vers.next().is_none());
 
     // testcase5 purge noop
-    assert!(!entry1.purge(1000 /*before*/));
+    assert!(!entry1.purge(Bound::Included(1000)));
     // verify latest entry
     assert_eq!(entry1.as_deltas().len(), 2);
     verify_latest(&entry1, 100, Some(30), 1003, false);
@@ -168,7 +170,7 @@ fn test_entry_new_lsm() {
     assert!(vers.next().is_none());
 
     // testcase5 purge
-    assert!(!entry1.purge(1002 /*before*/));
+    assert!(!entry1.purge(Bound::Included(1002)));
     // verify latest entry
     assert_eq!(entry1.as_deltas().len(), 0);
     verify_latest(&entry1, 100, Some(30), 1003, false);
@@ -178,7 +180,7 @@ fn test_entry_new_lsm() {
     verify_version(&entry, 100, Some(30), 1003, false);
     assert!(vers.next().is_none());
 
-    assert!(entry1.purge(1004 /*before*/));
+    assert!(entry1.purge(Bound::Included(1004)));
 }
 
 fn verify_version(e: &Entry<i32, i32>, key: i32, val: Option<i32>, seq: u64, del: bool) {

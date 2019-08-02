@@ -38,10 +38,11 @@ where
     /// Return an iterator over entries that meet following properties
     /// * Only entries greater than range.start_bound().
     /// * Only entries whose modified seqno is within seqno-range.
-    fn iter_within<R, Q>(&self, range: R, before: u64) -> Result<IndexIter<K, V>>
+    fn iter_within<R, G, Q>(&self, range: R, within: G) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
         R: RangeBounds<Q>,
+        G: Clone + RangeBounds<u64>,
         Q: Ord + ?Sized;
 
     /// Iterate from lower bound to upper bound.
@@ -399,7 +400,7 @@ where
     }
 
     // purge all versions whose seqno is ``before``.
-    pub(crate) fn purge_todo(&mut self, before: Bound<u64>) -> bool {
+    pub(crate) fn purge(&mut self, before: Bound<u64>) -> bool {
         for i in 0..self.deltas.len() {
             let seqno = self.deltas[i].to_seqno();
             let ok = match before {
@@ -449,7 +450,7 @@ where
             let deltas = entry.deltas;
             let entry = Entry::new(entry.key, entry.value);
             let mut entry = entry.skip_till(range.end_bound(), deltas).unwrap();
-            entry.purge_todo(match range.start_bound() {
+            entry.purge(match range.start_bound() {
                 Bound::Included(x) => Bound::Included(*x),
                 Bound::Excluded(x) => Bound::Excluded(*x),
                 Bound::Unbounded => Bound::Unbounded,

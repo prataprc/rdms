@@ -1,6 +1,6 @@
 // TODO: write test case for range_after for Llrb and Mvcc index.
 
-use std::ops::Bound;
+use std::ops::{self, Bound};
 
 use rand::prelude::random;
 
@@ -320,6 +320,49 @@ fn test_range() {
             };
         }
         assert!(iter.next().is_none());
+        assert!(iter.next().is_none());
+    }
+}
+
+#[test]
+fn test_range_str() {
+    let mut llrb: Llrb<&str, i64> = Llrb::new("test-llrb");
+    let mut refns = RefNodes::new(false /*lsm*/, 10);
+
+    assert!(llrb.set("key1", 10).unwrap().is_none());
+    assert!(llrb.set("key2", 11).unwrap().is_none());
+    assert!(llrb.set("key3", 12).unwrap().is_none());
+    assert!(llrb.set("key4", 13).unwrap().is_none());
+    assert!(llrb.set("key5", 14).unwrap().is_none());
+
+    assert_eq!(llrb.len(), 5);
+    assert!(llrb.validate().is_ok());
+
+    for _ in 0..1_000 {
+        let r = ops::RangeInclusive::new("key2", "key4");
+        let mut iter = llrb.range(r).unwrap();
+        let entry = iter.next().expect("expected entry for key2");
+        assert_eq!(entry.to_key(), "key2");
+        assert_eq!(entry.to_native_value().unwrap(), 11);
+        let entry = iter.next().expect("expected entry for key3");
+        assert_eq!(entry.to_key(), "key3");
+        assert_eq!(entry.to_native_value().unwrap(), 12);
+        let entry = iter.next().expect("expected entry for key4");
+        assert_eq!(entry.to_key(), "key4");
+        assert_eq!(entry.to_native_value().unwrap(), 13);
+        assert!(iter.next().is_none());
+
+        let r = ops::RangeInclusive::new("key2", "key4");
+        let mut iter = llrb.reverse(r).unwrap();
+        let entry = iter.next().expect("expected entry for key4");
+        assert_eq!(entry.to_key(), "key4");
+        assert_eq!(entry.to_native_value().unwrap(), 13);
+        let entry = iter.next().expect("expected entry for key3");
+        assert_eq!(entry.to_key(), "key3");
+        assert_eq!(entry.to_native_value().unwrap(), 12);
+        let entry = iter.next().expect("expected entry for key2");
+        assert_eq!(entry.to_key(), "key2");
+        assert_eq!(entry.to_native_value().unwrap(), 11);
         assert!(iter.next().is_none());
     }
 }

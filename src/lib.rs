@@ -32,6 +32,7 @@ extern crate llrb_index;
 mod bogn;
 mod core;
 mod error;
+mod skip_scan;
 mod spinlock;
 mod sync_writer;
 mod util;

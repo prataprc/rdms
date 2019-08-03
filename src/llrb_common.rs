@@ -205,7 +205,7 @@ where
                             Some(paths)
                         };
                         // include if entry was within the visible time-range
-                        match nref.entry.pick_within(self.within.clone()) {
+                        match nref.entry.filter_within(self.within.clone()) {
                             Some(entry) => break Some(entry),
                             None => (),
                         }

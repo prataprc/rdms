@@ -292,8 +292,15 @@ where
 
     pub(crate) fn to_native_value(&self) -> Option<V> {
         match &self {
-            Value::D { .. } => None,
             Value::U { value, .. } => value.to_native_value(),
+            Value::D { .. } => None,
+        }
+    }
+
+    pub(crate) fn to_seqno(&self) -> u64 {
+        match self {
+            Value::U { seqno, .. } => *seqno,
+            Value::D { seqno } => *seqno,
         }
     }
 
@@ -421,22 +428,24 @@ where
         *self.value = Value::D { seqno };
     }
 
-    // purge all versions whose seqno < or <= ``before``.
-    pub(crate) fn purge(mut self, start: Bound<u64>) -> Option<Entry<K, V>> {
+    // purge all versions whose seqno < or <= ``cutoff``.
+    pub(crate) fn purge(mut self, cutoff: Bound<u64>) -> Option<Entry<K, V>> {
         let e = self.to_seqno();
-        match start {
-            Bound::Included(start) if e < start => return None,
-            Bound::Excluded(start) if e <= start => return None,
+        // If all versions of this entry are before cutoff, then purge entry
+        match cutoff {
+            Bound::Included(cutoff) if e < cutoff => return None,
+            Bound::Excluded(cutoff) if e <= cutoff => return None,
             _ => (),
         }
+        // Otherwise, purge only those versions that are before cutoff
         self.deltas = self
             .deltas
             .into_iter()
             .take_while(|d| {
                 let seqno = d.to_seqno();
-                match start {
-                    Bound::Included(start) if seqno >= start => true,
-                    Bound::Excluded(start) if seqno > start => true,
+                match cutoff {
+                    Bound::Included(cutoff) if seqno >= cutoff => true,
+                    Bound::Excluded(cutoff) if seqno > cutoff => true,
                     _ => false,
                 }
             })
@@ -450,8 +459,10 @@ where
     K: Clone + Ord,
     V: Clone + Diff + From<<V as Diff>::D>,
 {
-    // pick all versions whose seqno is within the specified range.
-    pub(crate) fn pick_within<R>(&self, within: R) -> Option<Entry<K, V>>
+    // Pick all versions whose seqno is within the specified range.
+    // Note that, by bogn-design only memory-indexes ingesting new
+    // mutations are subjected to this filter function.
+    pub(crate) fn filter_within<R>(&self, within: R) -> Option<Entry<K, V>>
     where
         R: Clone + RangeBounds<u64>,
     {
@@ -469,20 +480,22 @@ where
     where
         R: Clone + RangeBounds<u64>,
     {
+        use std::ops::Bound::{Excluded, Included};
+
         // skip entire entry if it is before the specified range.
         let e = self.to_seqno();
         match within.start_bound() {
-            Bound::Included(s_seqno) if e < *s_seqno => return None,
-            Bound::Excluded(s_seqno) if e <= *s_seqno => return None,
+            Included(s_seqno) if e < *s_seqno => return None,
+            Excluded(s_seqno) if e <= *s_seqno => return None,
             _ => (),
         }
         // skip the entire entry if it is after the specified range.
         let s = self.deltas.last().map_or(e, |d| d.to_seqno());
         match within.end_bound() {
-            Bound::Included(e_seqno) if s > *e_seqno => return None,
-            Bound::Excluded(e_seqno) if s >= *e_seqno => return None,
-            Bound::Included(e_seqno) if e <= *e_seqno => return Some(self.clone()),
-            Bound::Included(e_seqno) if e < *e_seqno => return Some(self.clone()),
+            Included(e_seqno) if s > *e_seqno => return None,
+            Excluded(e_seqno) if s >= *e_seqno => return None,
+            Included(e_seqno) if e <= *e_seqno => return Some(self.clone()),
+            Included(e_seqno) if e < *e_seqno => return Some(self.clone()),
             _ => (),
         };
 
@@ -490,43 +503,17 @@ where
         let mut entry = self.clone();
         let mut iter = entry.deltas.into_iter();
         while let Some(delta) = iter.next() {
-            let seqno = match (delta.data, entry.value.to_native_value()) {
-                (InnerDelta::D { seqno }, Some(_)) => {
-                    entry.value = Box::new(Value::new_delete(seqno));
-                    seqno
-                }
-                (InnerDelta::U { delta, seqno }, None) => {
-                    entry.value = {
-                        let value = {
-                            let nd = delta.into_native_delta().unwrap();
-                            let nv: V = From::from(nd);
-                            vlog::Value::new_native(nv)
-                        };
-                        Box::new(Value::new_upsert(value, seqno))
-                    };
-                    seqno
-                }
-                (InnerDelta::U { delta, seqno }, Some(nv)) => {
-                    entry.value = {
-                        let value = {
-                            let nd = delta.into_native_delta().unwrap();
-                            let nv = nv.merge(&nd);
-                            vlog::Value::new_native(nv)
-                        };
-                        Box::new(Value::new_upsert(value, seqno))
-                    };
-                    seqno
-                }
-                (InnerDelta::D { .. }, None) => {
-                    panic!("consecutive versions can't be a delete");
-                }
-            };
+            let value = entry.value.to_native_value();
+            let (value, _) = next_value(value, delta.data);
+            entry.value = Box::new(value);
+            let seqno = entry.value.to_seqno();
             let ok = match within.end_bound() {
-                Bound::Included(e_seqno) if seqno <= *e_seqno => true,
-                Bound::Excluded(e_seqno) if seqno < *e_seqno => true,
+                Included(e_seqno) if seqno <= *e_seqno => true,
+                Excluded(e_seqno) if seqno < *e_seqno => true,
                 _ => false,
             };
             if ok {
+                // collect the remaining deltas and return
                 entry.deltas = iter.collect();
                 return Some(entry);
             }
@@ -534,13 +521,67 @@ where
         unreachable!()
     }
 
-    //pub(crate) fn merge(&self, entry: &Entry<K, V>) -> Entry<K, V> {
-    //    let mut entries: Vec<Entry<K, V>> = {
-    //        self.versions().collect();
-    //        let othr_entries: Vec<Entry<K, V>> = entry.versions().collect();
-    //        entries.extend_from_slice(&other_entries);
-    //    }
-    //}
+    /// Return an iterator of previous versions.
+    pub fn versions(&self) -> VersionIter<K, V> {
+        VersionIter {
+            key: self.key.clone(),
+            entry: Some(Entry {
+                key: self.key.clone(),
+                value: self.value.clone(),
+                deltas: Default::default(),
+            }),
+            curval: None,
+            deltas: Some(self.to_deltas().into_iter()),
+        }
+    }
+}
+
+impl<K, V> Entry<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff + From<<V as Diff>::D>,
+{
+    // Merge two version chain for same entry. This can happen between
+    // two entries from memory-index and disk-index, or disk-index and
+    // disk-index. In either case it is expected that all versions of
+    // one entry shall either be greater than all versions of the other entry.
+    pub(crate) fn lsm_merge(self, entry: Entry<K, V>) -> Entry<K, V> {
+        // `a` is newer than `b`, and all versions in a and b are mutually
+        // exclusive in seqno ordering.
+        let (a, mut b) = if self.to_seqno() > entry.to_seqno() {
+            (self, entry)
+        } else if entry.to_seqno() > self.to_seqno() {
+            (entry, self)
+        } else {
+            unreachable!()
+        };
+        // TODO remove this validation logic once bogn is fully stable.
+        a.validate_lsm_merge(&b);
+        for ne in a.versions().collect::<Vec<Entry<K, V>>>().into_iter().rev() {
+            b.prepend_version(ne, true /* lsm */);
+        }
+        b
+    }
+
+    // `self` is newer than `entr`
+    fn validate_lsm_merge(&self, entr: &Entry<K, V>) {
+        // validate ordering
+        let mut seqnos = vec![self.to_seqno()];
+        self.deltas.iter().for_each(|d| seqnos.push(d.to_seqno()));
+        seqnos.push(entr.to_seqno());
+        entr.deltas.iter().for_each(|d| seqnos.push(d.to_seqno()));
+        let mut fail = seqnos[0..seqnos.len() - 1]
+            .into_iter()
+            .zip(seqnos[1..].into_iter())
+            .any(|(a, b)| a <= b);
+        // validate self contains all native value and deltas.
+        fail = fail || self.value.is_reference();
+        fail = fail || self.deltas.iter().any(|d| d.is_reference());
+
+        if fail {
+            unreachable!()
+        }
+    }
 }
 
 // read methods.
@@ -610,27 +651,13 @@ where
     pub(crate) fn to_deltas(&self) -> Vec<Delta<V>> {
         self.deltas.clone()
     }
-
-    /// Return an iterator of previous versions.
-    pub fn versions(&self) -> VersionIter<K, V> {
-        VersionIter {
-            key: self.key.clone(),
-            entry: Some(Entry {
-                key: self.key.clone(),
-                value: self.value.clone(),
-                deltas: Default::default(),
-            }),
-            curval: None,
-            deltas: Some(self.to_deltas().into_iter()),
-        }
-    }
 }
 
 /// Iterate from latest to oldest available version for this entry.
 pub struct VersionIter<K, V>
 where
     K: Clone + Ord,
-    V: Clone + Diff,
+    V: Clone + Diff + From<<V as Diff>::D>,
 {
     key: K,
     entry: Option<Entry<K, V>>,
@@ -672,31 +699,37 @@ where
                 None => return None,
             }
         };
-        match (delta.data, self.curval.take()) {
-            (InnerDelta::D { .. }, None) => {
-                panic!("consecutive versions can't be a delete");
-            }
-            (InnerDelta::D { seqno }, _) => {
-                // this entry is deleted.
-                let key = self.key.clone();
-                Some(Entry::new(key, Box::new(Value::new_delete(seqno))))
-            }
-            (InnerDelta::U { delta, seqno }, None) => {
-                // previous entry was a delete.
-                let nv: V = From::from(delta.into_native_delta().unwrap());
-                let key = self.key.clone();
-                self.curval = Some(nv.clone());
-                let v = Value::new_upsert(vlog::Value::new_native(nv), seqno);
-                Some(Entry::new(key, Box::new(v)))
-            }
-            (InnerDelta::U { delta, seqno }, Some(curval)) => {
-                // this and previous entry are create/update.
-                let nv = curval.merge(&delta.into_native_delta().unwrap());
-                self.curval = Some(nv.clone());
-                let key = self.key.clone();
-                let v = Value::new_upsert(vlog::Value::new_native(nv), seqno);
-                Some(Entry::new(key, Box::new(v)))
-            }
+        let (value, curval) = next_value(self.curval.take(), delta.data);
+        self.curval = curval;
+        Some(Entry::new(self.key.clone(), Box::new(value)))
+    }
+}
+
+fn next_value<V>(value: Option<V>, delta: InnerDelta<V>) -> (Value<V>, Option<V>)
+where
+    V: Clone + Diff + From<<V as Diff>::D>,
+{
+    match (value, delta) {
+        (None, InnerDelta::D { .. }) => {
+            panic!("consecutive versions can't be a delete");
+        }
+        (Some(_), InnerDelta::D { seqno }) => {
+            // this entry is deleted.
+            (Value::new_delete(seqno), None)
+        }
+        (None, InnerDelta::U { delta, seqno }) => {
+            // previous entry was a delete.
+            let nv: V = From::from(delta.into_native_delta().unwrap());
+            let v = vlog::Value::new_native(nv.clone());
+            let value = Value::new_upsert(v, seqno);
+            (value, Some(nv))
+        }
+        (Some(curval), InnerDelta::U { delta, seqno }) => {
+            // this and previous entry are create/update.
+            let nv = curval.merge(&delta.into_native_delta().unwrap());
+            let v = vlog::Value::new_native(nv.clone());
+            let value = Value::new_upsert(v, seqno);
+            (value, Some(nv))
         }
     }
 }

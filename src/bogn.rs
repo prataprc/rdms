@@ -29,8 +29,8 @@ where
     M: Index<K, V>,
 {
     /// Create bogn index in ``mem-only`` mode. Memory only indexes are
-    /// ephimeral indexes. They don't persist data on disk to give
-    /// durability gaurantees.
+    /// ephimeral indexes. They don't persist data, hence don't have
+    /// durability gaurantee.
     pub fn mem_only<S>(name: S, mem: M) -> Result<Bogn<K, V, M>>
     where
         S: AsRef<str>,

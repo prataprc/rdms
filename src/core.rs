@@ -323,7 +323,7 @@ where
 }
 
 /// Entry is the covering structure for a {Key, value} pair
-/// indexed by bogn.
+/// indexed by bogn data structures.
 ///
 /// It is a user facing structure, also used in stitching together
 /// different components of Bogn.
@@ -338,8 +338,6 @@ where
     deltas: Vec<Delta<V>>,
 }
 
-// NOTE: user-facing entry values must be constructed with
-// native value and native deltas.
 // Entry construction methods.
 impl<K, V> Entry<K, V>
 where

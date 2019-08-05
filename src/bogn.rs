@@ -85,21 +85,21 @@ where
     }
 
     /// Iterate from lower bound to upper bound.
-    pub fn range<R, Q>(&self, range: R) -> Result<IndexIter<K, V>>
+    pub fn range<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
-        R: RangeBounds<Q>,
-        Q: Ord + ?Sized,
+        R: 'a + RangeBounds<Q>,
+        Q: 'a + Ord + ?Sized,
     {
         self.mem.range(range)
     }
 
     /// Iterate from upper bound to lower bound.
-    pub fn reverse<R, Q>(&self, range: R) -> Result<IndexIter<K, V>>
+    pub fn reverse<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
-        R: RangeBounds<Q>,
-        Q: Ord + ?Sized,
+        R: 'a + RangeBounds<Q>,
+        Q: 'a + Ord + ?Sized,
     {
         self.mem.reverse(range)
     }
@@ -129,7 +129,11 @@ where
     }
 
     /// Delete key from DB. Return the entry if it is already present.
-    pub fn delete<Q>(&mut self, key: &Q) -> Result<Option<Entry<K, V>>> {
+    pub fn delete<Q>(&mut self, key: &Q) -> Result<Option<Entry<K, V>>>
+    where
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
+    {
         let (seqno, res) = self.mem.delete_index(key, self.seqno + 1);
         self.seqno = cmp::max(seqno, self.seqno);
         res

@@ -37,6 +37,8 @@ mod sync_writer;
 mod util;
 mod vlog;
 
+pub mod scans;
+
 pub use crate::bogn::Bogn;
 pub use crate::core::{Diff, Entry, Replay, Result, Serialize, VersionIter};
 pub use crate::core::{Index, IndexIter, Reader, Writer};
@@ -72,7 +74,6 @@ pub mod llrb;
 mod llrb_node;
 pub mod lsm;
 pub mod mvcc;
-pub mod skip_scan;
 pub mod wal;
 
 #[cfg(test)]

@@ -121,7 +121,7 @@ where
     K: Ord + Clone,
     V: Clone + Diff,
 {
-    type Item = Entry<K, V>;
+    type Item = Result<Entry<K, V>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -143,7 +143,7 @@ where
                             paths.push(path);
                             Some(paths)
                         };
-                        break Some(nref.entry.clone());
+                        break Some(Ok(nref.entry.clone()));
                     }
                     (IFlag::Center, nref) => {
                         self.paths = {
@@ -160,29 +160,28 @@ where
     }
 }
 
-/// IterWithin scan from `lower-bound` for [`Llrb`] and [Mvcc] index,
+/// IterFullScan scan from `lower-bound` for [`Llrb`] and [Mvcc] index,
 /// that includes entry versions whose modified seqno is <= ``before``.
 ///
 /// [Llrb]: crate::llrb::Llrb
 /// [Mvcc]: crate::mvcc::Mvcc
-pub struct IterWithin<'a, K, V, G>
+pub struct IterFullScan<'a, K, V>
 where
     K: Ord + Clone,
     V: Clone + Diff + From<<V as Diff>::D>,
-    G: Clone + RangeBounds<u64>,
 {
     _arc: Arc<MvccRoot<K, V>>, // only used for ref-count-ing MVCC-snapshot.
-    within: G,
+    start: Bound<u64>,
+    end: Bound<u64>,
     paths: Option<Vec<Fragment<'a, K, V>>>,
 }
 
-impl<'a, K, V, G> Iterator for IterWithin<'a, K, V, G>
+impl<'a, K, V> Iterator for IterFullScan<'a, K, V>
 where
     K: Ord + Clone,
     V: Clone + Diff + From<<V as Diff>::D>,
-    G: Clone + RangeBounds<u64>,
 {
-    type Item = Entry<K, V>;
+    type Item = Result<Entry<K, V>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -205,8 +204,9 @@ where
                             Some(paths)
                         };
                         // include if entry was within the visible time-range
-                        match nref.entry.filter_within(self.within.clone()) {
-                            Some(entry) => break Some(entry),
+                        let (start, end) = (self.start.clone(), self.end.clone());
+                        match nref.entry.filter_within(start, end) {
+                            Some(entry) => break Some(Ok(entry)),
                             None => (),
                         }
                     }
@@ -250,7 +250,7 @@ where
     R: RangeBounds<Q>,
     Q: Ord + ?Sized,
 {
-    type Item = Entry<K, V>;
+    type Item = Result<Entry<K, V>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let item = loop {
@@ -292,9 +292,9 @@ where
             Some(entry) => {
                 let qey = entry.as_key().borrow();
                 match self.range.end_bound() {
-                    Bound::Unbounded => Some(entry),
-                    Bound::Included(high) if qey.le(high) => Some(entry),
-                    Bound::Excluded(high) if qey.lt(high) => Some(entry),
+                    Bound::Unbounded => Some(Ok(entry)),
+                    Bound::Included(high) if qey.le(high) => Some(Ok(entry)),
+                    Bound::Excluded(high) if qey.lt(high) => Some(Ok(entry)),
                     Bound::Included(_) | Bound::Excluded(_) => {
                         self.paths.take();
                         None
@@ -330,7 +330,7 @@ where
     R: RangeBounds<Q>,
     Q: Ord + ?Sized,
 {
-    type Item = Entry<K, V>;
+    type Item = Result<Entry<K, V>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let item = loop {
@@ -372,9 +372,9 @@ where
             Some(entry) => {
                 let qey = entry.as_key().borrow();
                 match self.range.start_bound() {
-                    Bound::Included(low) if qey.ge(low) => Some(entry),
-                    Bound::Excluded(low) if qey.gt(low) => Some(entry),
-                    Bound::Unbounded => Some(entry),
+                    Bound::Included(low) if qey.ge(low) => Some(Ok(entry)),
+                    Bound::Excluded(low) if qey.gt(low) => Some(Ok(entry)),
+                    Bound::Unbounded => Some(Ok(entry)),
                     Bound::Included(_) | Bound::Excluded(_) => {
                         self.paths.take();
                         None

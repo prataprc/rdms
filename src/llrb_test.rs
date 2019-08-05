@@ -1,9 +1,10 @@
-// TODO: write test case for range_after for Llrb and Mvcc index.
+// TODO: write test case for iter_within for Llrb and Mvcc index.
 
 use std::ops::{self, Bound};
 
 use rand::prelude::random;
 
+use crate::core::{Diff, Index};
 use crate::error::Error;
 use crate::llrb::Llrb;
 use crate::type_empty::Empty;
@@ -523,3 +524,20 @@ fn test_crud_lsm() {
         }
     }
 }
+
+#[test]
+fn test_traits() {
+    let llrb: Llrb<i32, i32> = Llrb::new("test-llrb");
+    test_index(llrb);
+}
+
+// TODO:
+// fn test_index<I: Index<K, V>, K, V>(index: I)
+// where
+//     K: Clone + Ord,
+//     V: Clone + Diff,
+// {
+//     assert!(index.set(2, 10).unwrap().is_none());
+//     assert!(index.set_cas(0, 200, 0).ok().unwrap().is_none());
+//     index.delete(2).unwrap()
+// }

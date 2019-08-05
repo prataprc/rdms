@@ -8,16 +8,22 @@ use crate::vlog;
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Index entry iterator.
-pub type IndexIter<K, V> = Box<dyn Iterator<Item = Result<Entry<K, V>>> + Send>;
+pub type IndexIter<'a, K, V> = Box<dyn Iterator<Item = Result<Entry<K, V>>> + 'a>;
 
 /// Index operations.
-pub trait Index<K, V>: Reader<K, V> + Writer<K, V>
+pub trait Index<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff,
+    Self: Reader<K, V> + Writer<K, V>,
 {
-    // Make a new empty index of this type, with same configuration.
+    /// Make a new empty index of this type, with same configuration.
     fn make_new(&self) -> Self;
+
+    /// Create a new writer handle. Note that, not all indexes allow
+    /// concurrent writers, and not all indexes support concurrent
+    /// read/write.
+    fn to_writer(&self) -> Writer<K, V>;
 }
 
 /// Index read operation.
@@ -26,38 +32,77 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    /// Get ``key`` from index.
+    /// Get ``key`` from index. Returned entry may not have all its
+    /// previous versions, if it is costly to fetch from disk.
     fn get<Q>(&self, key: &Q) -> Result<Entry<K, V>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized;
 
-    /// Iterate over all entries in this index.
+    /// Iterate over all entries in this index. Returned entry may not
+    /// have all its previous versions, if it is costly to fetch from disk.
     fn iter(&self) -> Result<IndexIter<K, V>>;
 
+    /// Iterate from lower bound to upper bound. Returned entry may not
+    /// have all its previous versions, if it is costly to fetch from disk.
+    fn range<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
+    where
+        K: Borrow<Q>,
+        R: 'a + RangeBounds<Q>,
+        Q: 'a + Ord + ?Sized;
+
+    /// Iterate from upper bound to lower bound. Returned entry may not
+    /// have all its previous versions, if it is costly to fetch from disk.
+    fn reverse<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
+    where
+        K: Borrow<Q>,
+        R: 'a + RangeBounds<Q>,
+        Q: 'a + Ord + ?Sized;
+
+    /// Get ``key`` from index. Returned entry shall have all its
+    /// previous versions, can be a costly call.
+    fn get_with_versions<Q>(&self, key: &Q) -> Result<Entry<K, V>>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized;
+
+    /// Iterate over all entries in this index. Returned entry shall
+    /// have all its previous versions, can be a costly call.
+    fn iter_with_versions(&self) -> Result<IndexIter<K, V>>;
+
+    /// Iterate from lower bound to upper bound. Returned entry shall
+    /// have all its previous versions, can be a costly call.
+    fn range_with_versions<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
+    where
+        K: Borrow<Q>,
+        R: 'a + RangeBounds<Q>,
+        Q: 'a + Ord + ?Sized;
+
+    /// Iterate from upper bound to lower bound. Returned entry shall
+    /// have all its previous versions, can be a costly call.
+    fn reverse_with_versions<'a, R, Q>(&'a self, rng: R) -> Result<IndexIter<K, V>>
+    where
+        K: Borrow<Q>,
+        R: 'a + RangeBounds<Q>,
+        Q: 'a + Ord + ?Sized;
+}
+
+/// Index read operation.
+pub trait FullScan<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff + From<<V as Diff>::D>,
+{
     /// Return an iterator over entries that meet following properties
     /// * Only entries greater than range.start_bound().
     /// * Only entries whose modified seqno is within seqno-range.
-    fn iter_within<R, G, Q>(&self, range: R, within: G) -> Result<IndexIter<K, V>>
+    ///
+    /// This method is typically valid only for memory-only indexes. Also,
+    /// returned entry may not have all its previous versions, if it is
+    /// costly to fetch from disk.
+    fn full_scan<G>(&self, from: Bound<K>, within: G) -> Result<IndexIter<K, V>>
     where
-        K: Borrow<Q>,
-        R: RangeBounds<Q>,
-        G: Clone + RangeBounds<u64>,
-        Q: Ord + ?Sized;
-
-    /// Iterate from lower bound to upper bound.
-    fn range<R, Q>(&self, range: R) -> Result<IndexIter<K, V>>
-    where
-        K: Borrow<Q>,
-        R: RangeBounds<Q>,
-        Q: Ord + ?Sized;
-
-    /// Iterate from upper bound to lower bound.
-    fn reverse<R, Q>(&self, range: R) -> Result<IndexIter<K, V>>
-    where
-        K: Borrow<Q>,
-        R: RangeBounds<Q>,
-        Q: Ord + ?Sized;
+        G: Clone + RangeBounds<u64>;
 }
 
 /// Index write operations.
@@ -94,7 +139,10 @@ where
         &mut self,
         key: &Q,
         index: u64, // seqno for this mutation
-    ) -> (u64, Result<Option<Entry<K, V>>>);
+    ) -> (u64, Result<Option<Entry<K, V>>>)
+    where
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized;
 }
 
 /// Replay WAL (Write-Ahead-Log) entries on index.
@@ -132,7 +180,7 @@ where
 /// D = N - O (diff operation)
 /// O = N - D (merge operation, to get old value)
 pub trait Diff: Sized {
-    type D: Clone + From<Self> + Into<Self>;
+    type D: Clone + From<Self> + Into<Self> + Send + Sync;
 
     /// Return the delta between two version of value.
     /// D = N - O
@@ -460,40 +508,38 @@ where
     // Pick all versions whose seqno is within the specified range.
     // Note that, by bogn-design only memory-indexes ingesting new
     // mutations are subjected to this filter function.
-    pub(crate) fn filter_within<R>(&self, within: R) -> Option<Entry<K, V>>
-    where
-        R: Clone + RangeBounds<u64>,
-    {
+    pub(crate) fn filter_within(
+        &self,
+        start: Bound<u64>, // filter from
+        end: Bound<u64>,   // filter till
+    ) -> Option<Entry<K, V>> {
         // skip versions newer than requested range.
-        let entry = self.skip_till(within.clone())?;
+        let entry = self.skip_till(start.clone(), end)?;
         // purge versions older than request range.
-        entry.purge(match within.start_bound() {
-            Bound::Included(x) => Bound::Included(*x),
-            Bound::Excluded(x) => Bound::Excluded(*x),
+        entry.purge(match start {
+            Bound::Included(x) => Bound::Included(x),
+            Bound::Excluded(x) => Bound::Excluded(x),
             Bound::Unbounded => Bound::Unbounded,
         })
     }
 
-    fn skip_till<R>(&self, within: R) -> Option<Entry<K, V>>
-    where
-        R: Clone + RangeBounds<u64>,
-    {
+    fn skip_till(&self, sb: Bound<u64>, eb: Bound<u64>) -> Option<Entry<K, V>> {
         use std::ops::Bound::{Excluded, Included};
 
         // skip entire entry if it is before the specified range.
         let e = self.to_seqno();
-        match within.start_bound() {
-            Included(s_seqno) if e < *s_seqno => return None,
-            Excluded(s_seqno) if e <= *s_seqno => return None,
+        match sb {
+            Included(s_seqno) if e < s_seqno => return None,
+            Excluded(s_seqno) if e <= s_seqno => return None,
             _ => (),
         }
         // skip the entire entry if it is after the specified range.
         let s = self.deltas.last().map_or(e, |d| d.to_seqno());
-        match within.end_bound() {
-            Included(e_seqno) if s > *e_seqno => return None,
-            Excluded(e_seqno) if s >= *e_seqno => return None,
-            Included(e_seqno) if e <= *e_seqno => return Some(self.clone()),
-            Included(e_seqno) if e < *e_seqno => return Some(self.clone()),
+        match eb {
+            Included(e_seqno) if s > e_seqno => return None,
+            Excluded(e_seqno) if s >= e_seqno => return None,
+            Included(e_seqno) if e <= e_seqno => return Some(self.clone()),
+            Included(e_seqno) if e < e_seqno => return Some(self.clone()),
             _ => (),
         };
 
@@ -505,9 +551,9 @@ where
             let (value, _) = next_value(value, delta.data);
             entry.value = Box::new(value);
             let seqno = entry.value.to_seqno();
-            let ok = match within.end_bound() {
-                Included(e_seqno) if seqno <= *e_seqno => true,
-                Excluded(e_seqno) if seqno < *e_seqno => true,
+            let ok = match eb {
+                Included(e_seqno) if seqno <= e_seqno => true,
+                Excluded(e_seqno) if seqno < e_seqno => true,
                 _ => false,
             };
             if ok {
@@ -519,7 +565,7 @@ where
         unreachable!()
     }
 
-    /// Return an iterator of previous versions.
+    /// Return an iterator for all existing versions for this entry.
     pub fn versions(&self) -> VersionIter<K, V> {
         VersionIter {
             key: self.key.clone(),

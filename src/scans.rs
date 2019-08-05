@@ -1,37 +1,40 @@
 //! Stitch a full table scan from piece-wise iteration.
+//!
+//! Typically used for memory-only index.
+
 use std::ops::{Bound, RangeBounds};
 use std::vec;
 
-use crate::core::{Diff, Entry, Index, Result};
+use crate::core::{Diff, Entry, FullScan, Result};
 
-pub struct SkipScan<'a, I, K, V, G>
+pub struct SkipScan<'a, M, K, V, G>
 where
-    I: Index<K, V>,
-    K: Clone + Ord,
-    V: Clone + Diff,
+    K: 'a + Clone + Ord,
+    V: 'a + Clone + Diff + From<<V as Diff>::D>,
     G: Clone + RangeBounds<u64>,
+    M: FullScan<K, V>,
 {
-    index: &'a I,
+    index: &'a M,
     within: G,
-    lower: Bound<K>,
+    from: Bound<K>,
     iter: vec::IntoIter<Result<Entry<K, V>>>,
     batch_size: usize,
 }
 
-impl<'a, I, K, V, G> SkipScan<'a, I, K, V, G>
+impl<'a, M, K, V, G> SkipScan<'a, M, K, V, G>
 where
-    I: Index<K, V>,
-    K: Clone + Ord,
-    V: Clone + Diff,
+    K: 'a + Clone + Ord,
+    V: 'a + Clone + Diff + From<<V as Diff>::D>,
     G: Clone + RangeBounds<u64>,
+    M: FullScan<K, V>,
 {
     const BATCH_SIZE: usize = 1000;
 
-    pub fn new(index: &'a I, within: G) -> SkipScan<I, K, V, G> {
+    pub fn new(index: &'a M, within: G) -> SkipScan<M, K, V, G> {
         SkipScan {
             index,
             within,
-            lower: Bound::Unbounded,
+            from: Bound::Unbounded,
             iter: vec![].into_iter(),
             batch_size: Self::BATCH_SIZE,
         }
@@ -42,19 +45,19 @@ where
     }
 }
 
-impl<'a, I, K, V, G> Iterator for SkipScan<'a, I, K, V, G>
+impl<'a, M, K, V, G> Iterator for SkipScan<'a, M, K, V, G>
 where
-    I: Index<K, V>,
-    K: Clone + Ord,
-    V: Clone + Diff,
+    K: 'a + Clone + Ord,
+    V: 'a + Clone + Diff + From<<V as Diff>::D>,
     G: Clone + RangeBounds<u64>,
+    M: FullScan<K, V>,
 {
     type Item = Result<Entry<K, V>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self.iter.next() {
             Some(Ok(entry)) => {
-                self.lower = Bound::Excluded(entry.to_key());
+                self.from = Bound::Excluded(entry.to_key());
                 Some(Ok(entry))
             }
             Some(Err(err)) => {
@@ -65,8 +68,8 @@ where
                 if self.batch_size == 0 {
                     return None;
                 }
-                let range = (self.lower.clone(), Bound::Unbounded);
-                match self.index.iter_within(range, self.within.clone()) {
+                let from = self.from.clone();
+                match self.index.full_scan(from, self.within.clone()) {
                     Ok(iter) => {
                         let mut entries: Vec<Result<Entry<K, V>>> = vec![];
                         for (i, item) in iter.enumerate() {

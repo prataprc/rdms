@@ -15,7 +15,7 @@ use std::{
     },
 };
 
-use crate::core::{Diff, Entry, Result, Value};
+use crate::core::{Diff, Entry, Index, Result, Value};
 use crate::error::Error;
 use crate::llrb::Llrb;
 use crate::llrb_node::{LlrbDepth, Node, Stats};
@@ -156,15 +156,16 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    /// Set current seqno. Use this API iff you are totaly sure
-    /// about what you are doing.
+    /// Return whether this index support lsm mode.
     #[inline]
-    #[allow(dead_code)] // TODO: remove this once bogn is weaved-up.
-    pub(crate) fn set_seqno(&mut self, seqno: u64) {
-        let mvcc_arc: Arc<MvccRoot<K, V>> = Snapshot::clone(&self.snapshot);
-        let (root, n_count) = (mvcc_arc.root_duplicate(), mvcc_arc.n_count);
+    pub(crate) fn is_lsm(&self) -> bool {
+        self.lsm
+    }
 
-        self.snapshot.shift_snapshot(root, seqno, n_count, vec![]);
+    /// Return number of entries in this instance.
+    #[inline]
+    pub fn len(&self) -> usize {
+        Snapshot::clone(&self.snapshot).n_count
     }
 
     /// Identify this instance. Applications can choose unique names while
@@ -172,12 +173,6 @@ where
     #[inline]
     pub fn to_name(&self) -> String {
         self.name.clone()
-    }
-
-    /// Return number of entries in this instance.
-    #[inline]
-    pub fn len(&self) -> usize {
-        Snapshot::clone(&self.snapshot).n_count
     }
 
     /// Return current seqno.
@@ -192,6 +187,22 @@ where
         Stats::new_partial(self.len(), mem::size_of::<Node<K, V>>())
     }
 }
+
+// TODO
+//impl<K, V> Index<K, V> for Mvcc<K, V>
+//where
+//    K: Clone + Ord,
+//    V: Clone + From<<V as Diff>::D> + Diff,
+//{
+//    // Make a new empty index of this type, with same configuration.
+//    fn make_new(&self) -> Self {
+//        if self.lsm {
+//            Mvcc::new_lsm(&self.name)
+//        } else {
+//            Mvcc::new(&self.name)
+//        }
+//    }
+//}
 
 /// Create/Update/Delete operations on Llrb instance.
 impl<K, V> Mvcc<K, V>
@@ -535,6 +546,40 @@ where
         };
         Ok(r)
     }
+
+    /// Short circuited to get().
+    pub fn get_with_versions<Q>(&self, key: &Q) -> Result<Entry<K, V>>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        self.get(key)
+    }
+
+    /// Short circuited to iter().
+    pub fn iter_with_versions(&self) -> Result<Iter<K, V>> {
+        self.iter()
+    }
+
+    /// Short circuited to range().
+    pub fn range_with_versions<R, Q>(&self, range: R) -> Result<Range<K, V, R, Q>>
+    where
+        K: Borrow<Q>,
+        R: RangeBounds<Q>,
+        Q: Ord + ?Sized,
+    {
+        self.range(range)
+    }
+
+    /// Short circuited to reverse()
+    pub fn reverse_with_versions<R, Q>(&self, range: R) -> Result<Reverse<K, V, R, Q>>
+    where
+        K: Borrow<Q>,
+        R: RangeBounds<Q>,
+        Q: Ord + ?Sized,
+    {
+        self.reverse(range)
+    }
 }
 
 impl<K, V> Mvcc<K, V>
@@ -545,12 +590,12 @@ where
     /// Return an iterator over entries that meet following properties
     /// * Only entries greater than range.start_bound().
     /// * Only entries whose modified seqno is within seqno-range.
-    pub fn iter_within<R, G, Q>(&self, range: R, within: G) -> Result<IterWithin<K, V, G>>
+    pub fn full_scan<R, Q, G>(&self, range: R, within: G) -> Result<IterFullScan<K, V>>
     where
         K: Borrow<Q>,
         R: RangeBounds<Q>,
-        G: Clone + RangeBounds<u64>,
         Q: Ord + ?Sized,
+        G: Clone + RangeBounds<u64>,
     {
         // validate arguments.
         match range.end_bound() {
@@ -559,10 +604,21 @@ where
                 panic!("iter_before cannot have an upper-bound !!");
             }
         }
+        let start = match within.start_bound() {
+            Bound::Included(x) => Bound::Included(*x),
+            Bound::Excluded(x) => Bound::Excluded(*x),
+            Bound::Unbounded => Bound::Unbounded,
+        };
+        let end = match within.end_bound() {
+            Bound::Included(x) => Bound::Included(*x),
+            Bound::Excluded(x) => Bound::Excluded(*x),
+            Bound::Unbounded => Bound::Unbounded,
+        };
         // similar to range pre-processing
-        let mut iter = IterWithin {
+        let mut iter = IterFullScan {
             _arc: Snapshot::clone(&self.snapshot),
-            within,
+            start,
+            end,
             paths: Default::default(),
         };
         let root = iter
@@ -913,8 +969,8 @@ where
 
 /// Writer handle for [`Mvcc`] index.
 ///
-/// Note that only one writer handle can be active at any given time to write into
-/// Mvcc index.
+/// Note that only one writer handle can be active at any given
+/// time to write into Mvcc index.
 ///
 /// [Mvcc]: crate::mvcc::Mvcc
 pub struct Writer<'a, K, V>

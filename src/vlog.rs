@@ -1,7 +1,9 @@
 use std::convert::TryInto;
+use std::{fs, mem};
 
-use crate::core::{self, Diff, Serialize};
+use crate::core::{self, Diff, Result, Serialize};
 use crate::error::Error;
+use crate::util;
 
 // *-----*------------------------------------*
 // |flags|        60-bit length               |
@@ -30,7 +32,6 @@ impl<V> Value<V> {
         Value::Native { value }
     }
 
-    #[allow(dead_code)] // TODO: remove this after wiring with bogn.
     pub(crate) fn new_reference(fpos: u64, length: u64, seqno: u64) -> Value<V> {
         Value::Reference {
             fpos,
@@ -44,14 +45,6 @@ impl<V> Value<V>
 where
     V: Clone,
 {
-    #[allow(dead_code)] // TODO: remove this after wiring with bogn.
-    pub(crate) fn into_native_value(self) -> Option<V> {
-        match self {
-            Value::Native { value } => Some(value),
-            _ => None,
-        }
-    }
-
     pub(crate) fn to_native_value(&self) -> Option<V> {
         match self {
             Value::Native { value } => Some(value.clone()),
@@ -64,7 +57,7 @@ impl<V> Value<V>
 where
     V: Serialize,
 {
-    pub(crate) fn encode(&self, buf: &mut Vec<u8>) -> Result<usize, Error>
+    pub(crate) fn encode(&self, buf: &mut Vec<u8>) -> Result<usize>
     where
         V: Serialize,
     {
@@ -90,6 +83,16 @@ where
             _ => Err(Error::NotNativeValue),
         }
     }
+}
+
+pub(crate) fn fetch_value<V>(fpos: u64, n: u64, fd: &mut fs::File) -> Result<Value<V>>
+where
+    V: Serialize,
+{
+    let block = util::read_buffer(fd, fpos, n, "reading value from vlog")?;
+    let mut value: V = unsafe { mem::zeroed() };
+    value.decode(&block[8..])?;
+    Ok(Value::new_native(value))
 }
 
 // *-----*------------------------------------*
@@ -123,7 +126,6 @@ where
         Delta::Native { diff }
     }
 
-    #[allow(dead_code)] // TODO: remove this after wiring with bogn.
     pub(crate) fn new_reference(fpos: u64, length: u64, seqno: u64) -> Delta<V> {
         Delta::Reference {
             fpos,
@@ -131,7 +133,12 @@ where
             seqno,
         }
     }
+}
 
+impl<V> Delta<V>
+where
+    V: Diff,
+{
     pub(crate) fn into_native_delta(self) -> Option<<V as Diff>::D> {
         match self {
             Delta::Native { diff } => Some(diff),
@@ -144,7 +151,7 @@ impl<V> Delta<V>
 where
     V: Diff,
 {
-    pub(crate) fn encode(&self, buf: &mut Vec<u8>) -> Result<usize, Error>
+    pub(crate) fn encode(&self, buf: &mut Vec<u8>) -> Result<usize>
     where
         V: Diff,
         <V as Diff>::D: Serialize,
@@ -170,4 +177,15 @@ where
             _ => Err(Error::NotNativeDelta),
         }
     }
+}
+
+pub(crate) fn fetch_delta<V>(fpos: u64, n: u64, fd: &mut fs::File) -> Result<Delta<V>>
+where
+    V: Diff,
+    <V as Diff>::D: Serialize,
+{
+    let block = util::read_buffer(fd, fpos, n, "reading delta from vlog")?;
+    let mut delta: <V as Diff>::D = unsafe { mem::zeroed() };
+    delta.decode(&block[8..])?;
+    Ok(Delta::new_native(delta))
 }

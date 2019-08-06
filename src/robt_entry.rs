@@ -218,11 +218,7 @@ where
         if is_deleted {
             Ok(core::Delta::new_delete(seqno))
         } else {
-            let delta = vlog::Delta::Reference {
-                fpos,
-                length: dlen,
-                seqno,
-            };
+            let delta = vlog::Delta::new_reference(fpos, dlen, seqno);
             Ok(core::Delta::new_upsert(delta, seqno))
         }
     }
@@ -531,11 +527,7 @@ where
             (true, _) => (n, Box::new(core::Value::new_delete(seqno))),
             (false, true) => {
                 let fpos = u64::from_be_bytes(e[n..n + 8].try_into().unwrap());
-                let value = vlog::Value::Reference {
-                    fpos,
-                    length: vlen,
-                    seqno,
-                };
+                let value = vlog::Value::new_reference(fpos, vlen, seqno);
                 (n + 8, Box::new(core::Value::new_upsert(value, seqno)))
             }
             (false, false) => {

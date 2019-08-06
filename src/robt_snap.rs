@@ -5,12 +5,14 @@
 
 use std::borrow::Borrow;
 use std::{
-    cmp, fs, marker,
+    cmp, fs, marker, mem,
     ops::{Bound, RangeBounds},
     path,
+    sync::{self, Arc},
 };
 
 use crate::core::{Diff, Entry, Result, Serialize};
+use crate::core::{Index, IndexIter, Reader, Writer};
 use crate::error::Error;
 use crate::robt_config::{self, Config, MetaItem};
 use crate::robt_entry::MEntry;
@@ -34,6 +36,7 @@ where
     config: Config,
     index_fd: fs::File,
     vlog_fd: Option<fs::File>,
+    mutex: sync::Mutex<i32>,
 
     phantom_key: marker::PhantomData<K>,
     phantom_val: marker::PhantomData<V>,
@@ -46,6 +49,8 @@ where
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
 {
+    /// Open BTree snapshot from file that can be constructed from ``dir``
+    /// and ``name``.
     pub fn open(dir: &str, name: &str) -> Result<Snapshot<K, V>> {
         let meta_items = robt_config::read_meta_items(dir, name)?;
         let mut snap = Snapshot {
@@ -58,6 +63,7 @@ where
                 util::open_file_r(&index_file.as_ref())?
             },
             vlog_fd: Default::default(),
+            mutex: sync::Mutex::new(0),
 
             phantom_key: marker::PhantomData,
             phantom_val: marker::PhantomData,
@@ -90,10 +96,12 @@ where
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
 {
+    /// Return number of entries in the snapshot.
     pub fn len(&self) -> u64 {
         self.to_stats().unwrap().n_count
     }
 
+    /// Return disk-footprint for this snapshot.
     pub fn footprint(&self) -> u64 {
         let (dir, name) = (self.dir.as_str(), self.name.as_str());
         let mut footprint = fs::metadata(self.config.to_index_file(dir, name))
@@ -106,30 +114,32 @@ where
         footprint
     }
 
+    /// Return the last seqno found in this snapshot.
     pub fn to_seqno(&self) -> u64 {
         self.to_stats().unwrap().seqno
     }
 
+    /// Return the application metadata.
     pub fn to_metadata(&self) -> Result<Vec<u8>> {
         if let MetaItem::Metadata(data) = &self.meta[1] {
             Ok(data.clone())
         } else {
-            Err(Error::InvalidSnapshot(
-                "snapshot metadata missing".to_string(),
-            ))
+            let msg = "snapshot metadata missing".to_string();
+            Err(Error::InvalidSnapshot(msg))
         }
     }
 
+    /// Return Btree statistics.
     pub fn to_stats(&self) -> Result<Stats> {
         if let MetaItem::Stats(stats) = &self.meta[2] {
             Ok(stats.parse()?)
         } else {
-            Err(Error::InvalidSnapshot(
-                "snapshot statistics missing".to_string(),
-            ))
+            let msg = "snapshot statistics missing".to_string();
+            Err(Error::InvalidSnapshot(msg))
         }
     }
 
+    /// Return the file-position for Btree's root node.
     pub fn to_root(&self) -> Result<u64> {
         if let MetaItem::Root(root) = self.meta[3] {
             Ok(root)
@@ -139,7 +149,161 @@ where
     }
 }
 
+impl<K, V> Index<K, V> for Snapshot<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
+{
+    type W = RobtWriter;
+
+    /// Make a new empty index of this type, with same configuration.
+    fn make_new(&self) -> Result<Self> {
+        Snapshot::open(self.name.as_str(), self.dir.as_str())
+    }
+
+    /// Create a new writer handle. Note that, not all indexes allow
+    /// concurrent writers, and not all indexes support concurrent
+    /// read/write.
+    fn to_writer(_index: Arc<Self>) -> Result<Self::W> {
+        panic!("Read-only-btree don't support write operations")
+    }
+}
+
 // Read methods
+impl<K, V> Reader<K, V> for Snapshot<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
+{
+    fn get<Q>(&self, key: &Q) -> Result<Entry<K, V>>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        let _lock = self.mutex.lock();
+        let snap = unsafe {
+            let snap = self as *const Snapshot<K, V> as *mut Snapshot<K, V>;
+            snap.as_mut().unwrap()
+        };
+
+        snap.do_get(key, false /*versions*/)
+    }
+
+    fn iter(&self) -> Result<IndexIter<K, V>> {
+        let _lock = self.mutex.lock();
+        let snap = unsafe {
+            let snap = self as *const Snapshot<K, V> as *mut Snapshot<K, V>;
+            snap.as_mut().unwrap()
+        };
+
+        let mut mzs = vec![];
+        snap.build_fwd(snap.to_root().unwrap(), &mut mzs)?;
+        Ok(Box::new(Iter {
+            snap,
+            mzs: mzs,
+            versions: false,
+        }))
+    }
+
+    fn range<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
+    where
+        K: Borrow<Q>,
+        R: 'a + RangeBounds<Q>,
+        Q: 'a + Ord + ?Sized,
+    {
+        let _lock = self.mutex.lock();
+        let snap = unsafe {
+            let snap = self as *const Snapshot<K, V> as *mut Snapshot<K, V>;
+            snap.as_mut().unwrap()
+        };
+
+        snap.do_range(range, false /*versions*/)
+    }
+
+    fn reverse<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
+    where
+        K: Borrow<Q>,
+        R: 'a + RangeBounds<Q>,
+        Q: 'a + Ord + ?Sized,
+    {
+        let _lock = self.mutex.lock();
+        let snap = unsafe {
+            let snap = self as *const Snapshot<K, V> as *mut Snapshot<K, V>;
+            snap.as_mut().unwrap()
+        };
+
+        snap.do_reverse(range, false /*versions*/)
+    }
+
+    fn get_with_versions<Q>(&self, key: &Q) -> Result<Entry<K, V>>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        let _lock = self.mutex.lock();
+        let snap = unsafe {
+            let snap = self as *const Snapshot<K, V> as *mut Snapshot<K, V>;
+            snap.as_mut().unwrap()
+        };
+
+        snap.do_get(key, true /*versions*/)
+    }
+
+    /// Iterate over all entries in this index. Returned entry shall
+    /// have all its previous versions, can be a costly call.
+    fn iter_with_versions(&self) -> Result<IndexIter<K, V>> {
+        let _lock = self.mutex.lock();
+        let snap = unsafe {
+            let snap = self as *const Snapshot<K, V> as *mut Snapshot<K, V>;
+            snap.as_mut().unwrap()
+        };
+
+        let mut mzs = vec![];
+        snap.build_fwd(snap.to_root().unwrap(), &mut mzs)?;
+        Ok(Box::new(Iter {
+            snap,
+            mzs: mzs,
+            versions: true,
+        }))
+    }
+
+    /// Iterate from lower bound to upper bound. Returned entry shall
+    /// have all its previous versions, can be a costly call.
+    fn range_with_versions<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
+    where
+        K: Borrow<Q>,
+        R: 'a + RangeBounds<Q>,
+        Q: 'a + Ord + ?Sized,
+    {
+        let _lock = self.mutex.lock();
+        let snap = unsafe {
+            let snap = self as *const Snapshot<K, V> as *mut Snapshot<K, V>;
+            snap.as_mut().unwrap()
+        };
+
+        snap.do_range(range, true /*versions*/)
+    }
+
+    /// Iterate from upper bound to lower bound. Returned entry shall
+    /// have all its previous versions, can be a costly call.
+    fn reverse_with_versions<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
+    where
+        K: Borrow<Q>,
+        R: 'a + RangeBounds<Q>,
+        Q: 'a + Ord + ?Sized,
+    {
+        let _lock = self.mutex.lock();
+        let snap = unsafe {
+            let snap = self as *const Snapshot<K, V> as *mut Snapshot<K, V>;
+            snap.as_mut().unwrap()
+        };
+
+        snap.do_reverse(range, true /*versions*/)
+    }
+}
+
 impl<K, V> Snapshot<K, V>
 where
     K: Clone + Ord + Serialize,
@@ -162,7 +326,7 @@ where
         }
     }
 
-    pub fn get<Q>(&mut self, key: &Q) -> Result<Entry<K, V>>
+    fn do_get<Q>(&mut self, key: &Q, versions: bool) -> Result<Entry<K, V>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -174,7 +338,7 @@ where
         match zblock.find(key, Bound::Unbounded, Bound::Unbounded) {
             Ok((_, entry)) => {
                 if entry.as_key().borrow().eq(key) {
-                    Ok(entry)
+                    self.fetch(entry, versions)
                 } else {
                     Err(Error::KeyNotFound)
                 }
@@ -184,20 +348,15 @@ where
         }
     }
 
-    pub fn iter(&mut self) -> Result<Iter<K, V>> {
-        let mut mzs = vec![];
-        self.build_fwd(self.to_root().unwrap(), &mut mzs)?;
-        Ok(Iter {
-            snap: self,
-            mzs: mzs,
-        })
-    }
-
-    pub fn range<R, Q>(&mut self, range: R) -> Result<Range<K, V, R, Q>>
+    fn do_range<'a, R, Q>(
+        &'a mut self,
+        range: R,
+        versions: bool, // if true include older versions.
+    ) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
-        R: RangeBounds<Q>,
-        Q: Ord + ?Sized,
+        R: 'a + RangeBounds<Q>,
+        Q: 'a + Ord + ?Sized,
     {
         let mut mzs = vec![];
         let skip_one = match range.start_bound() {
@@ -220,26 +379,27 @@ where
                 }
             }
         };
-        let mut r = Range {
+        let mut r = Box::new(Range {
             snap: self,
             mzs,
             range,
             high: marker::PhantomData,
-        };
+            versions,
+        });
         if skip_one {
             r.next();
         }
         Ok(r)
     }
 
-    pub fn reverse<R, Q>(&mut self, r: R) -> Result<Reverse<K, V, R, Q>>
+    fn do_reverse<'a, R, Q>(&'a mut self, range: R, versions: bool) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
-        R: RangeBounds<Q>,
-        Q: Ord + ?Sized,
+        R: 'a + RangeBounds<Q>,
+        Q: 'a + Ord + ?Sized,
     {
         let mut mzs = vec![];
-        let skip_one = match r.end_bound() {
+        let skip_one = match range.end_bound() {
             Bound::Unbounded => {
                 self.build_rev(self.to_root().unwrap(), &mut mzs)?;
                 false
@@ -253,12 +413,13 @@ where
                 key.eq(entry.as_key().borrow())
             }
         };
-        let mut rr = Reverse {
+        let mut rr = Box::new(Reverse {
             snap: self,
             mzs,
-            range: r,
+            range: range,
             low: marker::PhantomData,
-        };
+            versions,
+        });
         if skip_one {
             rr.next();
         }
@@ -409,6 +570,24 @@ where
         mzs.push(MZ::Z { zblock, index });
         Ok(entry)
     }
+
+    fn fetch(
+        &mut self,
+        mut entry: Entry<K, V>,
+        versions: bool, // fetch deltas as well
+    ) -> Result<Entry<K, V>> {
+        match &mut self.vlog_fd {
+            Some(fd) => entry.fetch_value(fd)?,
+            _ => (),
+        }
+        if versions {
+            match &mut self.vlog_fd {
+                Some(fd) => entry.fetch_deltas(fd)?,
+                _ => (),
+            }
+        }
+        Ok(entry)
+    }
 }
 
 pub struct Iter<'a, K, V>
@@ -419,6 +598,7 @@ where
 {
     snap: &'a mut Snapshot<K, V>,
     mzs: Vec<MZ<K, V>>,
+    versions: bool,
 }
 
 impl<'a, K, V> Iterator for Iter<'a, K, V>
@@ -439,7 +619,7 @@ where
                 }
                 Some(Ok(entry)) => {
                     self.mzs.push(z);
-                    Some(Ok(entry))
+                    Some(self.snap.fetch(entry, self.versions))
                 }
                 None => match self.snap.rebuild_fwd(&mut self.mzs) {
                     Err(err) => Some(Err(err)),
@@ -462,6 +642,7 @@ where
     mzs: Vec<MZ<K, V>>,
     range: R,
     high: marker::PhantomData<Q>,
+    versions: bool,
 }
 
 impl<'a, K, V, R, Q> Range<'a, K, V, R, Q>
@@ -502,7 +683,7 @@ where
                 Some(Ok(entry)) => {
                     if self.till_ok(&entry) {
                         self.mzs.push(z);
-                        Some(Ok(entry))
+                        Some(self.snap.fetch(entry, self.versions))
                     } else {
                         self.mzs.truncate(0);
                         None
@@ -529,6 +710,7 @@ where
     mzs: Vec<MZ<K, V>>,
     range: R,
     low: marker::PhantomData<Q>,
+    versions: bool,
 }
 
 impl<'a, K, V, R, Q> Reverse<'a, K, V, R, Q>
@@ -569,7 +751,7 @@ where
                 Some(Ok(entry)) => {
                     if self.till_ok(&entry) {
                         self.mzs.push(z);
-                        Some(Ok(entry))
+                        Some(self.snap.fetch(entry, self.versions))
                     } else {
                         self.mzs.truncate(0);
                         None
@@ -635,5 +817,55 @@ where
             },
             MZ::M { .. } => unreachable!(),
         }
+    }
+}
+
+pub struct RobtWriter;
+
+impl<K, V> Writer<K, V> for RobtWriter
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    fn set_index(
+        &mut self,
+        key: K,
+        value: V,
+        seqno: u64, // seqno for this mutation
+    ) -> (u64, Result<Option<Entry<K, V>>>) {
+        panic!(
+            "{} {} {}",
+            mem::size_of_val(&key),
+            mem::size_of_val(&value),
+            seqno
+        )
+    }
+
+    fn set_cas_index(
+        &mut self,
+        key: K,
+        value: V,
+        cas: u64,
+        seqno: u64, // seqno for this mutation
+    ) -> (u64, Result<Option<Entry<K, V>>>) {
+        panic!(
+            "{} {} {} {}",
+            mem::size_of_val(&key),
+            mem::size_of_val(&value),
+            seqno,
+            cas
+        )
+    }
+
+    fn delete_index<Q>(
+        &mut self,
+        key: &Q,
+        seqno: u64, // seqno for this mutation
+    ) -> (u64, Result<Option<Entry<K, V>>>)
+    where
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
+    {
+        panic!("{} {}", mem::size_of_val(key), seqno)
     }
 }

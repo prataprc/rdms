@@ -1,4 +1,5 @@
 use std::borrow::Borrow;
+use std::fs;
 use std::ops::{Bound, RangeBounds};
 use std::sync::Arc;
 
@@ -12,7 +13,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub type IndexIter<'a, K, V> = Box<dyn Iterator<Item = Result<Entry<K, V>>> + 'a>;
 
 /// Index operations.
-pub trait Index<K, V>
+pub trait Index<K, V>: Sized
 where
     K: Clone + Ord,
     V: Clone + Diff,
@@ -20,12 +21,12 @@ where
     type W: Writer<K, V>;
 
     /// Make a new empty index of this type, with same configuration.
-    fn make_new(&self) -> Self;
+    fn make_new(&self) -> Result<Self>;
 
     /// Create a new writer handle. Note that, not all indexes allow
     /// concurrent writers, and not all indexes support concurrent
     /// read/write.
-    fn to_writer(index: Arc<Self>) -> Self::W;
+    fn to_writer(index: Arc<Self>) -> Result<Self::W>;
 }
 
 /// Index read operation.
@@ -627,6 +628,43 @@ where
         if fail {
             unreachable!()
         }
+    }
+}
+
+impl<K, V> Entry<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Serialize,
+{
+    pub(crate) fn fetch_value(&mut self, fd: &mut fs::File) -> Result<()> {
+        match self.value.as_ref() {
+            Value::U {
+                value: vlog::Value::Reference { fpos, length, .. },
+                seqno,
+            } => {
+                let value = vlog::fetch_value(*fpos, *length, fd)?;
+                self.value = Box::new(Value::new_upsert(value, *seqno));
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    pub(crate) fn fetch_deltas(&mut self, fd: &mut fs::File) -> Result<()> {
+        for delta in self.deltas.iter_mut() {
+            match delta.data {
+                InnerDelta::U {
+                    delta: vlog::Delta::Reference { fpos, length, .. },
+                    seqno,
+                } => {
+                    let d = vlog::fetch_delta(fpos, length, fd)?;
+                    *delta = Delta::new_upsert(d, seqno);
+                }
+                _ => (),
+            }
+        }
+        Ok(())
     }
 }
 

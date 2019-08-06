@@ -193,17 +193,17 @@ where
     type W = MvccWriter<K, V>;
 
     /// Make a new empty index of this type, with same configuration.
-    fn make_new(&self) -> Self {
-        self.shallow_clone()
+    fn make_new(&self) -> Result<Self> {
+        Ok(self.shallow_clone())
     }
 
     /// Create a new writer handle. Only one writer handle can be
     /// active at any time, creating more than one writer handle
     /// will panic. Concurrent readers are allowed without using any
     /// underlying locks/latches.
-    fn to_writer(index: Arc<Mvcc<K, V>>) -> Self::W {
+    fn to_writer(index: Arc<Mvcc<K, V>>) -> Result<Self::W> {
         if index.writers.compare_and_swap(0, 1, Relaxed) == 0 {
-            MvccWriter { index }
+            Ok(MvccWriter { index })
         } else {
             panic!("there cannot be more than one writers!")
         }
@@ -218,7 +218,7 @@ where
 {
     pub fn set(&mut self, key: K, value: V) -> Result<Option<Entry<K, V>>> {
         let index = unsafe { Arc::from_raw(self as *const Mvcc<K, V>) };
-        let mut w = Mvcc::to_writer(index);
+        let mut w = Mvcc::to_writer(index)?;
 
         let seqno = self.to_seqno();
         let (_seqno, entry) = w.set_index(key, value, seqno + 1);
@@ -227,7 +227,7 @@ where
 
     pub fn set_cas(&mut self, key: K, value: V, cas: u64) -> Result<Option<Entry<K, V>>> {
         let index = unsafe { Arc::from_raw(self as *const Mvcc<K, V>) };
-        let mut w = Mvcc::to_writer(index);
+        let mut w = Mvcc::to_writer(index)?;
 
         let seqno = self.to_seqno();
         let (_seqno, entry) = w.set_cas_index(key, value, cas, seqno + 1);
@@ -241,7 +241,7 @@ where
         Q: ToOwned<Owned = K> + Ord + ?Sized,
     {
         let index = unsafe { Arc::from_raw(self as *const Mvcc<K, V>) };
-        let mut w = Mvcc::to_writer(index);
+        let mut w = Mvcc::to_writer(index)?;
 
         let seqno = self.to_seqno();
         let (_seqno, entry) = w.delete_index(key, seqno + 1);

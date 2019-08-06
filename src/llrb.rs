@@ -186,19 +186,19 @@ where
     type W = LlrbWriter<K, V>;
 
     /// Make a new empty index of this type, with same configuration.
-    fn make_new(&self) -> Self {
-        self.shallow_clone()
+    fn make_new(&self) -> Result<Self> {
+        Ok(self.shallow_clone())
     }
 
     /// Create a new writer handle. Only one writer handle can be active at
     /// any time, creating more than one writer handle will panic.
     /// Concurrent readers are allowed but the data-structure is protected
     /// via a spin-lock, that can optionally lock.
-    fn to_writer(index: Arc<Llrb<K, V>>) -> Self::W {
+    fn to_writer(index: Arc<Llrb<K, V>>) -> Result<Self::W> {
         use std::sync::atomic::Ordering;
 
         if index.writers.compare_and_swap(0, 1, Ordering::Relaxed) == 0 {
-            LlrbWriter { index }
+            Ok(LlrbWriter { index })
         } else {
             panic!("there cannot be more than one writers!")
         }
@@ -218,7 +218,8 @@ where
     /// *LSM mode*: Add a new version for the key, perserving the old value.
     pub fn set(&mut self, key: K, value: V) -> Result<Option<Entry<K, V>>> {
         let index = unsafe { Arc::from_raw(self as *const Llrb<K, V>) };
-        let mut w = Llrb::to_writer(index);
+        let mut w = Llrb::to_writer(index)?;
+
         let (_seqno, entry) = w.set_index(key, value, self.seqno + 1);
         entry
     }
@@ -231,7 +232,7 @@ where
     /// *LSM mode*: Add a new version for the key, perserving the old value.
     pub fn set_cas(&mut self, key: K, value: V, cas: u64) -> Result<Option<Entry<K, V>>> {
         let index = unsafe { Arc::from_raw(self as *const Llrb<K, V>) };
-        let mut w = Llrb::to_writer(index);
+        let mut w = Llrb::to_writer(index)?;
 
         let seqno = self.seqno + 1;
         let (_seqno, entry) = w.set_cas_index(key, value, cas, seqno);
@@ -254,7 +255,7 @@ where
         Q: ToOwned<Owned = K> + Ord + ?Sized,
     {
         let index = unsafe { Arc::from_raw(self as *const Llrb<K, V>) };
-        let mut w = Llrb::to_writer(index);
+        let mut w = Llrb::to_writer(index)?;
 
         let (_seqno, entry) = w.delete_index(key, self.seqno + 1);
         entry

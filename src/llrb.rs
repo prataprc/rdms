@@ -5,7 +5,6 @@ use std::borrow::Borrow;
 use std::cmp::{Ord, Ordering};
 use std::fmt::Debug;
 use std::ops::{Bound, Deref, DerefMut, RangeBounds};
-use std::sync::atomic::{AtomicU64, AtomicU8, AtomicUsize};
 use std::sync::Arc;
 use std::{cmp, marker, mem};
 
@@ -14,7 +13,6 @@ use crate::core::{FullScan, Index, IndexIter, Reader, Writer};
 use crate::error::Error;
 use crate::llrb_node::{LlrbDepth, Node, Stats};
 use crate::mvcc::MvccRoot;
-use crate::spinlock::RWSpinlock;
 
 include!("llrb_common.rs");
 
@@ -36,11 +34,9 @@ where
 {
     name: String,
     lsm: bool,
-    root: Option<AtomicPtr<Node<K, V>>>,
-    seqno: Atomicu64,
-    n_count: AtomicUsize,
-    latch: RWSpinlock,
-    writers: AtomicU8,
+    root: Option<Box<Node<K, V>>>,
+    seqno: u64,
+    n_count: usize,
 }
 
 impl<K, V> Clone for Llrb<K, V>
@@ -49,16 +45,12 @@ where
     V: Clone + Diff,
 {
     fn clone(&self) -> Llrb<K, V> {
-        use std::sync::atomic::Ordering;
-
-        let root = Box::new(self.root.clone());
         Llrb {
             name: self.name.clone(),
             lsm: self.lsm,
-            root: Some(AtomicPtr::new(Box::leak(root))),
-            seqno: AtomicU64::new(self.seqno.load(Ordering::Relaxed)),
-            n_count: AtomicUsize::new(self.n_count.load(Ordering::Relaxed)),
-            writers: AtomicU8::new(0),
+            root: self.root.clone(),
+            seqno: self.seqno,
+            n_count: self.n_count,
         }
     }
 }
@@ -69,14 +61,7 @@ where
     V: Clone + Diff,
 {
     fn drop(&mut self) {
-        use std::sync::atomic::Ordering;
-
-        if self.writers.load(Ordering::Relaxed) > 0 {
-            unreachable!()
-        }
-        self.root
-            .take()
-            .map(|ptr| drop_tree(Box::from_raw(ptr.load(Ordering::Relaxed))))
+        self.root.take().map(drop_tree);
     }
 }
 
@@ -93,10 +78,8 @@ where
             name: name.as_ref().to_string(),
             lsm: false,
             root: None,
-            seqno: AtomicU64::new(0),
-            n_count: AtomicUsize::new(0),
-            latch: RWSpinlock::new(),
-            writers: AtomicU8::new(0),
+            seqno: 0,
+            n_count: 0,
         }
     }
 
@@ -111,28 +94,16 @@ where
         Llrb {
             name: name.as_ref().to_string(),
             lsm: true,
-            seqno: AtomicU64::new(0),
-            n_count: AtomicUsize::new(0),
-            latch: RWSpinlock::new(),
-            writers: AtomicU8::new(0),
+            root: None,
+            seqno: 0,
+            n_count: 0,
         }
     }
 
     /// Squash this index and return the root and its book-keeping.
     /// IMPORTANT: after calling this method, value must be dropped.
     pub(crate) fn squash(&mut self) -> (Option<Box<Node<K, V>>>, u64, usize) {
-        if self.writers.load(Ordering::Relaxed) > 0 {
-            unreachable!()
-        }
-
-        let root = self
-            .root
-            .take()
-            .map(|ptr| Box::from_raw(ptr.load(Ordering::Relaxed)));
-        let seqno = AtomicU64::new(self.seqno.load(Ordering::Relaxed));
-        let n_count = AtomicUsize::new(self.n_count.load(Ordering::Relaxed));
-
-        (root, seqno, n_count)
+        (self.root.take(), self.seqno, self.n_count)
     }
 }
 
@@ -146,6 +117,14 @@ where
     #[inline]
     pub(crate) fn is_lsm(&self) -> bool {
         self.lsm
+    }
+
+    /// Set current seqno. Use this API iff you are totaly sure
+    /// about what you are doing.
+    #[inline]
+    #[allow(dead_code)] // TODO: remove this once bogn is weaved-up.
+    pub(crate) fn set_seqno(&mut self, seqno: u64) {
+        self.seqno = seqno
     }
 
     /// Return number of entries in this index.
@@ -185,14 +164,6 @@ where
             Llrb::new_lsm(&self.name)
         } else {
             Llrb::new(&self.name)
-        }
-    }
-
-    fn to_writer(&self) -> LlrbWriter<K, V> {
-        if self.writers.compare_and_swap(0, 1, Relaxed) == 0 {
-            Writer { index: self }
-        } else {
-            panic!("there cannot be more than one writers!")
         }
     }
 }
@@ -244,6 +215,102 @@ where
         let (seqno, res) = self.delete_index(key, self.seqno + 1);
         self.seqno = cmp::max(seqno, self.seqno);
         res
+    }
+}
+
+/// Create/Update/Delete operations on Llrb index.
+impl<K, V> Writer<K, V> for Llrb<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    fn set_index(&mut self, key: K, value: V, seqno: u64) -> Result<Option<Entry<K, V>>> {
+        let value = Box::new(Value::new_upsert_value(value, seqno));
+        let new_entry = Entry::new(key, value);
+        match Llrb::upsert(self.root.take(), new_entry, self.lsm) {
+            (Some(mut root), entry) => {
+                root.set_black();
+                self.root = Some(root);
+                if entry.is_none() {
+                    self.n_count += 1;
+                }
+                Ok(entry)
+            }
+            _ => panic!("set: impossible case, call programmer"),
+        }
+    }
+
+    /// Similar to set, but succeeds only when CAS matches with entry's
+    /// last `seqno`. In other words, since seqno is unique to each mutation,
+    /// we use `seqno` of the mutation as the CAS value. Use CAS == 0 to
+    /// enforce a create operation.
+    ///
+    /// *LSM mode*: Add a new version for the key, perserving the old value.
+    fn set_cas_index(
+        &mut self,
+        key: K,
+        value: V,
+        cas: u64,
+        seqno: u64,
+    ) -> (u64, Result<Option<Entry<K, V>>>) {
+        let value = Box::new(Value::new_upsert_value(value, seqno));
+        let new_entry = Entry::new(key, value);
+        match Llrb::upsert_cas(self.root.take(), new_entry, cas, self.lsm) {
+            (root, _, Some(err)) => {
+                self.root = root;
+                (0, Err(err))
+            }
+            (Some(mut root), entry, None) => {
+                root.set_black();
+                self.root = Some(root);
+                if entry.is_none() {
+                    self.n_count += 1;
+                }
+                (seqno, Ok(entry))
+            }
+            _ => panic!("set_cas: impossible case, call programmer"),
+        }
+    }
+
+    fn delete_index<Q>(
+        &mut self,
+        key: &Q,
+        seqno: u64, // seqno for this delete
+    ) -> (u64, Result<Option<Entry<K, V>>>)
+    where
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
+    {
+        if self.lsm {
+            let (root, entry) = Llrb::delete_lsm(self.root.take(), key, seqno);
+            self.root = root;
+            self.root.as_mut().map(|r| r.set_black());
+
+            return match entry {
+                None => {
+                    self.n_count += 1;
+                    (seqno, Ok(None))
+                }
+                Some(entry) if !entry.is_deleted() => (seqno, Ok(Some(entry))),
+                entry => (0, Ok(entry)),
+            };
+        } else {
+            // in non-lsm mode remove the entry from the tree.
+            let (root, entry) = match Llrb::do_delete(self.root.take(), key) {
+                (None, entry) => (None, entry),
+                (Some(mut root), entry) => {
+                    root.set_black();
+                    (Some(root), entry)
+                }
+            };
+            self.root = root;
+            if entry.is_some() {
+                self.n_count -= 1;
+                (seqno, Ok(entry))
+            } else {
+                (0, Ok(entry))
+            }
+        }
     }
 }
 
@@ -757,115 +824,5 @@ where
             Llrb::flip(node.deref_mut());
         }
         node
-    }
-}
-
-/// Writer handle for [`Llrb`] index.
-///
-/// Note that only one writer handle can be active at any given
-/// time to write into Llrb index. Also note that read threads shall
-/// be blocked during write operations.
-///
-/// [Llrb]: crate::mvcc::Llrb
-pub struct Writer<'a, K, V>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-{
-    index: &'a Llrb<K, V>,
-}
-
-impl<'a, K, V> Writer<'a, K, V> for Llrb<'a, K, V>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-{
-    fn set_index(&mut self, key: K, value: V, seqno: u64) -> Result<Option<Entry<K, V>>> {
-        let value = Box::new(Value::new_upsert_value(value, seqno));
-        let new_entry = Entry::new(key, value);
-        match Llrb::upsert(self.root.take(), new_entry, self.lsm) {
-            (Some(mut root), entry) => {
-                root.set_black();
-                self.root = Some(root);
-                if entry.is_none() {
-                    self.n_count += 1;
-                }
-                Ok(entry)
-            }
-            _ => panic!("set: impossible case, call programmer"),
-        }
-    }
-
-    /// Similar to set, but succeeds only when CAS matches with entry's
-    /// last `seqno`. In other words, since seqno is unique to each mutation,
-    /// we use `seqno` of the mutation as the CAS value. Use CAS == 0 to
-    /// enforce a create operation.
-    ///
-    /// *LSM mode*: Add a new version for the key, perserving the old value.
-    fn set_cas_index(
-        &mut self,
-        key: K,
-        value: V,
-        cas: u64,
-        seqno: u64,
-    ) -> (u64, Result<Option<Entry<K, V>>>) {
-        let value = Box::new(Value::new_upsert_value(value, seqno));
-        let new_entry = Entry::new(key, value);
-        match Llrb::upsert_cas(self.root.take(), new_entry, cas, self.lsm) {
-            (root, _, Some(err)) => {
-                self.root = root;
-                (0, Err(err))
-            }
-            (Some(mut root), entry, None) => {
-                root.set_black();
-                self.root = Some(root);
-                if entry.is_none() {
-                    self.n_count += 1;
-                }
-                (seqno, Ok(entry))
-            }
-            _ => panic!("set_cas: impossible case, call programmer"),
-        }
-    }
-
-    fn delete_index<Q>(
-        &mut self,
-        key: &Q,
-        seqno: u64, // seqno for this delete
-    ) -> (u64, Result<Option<Entry<K, V>>>)
-    where
-        K: Borrow<Q>,
-        Q: ToOwned<Owned = K> + Ord + ?Sized,
-    {
-        if self.lsm {
-            let (root, entry) = Llrb::delete_lsm(self.root.take(), key, seqno);
-            self.root = root;
-            self.root.as_mut().map(|r| r.set_black());
-
-            return match entry {
-                None => {
-                    self.n_count += 1;
-                    (seqno, Ok(None))
-                }
-                Some(entry) if !entry.is_deleted() => (seqno, Ok(Some(entry))),
-                entry => (0, Ok(entry)),
-            };
-        } else {
-            // in non-lsm mode remove the entry from the tree.
-            let (root, entry) = match Llrb::do_delete(self.root.take(), key) {
-                (None, entry) => (None, entry),
-                (Some(mut root), entry) => {
-                    root.set_black();
-                    (Some(root), entry)
-                }
-            };
-            self.root = root;
-            if entry.is_some() {
-                self.n_count -= 1;
-                (seqno, Ok(entry))
-            } else {
-                (0, Ok(entry))
-            }
-        }
     }
 }

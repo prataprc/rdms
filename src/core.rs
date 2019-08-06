@@ -20,10 +20,10 @@ where
     /// Make a new empty index of this type, with same configuration.
     fn make_new(&self) -> Self;
 
-    /// Create a new writer handle. Note that, not all indexes allow
-    /// concurrent writers, and not all indexes support concurrent
-    /// read/write.
-    fn to_writer(&self) -> Writer<K, V>;
+    // Create a new writer handle. Note that, not all indexes allow
+    // concurrent writers, and not all indexes support concurrent
+    // read/write.
+    // fn to_writer(&self) -> Writer<K, V>;
 }
 
 /// Index read operation.

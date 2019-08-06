@@ -112,7 +112,8 @@ where
     K: Ord + Clone,
     V: Clone + Diff,
 {
-    _arc: Arc<MvccRoot<K, V>>, // only used for ref-count-ing MVCC-snapshot.
+    _latch: Option<spinlock::Reader<'a>>, // only used for latching
+    _arc: Arc<MvccRoot<K, V>>,            // only used for MVCC-snapshot refcount.
     paths: Option<Vec<Fragment<'a, K, V>>>,
 }
 
@@ -161,7 +162,7 @@ where
 }
 
 /// IterFullScan scan from `lower-bound` for [`Llrb`] and [Mvcc] index,
-/// that includes entry versions whose modified seqno is <= ``before``.
+/// that includes entry versions whose modified seqno between start and end.
 ///
 /// [Llrb]: crate::llrb::Llrb
 /// [Mvcc]: crate::mvcc::Mvcc
@@ -170,6 +171,7 @@ where
     K: Ord + Clone,
     V: Clone + Diff + From<<V as Diff>::D>,
 {
+    _latch: Option<spinlock::Reader<'a>>,
     _arc: Arc<MvccRoot<K, V>>, // only used for ref-count-ing MVCC-snapshot.
     start: Bound<u64>,
     end: Bound<u64>,
@@ -237,7 +239,8 @@ where
     R: RangeBounds<Q>,
     Q: Ord + ?Sized,
 {
-    _arc: Arc<MvccRoot<K, V>>, // only used for ref-count-ing MVCC-snapshot.
+    _latch: Option<spinlock::Reader<'a>>, // only used for latching
+    _arc: Arc<MvccRoot<K, V>>,            // only used for MVCC-snapshot refcount.
     range: R,
     paths: Option<Vec<Fragment<'a, K, V>>>,
     high: marker::PhantomData<Q>,
@@ -317,7 +320,8 @@ where
     R: RangeBounds<Q>,
     Q: Ord + ?Sized,
 {
-    _arc: Arc<MvccRoot<K, V>>, // only used for ref-count-ing MVCC-snapshot.
+    _latch: Option<spinlock::Reader<'a>>, // only used for latching
+    _arc: Arc<MvccRoot<K, V>>,            // only used for MVCC-snapshot refcount.
     range: R,
     paths: Option<Vec<Fragment<'a, K, V>>>,
     low: marker::PhantomData<Q>,

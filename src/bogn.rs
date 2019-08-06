@@ -5,7 +5,7 @@ use std::borrow::Borrow;
 use std::ops::RangeBounds;
 use std::{cmp, marker};
 
-use crate::core::{Diff, Entry, Index, IndexIter, Result};
+use crate::core::{Diff, Entry, Index, IndexIter, Reader, Result, Writer};
 
 /// Index keys and corresponding values. Check module documentation for
 /// the full set of features.
@@ -13,7 +13,7 @@ pub struct Bogn<K, V, M>
 where
     K: Clone + Ord,
     V: Clone + Diff,
-    M: Index<K, V>,
+    M: Index<K, V> + Reader<K, V> + Writer<K, V>,
 {
     name: String,
     mem: M,
@@ -26,7 +26,7 @@ impl<K, V, M> Bogn<K, V, M>
 where
     K: Clone + Ord,
     V: Clone + Diff,
-    M: Index<K, V>,
+    M: Index<K, V> + Reader<K, V> + Writer<K, V>,
 {
     /// Create bogn index in ``mem-only`` mode. Memory only indexes are
     /// ephimeral indexes. They don't persist data, hence don't have
@@ -49,7 +49,7 @@ impl<K, V, M> Bogn<K, V, M>
 where
     K: Clone + Ord,
     V: Clone + Diff,
-    M: Index<K, V>,
+    M: Index<K, V> + Reader<K, V> + Writer<K, V>,
 {
     pub fn to_name(&self) -> String {
         self.name.clone()
@@ -68,7 +68,7 @@ impl<K, V, M> Bogn<K, V, M>
 where
     K: Clone + Ord,
     V: Clone + Diff,
-    M: Index<K, V>,
+    M: Index<K, V> + Reader<K, V> + Writer<K, V>,
 {
     /// Get ``key`` from index.
     pub fn get<Q>(&self, key: &Q) -> Result<Entry<K, V>>
@@ -109,13 +109,13 @@ impl<K, V, M> Bogn<K, V, M>
 where
     K: Clone + Ord,
     V: Clone + Diff,
-    M: Index<K, V>,
+    M: Index<K, V> + Reader<K, V> + Writer<K, V>,
 {
     /// Set {key, value} in index. Return older entry if present.
     pub fn set(&mut self, key: K, value: V) -> Result<Option<Entry<K, V>>> {
-        let res = self.mem.set_index(key, value, self.seqno + 1);
-        self.seqno += 1;
-        res
+        let (seqno, entry) = self.mem.set_index(key, value, self.seqno + 1);
+        self.seqno = cmp::max(seqno, self.seqno);
+        entry
     }
 
     /// Set {key, value} in index if an older entry exists with the
@@ -123,9 +123,9 @@ where
     /// Return the older entry if present.
     pub fn set_cas(&mut self, key: K, value: V, cas: u64) -> Result<Option<Entry<K, V>>> {
         let seqno = self.seqno + 1;
-        let (seqno, res) = self.mem.set_cas_index(key, value, cas, seqno);
+        let (seqno, entry) = self.mem.set_cas_index(key, value, cas, seqno);
         self.seqno = cmp::max(seqno, self.seqno);
-        res
+        entry
     }
 
     /// Delete key from DB. Return the entry if it is already present.
@@ -134,9 +134,9 @@ where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
     {
-        let (seqno, res) = self.mem.delete_index(key, self.seqno + 1);
+        let (seqno, entry) = self.mem.delete_index(key, self.seqno + 1);
         self.seqno = cmp::max(seqno, self.seqno);
-        res
+        entry
     }
 }
 

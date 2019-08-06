@@ -15,10 +15,12 @@ use std::{
     },
 };
 
-use crate::core::{Diff, Entry, Index, Result, Value};
+use crate::core::{Diff, Entry, Result, Value};
+use crate::core::{FullScan, Index, IndexIter, Reader, Writer};
 use crate::error::Error;
 use crate::llrb::Llrb;
 use crate::llrb_node::{LlrbDepth, Node, Stats};
+use crate::spinlock;
 
 const RECLAIM_CAP: usize = 128;
 
@@ -141,11 +143,12 @@ where
         }
     }
 
-    pub fn to_writer(&self) -> Writer<K, V> {
-        if self.writers.compare_and_swap(0, 1, Relaxed) == 0 {
-            Writer { index: self }
-        } else {
-            panic!("there cannot be more than one writers!")
+    fn shallow_clone(&self) -> Mvcc<K, V> {
+        Mvcc {
+            name: self.name.clone(),
+            lsm: self.lsm,
+            snapshot: Snapshot::new(),
+            writers: AtomicU8::new(0),
         }
     }
 }
@@ -156,12 +159,6 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    /// Return whether this index support lsm mode.
-    #[inline]
-    pub(crate) fn is_lsm(&self) -> bool {
-        self.lsm
-    }
-
     /// Return number of entries in this instance.
     #[inline]
     pub fn len(&self) -> usize {
@@ -188,23 +185,71 @@ where
     }
 }
 
-// TODO
-//impl<K, V> Index<K, V> for Mvcc<K, V>
-//where
-//    K: Clone + Ord,
-//    V: Clone + From<<V as Diff>::D> + Diff,
-//{
-//    // Make a new empty index of this type, with same configuration.
-//    fn make_new(&self) -> Self {
-//        if self.lsm {
-//            Mvcc::new_lsm(&self.name)
-//        } else {
-//            Mvcc::new(&self.name)
-//        }
-//    }
-//}
+impl<K, V> Index<K, V> for Mvcc<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    type W = MvccWriter<K, V>;
 
-/// Create/Update/Delete operations on Llrb instance.
+    /// Make a new empty index of this type, with same configuration.
+    fn make_new(&self) -> Self {
+        self.shallow_clone()
+    }
+
+    /// Create a new writer handle. Only one writer handle can be
+    /// active at any time, creating more than one writer handle
+    /// will panic. Concurrent readers are allowed without using any
+    /// underlying locks/latches.
+    fn to_writer(index: Arc<Mvcc<K, V>>) -> Self::W {
+        if index.writers.compare_and_swap(0, 1, Relaxed) == 0 {
+            MvccWriter { index }
+        } else {
+            panic!("there cannot be more than one writers!")
+        }
+    }
+}
+
+/// Create/Update/Delete operations on Mvcc instance.
+impl<K, V> Mvcc<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    pub fn set(&mut self, key: K, value: V) -> Result<Option<Entry<K, V>>> {
+        let index = unsafe { Arc::from_raw(self as *const Mvcc<K, V>) };
+        let mut w = Mvcc::to_writer(index);
+
+        let seqno = self.to_seqno();
+        let (_seqno, entry) = w.set_index(key, value, seqno + 1);
+        entry
+    }
+
+    pub fn set_cas(&mut self, key: K, value: V, cas: u64) -> Result<Option<Entry<K, V>>> {
+        let index = unsafe { Arc::from_raw(self as *const Mvcc<K, V>) };
+        let mut w = Mvcc::to_writer(index);
+
+        let seqno = self.to_seqno();
+        let (_seqno, entry) = w.set_cas_index(key, value, cas, seqno + 1);
+        entry
+    }
+
+    pub fn delete<Q>(&mut self, key: &Q) -> Result<Option<Entry<K, V>>>
+    where
+        // TODO: From<Q> and Clone will fail if V=String and Q=str
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
+    {
+        let index = unsafe { Arc::from_raw(self as *const Mvcc<K, V>) };
+        let mut w = Mvcc::to_writer(index);
+
+        let seqno = self.to_seqno();
+        let (_seqno, entry) = w.delete_index(key, seqno + 1);
+        entry
+    }
+}
+
+/// Create/Update/Delete operations on Mvcc instance.
 impl<K, V> Mvcc<K, V>
 where
     K: Clone + Ord,
@@ -468,14 +513,14 @@ where
     }
 }
 
-/// Read operations on Llrb instance.
-impl<K, V> Mvcc<K, V>
+/// Read operations on Mvcc instance.
+impl<K, V> Reader<K, V> for Mvcc<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff,
 {
     /// Get the latest version for key.
-    pub fn get<Q>(&self, key: &Q) -> Result<Entry<K, V>>
+    fn get<Q>(&self, key: &Q) -> Result<Entry<K, V>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -483,11 +528,12 @@ where
         get(Snapshot::clone(&self.snapshot).as_root(), key)
     }
 
-    pub fn iter(&self) -> Result<Iter<K, V>> {
-        let mut iter = Iter {
+    fn iter(&self) -> Result<IndexIter<K, V>> {
+        let mut iter = Box::new(Iter {
+            _latch: Default::default(),
             _arc: Snapshot::clone(&self.snapshot),
             paths: Default::default(),
-        };
+        });
         let root = iter
             ._arc
             .as_ref()
@@ -497,18 +543,19 @@ where
         Ok(iter)
     }
 
-    pub fn range<R, Q>(&self, range: R) -> Result<Range<K, V, R, Q>>
+    fn range<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
-        R: RangeBounds<Q>,
-        Q: Ord + ?Sized,
+        R: 'a + RangeBounds<Q>,
+        Q: 'a + Ord + ?Sized,
     {
-        let mut r = Range {
+        let mut r = Box::new(Range {
+            _latch: Default::default(),
             _arc: Snapshot::clone(&self.snapshot),
             range,
             paths: Default::default(),
             high: marker::PhantomData,
-        };
+        });
         let root = r
             ._arc
             .as_ref()
@@ -522,18 +569,19 @@ where
         Ok(r)
     }
 
-    pub fn reverse<R, Q>(&self, range: R) -> Result<Reverse<K, V, R, Q>>
+    fn reverse<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
-        R: RangeBounds<Q>,
-        Q: Ord + ?Sized,
+        R: 'a + RangeBounds<Q>,
+        Q: 'a + Ord + ?Sized,
     {
-        let mut r = Reverse {
+        let mut r = Box::new(Reverse {
+            _latch: Default::default(),
             _arc: Snapshot::clone(&self.snapshot),
             range,
             paths: Default::default(),
             low: marker::PhantomData,
-        };
+        });
         let root = r
             ._arc
             .as_ref()
@@ -548,7 +596,7 @@ where
     }
 
     /// Short circuited to get().
-    pub fn get_with_versions<Q>(&self, key: &Q) -> Result<Entry<K, V>>
+    fn get_with_versions<Q>(&self, key: &Q) -> Result<Entry<K, V>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -557,32 +605,32 @@ where
     }
 
     /// Short circuited to iter().
-    pub fn iter_with_versions(&self) -> Result<Iter<K, V>> {
+    fn iter_with_versions(&self) -> Result<IndexIter<K, V>> {
         self.iter()
     }
 
     /// Short circuited to range().
-    pub fn range_with_versions<R, Q>(&self, range: R) -> Result<Range<K, V, R, Q>>
+    fn range_with_versions<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
-        R: RangeBounds<Q>,
-        Q: Ord + ?Sized,
+        R: 'a + RangeBounds<Q>,
+        Q: 'a + Ord + ?Sized,
     {
         self.range(range)
     }
 
     /// Short circuited to reverse()
-    pub fn reverse_with_versions<R, Q>(&self, range: R) -> Result<Reverse<K, V, R, Q>>
+    fn reverse_with_versions<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
-        R: RangeBounds<Q>,
-        Q: Ord + ?Sized,
+        R: 'a + RangeBounds<Q>,
+        Q: 'a + Ord + ?Sized,
     {
         self.reverse(range)
     }
 }
 
-impl<K, V> Mvcc<K, V>
+impl<K, V> FullScan<K, V> for Mvcc<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff + From<<V as Diff>::D>,
@@ -590,20 +638,11 @@ where
     /// Return an iterator over entries that meet following properties
     /// * Only entries greater than range.start_bound().
     /// * Only entries whose modified seqno is within seqno-range.
-    pub fn full_scan<R, Q, G>(&self, range: R, within: G) -> Result<IterFullScan<K, V>>
+    fn full_scan<G>(&self, from: Bound<K>, within: G) -> Result<IndexIter<K, V>>
     where
-        K: Borrow<Q>,
-        R: RangeBounds<Q>,
-        Q: Ord + ?Sized,
         G: Clone + RangeBounds<u64>,
     {
         // validate arguments.
-        match range.end_bound() {
-            Bound::Unbounded => (),
-            Bound::Included(_) | Bound::Excluded(_) => {
-                panic!("iter_before cannot have an upper-bound !!");
-            }
-        }
         let start = match within.start_bound() {
             Bound::Included(x) => Bound::Included(*x),
             Bound::Excluded(x) => Bound::Excluded(*x),
@@ -615,21 +654,28 @@ where
             Bound::Unbounded => Bound::Unbounded,
         };
         // similar to range pre-processing
-        let mut iter = IterFullScan {
+        let mut iter = Box::new(IterFullScan {
+            _latch: Default::default(),
             _arc: Snapshot::clone(&self.snapshot),
             start,
             end,
             paths: Default::default(),
-        };
+        });
         let root = iter
             ._arc
             .as_ref()
             .root_duplicate()
             .map(|n| Box::leak(n) as &Node<K, V>);
-        iter.paths = match range.start_bound() {
+        iter.paths = match from {
             Bound::Unbounded => Some(build_iter(IFlag::Left, root, vec![])),
-            Bound::Included(low) => Some(find_start(root, low, true, vec![])),
-            Bound::Excluded(low) => Some(find_start(root, low, false, vec![])),
+            Bound::Included(low) => {
+                let paths = Some(find_start(root, low.borrow(), true, vec![]));
+                paths
+            }
+            Bound::Excluded(low) => {
+                let paths = Some(find_start(root, low.borrow(), false, vec![]));
+                paths
+            }
         };
         Ok(iter)
     }
@@ -967,30 +1013,50 @@ where
     }
 }
 
-/// Writer handle for [`Mvcc`] index.
+/// MvccWriter handle for [`Mvcc`] index.
 ///
 /// Note that only one writer handle can be active at any given
 /// time to write into Mvcc index.
 ///
 /// [Mvcc]: crate::mvcc::Mvcc
-pub struct Writer<'a, K, V>
+pub struct MvccWriter<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    index: &'a Mvcc<K, V>,
+    index: Arc<Mvcc<K, V>>,
 }
 
-impl<'a, K, V> Writer<'a, K, V>
+impl<K, V> MvccWriter<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    pub fn set(&mut self, key: K, value: V) -> Result<Option<Entry<K, V>>> {
-        let lsm = self.index.lsm;
-        let snapshot = Snapshot::clone(&self.index.snapshot);
+    fn get_index(&self) -> &mut Mvcc<K, V> {
+        let index = self.index.as_ref();
+        unsafe {
+            let index = index as *const Mvcc<K, V> as *mut Mvcc<K, V>;
+            index.as_mut().unwrap()
+        }
+    }
+}
 
-        let (seqno, mut n_count) = (snapshot.seqno + 1, snapshot.n_count);
+impl<K, V> Writer<K, V> for MvccWriter<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    fn set_index(
+        &mut self,
+        key: K,
+        value: V,
+        seqno: u64, // seqno for this mutation
+    ) -> (u64, Result<Option<Entry<K, V>>>) {
+        let index = self.get_index();
+        let lsm = index.lsm;
+        let snapshot = Snapshot::clone(&index.snapshot);
+
+        let mut n_count = snapshot.n_count;
         let value = Box::new(Value::new_upsert_value(value, seqno));
         let new_entry = Entry::new(key, value);
 
@@ -1004,32 +1070,39 @@ where
                 }
                 n.dirty = false;
                 Box::leak(n);
-                self.index
+                index
                     .snapshot
                     .shift_snapshot(Some(root), seqno, n_count, reclm);
-                Ok(entry)
+                (seqno, Ok(entry))
             }
             _ => unreachable!(),
         }
     }
 
-    pub fn set_cas(&mut self, key: K, value: V, cas: u64) -> Result<Option<Entry<K, V>>> {
-        let lsm = self.index.lsm;
-        let snapshot = Snapshot::clone(&self.index.snapshot);
+    fn set_cas_index(
+        &mut self,
+        key: K,
+        value: V,
+        cas: u64,
+        mut seqno: u64, // seqno for this mutation
+    ) -> (u64, Result<Option<Entry<K, V>>>) {
+        let index = self.get_index();
+        let lsm = index.lsm;
+        let snapshot = Snapshot::clone(&index.snapshot);
 
-        let (mut seqno, mut n_count) = (snapshot.seqno, snapshot.n_count);
-        let value = Box::new(Value::new_upsert_value(value, seqno + 1));
+        let mut n_count = snapshot.n_count;
+        let value = Box::new(Value::new_upsert_value(value, seqno));
         let new_entry = Entry::new(key, value);
         let root = snapshot.root_duplicate();
         let mut rclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
         let s = match Mvcc::upsert_cas(root, new_entry, cas, lsm, &mut rclm) {
             (Some(mut root), optn, _, Some(err)) => {
+                seqno = index.to_seqno();
                 root.set_black();
                 (root, optn, Err(err))
             }
             (Some(mut root), optn, entry, None) => {
                 root.set_black();
-                seqno += 1;
                 if entry.is_none() {
                     n_count += 1
                 }
@@ -1040,7 +1113,7 @@ where
         let (root, optn, entry) = s;
 
         // TODO: can we optimize this for no-op cases (err cases) ?
-        self.index
+        index
             .snapshot
             .shift_snapshot(Some(root), seqno, n_count, rclm);
 
@@ -1048,21 +1121,26 @@ where
             n.dirty = false;
             Box::leak(n);
         }
-        entry
+        (seqno, entry)
     }
 
-    pub fn delete<Q>(&mut self, key: &Q) -> Result<Option<Entry<K, V>>>
+    fn delete_index<Q>(
+        &mut self,
+        key: &Q,
+        mut seqno: u64, // seqno for this mutation
+    ) -> (u64, Result<Option<Entry<K, V>>>)
     where
         // TODO: From<Q> and Clone will fail if V=String and Q=str
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
     {
-        let snapshot = Snapshot::clone(&self.index.snapshot);
+        let index = self.get_index();
+        let snapshot = Snapshot::clone(&index.snapshot);
 
-        let (mut seqno, mut n_count) = (snapshot.seqno + 1, snapshot.n_count);
+        let mut n_count = snapshot.n_count;
         let root = snapshot.root_duplicate();
         let mut reclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
-        let (root, entry) = if self.index.lsm {
+        let (root, entry) = if index.lsm {
             let s = match Mvcc::delete_lsm(root, key, seqno, &mut reclm) {
                 (Some(mut root), optn, entry) => {
                     root.set_black();
@@ -1078,7 +1156,7 @@ where
                     n_count += 1;
                 }
                 Some(e) if e.is_deleted() => {
-                    seqno -= 1;
+                    seqno = index.to_seqno();
                 }
                 _ => (),
             }
@@ -1100,15 +1178,13 @@ where
             if entry.is_some() {
                 n_count -= 1;
             } else {
-                seqno -= 1;
+                seqno = index.to_seqno();
             }
             (root, entry)
         };
 
-        self.index
-            .snapshot
-            .shift_snapshot(root, seqno, n_count, reclm);
-        Ok(entry)
+        index.snapshot.shift_snapshot(root, seqno, n_count, reclm);
+        (seqno, Ok(entry))
     }
 }
 

@@ -68,9 +68,9 @@ impl RWSpinlock {
         }
     }
 
-    /// Acquire latch for read permission. If yield_ok is true, calling
+    /// Acquire latch for read permission. If ``spin`` is false, calling
     /// thread will yield to scheduler before re-trying the latch.
-    pub fn acquire_read(&self, yield_ok: bool) -> Reader {
+    pub fn acquire_read(&self, spin: bool) -> Reader {
         loop {
             let c = self.value.load(Ordering::Relaxed);
             if (c & Self::LATCH_LOCK_FLAG) == 0 {
@@ -82,15 +82,15 @@ impl RWSpinlock {
                 }
             }
             self.conflicts.fetch_add(1, Ordering::Relaxed);
-            if yield_ok {
+            if !spin {
                 thread::yield_now();
             }
         }
     }
 
-    /// Acquire latch for write permission. If yield_ok is true, calling
+    /// Acquire latch for write permission. If ``spin`` is false, calling
     /// thread will yield to scheduler before re-trying the latch.
-    pub fn acquire_write(&self, yield_ok: bool) -> Writer {
+    pub fn acquire_write(&self, spin: bool) -> Writer {
         // acquire latch
         loop {
             let c = self.value.load(Ordering::Relaxed);
@@ -105,7 +105,7 @@ impl RWSpinlock {
                 }
             }
             self.conflicts.fetch_add(1, Ordering::Relaxed);
-            if yield_ok {
+            if !spin {
                 thread::yield_now();
             }
         }
@@ -121,7 +121,7 @@ impl RWSpinlock {
                 panic!("latch is acquired, ZERO readers, but unable to lock !")
             }
             self.conflicts.fetch_add(1, Ordering::Relaxed);
-            if yield_ok {
+            if !spin {
                 thread::yield_now();
             }
         }

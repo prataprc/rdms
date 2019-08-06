@@ -1,5 +1,6 @@
 use std::borrow::Borrow;
 use std::ops::{Bound, RangeBounds};
+use std::sync::Arc;
 
 use crate::error::Error;
 use crate::vlog;
@@ -15,15 +16,16 @@ pub trait Index<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff,
-    Self: Reader<K, V> + Writer<K, V>,
 {
+    type W: Writer<K, V>;
+
     /// Make a new empty index of this type, with same configuration.
     fn make_new(&self) -> Self;
 
-    // Create a new writer handle. Note that, not all indexes allow
-    // concurrent writers, and not all indexes support concurrent
-    // read/write.
-    // fn to_writer(&self) -> Writer<K, V>;
+    /// Create a new writer handle. Note that, not all indexes allow
+    /// concurrent writers, and not all indexes support concurrent
+    /// read/write.
+    fn to_writer(index: Arc<Self>) -> Self::W;
 }
 
 /// Index read operation.
@@ -117,7 +119,7 @@ where
         key: K,
         value: V,
         index: u64, // seqno for this mutation
-    ) -> Result<Option<Entry<K, V>>>;
+    ) -> (u64, Result<Option<Entry<K, V>>>);
 
     /// Set {key, value} in index if an older entry exists with the
     /// same ``cas`` value. To create a fresh entry, pass ``cas`` as ZERO.

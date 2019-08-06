@@ -481,8 +481,8 @@ where
         let e = self.to_seqno();
         // If all versions of this entry are before cutoff, then purge entry
         match cutoff {
-            Bound::Included(cutoff) if e < cutoff => return None,
-            Bound::Excluded(cutoff) if e <= cutoff => return None,
+            Bound::Included(cutoff) if e <= cutoff => return None,
+            Bound::Excluded(cutoff) if e < cutoff => return None,
             _ => (),
         }
         // Otherwise, purge only those versions that are before cutoff
@@ -492,8 +492,8 @@ where
             .take_while(|d| {
                 let seqno = d.to_seqno();
                 match cutoff {
-                    Bound::Included(cutoff) if seqno >= cutoff => true,
-                    Bound::Excluded(cutoff) if seqno > cutoff => true,
+                    Bound::Included(cutoff) if seqno > cutoff => true,
+                    Bound::Excluded(cutoff) if seqno >= cutoff => true,
                     _ => false,
                 }
             })

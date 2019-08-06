@@ -87,8 +87,8 @@ fn test_entry_new() {
     assert!(vers.next().is_none());
 
     // testcase4 actual purge
-    assert!(entry1.purge(Bound::Included(1002)).is_none());
-    assert_eq!(entry1.as_deltas().len(), 0);
+    let entry = entry1.purge(Bound::Included(1002));
+    assert!(entry.is_none());
 }
 
 #[test]
@@ -155,6 +155,20 @@ fn test_entry_new_lsm() {
     assert!(vers.next().is_none());
 
     // testcase5 purge noop
+    let entry1 = entry1.purge(Bound::Excluded(1000)).unwrap();
+    assert_eq!(entry1.as_deltas().len(), 3);
+    let mut vers = entry1.versions();
+    let mut entry = vers.next().expect("expected valid entry");
+    verify_version(&entry, 100, Some(30), 1003, false);
+    entry = vers.next().expect("expected valid entry");
+    verify_version(&entry, 100, None, 1002, true);
+    entry = vers.next().expect("expected valid entry");
+    verify_version(&entry, 100, Some(20), 1001, false);
+    entry = vers.next().expect("expected valid entry");
+    verify_version(&entry, 100, Some(10), 1000, false);
+    assert!(vers.next().is_none());
+
+    // testcase6 purge noop
     let entry1 = entry1.purge(Bound::Included(1000)).unwrap();
     // verify latest entry
     assert_eq!(entry1.as_deltas().len(), 2);
@@ -169,14 +183,14 @@ fn test_entry_new_lsm() {
     verify_version(&entry, 100, Some(20), 1001, false);
     assert!(vers.next().is_none());
 
-    // testcase5 purge
+    // testcase7 purge
     let entry1 = entry1.purge(Bound::Included(1002)).unwrap();
     // verify latest entry
     assert_eq!(entry1.as_deltas().len(), 0);
     verify_latest(&entry1, 100, Some(30), 1003, false);
     // verify versions
     let mut vers = entry1.versions();
-    let mut entry = vers.next().expect("expected valid entry");
+    let entry = vers.next().expect("expected valid entry");
     verify_version(&entry, 100, Some(30), 1003, false);
     assert!(vers.next().is_none());
 

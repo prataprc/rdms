@@ -4,7 +4,7 @@ use std::ops::{self, Bound};
 
 use rand::prelude::random;
 
-use crate::core::{Diff, Index};
+use crate::core::{Index, Reader, Writer};
 use crate::error::Error;
 use crate::llrb::Llrb;
 use crate::type_empty::Empty;
@@ -17,14 +17,6 @@ include!("./ref_test.rs");
 fn test_id() {
     let llrb: Llrb<i32, Empty> = Llrb::new("test-llrb");
     assert_eq!(llrb.to_name(), "test-llrb".to_string());
-}
-
-#[test]
-fn test_seqno() {
-    let mut llrb: Llrb<i32, Empty> = Llrb::new("test-llrb");
-    assert_eq!(llrb.to_seqno(), 0);
-    llrb.set_seqno(1234);
-    assert_eq!(llrb.to_seqno(), 1234);
 }
 
 #[test]
@@ -72,7 +64,8 @@ fn test_set() {
     // test iter
     let (mut iter, mut iter_ref) = (llrb.iter().unwrap(), refns.iter());
     loop {
-        if check_node(iter.next(), iter_ref.next().cloned()) == false {
+        let item = iter.next().transpose().unwrap();
+        if check_node(item, iter_ref.next().cloned()) == false {
             break;
         }
     }
@@ -155,7 +148,8 @@ fn test_cas_lsm() {
     // test iter
     let (mut iter, mut iter_ref) = (llrb.iter().unwrap(), refns.iter());
     loop {
-        if check_node(iter.next(), iter_ref.next().cloned()) == false {
+        let item = iter.next().transpose().unwrap();
+        if check_node(item, iter_ref.next().cloned()) == false {
             break;
         }
     }
@@ -200,7 +194,7 @@ fn test_delete() {
     {
         let (mut iter, mut iter_ref) = (llrb.iter().unwrap(), refns.iter());
         loop {
-            let entry = iter.next();
+            let entry = iter.next().transpose().unwrap();
             let refn = iter_ref.next().cloned();
             //println!("entry: {} ref: {}", entry.is_some(), refn.is_some());
             if check_node(entry, refn) == false {
@@ -255,7 +249,8 @@ fn test_iter() {
     // test iter
     let (mut iter, mut iter_ref) = (llrb.iter().unwrap(), refns.iter());
     loop {
-        match (iter.next(), iter_ref.next()) {
+        let item = iter.next().transpose().unwrap();
+        match (item, iter_ref.next()) {
             (None, None) => break,
             (entry, Some(refn)) => check_node(entry, Some(refn.clone())),
             _ => panic!("invalid"),
@@ -302,7 +297,8 @@ fn test_range() {
         let mut iter = llrb.range((low, high)).unwrap();
         let mut iter_ref = refns.range(low, high);
         loop {
-            match (iter.next(), iter_ref.next()) {
+            let item = iter.next().transpose().unwrap();
+            match (item, iter_ref.next()) {
                 (None, None) => break,
                 (entry, Some(refn)) => check_node(entry, Some(refn.clone())),
                 _ => panic!("invalid"),
@@ -314,7 +310,8 @@ fn test_range() {
         let mut iter = llrb.reverse((low, high)).unwrap();
         let mut iter_ref = refns.reverse(low, high);
         loop {
-            match (iter.next(), iter_ref.next()) {
+            let item = iter.next().transpose().unwrap();
+            match (item, iter_ref.next()) {
                 (None, None) => break,
                 (entry, Some(refn)) => check_node(entry, Some(refn.clone())),
                 _ => panic!("invalid"),
@@ -328,7 +325,6 @@ fn test_range() {
 #[test]
 fn test_range_str() {
     let mut llrb: Llrb<&str, i64> = Llrb::new("test-llrb");
-    let mut refns = RefNodes::new(false /*lsm*/, 10);
 
     assert!(llrb.set("key1", 10).unwrap().is_none());
     assert!(llrb.set("key2", 11).unwrap().is_none());
@@ -339,33 +335,55 @@ fn test_range_str() {
     assert_eq!(llrb.len(), 5);
     assert!(llrb.validate().is_ok());
 
-    for _ in 0..1_000 {
-        let r = ops::RangeInclusive::new("key2", "key4");
-        let mut iter = llrb.range(r).unwrap();
-        let entry = iter.next().expect("expected entry for key2");
-        assert_eq!(entry.to_key(), "key2");
-        assert_eq!(entry.to_native_value().unwrap(), 11);
-        let entry = iter.next().expect("expected entry for key3");
-        assert_eq!(entry.to_key(), "key3");
-        assert_eq!(entry.to_native_value().unwrap(), 12);
-        let entry = iter.next().expect("expected entry for key4");
-        assert_eq!(entry.to_key(), "key4");
-        assert_eq!(entry.to_native_value().unwrap(), 13);
-        assert!(iter.next().is_none());
+    let r = ops::RangeInclusive::new("key2", "key4");
+    let mut iter = llrb.range(r).unwrap();
+    let entry = iter
+        .next()
+        .transpose()
+        .unwrap()
+        .expect("expected entry for key2");
+    assert_eq!(entry.to_key(), "key2");
+    assert_eq!(entry.to_native_value().unwrap(), 11);
+    let entry = iter
+        .next()
+        .transpose()
+        .unwrap()
+        .expect("expected entry for key3");
+    assert_eq!(entry.to_key(), "key3");
+    assert_eq!(entry.to_native_value().unwrap(), 12);
+    let entry = iter
+        .next()
+        .transpose()
+        .unwrap()
+        .expect("expected entry for key4");
+    assert_eq!(entry.to_key(), "key4");
+    assert_eq!(entry.to_native_value().unwrap(), 13);
+    assert!(iter.next().is_none());
 
-        let r = ops::RangeInclusive::new("key2", "key4");
-        let mut iter = llrb.reverse(r).unwrap();
-        let entry = iter.next().expect("expected entry for key4");
-        assert_eq!(entry.to_key(), "key4");
-        assert_eq!(entry.to_native_value().unwrap(), 13);
-        let entry = iter.next().expect("expected entry for key3");
-        assert_eq!(entry.to_key(), "key3");
-        assert_eq!(entry.to_native_value().unwrap(), 12);
-        let entry = iter.next().expect("expected entry for key2");
-        assert_eq!(entry.to_key(), "key2");
-        assert_eq!(entry.to_native_value().unwrap(), 11);
-        assert!(iter.next().is_none());
-    }
+    let r = ops::RangeInclusive::new("key2", "key4");
+    let mut iter = llrb.reverse(r).unwrap();
+    let entry = iter
+        .next()
+        .transpose()
+        .unwrap()
+        .expect("expected entry for key4");
+    assert_eq!(entry.to_key(), "key4");
+    assert_eq!(entry.to_native_value().unwrap(), 13);
+    let entry = iter
+        .next()
+        .transpose()
+        .unwrap()
+        .expect("expected entry for key3");
+    assert_eq!(entry.to_key(), "key3");
+    assert_eq!(entry.to_native_value().unwrap(), 12);
+    let entry = iter
+        .next()
+        .transpose()
+        .unwrap()
+        .expect("expected entry for key2");
+    assert_eq!(entry.to_key(), "key2");
+    assert_eq!(entry.to_native_value().unwrap(), 11);
+    assert!(iter.next().is_none());
 }
 
 #[test]
@@ -418,7 +436,8 @@ fn test_crud() {
     // test iter
     let (mut iter, mut iter_ref) = (llrb.iter().unwrap(), refns.iter());
     loop {
-        if check_node(iter.next(), iter_ref.next().cloned()) == false {
+        let item = iter.next().transpose().unwrap();
+        if check_node(item, iter_ref.next().cloned()) == false {
             break;
         }
     }
@@ -431,7 +450,8 @@ fn test_crud() {
         let mut iter = llrb.range((low, high)).unwrap();
         let mut iter_ref = refns.range(low, high);
         loop {
-            if check_node(iter.next(), iter_ref.next().cloned()) == false {
+            let item = iter.next().transpose().unwrap();
+            if check_node(item, iter_ref.next().cloned()) == false {
                 break;
             }
         }
@@ -439,7 +459,8 @@ fn test_crud() {
         let mut iter = llrb.reverse((low, high)).unwrap();
         let mut iter_ref = refns.reverse(low, high);
         loop {
-            if check_node(iter.next(), iter_ref.next().cloned()) == false {
+            let item = iter.next().transpose().unwrap();
+            if check_node(item, iter_ref.next().cloned()) == false {
                 break;
             }
         }
@@ -497,7 +518,8 @@ fn test_crud_lsm() {
     // test iter
     let (mut iter, mut iter_ref) = (llrb.iter().unwrap(), refns.iter());
     loop {
-        if check_node(iter.next(), iter_ref.next().cloned()) == false {
+        let item = iter.next().transpose().unwrap();
+        if check_node(item, iter_ref.next().cloned()) == false {
             break;
         }
     }
@@ -510,7 +532,8 @@ fn test_crud_lsm() {
         let mut iter = llrb.range((low, high)).unwrap();
         let mut iter_ref = refns.range(low, high);
         loop {
-            if check_node(iter.next(), iter_ref.next().cloned()) == false {
+            let item = iter.next().transpose().unwrap();
+            if check_node(item, iter_ref.next().cloned()) == false {
                 break;
             }
         }
@@ -518,26 +541,10 @@ fn test_crud_lsm() {
         let mut iter = llrb.reverse((low, high)).unwrap();
         let mut iter_ref = refns.reverse(low, high);
         loop {
-            if check_node(iter.next(), iter_ref.next().cloned()) == false {
+            let item = iter.next().transpose().unwrap();
+            if check_node(item, iter_ref.next().cloned()) == false {
                 break;
             }
         }
     }
 }
-
-#[test]
-fn test_traits() {
-    let llrb: Llrb<i32, i32> = Llrb::new("test-llrb");
-    test_index(llrb);
-}
-
-// TODO:
-// fn test_index<I: Index<K, V>, K, V>(index: I)
-// where
-//     K: Clone + Ord,
-//     V: Clone + Diff,
-// {
-//     assert!(index.set(2, 10).unwrap().is_none());
-//     assert!(index.set_cas(0, 200, 0).ok().unwrap().is_none());
-//     index.delete(2).unwrap()
-// }

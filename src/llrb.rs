@@ -921,3 +921,17 @@ where
         }
     }
 }
+
+impl<K, V> Drop for LlrbWriter<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    fn drop(&mut self) {
+        use std::sync::atomic::Ordering;
+
+        if self.index.writers.compare_and_swap(1, 0, Ordering::Relaxed) != 1 {
+            unreachable!()
+        }
+    }
+}

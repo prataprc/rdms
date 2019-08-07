@@ -5,13 +5,15 @@
 
 use std::borrow::Borrow;
 use std::{
-    cmp, fs, marker, mem,
+    cmp,
+    convert::TryInto,
+    fs, marker, mem,
     ops::{Bound, RangeBounds},
     path,
     sync::{self, Arc},
 };
 
-use crate::core::{Diff, Entry, Result, Serialize};
+use crate::core::{Diff, Entry, Footprint, Result, Serialize};
 use crate::core::{Index, IndexIter, Reader, Writer};
 use crate::error::Error;
 use crate::robt_config::{self, Config, MetaItem};
@@ -27,7 +29,6 @@ pub struct Snapshot<K, V>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
-    <V as Diff>::D: Clone + Serialize,
 {
     dir: String,
     name: String,
@@ -47,7 +48,6 @@ impl<K, V> Snapshot<K, V>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
-    <V as Diff>::D: Clone + Serialize,
 {
     /// Open BTree snapshot from file that can be constructed from ``dir``
     /// and ``name``.
@@ -94,24 +94,10 @@ impl<K, V> Snapshot<K, V>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
-    <V as Diff>::D: Clone + Serialize,
 {
     /// Return number of entries in the snapshot.
     pub fn len(&self) -> u64 {
         self.to_stats().unwrap().n_count
-    }
-
-    /// Return disk-footprint for this snapshot.
-    pub fn footprint(&self) -> u64 {
-        let (dir, name) = (self.dir.as_str(), self.name.as_str());
-        let mut footprint = fs::metadata(self.config.to_index_file(dir, name))
-            .unwrap()
-            .len();
-        footprint += match self.config.to_value_log(dir, name) {
-            Some(vlog_file) => fs::metadata(vlog_file).unwrap().len(),
-            None => 0,
-        };
-        footprint
     }
 
     /// Return the last seqno found in this snapshot.
@@ -151,9 +137,8 @@ where
 
 impl<K, V> Index<K, V> for Snapshot<K, V>
 where
-    K: Clone + Ord + Serialize,
-    V: Clone + Diff + Serialize,
-    <V as Diff>::D: Clone + Serialize,
+    K: Clone + Ord + Serialize + Footprint,
+    V: Clone + Diff + Serialize + Footprint,
 {
     type W = RobtWriter;
 
@@ -167,6 +152,24 @@ where
     /// read/write.
     fn to_writer(_index: Arc<Self>) -> Result<Self::W> {
         panic!("Read-only-btree don't support write operations")
+    }
+}
+
+impl<K, V> Footprint for Snapshot<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+{
+    fn footprint(&self) -> usize {
+        let (dir, name) = (self.dir.as_str(), self.name.as_str());
+        let mut footprint = fs::metadata(self.config.to_index_file(dir, name))
+            .unwrap()
+            .len();
+        footprint += match self.config.to_value_log(dir, name) {
+            Some(vlog_file) => fs::metadata(vlog_file).unwrap().len(),
+            None => 0,
+        };
+        footprint.try_into().unwrap()
     }
 }
 
@@ -632,11 +635,11 @@ where
 
 pub struct Range<'a, K, V, R, Q>
 where
-    Q: Ord + ?Sized,
-    R: RangeBounds<Q>,
     K: Clone + Ord + Borrow<Q> + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
+    R: RangeBounds<Q>,
+    Q: Ord + ?Sized,
 {
     snap: &'a mut Snapshot<K, V>,
     mzs: Vec<MZ<K, V>>,
@@ -647,11 +650,11 @@ where
 
 impl<'a, K, V, R, Q> Range<'a, K, V, R, Q>
 where
-    Q: Ord + ?Sized,
-    R: RangeBounds<Q>,
     K: Clone + Ord + Borrow<Q> + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
+    R: RangeBounds<Q>,
+    Q: Ord + ?Sized,
 {
     fn till_ok(&self, entry: &Entry<K, V>) -> bool {
         match self.range.end_bound() {
@@ -664,11 +667,11 @@ where
 
 impl<'a, K, V, R, Q> Iterator for Range<'a, K, V, R, Q>
 where
-    Q: Ord + ?Sized,
-    R: RangeBounds<Q>,
     K: Clone + Ord + Borrow<Q> + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
+    R: RangeBounds<Q>,
+    Q: Ord + ?Sized,
 {
     type Item = Result<Entry<K, V>>;
 
@@ -700,11 +703,11 @@ where
 
 pub struct Reverse<'a, K, V, R, Q>
 where
-    Q: Ord + ?Sized,
-    R: RangeBounds<Q>,
     K: Clone + Ord + Borrow<Q> + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
+    R: RangeBounds<Q>,
+    Q: Ord + ?Sized,
 {
     snap: &'a mut Snapshot<K, V>,
     mzs: Vec<MZ<K, V>>,
@@ -715,11 +718,11 @@ where
 
 impl<'a, K, V, R, Q> Reverse<'a, K, V, R, Q>
 where
-    Q: Ord + ?Sized,
-    R: RangeBounds<Q>,
     K: Clone + Ord + Borrow<Q> + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
+    R: RangeBounds<Q>,
+    Q: Ord + ?Sized,
 {
     fn till_ok(&self, entry: &Entry<K, V>) -> bool {
         match self.range.start_bound() {
@@ -732,11 +735,11 @@ where
 
 impl<'a, K, V, R, Q> Iterator for Reverse<'a, K, V, R, Q>
 where
-    Q: Ord + ?Sized,
-    R: RangeBounds<Q>,
     K: Clone + Ord + Borrow<Q> + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
+    R: RangeBounds<Q>,
+    Q: Ord + ?Sized,
 {
     type Item = Result<Entry<K, V>>;
 
@@ -824,15 +827,15 @@ pub struct RobtWriter;
 
 impl<K, V> Writer<K, V> for RobtWriter
 where
-    K: Clone + Ord,
-    V: Clone + Diff,
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
 {
     fn set_index(
         &mut self,
         key: K,
         value: V,
         seqno: u64, // seqno for this mutation
-    ) -> (u64, Result<Option<Entry<K, V>>>) {
+    ) -> (Option<u64>, Result<Option<Entry<K, V>>>) {
         panic!(
             "{} {} {}",
             mem::size_of_val(&key),
@@ -847,7 +850,7 @@ where
         value: V,
         cas: u64,
         seqno: u64, // seqno for this mutation
-    ) -> (u64, Result<Option<Entry<K, V>>>) {
+    ) -> (Option<u64>, Result<Option<Entry<K, V>>>) {
         panic!(
             "{} {} {} {}",
             mem::size_of_val(&key),
@@ -861,7 +864,7 @@ where
         &mut self,
         key: &Q,
         seqno: u64, // seqno for this mutation
-    ) -> (u64, Result<Option<Entry<K, V>>>)
+    ) -> (Option<u64>, Result<Option<Entry<K, V>>>)
     where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,

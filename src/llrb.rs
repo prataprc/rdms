@@ -9,7 +9,7 @@ use std::sync::atomic::AtomicU8;
 use std::sync::Arc;
 use std::{marker, mem};
 
-use crate::core::{Diff, Entry, Result, Value};
+use crate::core::{Diff, Entry, Footprint, Result, Value};
 use crate::core::{FullScan, Index, IndexIter, Reader, Writer};
 use crate::error::Error;
 use crate::llrb_node::{LlrbDepth, Node, Stats};
@@ -43,6 +43,8 @@ where
     n_count: usize,
     latch: RWSpinlock,
     writers: AtomicU8,
+    key_footprint: usize,
+    val_footprint: usize,
 }
 
 impl<K, V> Clone for Llrb<K, V>
@@ -60,6 +62,8 @@ where
             n_count: self.n_count,
             latch: RWSpinlock::new(),
             writers: AtomicU8::new(0),
+            key_footprint: self.key_footprint,
+            val_footprint: self.key_footprint,
         }
     }
 }
@@ -72,6 +76,18 @@ where
     fn drop(&mut self) {
         self.root.take().map(drop_tree);
     }
+}
+
+pub(crate) struct SquashDebris<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    pub(crate) root: Option<Box<Node<K, V>>>,
+    pub(crate) seqno: u64,
+    pub(crate) n_count: usize,
+    pub(crate) key_footprint: usize,
+    pub(crate) val_footprint: usize,
 }
 
 /// Different ways to construct a new Llrb index.
@@ -92,6 +108,8 @@ where
             n_count: Default::default(),
             latch: RWSpinlock::new(),
             writers: AtomicU8::new(0),
+            key_footprint: Default::default(),
+            val_footprint: Default::default(),
         }
     }
 
@@ -112,6 +130,8 @@ where
             n_count: Default::default(),
             latch: RWSpinlock::new(),
             writers: AtomicU8::new(0),
+            key_footprint: Default::default(),
+            val_footprint: Default::default(),
         }
     }
 
@@ -122,8 +142,14 @@ where
 
     /// Squash this index and return the root and its book-keeping.
     /// IMPORTANT: after calling this method, value must be dropped.
-    pub(crate) fn squash(&mut self) -> (Option<Box<Node<K, V>>>, u64, usize) {
-        (self.root.take(), self.seqno, self.n_count)
+    pub(crate) fn squash(&mut self) -> SquashDebris<K, V> {
+        SquashDebris {
+            root: self.root.take(),
+            seqno: self.seqno,
+            n_count: self.n_count,
+            key_footprint: self.key_footprint,
+            val_footprint: self.val_footprint,
+        }
     }
 
     fn shallow_clone(&self) -> Llrb<K, V> {
@@ -136,6 +162,8 @@ where
             n_count: Default::default(),
             latch: RWSpinlock::new(),
             writers: AtomicU8::new(0),
+            key_footprint: Default::default(),
+            val_footprint: Default::default(),
         }
     }
 }
@@ -180,8 +208,8 @@ where
 
 impl<K, V> Index<K, V> for Llrb<K, V>
 where
-    K: Clone + Ord,
-    V: Clone + Diff,
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
 {
     type W = LlrbWriter<K, V>;
 
@@ -205,11 +233,22 @@ where
     }
 }
 
-/// Create/Update/Delete operations on Llrb index.
-impl<K, V> Llrb<K, V>
+impl<K, V> Footprint for Llrb<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff,
+{
+    fn footprint(&self) -> usize {
+        let footprint = self.key_footprint + self.val_footprint;
+        footprint + (mem::size_of::<Node<K, V>>() * self.n_count)
+    }
+}
+
+/// Create/Update/Delete operations on Llrb index.
+impl<K, V> Llrb<K, V>
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
 {
     /// Set {key, value} pair into index. If key is already
     /// present, update the value and return the previous entry, else
@@ -808,8 +847,8 @@ where
 /// Create/Update/Delete operations on Llrb index.
 impl<K, V> Writer<K, V> for LlrbWriter<K, V>
 where
-    K: Clone + Ord,
-    V: Clone + Diff,
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
 {
     /// Set {key, value} in index. Return older entry if present.
     fn set_index(
@@ -817,7 +856,7 @@ where
         key: K,
         value: V,
         seqno: u64, // seqno for this mutation
-    ) -> (u64, Result<Option<Entry<K, V>>>) {
+    ) -> (Option<u64>, Result<Option<Entry<K, V>>>) {
         let _latch = self.index.latch.acquire_write(self.index.spin);
         let index = self.get_index();
 
@@ -831,7 +870,7 @@ where
                     index.n_count += 1;
                 }
                 index.seqno = seqno;
-                (seqno, Ok(entry))
+                (Some(seqno), Ok(entry))
             }
             _ => panic!("set: impossible case, call programmer"),
         }
@@ -849,7 +888,7 @@ where
         value: V,
         cas: u64,
         seqno: u64,
-    ) -> (u64, Result<Option<Entry<K, V>>>) {
+    ) -> (Option<u64>, Result<Option<Entry<K, V>>>) {
         let _latch = self.index.latch.acquire_write(self.index.spin);
         let index = self.get_index();
 
@@ -858,7 +897,7 @@ where
         match Llrb::upsert_cas(index.root.take(), new_entry, cas, index.lsm) {
             (root, _, Some(err)) => {
                 index.root = root;
-                (0, Err(err))
+                (None, Err(err))
             }
             (Some(mut root), entry, None) => {
                 root.set_black();
@@ -867,7 +906,7 @@ where
                     index.n_count += 1;
                 }
                 index.seqno = seqno;
-                (seqno, Ok(entry))
+                (Some(seqno), Ok(entry))
             }
             _ => panic!("set_cas: impossible case, call programmer"),
         }
@@ -877,7 +916,7 @@ where
         &mut self,
         key: &Q,
         seqno: u64, // seqno for this delete
-    ) -> (u64, Result<Option<Entry<K, V>>>)
+    ) -> (Option<u64>, Result<Option<Entry<K, V>>>)
     where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
@@ -894,13 +933,13 @@ where
                 None => {
                     index.n_count += 1;
                     index.seqno = seqno;
-                    (seqno, Ok(None))
+                    (Some(seqno), Ok(None))
                 }
                 Some(entry) if !entry.is_deleted() => {
                     index.seqno = seqno;
-                    (seqno, Ok(Some(entry)))
+                    (Some(seqno), Ok(Some(entry)))
                 }
-                entry => (0, Ok(entry)),
+                entry => (None, Ok(entry)),
             };
         } else {
             // in non-lsm mode remove the entry from the tree.
@@ -915,9 +954,9 @@ where
             if entry.is_some() {
                 index.n_count -= 1;
                 index.seqno = seqno;
-                (seqno, Ok(entry))
+                (Some(seqno), Ok(entry))
             } else {
-                (0, Ok(entry))
+                (None, Ok(entry))
             }
         }
     }

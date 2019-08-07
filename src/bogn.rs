@@ -2,18 +2,19 @@
 // Index, Reader and Writer traits as crate-only traits.
 
 use std::borrow::Borrow;
+use std::marker;
 use std::ops::RangeBounds;
-use std::{cmp, marker};
 
-use crate::core::{Diff, Entry, Index, IndexIter, Reader, Result, Writer};
+use crate::core::{Diff, Entry, Footprint, Result};
+use crate::core::{Index, IndexIter, Reader, Writer};
 
 /// Index keys and corresponding values. Check module documentation for
 /// the full set of features.
 pub struct Bogn<K, V, M>
 where
-    K: Clone + Ord,
-    V: Clone + Diff,
-    M: Index<K, V> + Reader<K, V> + Writer<K, V>,
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+    M: Index<K, V>,
 {
     name: String,
     mem: M,
@@ -24,8 +25,8 @@ where
 
 impl<K, V, M> Bogn<K, V, M>
 where
-    K: Clone + Ord,
-    V: Clone + Diff,
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
     M: Index<K, V> + Reader<K, V> + Writer<K, V>,
 {
     /// Create bogn index in ``mem-only`` mode. Memory only indexes are
@@ -47,8 +48,8 @@ where
 
 impl<K, V, M> Bogn<K, V, M>
 where
-    K: Clone + Ord,
-    V: Clone + Diff,
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
     M: Index<K, V> + Reader<K, V> + Writer<K, V>,
 {
     pub fn to_name(&self) -> String {
@@ -66,9 +67,9 @@ where
 
 impl<K, V, M> Bogn<K, V, M>
 where
-    K: Clone + Ord,
-    V: Clone + Diff,
-    M: Index<K, V> + Reader<K, V> + Writer<K, V>,
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+    M: Index<K, V> + Reader<K, V>,
 {
     /// Get ``key`` from index.
     pub fn get<Q>(&self, key: &Q) -> Result<Entry<K, V>>
@@ -107,14 +108,14 @@ where
 
 impl<K, V, M> Bogn<K, V, M>
 where
-    K: Clone + Ord,
-    V: Clone + Diff,
-    M: Index<K, V> + Reader<K, V> + Writer<K, V>,
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+    M: Index<K, V> + Writer<K, V>,
 {
     /// Set {key, value} in index. Return older entry if present.
     pub fn set(&mut self, key: K, value: V) -> Result<Option<Entry<K, V>>> {
         let (seqno, entry) = self.mem.set_index(key, value, self.seqno + 1);
-        self.seqno = cmp::max(seqno, self.seqno);
+        self.seqno = seqno.unwrap_or(self.seqno);
         entry
     }
 
@@ -124,7 +125,7 @@ where
     pub fn set_cas(&mut self, key: K, value: V, cas: u64) -> Result<Option<Entry<K, V>>> {
         let seqno = self.seqno + 1;
         let (seqno, entry) = self.mem.set_cas_index(key, value, cas, seqno);
-        self.seqno = cmp::max(seqno, self.seqno);
+        self.seqno = seqno.unwrap_or(self.seqno);
         entry
     }
 
@@ -135,7 +136,7 @@ where
         Q: ToOwned<Owned = K> + Ord + ?Sized,
     {
         let (seqno, entry) = self.mem.delete_index(key, self.seqno + 1);
-        self.seqno = cmp::max(seqno, self.seqno);
+        self.seqno = seqno.unwrap_or(self.seqno);
         entry
     }
 }

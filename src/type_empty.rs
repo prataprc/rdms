@@ -1,4 +1,4 @@
-use crate::core::{Diff, Serialize};
+use crate::core::{Diff, Footprint, Serialize};
 use crate::error::Error;
 
 /// Empty value, can be used for indexing entries that have a
@@ -27,5 +27,11 @@ impl Serialize for Empty {
 
     fn decode(&mut self, _buf: &[u8]) -> Result<usize, Error> {
         Ok(0)
+    }
+}
+
+impl Footprint for Empty {
+    fn footprint(&self) -> usize {
+        0
     }
 }

@@ -1,4 +1,4 @@
-use crate::core::{Diff, Serialize};
+use crate::core::{Diff, Footprint, Serialize};
 use crate::error::Error;
 
 impl Diff for i32 {
@@ -32,5 +32,11 @@ impl Serialize for i32 {
         } else {
             Err(Error::DecodeFail(format!("i32 encoded len {}", buf.len())))
         }
+    }
+}
+
+impl Footprint for i32 {
+    fn footprint(&self) -> usize {
+        0
     }
 }

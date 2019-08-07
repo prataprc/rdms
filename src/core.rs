@@ -1,7 +1,7 @@
 use std::borrow::Borrow;
-use std::fs;
 use std::ops::{Bound, RangeBounds};
 use std::sync::Arc;
+use std::{fs, mem};
 
 use crate::error::Error;
 use crate::vlog;
@@ -13,10 +13,10 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub type IndexIter<'a, K, V> = Box<dyn Iterator<Item = Result<Entry<K, V>>> + 'a>;
 
 /// Index operations.
-pub trait Index<K, V>: Sized
+pub trait Index<K, V>: Sized + Footprint
 where
-    K: Clone + Ord,
-    V: Clone + Diff,
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
 {
     type W: Writer<K, V>;
 
@@ -111,8 +111,8 @@ where
 /// Index write operations.
 pub trait Writer<K, V>
 where
-    K: Clone + Ord,
-    V: Clone + Diff,
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
 {
     /// Set {key, value} in index. Return older entry if present.
     fn set_index(
@@ -120,7 +120,7 @@ where
         key: K,
         value: V,
         index: u64, // seqno for this mutation
-    ) -> (u64, Result<Option<Entry<K, V>>>);
+    ) -> (Option<u64>, Result<Option<Entry<K, V>>>);
 
     /// Set {key, value} in index if an older entry exists with the
     /// same ``cas`` value. To create a fresh entry, pass ``cas`` as ZERO.
@@ -133,7 +133,7 @@ where
         value: V,
         cas: u64,
         index: u64,
-    ) -> (u64, Result<Option<Entry<K, V>>>);
+    ) -> (Option<u64>, Result<Option<Entry<K, V>>>);
 
     /// Delete key from DB. Return the seqno (index) for this mutation
     /// and entry if present. If operation was invalid or NOOP, returned
@@ -142,7 +142,7 @@ where
         &mut self,
         key: &Q,
         index: u64, // seqno for this mutation
-    ) -> (u64, Result<Option<Entry<K, V>>>)
+    ) -> (Option<u64>, Result<Option<Entry<K, V>>>)
     where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized;
@@ -183,7 +183,7 @@ where
 /// D = N - O (diff operation)
 /// O = N - D (merge operation, to get old value)
 pub trait Diff: Sized {
-    type D: Clone + From<Self> + Into<Self> + Send + Sync;
+    type D: Clone + From<Self> + Into<Self> + Footprint;
 
     /// Return the delta between two version of value.
     /// D = N - O
@@ -203,6 +203,14 @@ pub trait Serialize: Sized {
     /// Reverse process of encode, given the binary equivalent, `buf`,
     /// of a value, construct self.
     fn decode(&mut self, buf: &[u8]) -> Result<usize>;
+}
+
+/// To be implemented by index-types, key-types and value-types. This
+/// trait it meant to compute the memory or disk foot-print for index types
+/// and memory-footprint for key/value types.
+/// Note: This can be an approximate measure.
+pub trait Footprint {
+    fn footprint(&self) -> usize;
 }
 
 /// Delta maintains the older version of value, with necessary fields for
@@ -313,6 +321,15 @@ where
             InnerDelta::D { seqno } => (false, *seqno),
         }
     }
+
+    pub(crate) fn footprint(&self) -> usize {
+        let mut footprint = mem::size_of::<Delta<V>>();
+        footprint += match &self.data {
+            InnerDelta::U { delta, .. } => delta.diff_footprint(),
+            InnerDelta::D { .. } => 0,
+        };
+        footprint
+    }
 }
 
 #[derive(Clone)]
@@ -370,6 +387,20 @@ where
             } => true,
             _ => false,
         }
+    }
+}
+
+impl<V> Value<V>
+where
+    V: Clone + Diff + Footprint,
+{
+    pub(crate) fn footprint(&self) -> usize {
+        let mut footprint = mem::size_of::<Value<V>>();
+        footprint += match self {
+            Value::U { value, .. } => value.value_footprint(),
+            Value::D { .. } => 0,
+        };
+        footprint
     }
 }
 
@@ -602,6 +633,7 @@ where
         } else {
             unreachable!()
         };
+
         // TODO remove this validation logic once bogn is fully stable.
         a.validate_lsm_merge(&b);
         for ne in a.versions().collect::<Vec<Entry<K, V>>>().into_iter().rev() {
@@ -687,6 +719,12 @@ where
         &self.value
     }
 
+    /// Return the previous versions of this entry as Deltas.
+    #[inline]
+    pub(crate) fn to_deltas(&self) -> Vec<Delta<V>> {
+        self.deltas.clone()
+    }
+
     /// Return ownership of key.
     #[inline]
     pub fn to_key(&self) -> K {
@@ -729,11 +767,21 @@ where
     pub fn is_deleted(&self) -> bool {
         self.value.is_deleted()
     }
+}
 
+impl<K, V> Entry<K, V>
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+{
     /// Return the previous versions of this entry as Deltas.
-    #[inline]
-    pub(crate) fn to_deltas(&self) -> Vec<Delta<V>> {
-        self.deltas.clone()
+    pub fn footprint(&self) -> usize {
+        let mut footprint = mem::size_of::<Entry<K, V>>();
+        footprint += self.value.footprint();
+        for delta in self.deltas.iter() {
+            footprint += delta.footprint();
+        }
+        footprint
     }
 }
 

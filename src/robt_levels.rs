@@ -1,7 +1,7 @@
 use std::sync::{atomic::AtomicPtr, atomic::Ordering, mpsc, Arc};
 use std::{marker, mem, thread};
 
-use crate::core::{Diff, Index, Result, Serialize};
+use crate::core::{Diff, Footprint, Index, Result, Serialize};
 use crate::error::Error;
 use crate::robt_config::Config;
 use crate::robt_snap::Snapshot;
@@ -35,8 +35,8 @@ where
 
 pub(crate) struct Robts<K, V, M>
 where
-    K: 'static + Sync + Send + Clone + Ord + Serialize,
-    V: 'static + Sync + Send + Clone + Diff + Serialize,
+    K: 'static + Sync + Send + Clone + Ord + Serialize + Footprint,
+    V: 'static + Sync + Send + Clone + Diff + Serialize + Footprint,
     <V as Diff>::D: Serialize,
     M: 'static + Sync + Send + Index<K, V>,
 {
@@ -51,8 +51,8 @@ where
 // new instance of multi-level Robt indexes.
 impl<K, V, M> Robts<K, V, M>
 where
-    K: 'static + Sync + Send + Clone + Ord + Serialize,
-    V: 'static + Sync + Send + Clone + Diff + Serialize,
+    K: 'static + Sync + Send + Clone + Ord + Serialize + Footprint,
+    V: 'static + Sync + Send + Clone + Diff + Serialize + Footprint,
     <V as Diff>::D: Serialize,
     M: 'static + Sync + Send + Index<K, V>,
 {
@@ -84,8 +84,8 @@ where
 // add new levels.
 impl<K, V, M> Robts<K, V, M>
 where
-    K: 'static + Sync + Send + Clone + Ord + Serialize,
-    V: 'static + Sync + Send + Clone + Diff + Serialize,
+    K: 'static + Sync + Send + Clone + Ord + Serialize + Footprint,
+    V: 'static + Sync + Send + Clone + Diff + Serialize + Footprint,
     <V as Diff>::D: Serialize,
     M: 'static + Sync + Send + Index<K, V>,
 {
@@ -106,8 +106,8 @@ where
 
 enum Request<K, V, M>
 where
-    K: 'static + Sync + Send + Clone + Ord + Serialize,
-    V: 'static + Sync + Send + Clone + Diff + Serialize,
+    K: 'static + Sync + Send + Clone + Ord + Serialize + Footprint,
+    V: 'static + Sync + Send + Clone + Diff + Serialize + Footprint,
     <V as Diff>::D: Serialize,
     M: 'static + Sync + Send + Index<K, V>,
 {
@@ -125,8 +125,8 @@ enum Response {
 
 struct MemToDisk<K, V, M>
 where
-    K: 'static + Sync + Send + Clone + Ord + Serialize,
-    V: 'static + Sync + Send + Clone + Diff + Serialize,
+    K: 'static + Sync + Send + Clone + Ord + Serialize + Footprint,
+    V: 'static + Sync + Send + Clone + Diff + Serialize + Footprint,
     <V as Diff>::D: Serialize,
     M: 'static + Sync + Send + Index<K, V>,
 {
@@ -137,8 +137,8 @@ where
 
 impl<K, V, M> MemToDisk<K, V, M>
 where
-    K: 'static + Sync + Send + Clone + Ord + Serialize,
-    V: 'static + Sync + Send + Clone + Diff + Serialize,
+    K: 'static + Sync + Send + Clone + Ord + Serialize + Footprint,
+    V: 'static + Sync + Send + Clone + Diff + Serialize + Footprint,
     <V as Diff>::D: Serialize,
     M: 'static + Sync + Send + Index<K, V>,
 {
@@ -172,8 +172,8 @@ fn thread_mem_to_disk<K, V, M>(
     _rx: mpsc::Receiver<(Request<K, V, M>, mpsc::SyncSender<Response>)>,
 ) -> Result<()>
 where
-    K: 'static + Sync + Send + Clone + Ord + Serialize,
-    V: 'static + Sync + Send + Clone + Diff + Serialize,
+    K: 'static + Sync + Send + Clone + Ord + Serialize + Footprint,
+    V: 'static + Sync + Send + Clone + Diff + Serialize + Footprint,
     <V as Diff>::D: Serialize,
     M: 'static + Sync + Send + Index<K, V>,
 {
@@ -183,8 +183,8 @@ where
 
 struct DiskCompact<K, V, M>
 where
-    K: 'static + Sync + Send + Clone + Ord + Serialize,
-    V: 'static + Sync + Send + Clone + Diff + Serialize,
+    K: 'static + Sync + Send + Clone + Ord + Serialize + Footprint,
+    V: 'static + Sync + Send + Clone + Diff + Serialize + Footprint,
     <V as Diff>::D: Serialize,
     M: 'static + Sync + Send + Index<K, V>,
 {
@@ -195,8 +195,8 @@ where
 
 impl<K, V, M> DiskCompact<K, V, M>
 where
-    K: 'static + Sync + Send + Clone + Ord + Serialize,
-    V: 'static + Sync + Send + Clone + Diff + Serialize,
+    K: 'static + Sync + Send + Clone + Ord + Serialize + Footprint,
+    V: 'static + Sync + Send + Clone + Diff + Serialize + Footprint,
     <V as Diff>::D: Serialize,
     M: 'static + Sync + Send + Index<K, V>,
 {
@@ -230,8 +230,8 @@ fn thread_disk_compact<K, V, M>(
     _rx: mpsc::Receiver<(Request<K, V, M>, mpsc::SyncSender<Response>)>,
 ) -> Result<()>
 where
-    K: 'static + Sync + Send + Clone + Ord + Serialize,
-    V: 'static + Sync + Send + Clone + Diff + Serialize,
+    K: 'static + Sync + Send + Clone + Ord + Serialize + Footprint,
+    V: 'static + Sync + Send + Clone + Diff + Serialize + Footprint,
     <V as Diff>::D: Serialize,
     M: 'static + Sync + Send + Index<K, V>,
 {

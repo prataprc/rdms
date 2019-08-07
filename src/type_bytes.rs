@@ -1,6 +1,6 @@
 use std::convert::TryInto;
 
-use crate::core::{Diff, Serialize};
+use crate::core::{Diff, Footprint, Serialize};
 use crate::error::Error;
 
 impl Diff for Vec<u8> {
@@ -47,5 +47,11 @@ impl Serialize for Vec<u8> {
         self.resize(len, 0);
         self.copy_from_slice(&buf[4..len + 4]);
         Ok(len + 4)
+    }
+}
+
+impl Footprint for Vec<u8> {
+    fn footprint(&self) -> usize {
+        self.capacity()
     }
 }

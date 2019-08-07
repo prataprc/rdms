@@ -1,7 +1,7 @@
 use std::convert::TryInto;
 use std::{fs, mem};
 
-use crate::core::{self, Diff, Result, Serialize};
+use crate::core::{self, Diff, Footprint, Result, Serialize};
 use crate::error::Error;
 use crate::util;
 
@@ -49,6 +49,18 @@ where
         match self {
             Value::Native { value } => Some(value.clone()),
             _ => None,
+        }
+    }
+}
+
+impl<V> Value<V>
+where
+    V: Clone + Footprint,
+{
+    pub(crate) fn value_footprint(&self) -> usize {
+        match self {
+            Value::Native { value } => value.footprint(),
+            Value::Reference { .. } => 0,
         }
     }
 }
@@ -143,6 +155,13 @@ where
         match self {
             Delta::Native { diff } => Some(diff),
             _ => None,
+        }
+    }
+
+    pub(crate) fn diff_footprint(&self) -> usize {
+        match self {
+            Delta::Native { diff } => diff.footprint(),
+            Delta::Reference { .. } => 0,
         }
     }
 }

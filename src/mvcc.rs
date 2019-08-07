@@ -15,7 +15,7 @@ use std::{
     },
 };
 
-use crate::core::{Diff, Entry, Result, Value};
+use crate::core::{Diff, Entry, Footprint, Result, Value};
 use crate::core::{FullScan, Index, IndexIter, Reader, Writer};
 use crate::error::Error;
 use crate::llrb::Llrb;
@@ -105,10 +105,17 @@ where
             Mvcc::new(llrb_index.to_name())
         };
 
-        let (root, seqno, n_count) = llrb_index.squash();
-        mvcc_index
-            .snapshot
-            .shift_snapshot(root, seqno, n_count, vec![] /*reclaim*/);
+        let debris = llrb_index.squash();
+        // TODO
+        //mvcc_index.key_footprint = debris.key_footprint;
+        //mvcc_index.val_footprint = debris.val_footprint;
+
+        mvcc_index.snapshot.shift_snapshot(
+            debris.root,
+            debris.seqno,
+            debris.n_count,
+            vec![], /*reclaim*/
+        );
         mvcc_index
     }
 }
@@ -187,8 +194,8 @@ where
 
 impl<K, V> Index<K, V> for Mvcc<K, V>
 where
-    K: Clone + Ord,
-    V: Clone + Diff,
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
 {
     type W = MvccWriter<K, V>;
 
@@ -210,11 +217,22 @@ where
     }
 }
 
-/// Create/Update/Delete operations on Mvcc instance.
-impl<K, V> Mvcc<K, V>
+impl<K, V> Footprint for Mvcc<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff,
+{
+    fn footprint(&self) -> usize {
+        // TBD
+        0
+    }
+}
+
+/// Create/Update/Delete operations on Mvcc instance.
+impl<K, V> Mvcc<K, V>
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
 {
     pub fn set(&mut self, key: K, value: V) -> Result<Option<Entry<K, V>>> {
         let index = unsafe { Arc::from_raw(self as *const Mvcc<K, V>) };
@@ -1043,15 +1061,15 @@ where
 
 impl<K, V> Writer<K, V> for MvccWriter<K, V>
 where
-    K: Clone + Ord,
-    V: Clone + Diff,
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
 {
     fn set_index(
         &mut self,
         key: K,
         value: V,
         seqno: u64, // seqno for this mutation
-    ) -> (u64, Result<Option<Entry<K, V>>>) {
+    ) -> (Option<u64>, Result<Option<Entry<K, V>>>) {
         let index = self.get_index();
         let lsm = index.lsm;
         let snapshot = Snapshot::clone(&index.snapshot);
@@ -1073,7 +1091,7 @@ where
                 index
                     .snapshot
                     .shift_snapshot(Some(root), seqno, n_count, reclm);
-                (seqno, Ok(entry))
+                (Some(seqno), Ok(entry))
             }
             _ => unreachable!(),
         }
@@ -1085,7 +1103,7 @@ where
         value: V,
         cas: u64,
         mut seqno: u64, // seqno for this mutation
-    ) -> (u64, Result<Option<Entry<K, V>>>) {
+    ) -> (Option<u64>, Result<Option<Entry<K, V>>>) {
         let index = self.get_index();
         let lsm = index.lsm;
         let snapshot = Snapshot::clone(&index.snapshot);
@@ -1121,14 +1139,14 @@ where
             n.dirty = false;
             Box::leak(n);
         }
-        (seqno, entry)
+        (Some(seqno), entry)
     }
 
     fn delete_index<Q>(
         &mut self,
         key: &Q,
         mut seqno: u64, // seqno for this mutation
-    ) -> (u64, Result<Option<Entry<K, V>>>)
+    ) -> (Option<u64>, Result<Option<Entry<K, V>>>)
     where
         // TODO: From<Q> and Clone will fail if V=String and Q=str
         K: Borrow<Q>,
@@ -1184,7 +1202,7 @@ where
         };
 
         index.snapshot.shift_snapshot(root, seqno, n_count, reclm);
-        (seqno, Ok(entry))
+        (Some(seqno), Ok(entry))
     }
 }
 

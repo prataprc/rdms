@@ -1,4 +1,5 @@
 use std::borrow::Borrow;
+use std::convert::TryInto;
 use std::ops::{Bound, RangeBounds};
 use std::sync::Arc;
 use std::{fs, mem};
@@ -447,49 +448,55 @@ where
 impl<K, V> Entry<K, V>
 where
     K: Clone + Ord,
-    V: Clone + Diff,
+    V: Clone + Diff + Footprint,
 {
     // Prepend a new version, also the latest version, for this entry.
     // In non-lsm mode this is equivalent to over-writing previous value.
-    pub(crate) fn prepend_version(&mut self, new_entry: Self, lsm: bool) {
+    pub(crate) fn prepend_version(&mut self, nentry: Self, lsm: bool) -> isize {
         if lsm {
-            self.prepend_version_lsm(new_entry)
+            self.prepend_version_lsm(nentry)
         } else {
-            self.prepend_version_nolsm(new_entry)
+            self.prepend_version_nolsm(nentry)
         }
     }
 
-    fn prepend_version_nolsm(&mut self, new_entry: Self) {
-        self.value = new_entry.value.clone();
+    fn prepend_version_nolsm(&mut self, nentry: Self) -> isize {
+        let size = self.value.footprint();
+        self.value = nentry.value.clone();
+        (self.value.footprint() - size).try_into().unwrap()
     }
 
-    fn prepend_version_lsm(&mut self, new_entry: Self) {
-        match self.value.as_ref() {
-            Value::D { seqno } => {
-                self.deltas.insert(0, Delta::new_delete(*seqno));
-            }
+    fn prepend_version_lsm(&mut self, nentry: Self) -> isize {
+        let delta = match self.value.as_ref() {
+            Value::D { seqno } => Delta::new_delete(*seqno),
             Value::U {
                 value: vlog::Value::Native { value },
                 seqno,
             } => {
-                let delta = {
-                    let d = new_entry.to_native_value().unwrap().diff(value);
-                    vlog::Delta::new_native(d)
-                };
-                self.deltas.insert(0, Delta::new_upsert(delta, *seqno));
+                let d = nentry.to_native_value().unwrap().diff(value);
+                let nd = vlog::Delta::new_native(d);
+                Delta::new_upsert(nd, *seqno)
             }
             Value::U {
                 value: vlog::Value::Reference { .. },
                 ..
             } => unreachable!(),
-        }
-        self.prepend_version_nolsm(new_entry)
+        };
+
+        let size = {
+            let size = nentry.value.footprint() + delta.footprint();
+            size - self.value.footprint()
+        };
+
+        self.deltas.insert(0, delta);
+        self.prepend_version_nolsm(nentry);
+        size.try_into().unwrap()
     }
 
     // only lsm, if entry is already deleted this call becomes a no-op.
-    pub(crate) fn delete(&mut self, seqno: u64) {
-        match self.value.as_ref() {
-            Value::D { .. } => (), // NOOP
+    pub(crate) fn delete(&mut self, seqno: u64) -> isize {
+        let delta_size = match self.value.as_ref() {
+            Value::D { .. } => 0, // NOOP
             Value::U {
                 value: vlog::Value::Native { value },
                 seqno,
@@ -498,16 +505,28 @@ where
                     let d: <V as Diff>::D = From::from(value.clone());
                     vlog::Delta::new_native(d)
                 };
+                let size = delta.diff_footprint();
                 self.deltas.insert(0, Delta::new_upsert(delta, *seqno));
+                size
             }
             Value::U {
                 value: vlog::Value::Reference { .. },
                 ..
             } => unreachable!(),
-        }
+        };
+        let size = self.value.footprint();
         *self.value = Value::D { seqno };
+        (size + delta_size - self.value.footprint())
+            .try_into()
+            .unwrap()
     }
+}
 
+impl<K, V> Entry<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
     // purge all versions whose seqno < or <= ``cutoff``.
     pub(crate) fn purge(mut self, cutoff: Bound<u64>) -> Option<Entry<K, V>> {
         let e = self.to_seqno();
@@ -617,13 +636,13 @@ where
 impl<K, V> Entry<K, V>
 where
     K: Clone + Ord,
-    V: Clone + Diff + From<<V as Diff>::D>,
+    V: Clone + Diff + From<<V as Diff>::D> + Footprint,
 {
     // Merge two version chain for same entry. This can happen between
     // two entries from memory-index and disk-index, or disk-index and
     // disk-index. In either case it is expected that all versions of
     // one entry shall either be greater than all versions of the other entry.
-    pub(crate) fn lsm_merge(self, entry: Entry<K, V>) -> Entry<K, V> {
+    pub(crate) fn flush_merge(self, entry: Entry<K, V>) -> Entry<K, V> {
         // `a` is newer than `b`, and all versions in a and b are mutually
         // exclusive in seqno ordering.
         let (a, mut b) = if self.to_seqno() > entry.to_seqno() {
@@ -635,7 +654,7 @@ where
         };
 
         // TODO remove this validation logic once bogn is fully stable.
-        a.validate_lsm_merge(&b);
+        a.validate_flush_merge(&b);
         for ne in a.versions().collect::<Vec<Entry<K, V>>>().into_iter().rev() {
             b.prepend_version(ne, true /* lsm */);
         }
@@ -643,7 +662,7 @@ where
     }
 
     // `self` is newer than `entr`
-    fn validate_lsm_merge(&self, entr: &Entry<K, V>) {
+    fn validate_flush_merge(&self, entr: &Entry<K, V>) {
         // validate ordering
         let mut seqnos = vec![self.to_seqno()];
         self.deltas.iter().for_each(|d| seqnos.push(d.to_seqno()));

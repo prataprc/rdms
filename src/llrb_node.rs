@@ -1,6 +1,7 @@
+use std::mem;
 use std::ops::Deref;
 
-use crate::core::{Diff, Entry, Value};
+use crate::core::{Diff, Entry, Footprint, Value};
 #[allow(unused_imports)]
 use crate::llrb::Llrb;
 
@@ -24,6 +25,10 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
+    pub(crate) fn overhead() -> usize {
+        mem::size_of::<Node<K, V>>() - mem::size_of::<Entry<K, V>>()
+    }
+
     // lsm delete.
     pub(crate) fn new_deleted(key: K, deleted: u64) -> Box<Node<K, V>> {
         let node = Box::new(Node {
@@ -81,16 +86,21 @@ where
 impl<K, V> Node<K, V>
 where
     K: Clone + Ord,
-    V: Clone + Diff,
+    V: Clone + Diff + Footprint,
 {
     // prepend operation, equivalent to SET / INSERT / UPDATE
-    pub(crate) fn prepend_version(&mut self, entry: Entry<K, V>, lsm: bool) {
+    // return the different in footprint for this node
+    pub(crate) fn prepend_version(
+        &mut self,
+        entry: Entry<K, V>,
+        lsm: bool, /* will preseve old mutations*/
+    ) -> isize {
         self.entry.prepend_version(entry, lsm)
     }
 
     // DELETE operation, back to back delete shall collapse
     #[inline]
-    pub(crate) fn delete(&mut self, seqno: u64) {
+    pub(crate) fn delete(&mut self, seqno: u64) -> isize {
         self.entry.delete(seqno)
     }
 

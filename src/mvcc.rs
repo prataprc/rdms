@@ -270,8 +270,8 @@ where
 /// Create/Update/Delete operations on Mvcc instance.
 impl<K, V> Mvcc<K, V>
 where
-    K: Clone + Ord,
-    V: Clone + Diff,
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
 {
     fn upsert(
         node: Option<Box<Node<K, V>>>,
@@ -733,8 +733,8 @@ where
 
 impl<K, V> Mvcc<K, V>
 where
-    K: Clone + Ord,
-    V: Clone + Diff,
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
 {
     ////--------- rotation routines for 2-3 algorithm ----------------
 

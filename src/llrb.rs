@@ -44,7 +44,7 @@ where
     latch: RWSpinlock,
     writers: AtomicU8,
     key_footprint: usize,
-    val_footprint: usize,
+    entry_footprint: usize,
 }
 
 impl<K, V> Clone for Llrb<K, V>
@@ -63,7 +63,7 @@ where
             latch: RWSpinlock::new(),
             writers: AtomicU8::new(0),
             key_footprint: self.key_footprint,
-            val_footprint: self.key_footprint,
+            entry_footprint: self.entry_footprint,
         }
     }
 }
@@ -87,7 +87,7 @@ where
     pub(crate) seqno: u64,
     pub(crate) n_count: usize,
     pub(crate) key_footprint: usize,
-    pub(crate) val_footprint: usize,
+    pub(crate) entry_footprint: usize,
 }
 
 /// Different ways to construct a new Llrb index.
@@ -109,7 +109,7 @@ where
             latch: RWSpinlock::new(),
             writers: AtomicU8::new(0),
             key_footprint: Default::default(),
-            val_footprint: Default::default(),
+            entry_footprint: Default::default(),
         }
     }
 
@@ -131,7 +131,7 @@ where
             latch: RWSpinlock::new(),
             writers: AtomicU8::new(0),
             key_footprint: Default::default(),
-            val_footprint: Default::default(),
+            entry_footprint: Default::default(),
         }
     }
 
@@ -148,7 +148,7 @@ where
             seqno: self.seqno,
             n_count: self.n_count,
             key_footprint: self.key_footprint,
-            val_footprint: self.val_footprint,
+            entry_footprint: self.entry_footprint,
         }
     }
 
@@ -163,7 +163,7 @@ where
             latch: RWSpinlock::new(),
             writers: AtomicU8::new(0),
             key_footprint: Default::default(),
-            val_footprint: Default::default(),
+            entry_footprint: Default::default(),
         }
     }
 }
@@ -239,8 +239,8 @@ where
     V: Clone + Diff,
 {
     fn footprint(&self) -> usize {
-        let footprint = self.key_footprint + self.val_footprint;
-        footprint + (mem::size_of::<Node<K, V>>() * self.n_count)
+        let footprint = self.key_footprint + self.entry_footprint;
+        footprint + (Node::<K, V>::overhead() * self.n_count)
     }
 }
 
@@ -304,8 +304,8 @@ where
 /// Create/Update/Delete operations on Llrb index.
 impl<K, V> Llrb<K, V>
 where
-    K: Clone + Ord,
-    V: Clone + Diff,
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
 {
     fn upsert(
         node: Option<Box<Node<K, V>>>,
@@ -700,8 +700,8 @@ where
 
 impl<K, V> Llrb<K, V>
 where
-    K: Clone + Ord,
-    V: Clone + Diff,
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
 {
     //--------- rotation routines for 2-3 algorithm ----------------
 

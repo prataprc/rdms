@@ -2,7 +2,7 @@ use std::ops::Bound;
 
 use rand::prelude::random;
 
-use crate::core::{Index, Reader, Writer};
+use crate::core::Reader;
 use crate::error::Error;
 use crate::mvcc::Mvcc;
 use crate::type_empty::Empty;

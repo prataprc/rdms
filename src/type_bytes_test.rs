@@ -1,4 +1,4 @@
-use crate::core::{Diff, Serialize};
+use crate::core::{Diff, Footprint, Serialize};
 
 #[test]
 fn test_diff() {
@@ -23,4 +23,13 @@ fn test_serialize() {
     let mut out = vec![];
     out.decode(&buf).expect("failed decode");
     assert_eq!(value, out);
+}
+
+#[test]
+fn test_footprint() {
+    let mut value: Vec<u8> = vec![];
+    assert_eq!(value.footprint(), 0);
+
+    value.extend_from_slice(&[10, 20, 30]);
+    assert_eq!(value.footprint(), 3);
 }

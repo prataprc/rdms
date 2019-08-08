@@ -96,3 +96,5 @@ mod type_i32_test;
 mod type_i64_test;
 #[cfg(test)]
 mod util_test;
+#[cfg(test)]
+mod vlog_test;

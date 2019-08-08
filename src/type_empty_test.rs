@@ -1,4 +1,4 @@
-use crate::core::{Diff, Serialize};
+use crate::core::{Diff, Footprint, Serialize};
 use crate::type_empty::Empty;
 
 #[test]
@@ -20,4 +20,10 @@ fn test_serialize() {
     let mut out = Empty;
     out.decode(&buf).expect("failed decode");
     assert_eq!(value, out);
+}
+
+#[test]
+fn test_footprint() {
+    let value = Empty;
+    assert_eq!(value.footprint(), 0);
 }

@@ -180,7 +180,7 @@ where
                             m.reset();
                             m.insertz(c.z.as_first_key(), c.zfpos).unwrap();
                         }
-                        _ => unreachable!(),
+                        Err(err) => return Err(err),
                     }
                     c.ms.push(m);
 
@@ -189,7 +189,7 @@ where
 
                     c.z.insert(&entry, &mut self.stats).unwrap();
                 }
-                _ => unreachable!(),
+                Err(err) => return Err(err),
             };
 
             self.postprocess(&mut entry);
@@ -216,7 +216,7 @@ where
                     m.reset();
                     m.insertz(c.z.as_first_key(), c.zfpos)?;
                 }
-                _ => unreachable!(),
+                Err(err) => return Err(err),
             }
             c.ms.push(m);
         }
@@ -264,7 +264,7 @@ where
                     m0.insertm(key, mfpos).unwrap();
                     m0
                 }
-                _ => unreachable!(),
+                Err(err) => return Err(err),
             },
         };
         ms.push(m0);

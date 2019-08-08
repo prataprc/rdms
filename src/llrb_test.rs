@@ -1,10 +1,10 @@
 // TODO: write test case for iter_within for Llrb and Mvcc index.
 
-use std::ops::{self, Bound};
+use std::ops::Bound;
 
 use rand::prelude::random;
 
-use crate::core::{Index, Reader, Writer};
+use crate::core::Reader;
 use crate::error::Error;
 use crate::llrb::Llrb;
 use crate::type_empty::Empty;
@@ -322,69 +322,70 @@ fn test_range() {
     }
 }
 
-#[test]
-fn test_range_str() {
-    let mut llrb: Llrb<&str, i64> = Llrb::new("test-llrb");
-
-    assert!(llrb.set("key1", 10).unwrap().is_none());
-    assert!(llrb.set("key2", 11).unwrap().is_none());
-    assert!(llrb.set("key3", 12).unwrap().is_none());
-    assert!(llrb.set("key4", 13).unwrap().is_none());
-    assert!(llrb.set("key5", 14).unwrap().is_none());
-
-    assert_eq!(llrb.len(), 5);
-    assert!(llrb.validate().is_ok());
-
-    let r = ops::RangeInclusive::new("key2", "key4");
-    let mut iter = llrb.range(r).unwrap();
-    let entry = iter
-        .next()
-        .transpose()
-        .unwrap()
-        .expect("expected entry for key2");
-    assert_eq!(entry.to_key(), "key2");
-    assert_eq!(entry.to_native_value().unwrap(), 11);
-    let entry = iter
-        .next()
-        .transpose()
-        .unwrap()
-        .expect("expected entry for key3");
-    assert_eq!(entry.to_key(), "key3");
-    assert_eq!(entry.to_native_value().unwrap(), 12);
-    let entry = iter
-        .next()
-        .transpose()
-        .unwrap()
-        .expect("expected entry for key4");
-    assert_eq!(entry.to_key(), "key4");
-    assert_eq!(entry.to_native_value().unwrap(), 13);
-    assert!(iter.next().is_none());
-
-    let r = ops::RangeInclusive::new("key2", "key4");
-    let mut iter = llrb.reverse(r).unwrap();
-    let entry = iter
-        .next()
-        .transpose()
-        .unwrap()
-        .expect("expected entry for key4");
-    assert_eq!(entry.to_key(), "key4");
-    assert_eq!(entry.to_native_value().unwrap(), 13);
-    let entry = iter
-        .next()
-        .transpose()
-        .unwrap()
-        .expect("expected entry for key3");
-    assert_eq!(entry.to_key(), "key3");
-    assert_eq!(entry.to_native_value().unwrap(), 12);
-    let entry = iter
-        .next()
-        .transpose()
-        .unwrap()
-        .expect("expected entry for key2");
-    assert_eq!(entry.to_key(), "key2");
-    assert_eq!(entry.to_native_value().unwrap(), 11);
-    assert!(iter.next().is_none());
-}
+//TODO: enable this test case once type_str is implemented.
+//#[test]
+//fn test_range_str() {
+//    let mut llrb: Llrb<&str, i64> = Llrb::new("test-llrb");
+//
+//    assert!(llrb.set("key1", 10).unwrap().is_none());
+//    assert!(llrb.set("key2", 11).unwrap().is_none());
+//    assert!(llrb.set("key3", 12).unwrap().is_none());
+//    assert!(llrb.set("key4", 13).unwrap().is_none());
+//    assert!(llrb.set("key5", 14).unwrap().is_none());
+//
+//    assert_eq!(llrb.len(), 5);
+//    assert!(llrb.validate().is_ok());
+//
+//    let r = ops::RangeInclusive::new("key2", "key4");
+//    let mut iter = llrb.range(r).unwrap();
+//    let entry = iter
+//        .next()
+//        .transpose()
+//        .unwrap()
+//        .expect("expected entry for key2");
+//    assert_eq!(entry.to_key(), "key2");
+//    assert_eq!(entry.to_native_value().unwrap(), 11);
+//    let entry = iter
+//        .next()
+//        .transpose()
+//        .unwrap()
+//        .expect("expected entry for key3");
+//    assert_eq!(entry.to_key(), "key3");
+//    assert_eq!(entry.to_native_value().unwrap(), 12);
+//    let entry = iter
+//        .next()
+//        .transpose()
+//        .unwrap()
+//        .expect("expected entry for key4");
+//    assert_eq!(entry.to_key(), "key4");
+//    assert_eq!(entry.to_native_value().unwrap(), 13);
+//    assert!(iter.next().is_none());
+//
+//    let r = ops::RangeInclusive::new("key2", "key4");
+//    let mut iter = llrb.reverse(r).unwrap();
+//    let entry = iter
+//        .next()
+//        .transpose()
+//        .unwrap()
+//        .expect("expected entry for key4");
+//    assert_eq!(entry.to_key(), "key4");
+//    assert_eq!(entry.to_native_value().unwrap(), 13);
+//    let entry = iter
+//        .next()
+//        .transpose()
+//        .unwrap()
+//        .expect("expected entry for key3");
+//    assert_eq!(entry.to_key(), "key3");
+//    assert_eq!(entry.to_native_value().unwrap(), 12);
+//    let entry = iter
+//        .next()
+//        .transpose()
+//        .unwrap()
+//        .expect("expected entry for key2");
+//    assert_eq!(entry.to_key(), "key2");
+//    assert_eq!(entry.to_native_value().unwrap(), 11);
+//    assert!(iter.next().is_none());
+//}
 
 #[test]
 fn test_crud() {

@@ -1,4 +1,4 @@
-use crate::core::{Diff, Serialize};
+use crate::core::{Diff, Footprint, Serialize};
 
 #[test]
 fn test_diff() {
@@ -19,4 +19,10 @@ fn test_serialize() {
     let mut out: i32 = Default::default();
     out.decode(&buf).expect("failed decode");
     assert_eq!(value, out);
+}
+
+#[test]
+fn test_footprint() {
+    let value = 0_i32;
+    assert_eq!(value.footprint(), 0);
 }

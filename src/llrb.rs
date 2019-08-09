@@ -317,8 +317,18 @@ where
 {
     node: Option<Box<Node<K, V>>>,
     old_entry: Option<Entry<K, V>>,
-    size: isize, // differencen in footprint
+    size: isize, // difference in footprint
     err: Option<Error>,
+}
+
+struct DeleteResult<K, V>
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+{
+    node: Option<Box<Node<K, V>>>,
+    old_entry: Option<Entry<K, V>>,
+    size: isize, // difference in footprint
 }
 
 /// Create/Update/Delete operations on Llrb index.
@@ -444,8 +454,8 @@ where
     fn delete_lsm<Q>(
         node: Option<Box<Node<K, V>>>,
         key: &Q,
-        seqno: u64,
-    ) -> (Option<Box<Node<K, V>>>, Option<Entry<K, V>>)
+        seqno: u64, // seqno for this mutation
+    ) -> DeleteResult<K, V>
     where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
@@ -455,29 +465,42 @@ where
                 // insert and mark as delete
                 let mut node = Node::new_deleted(key.to_owned(), seqno);
                 node.dirty = false;
-                (Some(node), None)
+                let size: isize = node.footprint().try_into().unwrap();
+                DeleteResult {
+                    node: Some(node),
+                    old_entry: None,
+                    size,
+                }
             }
             Some(mut node) => {
                 node = Llrb::walkdown_rot23(node);
                 match node.as_key().borrow().cmp(&key) {
                     Ordering::Greater => {
                         let left = node.left.take();
-                        let (left, entry) = Llrb::delete_lsm(left, key, seqno);
-                        node.left = left;
-                        (Some(Llrb::walkuprot_23(node)), entry)
+                        let mut r = Llrb::delete_lsm(left, key, seqno);
+                        node.left = r.node;
+                        r.node = Some(Llrb::walkuprot_23(node));
+                        r
                     }
                     Ordering::Less => {
                         let right = node.right.take();
-                        let (right, entry) = Llrb::delete_lsm(right, key, seqno);
-                        node.right = right;
-                        (Some(Llrb::walkuprot_23(node)), entry)
+                        let mut r = Llrb::delete_lsm(right, key, seqno);
+                        node.right = r.node;
+                        r.node = Some(Llrb::walkuprot_23(node));
+                        r
                     }
                     Ordering::Equal => {
                         let entry = node.entry.clone();
-                        if !node.is_deleted() {
-                            node.delete(seqno);
+                        let size = if !node.is_deleted() {
+                            node.delete(seqno)
+                        } else {
+                            0
+                        };
+                        DeleteResult {
+                            node: Some(Llrb::walkuprot_23(node)),
+                            old_entry: Some(entry),
+                            size,
                         }
-                        (Some(Llrb::walkuprot_23(node)), Some(entry))
                     }
                 }
             }
@@ -485,30 +508,38 @@ where
     }
 
     // this is the non-lsm path.
-    fn do_delete<Q>(
-        node: Option<Box<Node<K, V>>>,
-        key: &Q,
-    ) -> (Option<Box<Node<K, V>>>, Option<Entry<K, V>>)
+    fn do_delete<Q>(node: Option<Box<Node<K, V>>>, key: &Q) -> DeleteResult<K, V>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
         let mut node = match node {
-            None => return (None, None),
+            None => {
+                return DeleteResult {
+                    node: None,
+                    old_entry: None,
+                    size: 0,
+                }
+            }
             Some(node) => node,
         };
 
         if node.as_key().borrow().gt(key) {
             if node.left.is_none() {
-                (Some(node), None)
+                DeleteResult {
+                    node: Some(node),
+                    old_entry: None,
+                    size: 0,
+                }
             } else {
                 let ok = !is_red(node.as_left_deref());
                 if ok && !is_red(node.left.as_ref().unwrap().as_left_deref()) {
                     node = Llrb::move_red_left(node);
                 }
-                let (left, entry) = Llrb::do_delete(node.left.take(), key);
-                node.left = left;
-                (Some(Llrb::fixup(node)), entry)
+                let mut r = Llrb::do_delete(node.left.take(), key);
+                node.left = r.node;
+                r.node = Some(Llrb::fixup(node));
+                r
             }
         } else {
             if is_red(node.as_left_deref()) {
@@ -516,7 +547,11 @@ where
             }
 
             if !node.as_key().borrow().lt(key) && node.right.is_none() {
-                return (None, Some(node.entry.clone()));
+                return DeleteResult {
+                    node: None,
+                    old_entry: Some(node.entry.clone()),
+                    size: node.footprint(),
+                };
             }
 
             let ok = node.right.is_some() && !is_red(node.as_right_deref());
@@ -537,11 +572,17 @@ where
                 newnode.right = node.right.take();
                 newnode.black = node.black;
                 newnode.dirty = false;
-                (Some(Llrb::fixup(newnode)), Some(node.entry.clone()))
+                let size: isize = node.footprint().try_into().unwrap();
+                DeleteResult {
+                    node: Some(Llrb::fixup(newnode)),
+                    old_entry: Some(node.entry.clone()),
+                    size,
+                }
             } else {
-                let (right, entry) = Llrb::do_delete(node.right.take(), key);
-                node.right = right;
-                (Some(Llrb::fixup(node)), entry)
+                let mut r = Llrb::do_delete(node.right.take(), key);
+                node.right = r.node;
+                r.node = Some(Llrb::fixup(node));
+                r
             }
         }
     }
@@ -997,18 +1038,25 @@ where
         let _latch = self.index.latch.acquire_write(self.index.spin);
         let index = self.get_index();
 
+        let key_footprint = key.to_owned().footprint();
+
         if index.lsm {
-            let (root, entry) = Llrb::delete_lsm(index.root.take(), key, seqno);
-            index.root = root;
+            let res = Llrb::delete_lsm(index.root.take(), key, seqno);
+            index.root = res.node;
             index.root.as_mut().map(|r| r.set_black());
 
-            return match entry {
+            return match res.old_entry {
                 None => {
+                    index.key_footprint += key_footprint;
+                    index.tree_footprint += res.size;
+
                     index.n_count += 1;
                     index.seqno = seqno;
                     (Some(seqno), Ok(None))
                 }
                 Some(entry) if !entry.is_deleted() => {
+                    index.tree_footprint += res.size;
+
                     index.seqno = seqno;
                     (Some(seqno), Ok(Some(entry)))
                 }
@@ -1016,20 +1064,23 @@ where
             };
         } else {
             // in non-lsm mode remove the entry from the tree.
-            let (root, entry) = match Llrb::do_delete(index.root.take(), key) {
-                (None, entry) => (None, entry),
-                (Some(mut root), entry) => {
-                    root.set_black();
-                    (Some(root), entry)
+            let res = match Llrb::do_delete(index.root.take(), key) {
+                res @ DeleteResult { node: None, .. } => res,
+                mut res => {
+                    res.node.as_mut().map(|node| node.set_black());
+                    res
                 }
             };
-            index.root = root;
-            if entry.is_some() {
+            index.root = res.node;
+            if res.old_entry.is_some() {
+                index.key_footprint -= key_footprint;
+                index.tree_footprint += res.size;
+
                 index.n_count -= 1;
                 index.seqno = seqno;
-                (Some(seqno), Ok(entry))
+                (Some(seqno), Ok(res.old_entry))
             } else {
-                (None, Ok(entry))
+                (None, Ok(res.old_entry))
             }
         }
     }

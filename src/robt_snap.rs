@@ -160,7 +160,7 @@ where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
 {
-    fn footprint(&self) -> usize {
+    fn footprint(&self) -> isize {
         let (dir, name) = (self.dir.as_str(), self.name.as_str());
         let mut footprint = fs::metadata(self.config.to_index_file(dir, name))
             .unwrap()

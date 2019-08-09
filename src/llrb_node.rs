@@ -25,10 +25,6 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    pub(crate) fn overhead() -> usize {
-        mem::size_of::<Node<K, V>>() - mem::size_of::<Entry<K, V>>()
-    }
-
     // lsm delete.
     pub(crate) fn new_deleted(key: K, deleted: u64) -> Box<Node<K, V>> {
         let node = Box::new(Node {
@@ -85,7 +81,7 @@ where
 // write/update methods
 impl<K, V> Node<K, V>
 where
-    K: Clone + Ord,
+    K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
 {
     // prepend operation, equivalent to SET / INSERT / UPDATE
@@ -117,6 +113,14 @@ where
     #[inline]
     pub(crate) fn toggle_link(&mut self) {
         self.black = !self.black
+    }
+
+    pub(crate) fn overhead() -> usize {
+        mem::size_of::<Node<K, V>>() - mem::size_of::<Entry<K, V>>()
+    }
+
+    pub(crate) fn footprint(&self) -> isize {
+        (Node::<K, V>::overhead() as isize) + self.entry.footprint()
     }
 }
 

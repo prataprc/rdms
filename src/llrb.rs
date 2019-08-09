@@ -3,10 +3,10 @@
 //! [llrb]: https://en.wikipedia.org/wiki/Left-leaning_red-black_tree
 use std::borrow::Borrow;
 use std::cmp::{Ord, Ordering};
+use std::convert::TryInto;
 use std::fmt::Debug;
 use std::ops::{Bound, Deref, DerefMut, RangeBounds};
-use std::sync::atomic::AtomicU8;
-use std::sync::Arc;
+use std::sync::{atomic::AtomicU8, Arc};
 use std::{marker, mem};
 
 use crate::core::{Diff, Entry, Footprint, Result, Value};
@@ -43,8 +43,8 @@ where
     n_count: usize,
     latch: RWSpinlock,
     writers: AtomicU8,
-    key_footprint: usize,
-    entry_footprint: usize,
+    key_footprint: isize,
+    tree_footprint: isize,
 }
 
 impl<K, V> Clone for Llrb<K, V>
@@ -63,7 +63,7 @@ where
             latch: RWSpinlock::new(),
             writers: AtomicU8::new(0),
             key_footprint: self.key_footprint,
-            entry_footprint: self.entry_footprint,
+            tree_footprint: self.tree_footprint,
         }
     }
 }
@@ -86,8 +86,8 @@ where
     pub(crate) root: Option<Box<Node<K, V>>>,
     pub(crate) seqno: u64,
     pub(crate) n_count: usize,
-    pub(crate) key_footprint: usize,
-    pub(crate) entry_footprint: usize,
+    pub(crate) key_footprint: isize,
+    pub(crate) tree_footprint: isize,
 }
 
 /// Different ways to construct a new Llrb index.
@@ -109,7 +109,7 @@ where
             latch: RWSpinlock::new(),
             writers: AtomicU8::new(0),
             key_footprint: Default::default(),
-            entry_footprint: Default::default(),
+            tree_footprint: Default::default(),
         }
     }
 
@@ -131,7 +131,7 @@ where
             latch: RWSpinlock::new(),
             writers: AtomicU8::new(0),
             key_footprint: Default::default(),
-            entry_footprint: Default::default(),
+            tree_footprint: Default::default(),
         }
     }
 
@@ -148,7 +148,7 @@ where
             seqno: self.seqno,
             n_count: self.n_count,
             key_footprint: self.key_footprint,
-            entry_footprint: self.entry_footprint,
+            tree_footprint: self.tree_footprint,
         }
     }
 
@@ -163,7 +163,7 @@ where
             latch: RWSpinlock::new(),
             writers: AtomicU8::new(0),
             key_footprint: Default::default(),
-            entry_footprint: Default::default(),
+            tree_footprint: Default::default(),
         }
     }
 }
@@ -238,9 +238,8 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    fn footprint(&self) -> usize {
-        let footprint = self.key_footprint + self.entry_footprint;
-        footprint + (Node::<K, V>::overhead() * self.n_count)
+    fn footprint(&self) -> isize {
+        self.tree_footprint
     }
 }
 
@@ -301,6 +300,27 @@ where
     }
 }
 
+struct UpsertResult<K, V>
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+{
+    node: Option<Box<Node<K, V>>>,
+    old_entry: Option<Entry<K, V>>,
+    size: isize, // differencen in footprint
+}
+
+struct UpsertCasResult<K, V>
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+{
+    node: Option<Box<Node<K, V>>>,
+    old_entry: Option<Entry<K, V>>,
+    size: isize, // differencen in footprint
+    err: Option<Error>,
+}
+
 /// Create/Update/Delete operations on Llrb index.
 impl<K, V> Llrb<K, V>
 where
@@ -310,33 +330,42 @@ where
     fn upsert(
         node: Option<Box<Node<K, V>>>,
         nentry: Entry<K, V>,
-        lsm: bool,
-    ) -> (Option<Box<Node<K, V>>>, Option<Entry<K, V>>) {
+        lsm: bool, // preserve old entries
+    ) -> UpsertResult<K, V> {
         match node {
             None => {
                 let mut node: Box<Node<K, V>> = Box::new(From::from(nentry));
                 node.dirty = false;
-                return (Some(node), None);
+                let size: isize = node.footprint().try_into().unwrap();
+                return UpsertResult {
+                    node: Some(node),
+                    old_entry: None,
+                    size,
+                };
             }
             Some(mut node) => {
                 node = Llrb::walkdown_rot23(node);
                 match node.as_key().cmp(nentry.as_key()) {
                     Ordering::Greater => {
-                        let res = Llrb::upsert(node.left.take(), nentry, lsm);
-                        let (left, entry) = res;
-                        node.left = left;
-                        (Some(Llrb::walkuprot_23(node)), entry)
+                        let mut r = Llrb::upsert(node.left.take(), nentry, lsm);
+                        node.left = r.node;
+                        r.node = Some(Llrb::walkuprot_23(node));
+                        r
                     }
                     Ordering::Less => {
-                        let res = Llrb::upsert(node.right.take(), nentry, lsm);
-                        let (right, entry) = res;
-                        node.right = right;
-                        (Some(Llrb::walkuprot_23(node)), entry)
+                        let mut r = Llrb::upsert(node.right.take(), nentry, lsm);
+                        node.right = r.node;
+                        r.node = Some(Llrb::walkuprot_23(node));
+                        r
                     }
                     Ordering::Equal => {
-                        let entry = node.entry.clone();
-                        node.prepend_version(nentry, lsm);
-                        (Some(Llrb::walkuprot_23(node)), Some(entry))
+                        let old_entry = Some(node.entry.clone());
+                        let size = node.prepend_version(nentry, lsm);
+                        UpsertResult {
+                            node: Some(Llrb::walkuprot_23(node)),
+                            old_entry,
+                            size,
+                        }
                     }
                 }
             }
@@ -348,47 +377,68 @@ where
         nentry: Entry<K, V>,
         cas: u64,
         lsm: bool,
-    ) -> (Option<Box<Node<K, V>>>, Option<Entry<K, V>>, Option<Error>) {
+    ) -> UpsertCasResult<K, V> {
         let mut node = match node {
             None if cas > 0 => {
-                return (None, None, Some(Error::InvalidCAS));
+                return UpsertCasResult {
+                    node: None,
+                    old_entry: None,
+                    size: 0,
+                    err: Some(Error::InvalidCAS),
+                };
             }
             None => {
                 let mut node: Box<Node<K, V>> = Box::new(From::from(nentry));
                 node.dirty = false;
-                return (Some(node), None, None);
+                let size: isize = node.footprint().try_into().unwrap();
+                return UpsertCasResult {
+                    node: Some(node),
+                    old_entry: None,
+                    size,
+                    err: None,
+                };
             }
             Some(node) => node,
         };
 
         node = Llrb::walkdown_rot23(node);
-        let (entry, err) = match node.as_key().cmp(nentry.as_key()) {
+        match node.as_key().cmp(nentry.as_key()) {
             Ordering::Greater => {
                 let left = node.left.take();
-                let (l, en, e) = Llrb::upsert_cas(left, nentry, cas, lsm);
-                node.left = l;
-                (en, e)
+                let mut r = Llrb::upsert_cas(left, nentry, cas, lsm);
+                node.left = r.node;
+                r.node = Some(Llrb::walkuprot_23(node));
+                r
             }
             Ordering::Less => {
-                let rt = node.right.take();
-                let (r, en, e) = Llrb::upsert_cas(rt, nentry, cas, lsm);
-                node.right = r;
-                (en, e)
+                let right = node.right.take();
+                let mut r = Llrb::upsert_cas(right, nentry, cas, lsm);
+                node.right = r.node;
+                r.node = Some(Llrb::walkuprot_23(node));
+                r
             }
             Ordering::Equal => {
-                if node.is_deleted() && cas != 0 && cas != node.to_seqno() {
-                    (None, Some(Error::InvalidCAS))
-                } else if !node.is_deleted() && cas != node.to_seqno() {
-                    (None, Some(Error::InvalidCAS))
+                let p = node.is_deleted() && cas != 0 && cas != node.to_seqno();
+                let p = p || (!node.is_deleted() && cas != node.to_seqno());
+                if p {
+                    UpsertCasResult {
+                        node: Some(Llrb::walkuprot_23(node)),
+                        old_entry: None,
+                        size: 0,
+                        err: Some(Error::InvalidCAS),
+                    }
                 } else {
-                    let entry = node.entry.clone();
-                    node.prepend_version(nentry, lsm);
-                    (Some(entry), None)
+                    let old_entry = Some(node.entry.clone());
+                    let size = node.prepend_version(nentry, lsm);
+                    UpsertCasResult {
+                        node: Some(Llrb::walkuprot_23(node)),
+                        old_entry,
+                        size,
+                        err: None,
+                    }
                 }
             }
-        };
-        node = Llrb::walkuprot_23(node);
-        return (Some(node), entry, err);
+        }
     }
 
     fn delete_lsm<Q>(
@@ -860,17 +910,26 @@ where
         let _latch = self.index.latch.acquire_write(self.index.spin);
         let index = self.get_index();
 
-        let value = Box::new(Value::new_upsert_value(value, seqno));
-        let new_entry = Entry::new(key, value);
+        let key_footprint = key.footprint();
+        let new_entry = {
+            let value = Box::new(Value::new_upsert_value(value, seqno));
+            Entry::new(key, value)
+        };
         match Llrb::upsert(index.root.take(), new_entry, index.lsm) {
-            (Some(mut root), entry) => {
+            UpsertResult {
+                node: Some(mut root),
+                old_entry,
+                size,
+            } => {
                 root.set_black();
                 index.root = Some(root);
-                if entry.is_none() {
+                if old_entry.is_none() {
                     index.n_count += 1;
+                    index.key_footprint += key_footprint;
                 }
                 index.seqno = seqno;
-                (Some(seqno), Ok(entry))
+                index.tree_footprint += size;
+                (Some(seqno), Ok(old_entry))
             }
             _ => panic!("set: impossible case, call programmer"),
         }
@@ -892,21 +951,35 @@ where
         let _latch = self.index.latch.acquire_write(self.index.spin);
         let index = self.get_index();
 
-        let value = Box::new(Value::new_upsert_value(value, seqno));
-        let new_entry = Entry::new(key, value);
+        let key_footprint = key.footprint();
+        let new_entry = {
+            let value = Box::new(Value::new_upsert_value(value, seqno));
+            Entry::new(key, value)
+        };
         match Llrb::upsert_cas(index.root.take(), new_entry, cas, index.lsm) {
-            (root, _, Some(err)) => {
+            UpsertCasResult {
+                node: root,
+                err: Some(err),
+                ..
+            } => {
                 index.root = root;
                 (None, Err(err))
             }
-            (Some(mut root), entry, None) => {
+            UpsertCasResult {
+                node: Some(mut root),
+                old_entry,
+                size,
+                err: None,
+            } => {
                 root.set_black();
                 index.root = Some(root);
-                if entry.is_none() {
+                if old_entry.is_none() {
                     index.n_count += 1;
+                    index.key_footprint += key_footprint;
                 }
                 index.seqno = seqno;
-                (Some(seqno), Ok(entry))
+                index.tree_footprint += size;
+                (Some(seqno), Ok(old_entry))
             }
             _ => panic!("set_cas: impossible case, call programmer"),
         }

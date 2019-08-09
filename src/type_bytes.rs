@@ -51,7 +51,7 @@ impl Serialize for Vec<u8> {
 }
 
 impl Footprint for Vec<u8> {
-    fn footprint(&self) -> usize {
-        self.capacity()
+    fn footprint(&self) -> isize {
+        self.capacity().try_into().unwrap()
     }
 }

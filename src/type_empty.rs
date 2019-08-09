@@ -31,7 +31,7 @@ impl Serialize for Empty {
 }
 
 impl Footprint for Empty {
-    fn footprint(&self) -> usize {
+    fn footprint(&self) -> isize {
         0
     }
 }

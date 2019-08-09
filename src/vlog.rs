@@ -57,7 +57,7 @@ impl<V> Value<V>
 where
     V: Clone + Footprint,
 {
-    pub(crate) fn value_footprint(&self) -> usize {
+    pub(crate) fn value_footprint(&self) -> isize {
         match self {
             Value::Native { value } => value.footprint(),
             Value::Reference { .. } => 0,
@@ -158,7 +158,7 @@ where
         }
     }
 
-    pub(crate) fn diff_footprint(&self) -> usize {
+    pub(crate) fn diff_footprint(&self) -> isize {
         match self {
             Delta::Native { diff } => diff.footprint(),
             Delta::Reference { .. } => 0,

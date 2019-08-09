@@ -36,7 +36,7 @@ impl Serialize for i32 {
 }
 
 impl Footprint for i32 {
-    fn footprint(&self) -> usize {
+    fn footprint(&self) -> isize {
         0
     }
 }

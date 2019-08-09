@@ -36,7 +36,7 @@ impl Serialize for i64 {
 }
 
 impl Footprint for i64 {
-    fn footprint(&self) -> usize {
+    fn footprint(&self) -> isize {
         0
     }
 }

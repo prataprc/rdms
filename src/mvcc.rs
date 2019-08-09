@@ -222,8 +222,7 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    fn footprint(&self) -> usize {
-        // TBD
+    fn footprint(&self) -> isize {
         0
     }
 }

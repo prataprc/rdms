@@ -211,7 +211,7 @@ pub trait Serialize: Sized {
 /// and memory-footprint for key/value types.
 /// Note: This can be an approximate measure.
 pub trait Footprint {
-    fn footprint(&self) -> usize;
+    fn footprint(&self) -> isize;
 }
 
 /// Delta maintains the older version of value, with necessary fields for
@@ -323,8 +323,8 @@ where
         }
     }
 
-    pub(crate) fn footprint(&self) -> usize {
-        let mut footprint = mem::size_of::<Delta<V>>();
+    pub(crate) fn footprint(&self) -> isize {
+        let mut footprint: isize = mem::size_of::<Delta<V>>().try_into().unwrap();
         footprint += match &self.data {
             InnerDelta::U { delta, .. } => delta.diff_footprint(),
             InnerDelta::D { .. } => 0,
@@ -395,8 +395,8 @@ impl<V> Value<V>
 where
     V: Clone + Diff + Footprint,
 {
-    pub(crate) fn footprint(&self) -> usize {
-        let mut footprint = mem::size_of::<Value<V>>();
+    pub(crate) fn footprint(&self) -> isize {
+        let mut footprint: isize = mem::size_of::<Value<V>>().try_into().unwrap();
         footprint += match self {
             Value::U { value, .. } => value.value_footprint(),
             Value::D { .. } => 0,
@@ -794,13 +794,13 @@ where
     V: Clone + Diff + Footprint,
 {
     /// Return the previous versions of this entry as Deltas.
-    pub fn footprint(&self) -> usize {
-        let mut footprint = mem::size_of::<Entry<K, V>>();
-        footprint += self.value.footprint();
+    pub fn footprint(&self) -> isize {
+        let mut fp: isize = mem::size_of::<Entry<K, V>>().try_into().unwrap();
+        fp += self.value.footprint();
         for delta in self.deltas.iter() {
-            footprint += delta.footprint();
+            fp += delta.footprint();
         }
-        footprint
+        fp
     }
 }
 

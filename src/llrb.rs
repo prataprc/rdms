@@ -180,6 +180,15 @@ where
         self.lsm
     }
 
+    /// Return current seqno.
+    pub(crate) fn to_key_footprint(&self) -> isize {
+        self.key_footprint
+    }
+
+    pub(crate) fn to_tree_footprint(&self) -> isize {
+        self.tree_footprint
+    }
+
     /// Return number of entries in this index.
     #[inline]
     pub fn len(&self) -> usize {
@@ -194,7 +203,6 @@ where
     }
 
     /// Return current seqno.
-    #[inline]
     pub fn to_seqno(&self) -> u64 {
         self.seqno
     }

@@ -72,7 +72,7 @@ pub use crate::type_empty::Empty; // TODO: proper nomenclature.
 
 pub mod llrb;
 mod llrb_node;
-pub mod lsm;
+mod lsm;
 pub mod mvcc;
 pub mod wal;
 

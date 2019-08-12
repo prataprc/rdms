@@ -75,26 +75,3 @@ mod llrb_node;
 mod lsm;
 pub mod mvcc;
 pub mod wal;
-
-#[cfg(test)]
-mod core_test;
-#[cfg(test)]
-mod llrb_test;
-#[cfg(test)]
-mod mvcc_test;
-#[cfg(test)]
-mod spinlock_test;
-#[cfg(test)]
-mod sync_writer_test;
-#[cfg(test)]
-mod type_bytes_test;
-#[cfg(test)]
-mod type_empty_test;
-#[cfg(test)]
-mod type_i32_test;
-#[cfg(test)]
-mod type_i64_test;
-#[cfg(test)]
-mod util_test;
-#[cfg(test)]
-mod vlog_test;

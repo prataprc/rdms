@@ -40,3 +40,7 @@ impl Footprint for i64 {
         0
     }
 }
+
+#[cfg(test)]
+#[path = "type_i64_test.rs"]
+mod type_i64_test;

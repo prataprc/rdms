@@ -40,3 +40,7 @@ impl Footprint for i32 {
         0
     }
 }
+
+#[cfg(test)]
+#[path = "type_i32_test.rs"]
+mod type_i32_test;

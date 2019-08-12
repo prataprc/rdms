@@ -113,10 +113,10 @@ where
         let debris = llrb_index.squash();
         mvcc_index
             .key_footprint
-            .store(llrb_index.to_key_footprint(), Relaxed);
+            .store(debris.key_footprint, Relaxed);
         mvcc_index
             .tree_footprint
-            .store(llrb_index.to_tree_footprint(), Relaxed);
+            .store(debris.tree_footprint, Relaxed);
 
         mvcc_index.snapshot.shift_snapshot(
             debris.root,
@@ -1374,3 +1374,7 @@ where
     reclaim.iter().for_each(|item| print!("{:p} ", *item));
     println!("");
 }
+
+#[cfg(test)]
+#[path = "mvcc_test.rs"]
+mod mvcc_test;

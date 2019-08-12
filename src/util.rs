@@ -60,3 +60,7 @@ pub(crate) fn check_remaining(buf: &[u8], want: usize, msg: &str) -> Result<(), 
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "util_test.rs"]
+mod util_test;

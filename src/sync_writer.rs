@@ -37,3 +37,7 @@ impl<'a> Drop for Fence<'a> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "sync_writer_test.rs"]
+mod sync_writer_test;

@@ -1,5 +1,3 @@
-// TODO: Is batch operation required on Writer ?
-
 //! Write-Ahead-Logging for Bogn index.
 //!
 //! Takes care of batching entries, serializing and appending

@@ -55,3 +55,7 @@ impl Footprint for Vec<u8> {
         self.capacity().try_into().unwrap()
     }
 }
+
+#[cfg(test)]
+#[path = "type_bytes_test.rs"]
+mod type_bytes_test;

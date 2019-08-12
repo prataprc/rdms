@@ -35,3 +35,7 @@ impl Footprint for Empty {
         0
     }
 }
+
+#[cfg(test)]
+#[path = "type_empty_test.rs"]
+mod type_empty_test;

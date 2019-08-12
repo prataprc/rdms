@@ -166,3 +166,7 @@ impl fmt::Display for RWSpinlock {
         )
     }
 }
+
+#[cfg(test)]
+#[path = "spinlock_test.rs"]
+mod spinlock_test;

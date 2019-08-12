@@ -249,32 +249,6 @@ where
             data: InnerDelta::D { seqno },
         }
     }
-
-    #[allow(dead_code)] // TODO: remove this once bogn is weaved-up.
-    pub(crate) fn into_upserted(self) -> Option<(vlog::Delta<V>, u64)> {
-        match self.data {
-            InnerDelta::U { delta, seqno } => Some((delta, seqno)),
-            InnerDelta::D { .. } => None,
-        }
-    }
-
-    #[allow(dead_code)] // TODO: remove this once bogn is weaved-up.
-    pub(crate) fn into_deleted(self) -> Option<u64> {
-        match self.data {
-            InnerDelta::D { seqno } => Some(seqno),
-            InnerDelta::U { .. } => None,
-        }
-    }
-
-    pub(crate) fn is_reference(&self) -> bool {
-        match self.data {
-            InnerDelta::U {
-                delta: vlog::Delta::Reference { .. },
-                ..
-            } => true,
-            _ => false,
-        }
-    }
 }
 
 impl<V> AsRef<InnerDelta<V>> for Delta<V>
@@ -330,6 +304,32 @@ where
             InnerDelta::D { .. } => 0,
         };
         footprint
+    }
+
+    #[allow(dead_code)] // TODO: remove this once bogn is weaved-up.
+    pub(crate) fn into_upserted(self) -> Option<(vlog::Delta<V>, u64)> {
+        match self.data {
+            InnerDelta::U { delta, seqno } => Some((delta, seqno)),
+            InnerDelta::D { .. } => None,
+        }
+    }
+
+    #[allow(dead_code)] // TODO: remove this once bogn is weaved-up.
+    pub(crate) fn into_deleted(self) -> Option<u64> {
+        match self.data {
+            InnerDelta::D { seqno } => Some(seqno),
+            InnerDelta::U { .. } => None,
+        }
+    }
+
+    pub(crate) fn is_reference(&self) -> bool {
+        match self.data {
+            InnerDelta::U {
+                delta: vlog::Delta::Reference { .. },
+                ..
+            } => true,
+            _ => false,
+        }
     }
 }
 

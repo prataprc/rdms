@@ -208,3 +208,7 @@ where
     delta.decode(&block[8..])?;
     Ok(Delta::new_native(delta))
 }
+
+#[cfg(test)]
+#[path = "vlog_test.rs"]
+mod vlog_test;

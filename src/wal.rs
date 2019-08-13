@@ -1273,7 +1273,8 @@ where
     Term {
         // Term in which the entry is created.
         term: u64,
-        // Index seqno for this entry.
+        // Index seqno for this entry. This will be monotonically
+        // increasing number.
         index: u64,
         // Operation on host data structure.
         op: Op<K, V>,
@@ -1281,13 +1282,13 @@ where
     Client {
         // Term in which the entry is created.
         term: u64,
-        // Index seqno for this entry. This will be monotonically increasing
-        // number without any break.
+        // Index seqno for this entry. This will be monotonically
+        // increasing number.
         index: u64,
         // Id of client applying this entry. To deal with false negatives.
         id: u64,
-        // Client seqno monotonically increasing number. To deal with
-        // false negatives.
+        // Client seqno monotonically increased by client. To deal
+        // with false negatives.
         ceqno: u64,
         // Operation on host data structure.
         op: Op<K, V>,
@@ -1348,7 +1349,7 @@ where
     fn encode(&self, buf: &mut Vec<u8>) -> usize {
         match self {
             Entry::Term { op, term, index } => {
-                let n = Self::encode_term(buf, op, *term, *index);
+                let n = Self::encode_term(op, *term, *index, buf);
                 n
             }
             Entry::Client {
@@ -1358,7 +1359,7 @@ where
                 id,
                 ceqno,
             } => {
-                let n = Self::encode_client(buf, op, *term, *index, *id, *ceqno);
+                let n = Self::encode_client(op, *term, *index, *id, *ceqno, buf);
                 n
             }
         }
@@ -1416,10 +1417,10 @@ where
     V: Serialize,
 {
     fn encode_term(
-        buf: &mut Vec<u8>,
         op: &Op<K, V>, // op
         term: u64,
         index: u64,
+        buf: &mut Vec<u8>,
     ) -> usize {
         buf.extend_from_slice(&(EntryType::Term as u64).to_be_bytes());
         buf.extend_from_slice(&term.to_be_bytes());
@@ -1459,12 +1460,12 @@ where
     V: Serialize,
 {
     fn encode_client(
-        buf: &mut Vec<u8>,
         op: &Op<K, V>,
         term: u64,
         index: u64,
         id: u64,
         ceqno: u64,
+        buf: &mut Vec<u8>,
     ) -> usize {
         buf.extend_from_slice(&(EntryType::Client as u64).to_be_bytes());
         buf.extend_from_slice(&term.to_be_bytes());
@@ -1493,6 +1494,7 @@ where
 
 /************************ Operations within entry ***********************/
 
+#[derive(PartialEq, Debug)]
 enum OpType {
     // Data operations
     Set = 1,
@@ -1789,3 +1791,7 @@ where
         Ok(n.try_into().unwrap())
     }
 }
+
+#[cfg(test)]
+#[path = "wal_test.rs"]
+mod wal_test;

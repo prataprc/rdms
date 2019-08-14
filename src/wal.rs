@@ -630,7 +630,7 @@ where
                 path: file_path,
                 fd: Default::default(),
                 batches: Default::default(),
-                active: Batch::new(vec![], NIL_TERM, DEFAULT_NODE.to_string()),
+                active: Batch::new(),
                 buffer: Vec::with_capacity(FLUSH_SIZE),
             })),
             _ => Ok(None),
@@ -652,7 +652,7 @@ where
                 opts.append(true).create_new(true).open(&path)?
             }),
             batches: Default::default(),
-            active: Batch::new(vec![], NIL_TERM, DEFAULT_NODE.to_string()),
+            active: Batch::new(),
             buffer: Vec::with_capacity(FLUSH_SIZE),
         })
     }
@@ -668,7 +668,7 @@ where
                 path: file_path.clone(),
                 fd: Default::default(),
                 batches: Self::load_batches(&file_path)?,
-                active: Batch::new(vec![], NIL_TERM, DEFAULT_NODE.to_string()),
+                active: Batch::new(),
                 buffer: Vec::with_capacity(FLUSH_SIZE),
             })),
             _ => Ok(None),
@@ -827,7 +827,7 @@ where
         }
 
         self.buffer.resize(0, 0);
-        let length = self.active.encode_native(&mut self.buffer);
+        let length = self.active.encode_active(&mut self.buffer);
         let start_index = self.active.to_start_index().unwrap();
         let last_index = self.active.to_last_index().unwrap();
         let fd = self.fd.as_mut().unwrap();
@@ -841,7 +841,7 @@ where
             fd.sync_all()?; // TODO: <- bottle-neck for disk latency/throughput.
             let b = Batch::new_refer(fpos, length, start_index, last_index);
             self.batches.push(b);
-            self.active = Batch::new(vec![], 0, DEFAULT_NODE.to_string());
+            self.active = Batch::new();
             Ok(length)
         }
     }
@@ -882,12 +882,13 @@ where
     }
 }
 
+#[derive(Clone)]
 enum Batch<K, V>
 where
     K: Serialize,
     V: Serialize,
 {
-    // Reference into the log file where the batch is persisted.
+    // Reference to immutable batch in log file,
     Refer {
         // position in log-file where the batch starts.
         fpos: u64,
@@ -898,6 +899,8 @@ where
         // index-seqno of last entry in this batch.
         last_index: u64,
     },
+    // Current active batch. Once flush is called, it becomes a
+    // ``Refer`` varaint and hence immutable.
     Active {
         // state: term is current term for all entries in a batch.
         term: u64,
@@ -924,13 +927,13 @@ where
     K: Serialize,
     V: Serialize,
 {
-    fn new(config: Vec<String>, term: u64, votedfor: String) -> Batch<K, V> {
+    fn new() -> Batch<K, V> {
         Batch::Active {
-            config,
-            term,
+            config: Default::default(),
+            term: NIL_TERM,
             committed: Default::default(),
             persisted: Default::default(),
-            votedfor,
+            votedfor: DEFAULT_NODE.to_string(),
             entries: vec![],
         }
     }
@@ -945,10 +948,22 @@ where
     }
 
     #[allow(dead_code)] // TODO: remove this once consensus in integrated.
-    fn set_term(&mut self, t: u64, voted_for: String) -> &mut Batch<K, V> {
+    fn set_config(&mut self, cnfg: &Vec<String>) -> &mut Batch<K, V> {
+        match self {
+            Batch::Active { config, .. } => {
+                config.truncate(0);
+                config.extend_from_slice(cnfg);
+            }
+            _ => unreachable!(),
+        }
+        self
+    }
+
+    #[allow(dead_code)] // TODO: remove this once consensus in integrated.
+    fn set_term(&mut self, trm: u64, voted_for: String) -> &mut Batch<K, V> {
         match self {
             Batch::Active { term, votedfor, .. } => {
-                *term = t;
+                *term = trm;
                 *votedfor = voted_for;
             }
             _ => unreachable!(),
@@ -1023,8 +1038,8 @@ where
 
     fn into_entries(self) -> Vec<Entry<K, V>> {
         match self {
-            Batch::Refer { .. } => unreachable!(),
             Batch::Active { entries, .. } => entries,
+            Batch::Refer { .. } => unreachable!(),
         }
     }
 
@@ -1034,7 +1049,7 @@ where
                 let n: u64 = length.try_into().unwrap();
                 let buf = util::read_buffer(fd, fpos, n, "fetching batch")?;
                 let mut batch: Batch<K, V> = unsafe { mem::zeroed() };
-                batch.decode_native(&buf)?;
+                batch.decode_active(&buf)?;
                 Ok(batch)
             }
             Batch::Active { .. } => Ok(self),
@@ -1074,7 +1089,7 @@ where
     K: Serialize,
     V: Serialize,
 {
-    fn encode_native(&self, buf: &mut Vec<u8>) -> usize {
+    fn encode_active(&self, buf: &mut Vec<u8>) -> usize {
         match self {
             Batch::Active {
                 term,
@@ -1095,8 +1110,8 @@ where
                 let nentries: u64 = entries.len().try_into().unwrap();
                 buf.extend_from_slice(&nentries.to_be_bytes());
 
-                let mut m = Self::encode_config(buf, config);
-                m += Self::encode_votedfor(buf, votedfor);
+                let mut m = Self::encode_config(config, buf);
+                m += Self::encode_votedfor(votedfor, buf);
 
                 m += entries.iter().map(|e| e.encode(buf)).sum::<usize>();
 
@@ -1127,8 +1142,8 @@ where
         Ok(length)
     }
 
-    fn decode_native(&mut self, buf: &[u8]) -> Result<usize> {
-        util::check_remaining(buf, 48, "batch-native-hdr")?;
+    fn decode_active(&mut self, buf: &[u8]) -> Result<usize> {
+        util::check_remaining(buf, 48, "batch-active-hdr")?;
         let length = Self::validate(buf)?;
         let term = u64::from_be_bytes(buf[8..16].try_into().unwrap());
         let committed = u64::from_be_bytes(buf[16..24].try_into().unwrap());
@@ -1170,7 +1185,7 @@ where
     K: Serialize,
     V: Serialize,
 {
-    fn encode_config(buf: &mut Vec<u8>, config: &Vec<String>) -> usize {
+    fn encode_config(config: &Vec<String>, buf: &mut Vec<u8>) -> usize {
         let count: u16 = config.len().try_into().unwrap();
         buf.extend_from_slice(&count.to_be_bytes());
         let mut n = mem::size_of_val(&count);
@@ -1204,7 +1219,7 @@ where
         Ok((config, n))
     }
 
-    fn encode_votedfor(buf: &mut Vec<u8>, s: &str) -> usize {
+    fn encode_votedfor(s: &str, buf: &mut Vec<u8>) -> usize {
         let len: u16 = s.as_bytes().len().try_into().unwrap();
         buf.extend_from_slice(&len.to_be_bytes());
         buf.extend_from_slice(s.as_bytes());
@@ -1243,7 +1258,6 @@ where
             let msg = format!("batch-marker {:?}", &buf[m..n]);
             return Err(Error::InvalidWAL(msg));
         }
-
         Ok(a)
     }
 }
@@ -1265,6 +1279,7 @@ impl From<u64> for EntryType {
     }
 }
 
+#[derive(Clone)]
 enum Entry<K, V>
 where
     K: Serialize,
@@ -1515,6 +1530,7 @@ impl From<u64> for OpType {
     }
 }
 
+#[derive(Clone)]
 enum Op<K, V>
 where
     K: Serialize,

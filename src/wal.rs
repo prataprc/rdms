@@ -102,7 +102,7 @@ where
 {
     name: String,
     index: Arc<Box<AtomicU64>>,
-    shards: Vec<mpsc::Sender<Opreq<K, V>>>,
+    shards: Vec<mpsc::Sender<OpRequest<K, V>>>,
     threads: Vec<thread::JoinHandle<Result<u64>>>,
     journals: Vec<Journal<K, V>>,
     // configuration
@@ -283,7 +283,7 @@ where
     pub fn purge_before(&mut self, before: u64) -> Result<()> {
         for shard_tx in self.shards.iter() {
             let (tx, rx) = mpsc::sync_channel(1);
-            shard_tx.send(Opreq::purge_before(before, tx))?;
+            shard_tx.send(OpRequest::purge_before(before, tx))?;
             rx.recv()?;
         }
         Ok(())
@@ -293,7 +293,7 @@ where
         // wait for the threads to exit, note that threads could have ended
         // when close() was called on WAL or Writer, or due panic or error.
         while let Some(tx) = self.shards.pop() {
-            tx.send(Opreq::close()).ok(); // ignore if send returns an error
+            tx.send(OpRequest::close()).ok(); // ignore if send returns an error
         }
         // wait for the threads to exit.
         let mut index = 0_u64;
@@ -309,7 +309,7 @@ where
     K: Send + Serialize,
     V: Send + Serialize,
 {
-    tx: mpsc::Sender<Opreq<K, V>>,
+    tx: mpsc::Sender<OpRequest<K, V>>,
 }
 
 impl<K, V> Writer<K, V>
@@ -317,13 +317,13 @@ where
     K: Send + Serialize,
     V: Send + Serialize,
 {
-    fn new(tx: mpsc::Sender<Opreq<K, V>>) -> Writer<K, V> {
+    fn new(tx: mpsc::Sender<OpRequest<K, V>>) -> Writer<K, V> {
         Writer { tx }
     }
 
     pub fn set(&self, key: K, value: V) -> Result<u64> {
         let (resp_tx, resp_rx) = mpsc::sync_channel(1);
-        self.tx.send(Opreq::set(key, value, resp_tx))?;
+        self.tx.send(OpRequest::set(key, value, resp_tx))?;
         match resp_rx.recv()? {
             Opresp::Result(res) => res,
         }
@@ -331,7 +331,7 @@ where
 
     pub fn set_cas(&self, key: K, value: V, cas: u64) -> Result<u64> {
         let (resp_tx, resp_rx) = mpsc::sync_channel(1);
-        self.tx.send(Opreq::set_cas(key, value, cas, resp_tx))?;
+        self.tx.send(OpRequest::set_cas(key, value, cas, resp_tx))?;
         match resp_rx.recv()? {
             Opresp::Result(res) => res,
         }
@@ -343,7 +343,7 @@ where
         Q: ToOwned<Owned = K> + ?Sized,
     {
         let (resp_tx, resp_rx) = mpsc::sync_channel(1);
-        self.tx.send(Opreq::delete(key.to_owned(), resp_tx))?;
+        self.tx.send(OpRequest::delete(key.to_owned(), resp_tx))?;
         match resp_rx.recv()? {
             Opresp::Result(res) => res,
         }
@@ -391,14 +391,14 @@ where
         self
     }
 
-    fn next_journal_num(&self) -> usize {
-        self.journals.last().map(|jrn| jrn.num + 1).unwrap_or(1)
+    fn next_journal_num(&self, start: usize) -> usize {
+        self.journals.last().map(|jrn| jrn.num + 1).unwrap_or(start)
     }
 }
 
 fn thread_shard<K, V>(
     mut shard: Shard<K, V>,
-    rx: mpsc::Receiver<Opreq<K, V>>, // shard commands
+    rx: mpsc::Receiver<OpRequest<K, V>>, // shard commands
 ) -> Result<u64>
 where
     K: 'static + Send + Serialize,
@@ -432,16 +432,17 @@ where
 {
     fn spawn(
         mut self,
-        rx: mpsc::Receiver<Opreq<K, V>>, // spawn thread to handle rx-msgs
+        rx: mpsc::Receiver<OpRequest<K, V>>, // spawn thread to handle rx-msgs
     ) -> Result<thread::JoinHandle<Result<u64>>> {
-        let (name, num) = (self.name.clone(), self.next_journal_num());
+        let start = 1;
+        let (name, num) = (self.name.clone(), self.next_journal_num(start));
         self.active = Some(Journal::create(name, self.id, num)?);
         Ok(thread::spawn(move || thread_shard(self, rx)))
     }
 
     fn receive_cmds(
-        rx: &mpsc::Receiver<Opreq<K, V>>,
-        cmds: &mut Vec<Opreq<K, V>>,
+        rx: &mpsc::Receiver<OpRequest<K, V>>,
+        cmds: &mut Vec<OpRequest<K, V>>,
     ) -> result::Result<(), mpsc::TryRecvError> // TODO: can this be folded into Error
     {
         loop {
@@ -455,28 +456,28 @@ where
     fn do_cmds(
         &mut self,
         index: &mut u64,
-        cmds: Vec<Opreq<K, V>>, // gather a batch of commands/entries
+        cmds: Vec<OpRequest<K, V>>, // gather a batch of commands/entries
     ) -> Result<bool> {
         use std::sync::atomic::Ordering;
 
         for cmd in cmds {
             match cmd {
-                Opreq::Close => {
+                OpRequest::Close => {
                     return Ok(true);
                 }
-                Opreq::PurgeBefore { before, caller } => {
+                OpRequest::PurgeBefore { before, caller } => {
                     match self.handle_purge_before(before) {
-                        ok @ Ok(_) => caller.send(Opresp::result(ok)).ok(),
+                        ok @ Ok(_) => caller.send(Opresp::new_result(ok)).ok(),
                         Err(e) => {
                             let s = format!("purge-before {}: {:?}", before, e);
-                            caller.send(Opresp::result(Err(e))).ok();
+                            caller.send(Opresp::new_result(Err(e))).ok();
                             return Err(Error::InvalidWAL(s));
                         }
                     };
                 }
                 cmd => {
                     *index = self.wal_index.fetch_add(1, Ordering::Relaxed);
-                    self.active.as_mut().unwrap().handle_op(*index, cmd);
+                    self.active.as_mut().unwrap().handle_op(*index, cmd)?;
                     self.active.as_mut().unwrap().flush()?;
                     self.try_rotating_journal()?;
                 }
@@ -491,7 +492,8 @@ where
             Ok(true) => {
                 active.freeze();
                 self.journals.push(active);
-                let (name, num) = (self.name.clone(), self.next_journal_num());
+                let name = self.name.clone();
+                let num = self.next_journal_num(1 /*start*/);
                 self.active = Some(Journal::create(name, self.id, num)?);
                 Ok(())
             }
@@ -521,7 +523,7 @@ where
     }
 }
 
-enum Opreq<K, V>
+enum OpRequest<K, V>
 where
     K: Send + Serialize,
     V: Send + Serialize,
@@ -548,13 +550,13 @@ where
     Close,
 }
 
-impl<K, V> Opreq<K, V>
+impl<K, V> OpRequest<K, V>
 where
     K: Send + Serialize,
     V: Send + Serialize,
 {
-    fn set(k: K, v: V, caller: mpsc::SyncSender<Opresp>) -> Opreq<K, V> {
-        Opreq::Set {
+    fn set(k: K, v: V, caller: mpsc::SyncSender<Opresp>) -> OpRequest<K, V> {
+        OpRequest::Set {
             key: k,
             value: v,
             caller,
@@ -566,8 +568,8 @@ where
         value: V,
         cas: u64,
         caller: mpsc::SyncSender<Opresp>, // channel to receive response
-    ) -> Opreq<K, V> {
-        Opreq::SetCAS {
+    ) -> OpRequest<K, V> {
+        OpRequest::SetCAS {
             key,
             value,
             cas,
@@ -575,16 +577,16 @@ where
         }
     }
 
-    fn delete(key: K, caller: mpsc::SyncSender<Opresp>) -> Opreq<K, V> {
-        Opreq::Delete { key, caller }
+    fn delete(key: K, caller: mpsc::SyncSender<Opresp>) -> OpRequest<K, V> {
+        OpRequest::Delete { key, caller }
     }
 
-    fn purge_before(s: u64, caller: mpsc::SyncSender<Opresp>) -> Opreq<K, V> {
-        Opreq::PurgeBefore { before: s, caller }
+    fn purge_before(s: u64, caller: mpsc::SyncSender<Opresp>) -> OpRequest<K, V> {
+        OpRequest::PurgeBefore { before: s, caller }
     }
 
-    fn close() -> Opreq<K, V> {
-        Opreq::Close
+    fn close() -> OpRequest<K, V> {
+        OpRequest::Close
     }
 }
 
@@ -593,7 +595,7 @@ enum Opresp {
 }
 
 impl Opresp {
-    fn result(res: Result<u64>) -> Opresp {
+    fn new_result(res: Result<u64>) -> Opresp {
         Opresp::Result(res)
     }
 }
@@ -604,9 +606,8 @@ where
     V: Serialize,
 {
     id: usize,
-    num: usize, // starts from 1
-    // {name}-shard-{id}-journal-{num}.log
-    path: ffi::OsString,
+    num: usize,          // starts from 1
+    path: ffi::OsString, // {name}-shard-{id}-journal-{num}.log
     fd: Option<fs::File>,
     batches: Vec<Batch<K, V>>, // batches sorted by index-seqno.
     active: Batch<K, V>,
@@ -618,31 +619,32 @@ where
     K: Serialize,
     V: Serialize,
 {
-    // doesn't load the batches. use this only for purging the journal.
-    fn shallow_load(
-        name: String,
-        file_path: ffi::OsString, // full path
-    ) -> Result<Option<Journal<K, V>>> {
-        match Self::file_parts(&file_path) {
-            Some((nm, id, num)) if nm == name => Ok(Some(Journal {
-                id,
-                num,
-                path: file_path,
-                fd: Default::default(),
-                batches: Default::default(),
-                active: Batch::new(),
-                buffer: Vec::with_capacity(FLUSH_SIZE),
-            })),
-            _ => Ok(None),
+    fn parts_to_file_name(name: &str, id: usize, num: usize) -> String {
+        format!("{}-shard-{}-journal-{}", name, id, num)
+    }
+
+    fn file_name_to_parts(file_path: &ffi::OsString) -> Option<(String, usize, usize)> {
+        let file_name = path::Path::new(&file_path)
+            .file_name()?
+            .to_os_string()
+            .into_string()
+            .ok()?;
+        let mut iter = file_name.split('_');
+
+        let name = iter.next()?.to_string();
+        let shard = iter.next()?;
+        let id = iter.next()?;
+        let journal = iter.next()?;
+        let num = iter.next()?;
+        if shard != "shard" || journal != "journal" {
+            None
+        } else {
+            Some((name, id.parse().ok()?, num.parse().ok()?))
         }
     }
 
-    fn create(
-        name: String,
-        id: usize,
-        num: usize, // journal number
-    ) -> Result<Journal<K, V>> {
-        let path = format!("{}-shard-{}-journal-1", name, id);
+    fn create(name: String, id: usize, num: usize) -> Result<Journal<K, V>> {
+        let path = Self::parts_to_file_name(&name, id, num);
         Ok(Journal {
             id,
             num,
@@ -661,13 +663,44 @@ where
         name: String,
         file_path: ffi::OsString, // full path
     ) -> Result<Option<Journal<K, V>>> {
-        match Self::file_parts(&file_path) {
+        // load batches are reference to file.
+        let batches = {
+            let mut batches = vec![];
+            let mut fd = util::open_file_r(&file_path)?;
+
+            let (mut fpos, till) = (0_u64, fd.metadata()?.len());
+            while fpos < till {
+                let block = {
+                    let mut block = Vec::with_capacity(WAL_BLOCK_SIZE);
+                    block.resize(block.capacity(), Default::default());
+                    fd.seek(io::SeekFrom::Start(fpos))?;
+                    let n = fd.read(&mut block)?;
+                    if n < block.len() && (fpos + (n as u64)) < till {
+                        let msg = format!("journal block at {}", fpos);
+                        return Err(Error::PartialRead(msg));
+                    }
+                    block.truncate(n);
+                    block
+                };
+
+                let mut m = 0_usize;
+                while m < block.len() {
+                    let mut batch: Batch<K, V> = unsafe { mem::zeroed() };
+                    m += batch.decode_refer(&block[m..], fpos + (m as u64))?;
+                    batches.push(batch);
+                }
+                fpos += block.len() as u64;
+            }
+            batches
+        };
+
+        match Self::file_name_to_parts(&file_path) {
             Some((nm, id, num)) if nm == name => Ok(Some(Journal {
                 id,
                 num,
                 path: file_path.clone(),
                 fd: Default::default(),
-                batches: Self::load_batches(&file_path)?,
+                batches,
                 active: Batch::new(),
                 buffer: Vec::with_capacity(FLUSH_SIZE),
             })),
@@ -675,51 +708,22 @@ where
         }
     }
 
-    fn load_batches(path: &ffi::OsString) -> Result<Vec<Batch<K, V>>> {
-        let mut batches = vec![];
-
-        let mut fd = util::open_file_r(&path)?;
-        let mut block = Vec::with_capacity(WAL_BLOCK_SIZE);
-        block.resize(block.capacity(), Default::default());
-
-        let (mut fpos, till) = (0_u64, fd.metadata()?.len());
-        while fpos < till {
-            fd.seek(io::SeekFrom::Start(fpos))?;
-            let n = fd.read(&mut block)?;
-            if n < block.len() && (fpos + (n as u64)) < till {
-                let msg = format!("journal block at {}", fpos);
-                return Err(Error::PartialRead(msg));
-            }
-            let mut m = 0_usize;
-            while m < n {
-                let mut batch: Batch<K, V> = unsafe { mem::zeroed() };
-                m += batch.decode_refer(&block[m..], fpos + (m as u64))?;
-                batches.push(batch);
-            }
-            fpos += n as u64;
-        }
-        Ok(batches)
-    }
-
-    fn file_parts(file_path: &ffi::OsString) -> Option<(String, usize, usize)> {
-        let filename = path::Path::new(&file_path)
-            .file_name()?
-            .to_os_string()
-            .into_string()
-            .ok()?;
-
-        let mut iter = filename.split('_');
-        let name = iter.next()?;
-        let shard = iter.next()?;
-        let id = iter.next()?;
-        let journal = iter.next()?;
-        let num = iter.next()?;
-        if shard != "shard" || journal != "journal" {
-            None
-        } else {
-            let id = id.parse().ok()?;
-            let num = num.parse().ok()?;
-            Some((name.to_string(), id, num))
+    // don't load the batches. use this only for purging the journal.
+    fn shallow_load(
+        name: String,
+        file_path: ffi::OsString, // full path
+    ) -> Result<Option<Journal<K, V>>> {
+        match Self::file_name_to_parts(&file_path) {
+            Some((nm, id, num)) if nm == name => Ok(Some(Journal {
+                id,
+                num,
+                path: file_path,
+                fd: Default::default(),
+                batches: Default::default(),
+                active: Batch::new(),
+                buffer: Vec::with_capacity(FLUSH_SIZE),
+            })),
+            _ => Ok(None),
         }
     }
 }
@@ -741,14 +745,20 @@ where
         self.batches.last()?.to_last_index()
     }
 
+    fn to_current_term(&self) -> u64 {
+        self.active.to_current_term()
+    }
+
     fn exceed_limit(&self, journal_limit: usize) -> Result<bool> {
         let limit: u64 = journal_limit.try_into().unwrap();
         Ok(self.fd.as_ref().unwrap().metadata()?.len() > limit)
     }
 
     fn into_iter(self) -> Result<BatchIter<K, V>> {
-        let mut opts = fs::OpenOptions::new();
-        let fd = opts.append(true).create_new(true).open(self.path)?;
+        let fd = {
+            let mut opts = fs::OpenOptions::new();
+            opts.append(true).create_new(true).open(self.path)?
+        };
         Ok(BatchIter {
             fd,
             batches: self.batches.into_iter(),
@@ -772,53 +782,46 @@ where
     K: Send + Serialize,
     V: Send + Serialize,
 {
-    fn handle_op(&mut self, index: u64, cmd: Opreq<K, V>) {
+    fn handle_op(&mut self, index: u64, cmd: OpRequest<K, V>) -> Result<()> {
         match cmd {
-            Opreq::Set { key, value, caller } => {
+            OpRequest::Set { key, value, caller } => {
                 self.handle_set(index, key, value);
-                caller.send(Opresp::result(Ok(index))).ok();
+                caller.send(Opresp::new_result(Ok(index)))?;
             }
-            Opreq::SetCAS {
+            OpRequest::SetCAS {
                 key,
                 value,
                 cas,
                 caller,
             } => {
                 self.handle_set_cas(index, key, value, cas);
-                caller.send(Opresp::result(Ok(index))).ok();
+                caller.send(Opresp::new_result(Ok(index)))?;
             }
-            Opreq::Delete { key, caller } => {
+            OpRequest::Delete { key, caller } => {
                 self.handle_delete(index, key);
-                caller.send(Opresp::result(Ok(index))).ok();
+                caller.send(Opresp::new_result(Ok(index)))?;
             }
             _ => unreachable!(),
         }
+        Ok(())
     }
 
     fn handle_set(&mut self, index: u64, key: K, value: V) {
         let op = Op::new_set(key, value);
         let entry = Entry::new_term(op, self.to_current_term(), index);
-        self.add_entry(entry);
+        self.active.add_entry(entry);
     }
 
     fn handle_set_cas(&mut self, index: u64, key: K, value: V, cas: u64) {
         let op = Op::new_set_cas(key, value, cas);
         let entry = Entry::new_term(op, self.to_current_term(), index);
-        self.add_entry(entry);
+        self.active.add_entry(entry);
     }
 
     fn handle_delete(&mut self, index: u64, key: K) {
         let op = Op::new_delete(key);
         let entry = Entry::new_term(op, self.to_current_term(), index);
-        self.add_entry(entry);
-    }
-
-    fn to_current_term(&self) -> u64 {
-        self.active.to_current_term()
-    }
-
-    fn add_entry(&mut self, entry: Entry<K, V>) {
-        self.active.add_entry(entry)
+        self.active.add_entry(entry);
     }
 
     fn flush(&mut self) -> Result<usize> {
@@ -828,16 +831,16 @@ where
 
         self.buffer.resize(0, 0);
         let length = self.active.encode_active(&mut self.buffer);
-        let start_index = self.active.to_start_index().unwrap();
-        let last_index = self.active.to_last_index().unwrap();
-        let fd = self.fd.as_mut().unwrap();
-        let fpos = fd.metadata()?.len();
-
         let n = fd.write(&self.buffer)?;
         if length != n {
             let msg = format!("wal-flush: {:?}, {}/{}", self.path, length, n);
             Err(Error::PartialWrite(msg))
         } else {
+            let start_index = self.active.to_start_index().unwrap();
+            let last_index = self.active.to_last_index().unwrap();
+            let fd = self.fd.as_mut().unwrap();
+            let fpos = fd.metadata()?.len();
+
             fd.sync_all()?; // TODO: <- bottle-neck for disk latency/throughput.
             let b = Batch::new_refer(fpos, length, start_index, last_index);
             self.batches.push(b);

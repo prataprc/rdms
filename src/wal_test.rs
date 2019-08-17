@@ -1,5 +1,28 @@
 use super::*;
 
+// parts_to_file_name()  <-> file_name_to_parts()
+// create()
+//      id()
+//      to_start_index()
+//      to_last_index()
+//      to_current_term()
+//      exceed_limit()
+//      into_iter()
+//      handle_op() -> handle_set(), handle_set_cas(), handle_delete()
+//      flush(), repeat 2-3 times.
+//      BatchIter
+// load()
+//      id()
+//      to_start_index()
+//      to_last_index()
+//      to_current_term()
+//      exceed_limit()
+//      into_iter()
+//      handle_op() -> handle_set(), handle_set_cas(), handle_delete()
+//      flush(), repeat 2-3 times.
+//      BatchIter
+// purge()
+
 #[test]
 fn test_batch() {
     // encode/decode config

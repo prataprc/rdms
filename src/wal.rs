@@ -67,18 +67,19 @@ use std::{
     borrow::Borrow,
     cmp,
     collections::HashMap,
-    ffi, fs,
+    ffi, fmt, fs,
     io::{self, Read, Seek, Write},
     mem, path, result,
     sync::{mpsc, Arc},
     thread, vec,
 };
 
+use lazy_static::lazy_static;
+
 use crate::core::{Diff, Replay, Result, Serialize};
 use crate::{error::Error, util};
 
-// TODO: marker text to validate each batch on disk.
-const BATCH_MARKER: &'static str = "yaamirukka bayamaen";
+include!("wal_marker.rs");
 
 // default node name.
 const DEFAULT_NODE: &'static str = "no-consensus";
@@ -146,10 +147,10 @@ where
             let dentry = item?;
             // can this be a journal file ?
             if let Some(jrn) = Journal::load(name.clone(), dentry.file_name())? {
-                match shards.get_mut(&jrn.id()) {
+                match shards.get_mut(&jrn.shard_id()) {
                     Some(_) => (),
                     None => {
-                        shards.insert(jrn.id(), true);
+                        shards.insert(jrn.shard_id(), true);
                     }
                 }
                 journals.push(jrn);
@@ -243,8 +244,10 @@ where
             let mut shard = Shard::<K, V>::new(self.name.clone(), id, index);
 
             // remove journals for this shard.
-            let journals: Vec<Journal<K, V>> =
-                self.journals.drain_filter(|jrn| jrn.id() == id).collect();
+            let journals: Vec<Journal<K, V>> = self
+                .journals
+                .drain_filter(|jrn| jrn.shard_id() == id)
+                .collect();
 
             // check whether journals are in proper order
             if journals.len() > 0 {
@@ -283,7 +286,7 @@ where
     pub fn purge_before(&mut self, before: u64) -> Result<()> {
         for shard_tx in self.shards.iter() {
             let (tx, rx) = mpsc::sync_channel(1);
-            shard_tx.send(OpRequest::purge_before(before, tx))?;
+            shard_tx.send(OpRequest::new_purge_before(before, tx))?;
             rx.recv()?;
         }
         Ok(())
@@ -293,7 +296,7 @@ where
         // wait for the threads to exit, note that threads could have ended
         // when close() was called on WAL or Writer, or due panic or error.
         while let Some(tx) = self.shards.pop() {
-            tx.send(OpRequest::close()).ok(); // ignore if send returns an error
+            tx.send(OpRequest::new_close()).ok(); // ignore if send returns an error
         }
         // wait for the threads to exit.
         let mut index = 0_u64;
@@ -323,7 +326,7 @@ where
 
     pub fn set(&self, key: K, value: V) -> Result<u64> {
         let (resp_tx, resp_rx) = mpsc::sync_channel(1);
-        self.tx.send(OpRequest::set(key, value, resp_tx))?;
+        self.tx.send(OpRequest::new_set(key, value, resp_tx))?;
         match resp_rx.recv()? {
             Opresp::Result(res) => res,
         }
@@ -331,7 +334,8 @@ where
 
     pub fn set_cas(&self, key: K, value: V, cas: u64) -> Result<u64> {
         let (resp_tx, resp_rx) = mpsc::sync_channel(1);
-        self.tx.send(OpRequest::set_cas(key, value, cas, resp_tx))?;
+        self.tx
+            .send(OpRequest::new_set_cas(key, value, cas, resp_tx))?;
         match resp_rx.recv()? {
             Opresp::Result(res) => res,
         }
@@ -343,7 +347,8 @@ where
         Q: ToOwned<Owned = K> + ?Sized,
     {
         let (resp_tx, resp_rx) = mpsc::sync_channel(1);
-        self.tx.send(OpRequest::delete(key.to_owned(), resp_tx))?;
+        self.tx
+            .send(OpRequest::new_delete(key.to_owned(), resp_tx))?;
         match resp_rx.recv()? {
             Opresp::Result(res) => res,
         }
@@ -555,19 +560,19 @@ where
     K: Send + Serialize,
     V: Send + Serialize,
 {
-    fn set(k: K, v: V, caller: mpsc::SyncSender<Opresp>) -> OpRequest<K, V> {
-        OpRequest::Set {
-            key: k,
-            value: v,
-            caller,
-        }
+    fn new_set(
+        key: K,
+        value: V,
+        caller: mpsc::SyncSender<Opresp>, // response channel
+    ) -> OpRequest<K, V> {
+        OpRequest::Set { key, value, caller }
     }
 
-    fn set_cas(
+    fn new_set_cas(
         key: K,
         value: V,
         cas: u64,
-        caller: mpsc::SyncSender<Opresp>, // channel to receive response
+        caller: mpsc::SyncSender<Opresp>, // response channel
     ) -> OpRequest<K, V> {
         OpRequest::SetCAS {
             key,
@@ -577,21 +582,36 @@ where
         }
     }
 
-    fn delete(key: K, caller: mpsc::SyncSender<Opresp>) -> OpRequest<K, V> {
+    fn new_delete(
+        key: K,
+        caller: mpsc::SyncSender<Opresp>, // reponse channel
+    ) -> OpRequest<K, V> {
         OpRequest::Delete { key, caller }
     }
 
-    fn purge_before(s: u64, caller: mpsc::SyncSender<Opresp>) -> OpRequest<K, V> {
-        OpRequest::PurgeBefore { before: s, caller }
+    fn new_purge_before(
+        before: u64,                      // purge all entries with seqno <= u64
+        caller: mpsc::SyncSender<Opresp>, // response channel
+    ) -> OpRequest<K, V> {
+        OpRequest::PurgeBefore { before, caller }
     }
 
-    fn close() -> OpRequest<K, V> {
+    fn new_close() -> OpRequest<K, V> {
         OpRequest::Close
     }
 }
 
 enum Opresp {
     Result(Result<u64>),
+}
+
+impl PartialEq for Opresp {
+    fn eq(&self, other: &Opresp) -> bool {
+        match (self, other) {
+            (Opresp::Result(Ok(x)), Opresp::Result(Ok(y))) => x == y,
+            _ => false,
+        }
+    }
 }
 
 impl Opresp {
@@ -605,9 +625,9 @@ where
     K: Serialize,
     V: Serialize,
 {
-    id: usize,
+    shard_id: usize,
     num: usize,          // starts from 1
-    path: ffi::OsString, // {name}-shard-{id}-journal-{num}.log
+    path: ffi::OsString, // {name}-shard-{shard_id}-journal-{num}.log
     fd: Option<fs::File>,
     batches: Vec<Batch<K, V>>, // batches sorted by index-seqno.
     active: Batch<K, V>,
@@ -619,8 +639,8 @@ where
     K: Serialize,
     V: Serialize,
 {
-    fn parts_to_file_name(name: &str, id: usize, num: usize) -> String {
-        format!("{}-shard-{}-journal-{}", name, id, num)
+    fn parts_to_file_name(name: &str, shard_id: usize, num: usize) -> String {
+        format!("{}-shard-{}-journal-{}.wal", name, shard_id, num)
     }
 
     fn file_name_to_parts(file_path: &ffi::OsString) -> Option<(String, usize, usize)> {
@@ -629,24 +649,28 @@ where
             .to_os_string()
             .into_string()
             .ok()?;
-        let mut iter = file_name.split('_');
+        let file_name = file_name.split('.').next()?.to_string();
+        let mut iter = file_name.split('-');
 
         let name = iter.next()?.to_string();
         let shard = iter.next()?;
-        let id = iter.next()?;
+        let shard_id = iter.next()?;
         let journal = iter.next()?;
         let num = iter.next()?;
         if shard != "shard" || journal != "journal" {
             None
         } else {
-            Some((name, id.parse().ok()?, num.parse().ok()?))
+            Some((name, shard_id.parse().ok()?, num.parse().ok()?))
         }
     }
 
-    fn create(name: String, id: usize, num: usize) -> Result<Journal<K, V>> {
-        let path = Self::parts_to_file_name(&name, id, num);
+    fn create(name: String, shard_id: usize, num: usize) -> Result<Journal<K, V>> {
+        let path = Self::parts_to_file_name(&name, shard_id, num);
+
+        fs::remove_file(&path).ok(); // cleanup a single journal file
+
         Ok(Journal {
-            id,
+            shard_id,
             num,
             path: <String as AsRef<ffi::OsStr>>::as_ref(&path).to_os_string(),
             fd: Some({
@@ -695,8 +719,8 @@ where
         };
 
         match Self::file_name_to_parts(&file_path) {
-            Some((nm, id, num)) if nm == name => Ok(Some(Journal {
-                id,
+            Some((nm, shard_id, num)) if nm == name => Ok(Some(Journal {
+                shard_id,
                 num,
                 path: file_path.clone(),
                 fd: Default::default(),
@@ -714,8 +738,8 @@ where
         file_path: ffi::OsString, // full path
     ) -> Result<Option<Journal<K, V>>> {
         match Self::file_name_to_parts(&file_path) {
-            Some((nm, id, num)) if nm == name => Ok(Some(Journal {
-                id,
+            Some((nm, shard_id, num)) if nm == name => Ok(Some(Journal {
+                shard_id,
                 num,
                 path: file_path,
                 fd: Default::default(),
@@ -733,8 +757,8 @@ where
     K: Serialize,
     V: Serialize,
 {
-    fn id(&self) -> usize {
-        self.id
+    fn shard_id(&self) -> usize {
+        self.shard_id
     }
 
     fn to_start_index(&self) -> Option<u64> {
@@ -754,13 +778,13 @@ where
         Ok(self.fd.as_ref().unwrap().metadata()?.len() > limit)
     }
 
-    fn into_iter(self) -> Result<BatchIter<K, V>> {
-        let fd = {
-            let mut opts = fs::OpenOptions::new();
-            opts.append(true).create_new(true).open(self.path)?
-        };
+    fn into_iter(mut self) -> Result<BatchIter<K, V>> {
+        self.fd.take();
         Ok(BatchIter {
-            fd,
+            fd: {
+                let mut opts = fs::OpenOptions::new();
+                opts.read(true).write(false).open(self.path)?
+            },
             batches: self.batches.into_iter(),
             entries: vec![].into_iter(),
         })
@@ -829,6 +853,8 @@ where
             return Ok(0);
         }
 
+        let fd = self.fd.as_mut().unwrap();
+        let fpos = fd.metadata()?.len();
         self.buffer.resize(0, 0);
         let length = self.active.encode_active(&mut self.buffer);
         let n = fd.write(&self.buffer)?;
@@ -838,8 +864,6 @@ where
         } else {
             let start_index = self.active.to_start_index().unwrap();
             let last_index = self.active.to_last_index().unwrap();
-            let fd = self.fd.as_mut().unwrap();
-            let fpos = fd.metadata()?.len();
 
             fd.sync_all()?; // TODO: <- bottle-neck for disk latency/throughput.
             let b = Batch::new_refer(fpos, length, start_index, last_index);
@@ -1118,9 +1142,9 @@ where
 
                 m += entries.iter().map(|e| e.encode(buf)).sum::<usize>();
 
-                buf.extend_from_slice(BATCH_MARKER.as_bytes());
+                buf.extend_from_slice(BATCH_MARKER.as_ref());
 
-                let n = 56 + m + BATCH_MARKER.as_bytes().len() + 8;
+                let n = 56 + m + BATCH_MARKER.len() + 8;
                 let length: u64 = n.try_into().unwrap();
                 buf[..8].copy_from_slice(&length.to_be_bytes());
                 buf.extend_from_slice(&length.to_be_bytes());
@@ -1257,7 +1281,7 @@ where
         }
 
         let (m, n) = (a - 8 - BATCH_MARKER.len(), a - 8);
-        if BATCH_MARKER.as_bytes() != &buf[m..n] {
+        if BATCH_MARKER.as_slice() != &buf[m..n] {
             let msg = format!("batch-marker {:?}", &buf[m..n]);
             return Err(Error::InvalidWAL(msg));
         }
@@ -1311,6 +1335,73 @@ where
         // Operation on host data structure.
         op: Op<K, V>,
     },
+}
+
+impl<K, V> PartialEq for Entry<K, V>
+where
+    K: PartialEq + Serialize,
+    V: PartialEq + Serialize,
+{
+    fn eq(&self, other: &Entry<K, V>) -> bool {
+        match (self, other) {
+            (
+                Entry::Term {
+                    term: t1,
+                    index: i1,
+                    op: op1,
+                },
+                Entry::Term {
+                    term: t2,
+                    index: i2,
+                    op: op2,
+                },
+            ) => t1 == t2 && i1 == i2 && op1.eq(&op2),
+            (
+                Entry::Client {
+                    term: t1,
+                    index: i1,
+                    id: id1,
+                    ceqno: n1,
+                    op: op1,
+                },
+                Entry::Client {
+                    term: t2,
+                    index: i2,
+                    id: id2,
+                    ceqno: n2,
+                    op: op2,
+                },
+            ) => t1 == t2 && i1 == i2 && id1 == id2 && n1 == n2 && op1.eq(&op2),
+            _ => false,
+        }
+    }
+}
+
+impl<K, V> fmt::Debug for Entry<K, V>
+where
+    K: Serialize + fmt::Debug,
+    V: Serialize + fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
+        match self {
+            Entry::Term { term, index, op } => write!(
+                f,
+                "Entry::Term<term: {} index: {}  op: {:?}>",
+                term, index, op
+            ),
+            Entry::Client {
+                term,
+                index,
+                id,
+                ceqno,
+                op,
+            } => write!(
+                f,
+                "Entry::Term<term: {} index: {}  id: {} ceqno: {} op: {:?}>",
+                term, index, id, ceqno, op
+            ),
+        }
+    }
 }
 
 impl<K, V> Entry<K, V>
@@ -1545,6 +1636,50 @@ where
     Delete { key: K },
     // Config operations,
     // TBD
+}
+
+impl<K, V> PartialEq for Op<K, V>
+where
+    K: PartialEq + Serialize,
+    V: PartialEq + Serialize,
+{
+    fn eq(&self, other: &Op<K, V>) -> bool {
+        match (self, other) {
+            (Op::Set { key: k1, value: v1 }, Op::Set { key: k2, value: v2 }) => {
+                k1 == k2 && v1 == v2
+            }
+            (
+                Op::SetCAS {
+                    key: k1,
+                    value: v1,
+                    cas: n1,
+                },
+                Op::SetCAS {
+                    key: k2,
+                    value: v2,
+                    cas: n2,
+                },
+            ) => k1 == k2 && v1 == v2 && n1 == n2,
+            (Op::Delete { key: k1 }, Op::Delete { key: k2 }) => k1 == k2,
+            _ => false,
+        }
+    }
+}
+
+impl<K, V> fmt::Debug for Op<K, V>
+where
+    K: Serialize + fmt::Debug,
+    V: Serialize + fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
+        match self {
+            Op::Set { key, value } => write!(f, "<Op::Set<key: {:?} value: {:?}>", key, value),
+            Op::SetCAS { key, value, cas } => {
+                write!(f, "Op::Set<key: {:?} value: {:?} cas: {}>", key, value, cas)
+            }
+            Op::Delete { key } => write!(f, "Op::Set< key: {:?}>", key),
+        }
+    }
 }
 
 impl<K, V> Op<K, V>

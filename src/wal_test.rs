@@ -1,27 +1,159 @@
+use std::ffi::OsStr;
+
 use super::*;
 
-// parts_to_file_name()  <-> file_name_to_parts()
-// create()
-//      id()
-//      to_start_index()
-//      to_last_index()
-//      to_current_term()
-//      exceed_limit()
-//      into_iter()
-//      handle_op() -> handle_set(), handle_set_cas(), handle_delete()
-//      flush(), repeat 2-3 times.
-//      BatchIter
-// load()
-//      id()
-//      to_start_index()
-//      to_last_index()
-//      to_current_term()
-//      exceed_limit()
-//      into_iter()
-//      handle_op() -> handle_set(), handle_set_cas(), handle_delete()
-//      flush(), repeat 2-3 times.
-//      BatchIter
-// purge()
+#[test]
+fn test_journal_file() {
+    let file_path = Journal::<i32, i32>::parts_to_file_name("users", 1, 1);
+    let file: &OsStr = file_path.as_ref();
+
+    assert_eq!(file_path, "users-shard-1-journal-1.wal".to_string());
+
+    match Journal::<i32, i32>::file_name_to_parts(&file.to_os_string()) {
+        Some((name, shard_id, num)) => {
+            assert_eq!(name, "users".to_string());
+            assert_eq!(shard_id, 1);
+            assert_eq!(num, 1);
+        }
+        None => unreachable!(),
+    }
+}
+
+#[test]
+fn test_journal() {
+    let (name, shard_id, num) = ("users".to_string(), 1, 1);
+    let mut j = Journal::<i32, i32>::create(name, shard_id, num)
+        .expect("failed to create journal file for users");
+
+    assert_eq!(j.shard_id(), 1);
+    assert_eq!(j.to_start_index(), None);
+    assert_eq!(j.to_last_index(), None);
+    assert_eq!(j.to_current_term(), NIL_TERM);
+    assert!(!j.exceed_limit(0).expect("exceed limit"));
+
+    let (tx, rx) = mpsc::sync_channel(1);
+
+    j.handle_op(1, OpRequest::new_set(10, 2000, tx.clone()))
+        .unwrap();
+    assert!(rx.recv().unwrap() == Opresp::Result(Ok(1)));
+
+    j.handle_op(2, OpRequest::new_set(20, 2001, tx.clone()))
+        .unwrap();
+    assert!(rx.recv().unwrap() == Opresp::Result(Ok(2)));
+
+    j.handle_op(3, OpRequest::new_set(30, 2002, tx.clone()))
+        .unwrap();
+    assert!(rx.recv().unwrap() == Opresp::Result(Ok(3)));
+
+    j.handle_op(4, OpRequest::new_set_cas(10, 3000, 1, tx.clone()))
+        .unwrap();
+    assert!(rx.recv().unwrap() == Opresp::Result(Ok(4)));
+
+    j.handle_op(5, OpRequest::new_set_cas(20, 3001, 2, tx.clone()))
+        .unwrap();
+    assert!(rx.recv().unwrap() == Opresp::Result(Ok(5)));
+
+    j.handle_op(6, OpRequest::new_delete(30, tx.clone()))
+        .unwrap();
+    assert!(rx.recv().unwrap() == Opresp::Result(Ok(6)));
+
+    assert_eq!(j.flush(), Ok(431));
+
+    j.handle_op(7, OpRequest::new_set(40, 2000, tx.clone()))
+        .unwrap();
+    assert!(rx.recv().unwrap() == Opresp::Result(Ok(7)));
+
+    j.handle_op(8, OpRequest::new_set(30, 5000, tx.clone()))
+        .unwrap();
+    assert!(rx.recv().unwrap() == Opresp::Result(Ok(8)));
+
+    assert_eq!(j.flush(), Ok(235));
+
+    j.handle_op(9, OpRequest::new_set(50, 2002, tx.clone()))
+        .unwrap();
+    assert!(rx.recv().unwrap() == Opresp::Result(Ok(9)));
+
+    j.handle_op(10, OpRequest::new_set_cas(10, 5000, 6, tx.clone()))
+        .unwrap();
+    assert!(rx.recv().unwrap() == Opresp::Result(Ok(10)));
+
+    j.handle_op(11, OpRequest::new_set_cas(50, 3001, 9, tx.clone()))
+        .unwrap();
+    assert!(rx.recv().unwrap() == Opresp::Result(Ok(11)));
+
+    j.handle_op(12, OpRequest::new_delete(10, tx.clone()))
+        .unwrap();
+    assert!(rx.recv().unwrap() == Opresp::Result(Ok(12)));
+
+    assert_eq!(j.flush(), Ok(335));
+
+    for (i, entry) in j.into_iter().unwrap().enumerate() {
+        match (i, entry.unwrap()) {
+            (0, entry) => {
+                let e = Entry::new_term(Op::new_set(10, 2000), NIL_TERM, 1);
+                assert!(e == entry)
+            }
+            (1, entry) => {
+                let e = Entry::new_term(Op::new_set(20, 2001), NIL_TERM, 2);
+                assert!(e == entry)
+            }
+            (2, entry) => {
+                let e = Entry::new_term(Op::new_set(30, 2002), NIL_TERM, 3);
+                assert!(e == entry)
+            }
+            (3, entry) => {
+                let e = Entry::new_term(Op::new_set_cas(10, 3000, 1), NIL_TERM, 4);
+                assert!(e == entry)
+            }
+            (4, entry) => {
+                let e = Entry::new_term(Op::new_set_cas(20, 3001, 2), NIL_TERM, 5);
+                assert!(e == entry)
+            }
+            (5, entry) => {
+                let e = Entry::new_term(Op::new_delete(30), NIL_TERM, 6);
+                assert!(e == entry)
+            }
+            // next batch
+            (6, entry) => {
+                let e = Entry::new_term(Op::new_set(40, 2000), NIL_TERM, 7);
+                assert!(e == entry)
+            }
+            (7, entry) => {
+                let e = Entry::new_term(Op::new_set(30, 5000), NIL_TERM, 8);
+                assert!(e == entry)
+            }
+            // next batch
+            (8, entry) => {
+                let e = Entry::new_term(Op::new_set(50, 2002), NIL_TERM, 9);
+                assert!(e == entry)
+            }
+            (9, entry) => {
+                let e = Entry::new_term(Op::new_set_cas(10, 5000, 6), NIL_TERM, 10);
+                assert!(e == entry)
+            }
+            (10, entry) => {
+                let e = Entry::new_term(Op::new_set_cas(50, 3001, 9), NIL_TERM, 11);
+                assert!(e == entry)
+            }
+            (11, entry) => {
+                let e = Entry::new_term(Op::new_delete(10), NIL_TERM, 12);
+                assert!(e == entry)
+            }
+            _ => unreachable!(),
+        }
+    }
+    // load()
+    //      id()
+    //      to_start_index()
+    //      to_last_index()
+    //      to_current_term()
+    //      exceed_limit()
+    //      into_iter()
+    //      handle_op() -> handle_set(), handle_set_cas(), handle_delete()
+    //      flush(), repeat 2-3 times.
+    //      BatchIter
+    // purge()
+}
 
 #[test]
 fn test_batch() {
@@ -153,7 +285,7 @@ fn test_entry() {
     }
 
     let mut entry: Entry<i32, i32> = unsafe { mem::zeroed() };
-    entry.decode(&buf);
+    entry.decode(&buf).unwrap();
     match entry {
         Entry::Term {
             term: 23,
@@ -181,7 +313,7 @@ fn test_entry() {
     }
 
     let mut entry: Entry<i32, i32> = unsafe { mem::zeroed() };
-    entry.decode(&buf);
+    entry.decode(&buf).unwrap();
     match entry {
         Entry::Client {
             term: 23,
@@ -211,7 +343,7 @@ fn test_entry_term() {
     let mut op: Op<i32, i32> = unsafe { mem::zeroed() };
     let mut term: u64 = 0;
     let mut index: u64 = 0;
-    Entry::decode_term(&buf, &mut op, &mut term, &mut index);
+    Entry::decode_term(&buf, &mut op, &mut term, &mut index).unwrap();
     match op {
         Op::Set { key: 10, value: 20 } => (),
         _ => unreachable!(),
@@ -233,7 +365,7 @@ fn test_entry_client() {
     let mut index: u64 = 0;
     let mut id: u64 = 0;
     let mut ceqno: u64 = 0;
-    Entry::decode_client(&buf, &mut op, &mut term, &mut index, &mut id, &mut ceqno);
+    Entry::decode_client(&buf, &mut op, &mut term, &mut index, &mut id, &mut ceqno).unwrap();
     match op {
         Op::Set { key: 10, value: 20 } => (),
         _ => unreachable!(),

@@ -1,5 +1,5 @@
 //! Bogn provide a collection of algorithms for indexing data either
-//! in memory or in disk or in both. Bogn indexes are optimized for
+//! in memory or in disk or both. Bogn indexes are optimized for
 //! document databases and bigdata.
 //!
 //! Each index will carry a sequence-number as the count of mutations
@@ -13,7 +13,7 @@
 //! structures, and LSM technique is used to maintain consistency between
 //! them.
 //!
-//! CAS, similar to compare-and-set, can be specified by applications
+//! CAS, a.k.a compare-and-set, can be specified by applications
 //! that need consistency gaurantees for a single index-entry. In API
 //! context CAS == sequence-number.
 //!
@@ -41,7 +41,7 @@ pub mod scans;
 
 pub use crate::bogn::Bogn;
 pub use crate::core::{Diff, Entry, Replay, Result, Serialize, VersionIter};
-pub use crate::core::{Index, IndexIter, Reader, Writer};
+pub use crate::core::{Footprint, Index, IndexIter, Reader, Writer};
 pub use crate::error::Error;
 pub use crate::spinlock::RWSpinlock;
 

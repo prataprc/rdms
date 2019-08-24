@@ -300,7 +300,8 @@ where
         // wait for the threads to exit, note that threads could have ended
         // when close() was called on WAL or Writer, or due panic or error.
         while let Some(tx) = self.shards.pop() {
-            tx.send(OpRequest::new_close()).ok(); // ignore if send returns an error
+            // ignore if send returns an error
+            tx.send(OpRequest::new_close()).ok();
         }
         // wait for the threads to exit.
         let mut index = 0_u64;
@@ -379,7 +380,12 @@ where
     K: Serialize,
     V: Serialize,
 {
-    fn new(dir: ffi::OsString, name: String, id: usize, index: Arc<Box<AtomicU64>>) -> Shard<K, V> {
+    fn new(
+        dir: ffi::OsString, // wal directory
+        name: String,
+        id: usize,
+        index: Arc<Box<AtomicU64>>,
+    ) -> Shard<K, V> {
         Shard {
             dir,
             name,
@@ -455,8 +461,7 @@ where
     fn receive_cmds(
         rx: &mpsc::Receiver<OpRequest<K, V>>,
         cmds: &mut Vec<OpRequest<K, V>>,
-    ) -> result::Result<(), mpsc::TryRecvError> // TODO: can this be folded into Error
-    {
+    ) -> result::Result<(), mpsc::TryRecvError> {
         loop {
             match rx.try_recv() {
                 Ok(cmd) => cmds.push(cmd),

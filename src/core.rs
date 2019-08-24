@@ -10,10 +10,32 @@ use crate::vlog;
 /// Result returned by bogn functions and methods.
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Index entry iterator.
+/// Type alias to trait-objects iterating over [`Index`] [`Entry`].
 pub type IndexIter<'a, K, V> = Box<dyn Iterator<Item = Result<Entry<K, V>>> + 'a>;
 
-/// Index operations.
+/// Trait for Diffable values. Bogn can version control an index-entry.
+///
+/// O = old value
+/// N = new value
+/// D = difference between O and N
+///
+/// Then,
+///
+/// D = N - O (diff operation)
+/// O = N - D (merge operation, to get old value)
+pub trait Diff: Sized {
+    type D: Clone + From<Self> + Into<Self> + Footprint;
+
+    /// Return the delta between two version of value.
+    /// D = N - O
+    fn diff(&self, old: &Self) -> Self::D;
+
+    /// Merge delta with newer version to construct older version of the value.
+    /// O = N - D
+    fn merge(&self, delta: &Self::D) -> Self;
+}
+
+/// Index trait that can ingest key, value pairs.
 pub trait Index<K, V>: Sized + Footprint
 where
     K: Clone + Ord + Footprint,
@@ -171,28 +193,6 @@ where
     ) -> Result<Entry<K, V>>;
 
     fn delete<Q>(&mut self, key: &Q, index: u64) -> Result<Entry<K, V>>;
-}
-
-/// Diffable values.
-///
-/// O = previous value
-/// N = next value
-/// D = difference between O and N
-///
-/// Then,
-///
-/// D = N - O (diff operation)
-/// O = N - D (merge operation, to get old value)
-pub trait Diff: Sized {
-    type D: Clone + From<Self> + Into<Self> + Footprint;
-
-    /// Return the delta between two version of value.
-    /// D = N - O
-    fn diff(&self, old: &Self) -> Self::D;
-
-    /// Merge delta with this value to create another value.
-    /// O = N - D
-    fn merge(&self, delta: &Self::D) -> Self;
 }
 
 /// Serialize types and values to binary sequence of bytes.

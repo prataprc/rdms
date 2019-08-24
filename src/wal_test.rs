@@ -21,9 +21,16 @@ fn test_journal_file() {
 
 #[test]
 fn test_journal() {
+    let dir = std::env::temp_dir().into_os_string();
     let (name, shard_id, num) = ("users".to_string(), 1, 1);
-    let mut j = Journal::<i32, i32>::create(name, shard_id, num)
-        .expect("failed to create journal file for users");
+    let mut j = Journal::<i32, i32>::create(
+        // create a new journal
+        dir.clone(),
+        name.clone(),
+        shard_id,
+        num,
+    )
+    .expect("failed to create journal file for users");
 
     assert_eq!(j.shard_id(), 1);
     assert_eq!(j.to_start_index(), None);
@@ -87,72 +94,92 @@ fn test_journal() {
 
     assert_eq!(j.flush(), Ok(335));
 
-    for (i, entry) in j.into_iter().unwrap().enumerate() {
-        match (i, entry.unwrap()) {
-            (0, entry) => {
-                let e = Entry::new_term(Op::new_set(10, 2000), NIL_TERM, 1);
-                assert!(e == entry)
+    let verify_fn = |j: Journal<i32, i32>| {
+        assert_eq!(j.shard_id(), 1);
+        assert_eq!(j.to_start_index(), Some(1));
+        assert_eq!(j.to_last_index(), Some(12));
+        assert_eq!(j.to_current_term(), NIL_TERM);
+        assert_eq!(j.exceed_limit(1000).expect("exceed limit"), true);
+        assert_eq!(j.exceed_limit(1001).expect("exceed limit"), false);
+        assert_eq!(j.exceed_limit(1002).expect("exceed limit"), false);
+
+        for (i, entry) in j.into_iter().unwrap().enumerate() {
+            match (i, entry.unwrap()) {
+                (0, entry) => {
+                    let e = Entry::new_term(Op::new_set(10, 2000), NIL_TERM, 1);
+                    assert!(e == entry)
+                }
+                (1, entry) => {
+                    let e = Entry::new_term(Op::new_set(20, 2001), NIL_TERM, 2);
+                    assert!(e == entry)
+                }
+                (2, entry) => {
+                    let e = Entry::new_term(Op::new_set(30, 2002), NIL_TERM, 3);
+                    assert!(e == entry)
+                }
+                (3, entry) => {
+                    let op = Op::new_set_cas(10, 3000, 1);
+                    let e = Entry::new_term(op, NIL_TERM, 4);
+                    assert!(e == entry)
+                }
+                (4, entry) => {
+                    let op = Op::new_set_cas(20, 3001, 2);
+                    let e = Entry::new_term(op, NIL_TERM, 5);
+                    assert!(e == entry)
+                }
+                (5, entry) => {
+                    let e = Entry::new_term(Op::new_delete(30), NIL_TERM, 6);
+                    assert!(e == entry)
+                }
+                // next batch
+                (6, entry) => {
+                    let e = Entry::new_term(Op::new_set(40, 2000), NIL_TERM, 7);
+                    assert!(e == entry)
+                }
+                (7, entry) => {
+                    let e = Entry::new_term(Op::new_set(30, 5000), NIL_TERM, 8);
+                    assert!(e == entry)
+                }
+                // next batch
+                (8, entry) => {
+                    let e = Entry::new_term(Op::new_set(50, 2002), NIL_TERM, 9);
+                    assert!(e == entry)
+                }
+                (9, entry) => {
+                    let op = Op::new_set_cas(10, 5000, 6);
+                    let e = Entry::new_term(op, NIL_TERM, 10);
+                    assert!(e == entry)
+                }
+                (10, entry) => {
+                    let op = Op::new_set_cas(50, 3001, 9);
+                    let e = Entry::new_term(op, NIL_TERM, 11);
+                    assert!(e == entry)
+                }
+                (11, entry) => {
+                    let e = Entry::new_term(Op::new_delete(10), NIL_TERM, 12);
+                    assert!(e == entry)
+                }
+                _ => unreachable!(),
             }
-            (1, entry) => {
-                let e = Entry::new_term(Op::new_set(20, 2001), NIL_TERM, 2);
-                assert!(e == entry)
-            }
-            (2, entry) => {
-                let e = Entry::new_term(Op::new_set(30, 2002), NIL_TERM, 3);
-                assert!(e == entry)
-            }
-            (3, entry) => {
-                let e = Entry::new_term(Op::new_set_cas(10, 3000, 1), NIL_TERM, 4);
-                assert!(e == entry)
-            }
-            (4, entry) => {
-                let e = Entry::new_term(Op::new_set_cas(20, 3001, 2), NIL_TERM, 5);
-                assert!(e == entry)
-            }
-            (5, entry) => {
-                let e = Entry::new_term(Op::new_delete(30), NIL_TERM, 6);
-                assert!(e == entry)
-            }
-            // next batch
-            (6, entry) => {
-                let e = Entry::new_term(Op::new_set(40, 2000), NIL_TERM, 7);
-                assert!(e == entry)
-            }
-            (7, entry) => {
-                let e = Entry::new_term(Op::new_set(30, 5000), NIL_TERM, 8);
-                assert!(e == entry)
-            }
-            // next batch
-            (8, entry) => {
-                let e = Entry::new_term(Op::new_set(50, 2002), NIL_TERM, 9);
-                assert!(e == entry)
-            }
-            (9, entry) => {
-                let e = Entry::new_term(Op::new_set_cas(10, 5000, 6), NIL_TERM, 10);
-                assert!(e == entry)
-            }
-            (10, entry) => {
-                let e = Entry::new_term(Op::new_set_cas(50, 3001, 9), NIL_TERM, 11);
-                assert!(e == entry)
-            }
-            (11, entry) => {
-                let e = Entry::new_term(Op::new_delete(10), NIL_TERM, 12);
-                assert!(e == entry)
-            }
-            _ => unreachable!(),
         }
-    }
-    // load()
-    //      id()
-    //      to_start_index()
-    //      to_last_index()
-    //      to_current_term()
-    //      exceed_limit()
-    //      into_iter()
-    //      handle_op() -> handle_set(), handle_set_cas(), handle_delete()
-    //      flush(), repeat 2-3 times.
-    //      BatchIter
-    // purge()
+    };
+
+    verify_fn(j);
+
+    // load test case
+    let mut file_path = path::PathBuf::new();
+    file_path.push(dir);
+    file_path.push(Journal::<i32, i32>::parts_to_file_name(
+        &name, shard_id, num,
+    ));
+    let file: &OsStr = file_path.as_ref();
+
+    let j = Journal::<i32, i32>::load(name, file.clone().to_os_string());
+    let mut j = j.unwrap().unwrap();
+    j.open().expect("unable to open journal file");
+    verify_fn(j);
+
+    // TODO: purge()
 }
 
 #[test]
@@ -226,7 +253,7 @@ fn test_batch() {
     // encode / decode active
     let mut buf = vec![];
     let n = batch.encode_active(&mut buf);
-    assert_eq!(n, 253);
+    assert_eq!(n, 293);
     let mut batch_out: Batch<i32, i32> = unsafe { mem::zeroed() };
     let m = batch_out
         .decode_active(&buf)
@@ -261,7 +288,7 @@ fn test_batch() {
             last_index,
         } => {
             assert_eq!(fpos, 12345678);
-            assert_eq!(length, 253);
+            assert_eq!(length, 293);
             assert_eq!(start_index, 1);
             assert_eq!(last_index, 3);
         }
@@ -365,7 +392,11 @@ fn test_entry_client() {
     let mut index: u64 = 0;
     let mut id: u64 = 0;
     let mut ceqno: u64 = 0;
-    Entry::decode_client(&buf, &mut op, &mut term, &mut index, &mut id, &mut ceqno).unwrap();
+    Entry::decode_client(
+        // all mutable reference
+        &buf, &mut op, &mut term, &mut index, &mut id, &mut ceqno,
+    )
+    .unwrap();
     match op {
         Op::Set { key: 10, value: 20 } => (),
         _ => unreachable!(),

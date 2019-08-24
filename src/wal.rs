@@ -101,6 +101,7 @@ where
     K: Send + Serialize,
     V: Send + Serialize,
 {
+    dir: ffi::OsString,
     name: String,
     index: Arc<Box<AtomicU64>>,
     shards: Vec<mpsc::Sender<OpRequest<K, V>>>,
@@ -116,8 +117,8 @@ where
     V: Send + Serialize,
 {
     pub fn create(
-        name: String,
         dir: ffi::OsString,
+        name: String,
         nshards: usize, // number of shards
     ) -> Result<Wal<K, V>> {
         // purge existing journals for name.
@@ -130,6 +131,7 @@ where
         }
         // create this WAL. later shards/journals can be added.
         Ok(Wal {
+            dir,
             name,
             index: Arc::new(Box::new(AtomicU64::new(0))),
             shards: vec![],
@@ -139,7 +141,7 @@ where
         })
     }
 
-    pub fn load(name: String, dir: ffi::OsString) -> Result<Wal<K, V>> {
+    pub fn load(dir: ffi::OsString, name: String) -> Result<Wal<K, V>> {
         // gather all the journals.
         let mut shards: HashMap<usize, bool> = HashMap::new();
         let mut journals = vec![];
@@ -167,6 +169,7 @@ where
         }
 
         Ok(Wal {
+            dir,
             name,
             index: Arc::new(Box::new(AtomicU64::new(0))),
             shards: vec![],
@@ -239,9 +242,10 @@ where
         if self.threads.len() < self.threads.capacity() {
             let (tx, rx) = mpsc::channel();
 
-            let id = self.threads.len() + 1;
+            let (dir, id) = (self.dir.clone(), self.threads.len() + 1);
+            let name = self.name.clone();
             let index = Arc::clone(&self.index);
-            let mut shard = Shard::<K, V>::new(self.name.clone(), id, index);
+            let mut shard = Shard::<K, V>::new(dir, name, id, index);
 
             // remove journals for this shard.
             let journals: Vec<Journal<K, V>> = self
@@ -361,6 +365,7 @@ where
     K: Serialize,
     V: Serialize,
 {
+    dir: ffi::OsString,
     name: String,
     id: usize,
     wal_index: Arc<Box<AtomicU64>>,
@@ -374,8 +379,9 @@ where
     K: Serialize,
     V: Serialize,
 {
-    fn new(name: String, id: usize, index: Arc<Box<AtomicU64>>) -> Shard<K, V> {
+    fn new(dir: ffi::OsString, name: String, id: usize, index: Arc<Box<AtomicU64>>) -> Shard<K, V> {
         Shard {
+            dir,
             name,
             id,
             wal_index: index,
@@ -441,7 +447,8 @@ where
     ) -> Result<thread::JoinHandle<Result<u64>>> {
         let start = 1;
         let (name, num) = (self.name.clone(), self.next_journal_num(start));
-        self.active = Some(Journal::create(name, self.id, num)?);
+        let (id, dir) = (self.id, self.dir.clone());
+        self.active = Some(Journal::create(dir, name, id, num)?);
         Ok(thread::spawn(move || thread_shard(self, rx)))
     }
 
@@ -499,7 +506,8 @@ where
                 self.journals.push(active);
                 let name = self.name.clone();
                 let num = self.next_journal_num(1 /*start*/);
-                self.active = Some(Journal::create(name, self.id, num)?);
+                let (id, dir) = (self.id, self.dir.clone());
+                self.active = Some(Journal::create(dir, name, id, num)?);
                 Ok(())
             }
             Ok(false) => {
@@ -626,8 +634,8 @@ where
     V: Serialize,
 {
     shard_id: usize,
-    num: usize,          // starts from 1
-    path: ffi::OsString, // {name}-shard-{shard_id}-journal-{num}.log
+    num: usize,               // starts from 1
+    file_path: ffi::OsString, // {name}-shard-{shard_id}-journal-{num}.log
     fd: Option<fs::File>,
     batches: Vec<Batch<K, V>>, // batches sorted by index-seqno.
     active: Batch<K, V>,
@@ -643,7 +651,9 @@ where
         format!("{}-shard-{}-journal-{}.wal", name, shard_id, num)
     }
 
-    fn file_name_to_parts(file_path: &ffi::OsString) -> Option<(String, usize, usize)> {
+    fn file_name_to_parts(
+        file_path: &ffi::OsString, // directory path and file-name
+    ) -> Option<(String, usize, usize)> {
         let file_name = path::Path::new(&file_path)
             .file_name()?
             .to_os_string()
@@ -664,18 +674,28 @@ where
         }
     }
 
-    fn create(name: String, shard_id: usize, num: usize) -> Result<Journal<K, V>> {
-        let path = Self::parts_to_file_name(&name, shard_id, num);
+    fn create(
+        dir: ffi::OsString,
+        name: String,
+        shard_id: usize,
+        num: usize,
+    ) -> Result<Journal<K, V>> {
+        let file = Self::parts_to_file_name(&name, shard_id, num);
+        let mut file_path = path::PathBuf::new();
+        file_path.push(&dir);
+        file_path.push(&file);
 
-        fs::remove_file(&path).ok(); // cleanup a single journal file
+        fs::remove_file(&file_path).ok(); // cleanup a single journal file
 
+        let file_path: &ffi::OsStr = file_path.as_ref();
+        let file_path = file_path.to_os_string();
         Ok(Journal {
             shard_id,
             num,
-            path: <String as AsRef<ffi::OsStr>>::as_ref(&path).to_os_string(),
+            file_path: file_path.clone(),
             fd: Some({
                 let mut opts = fs::OpenOptions::new();
-                opts.append(true).create_new(true).open(&path)?
+                opts.append(true).create_new(true).open(&file_path)?
             }),
             batches: Default::default(),
             active: Batch::new(),
@@ -685,7 +705,7 @@ where
 
     fn load(
         name: String,
-        file_path: ffi::OsString, // full path
+        file_path: ffi::OsString, // directory path and file
     ) -> Result<Option<Journal<K, V>>> {
         // load batches are reference to file.
         let batches = {
@@ -722,7 +742,7 @@ where
             Some((nm, shard_id, num)) if nm == name => Ok(Some(Journal {
                 shard_id,
                 num,
-                path: file_path.clone(),
+                file_path: file_path.clone(),
                 fd: Default::default(),
                 batches,
                 active: Batch::new(),
@@ -730,6 +750,15 @@ where
             })),
             _ => Ok(None),
         }
+    }
+
+    #[cfg(test)]
+    fn open(&mut self) -> Result<()> {
+        self.fd = Some({
+            let mut opts = fs::OpenOptions::new();
+            opts.read(true).write(false).open(&self.file_path)?
+        });
+        Ok(())
     }
 
     // don't load the batches. use this only for purging the journal.
@@ -741,7 +770,7 @@ where
             Some((nm, shard_id, num)) if nm == name => Ok(Some(Journal {
                 shard_id,
                 num,
-                path: file_path,
+                file_path: file_path,
                 fd: Default::default(),
                 batches: Default::default(),
                 active: Batch::new(),
@@ -783,7 +812,7 @@ where
         Ok(BatchIter {
             fd: {
                 let mut opts = fs::OpenOptions::new();
-                opts.read(true).write(false).open(self.path)?
+                opts.read(true).write(false).open(self.file_path)?
             },
             batches: self.batches.into_iter(),
             entries: vec![].into_iter(),
@@ -796,7 +825,7 @@ where
     }
 
     fn purge(self) -> Result<()> {
-        fs::remove_file(&self.path)?;
+        fs::remove_file(&self.file_path)?;
         Ok(())
     }
 }
@@ -859,7 +888,8 @@ where
         let length = self.active.encode_active(&mut self.buffer);
         let n = fd.write(&self.buffer)?;
         if length != n {
-            let msg = format!("wal-flush: {:?}, {}/{}", self.path, length, n);
+            let file_path = self.file_path.clone();
+            let msg = format!("wal-flush: {:?}, {}/{}", file_path, length, n);
             Err(Error::PartialWrite(msg))
         } else {
             let start_index = self.active.to_start_index().unwrap();

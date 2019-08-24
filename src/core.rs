@@ -13,34 +13,59 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// Type alias to trait-objects iterating over [`Index`] [`Entry`].
 pub type IndexIter<'a, K, V> = Box<dyn Iterator<Item = Result<Entry<K, V>>> + 'a>;
 
-/// Trait for Diffable values. Bogn can version control an index-entry.
+/// Trait for diffable values.
 ///
-/// O = old value
-/// N = new value
-/// D = difference between O and N
+/// All values indexed in [Bogn] must support this trait, since [Bogn]
+/// can manage successive modifications to the same entry.
+///
+/// If,
+/// ```notest
+/// O = old value; N = new value; D = difference between O and N
+/// ```
 ///
 /// Then,
-///
+/// ```notest
 /// D = N - O (diff operation)
 /// O = N - D (merge operation, to get old value)
+/// ```
+///
+/// [Bogn]: crate::Bogn
+///
 pub trait Diff: Sized {
     type D: Clone + From<Self> + Into<Self> + Footprint;
 
-    /// Return the delta between two version of value.
-    /// D = N - O
+    /// Return the delta between two consecutive versions of a value.
+    /// ``Delta = New - Old``.
     fn diff(&self, old: &Self) -> Self::D;
 
-    /// Merge delta with newer version to construct older version of the value.
-    /// O = N - D
+    /// Merge delta with newer version to return older version of the value.
+    /// ``Old = New - Delta``.
     fn merge(&self, delta: &Self::D) -> Self;
 }
 
-/// Index trait that can ingest key, value pairs.
+/// To be implemented by index-types, key-types and value-types.
+///
+/// This trait is required to compute the memory or disk foot-print
+/// for index-types, key-types and value-types.
+///
+/// **Note: This can be an approximate measure.**
+///
+pub trait Footprint {
+    fn footprint(&self) -> isize;
+}
+
+/// Index trait implemented by [Bogn]'s underlying data-structures that
+/// can ingest key, value pairs.
+///
+/// [Bogn]: crate::Bogn
+///
 pub trait Index<K, V>: Sized + Footprint
 where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
 {
+    /// A writer type, that can ingest key-value pairs, associated with
+    /// this index.
     type W: Writer<K, V>;
 
     /// Make a new empty index of this type, with same configuration.
@@ -52,7 +77,7 @@ where
     fn to_writer(index: Arc<Self>) -> Result<Self::W>;
 }
 
-/// Index read operation.
+/// Index read operations.
 pub trait Reader<K, V>
 where
     K: Clone + Ord,
@@ -138,6 +163,9 @@ where
     V: Clone + Diff + Footprint,
 {
     /// Set {key, value} in index. Return older entry if present.
+    /// Return the seqno (index) for this mutation and older entry
+    /// if present. If operation was invalid or NOOP, returned seqno
+    /// shall be ZERO.
     fn set_index(
         &mut self,
         key: K,
@@ -158,7 +186,7 @@ where
         index: u64,
     ) -> (Option<u64>, Result<Option<Entry<K, V>>>);
 
-    /// Delete key from DB. Return the seqno (index) for this mutation
+    /// Delete key from index. Return the seqno (index) for this mutation
     /// and entry if present. If operation was invalid or NOOP, returned
     /// seqno shall be ZERO.
     fn delete_index<Q>(
@@ -177,14 +205,16 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    fn set(
+    /// Replay set operation on the index.
+    fn set_index(
         &mut self,
         key: K,
         value: V,
         index: u64, // replay seqno
     ) -> Result<Entry<K, V>>;
 
-    fn set_cas(
+    /// Replay set-cas operation on the index.
+    fn set_cas_index(
         &mut self,
         key: K,
         value: V,
@@ -192,26 +222,19 @@ where
         index: u64, // replay seqno
     ) -> Result<Entry<K, V>>;
 
-    fn delete<Q>(&mut self, key: &Q, index: u64) -> Result<Entry<K, V>>;
+    /// Replay delete operation on the index.
+    fn delete_index<Q>(&mut self, key: &Q, index: u64) -> Result<Entry<K, V>>;
 }
 
-/// Serialize types and values to binary sequence of bytes.
+/// Serialize values to binary sequence of bytes.
 pub trait Serialize: Sized {
     /// Convert this value into binary equivalent. Encoded bytes shall
-    /// appended to the input-buffer `buf`. Return bytes encoded.
+    /// be appended to the input-buffer `buf`. Return bytes encoded.
     fn encode(&self, buf: &mut Vec<u8>) -> usize;
 
-    /// Reverse process of encode, given the binary equivalent, `buf`,
-    /// of a value, construct self.
+    /// Reverse process of encode, given the binary equivalent `buf`,
+    /// construct ``self``.
     fn decode(&mut self, buf: &[u8]) -> Result<usize>;
-}
-
-/// To be implemented by index-types, key-types and value-types. This
-/// trait it meant to compute the memory or disk foot-print for index types
-/// and memory-footprint for key/value types.
-/// Note: This can be an approximate measure.
-pub trait Footprint {
-    fn footprint(&self) -> isize;
 }
 
 /// Delta maintains the older version of value, with necessary fields for

@@ -205,13 +205,13 @@ where
                 let index = entry.to_index();
                 match entry.into_op() {
                     Op::Set { key, value } => {
-                        w.set(key, value, index)?;
+                        w.set_index(key, value, index)?;
                     }
                     Op::SetCAS { key, value, cas } => {
-                        w.set_cas(key, value, cas, index)?;
+                        w.set_cas_index(key, value, cas, index)?;
                     }
                     Op::Delete { key } => {
-                        w.delete(&key, index)?;
+                        w.delete_index(&key, index)?;
                     }
                 }
                 nentries += 1;

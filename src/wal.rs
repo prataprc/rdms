@@ -367,6 +367,8 @@ where
         Writer { tx }
     }
 
+    /// Append ``set`` operation into the log. Return the sequence-no
+    /// for this mutation.
     pub fn set(&self, key: K, value: V) -> Result<u64> {
         let (resp_tx, resp_rx) = mpsc::sync_channel(1);
         self.tx.send(OpRequest::new_set(key, value, resp_tx))?;
@@ -375,6 +377,8 @@ where
         }
     }
 
+    /// Append ``set_cas`` operation into the log. Return the sequence-no
+    /// for this mutation.
     pub fn set_cas(&self, key: K, value: V, cas: u64) -> Result<u64> {
         let (resp_tx, resp_rx) = mpsc::sync_channel(1);
         self.tx
@@ -384,6 +388,8 @@ where
         }
     }
 
+    /// Append ``delete`` operation into the log. Return the sequence-no
+    /// for this mutation.
     pub fn delete<Q>(&self, key: &Q) -> Result<u64>
     where
         K: Borrow<Q>,

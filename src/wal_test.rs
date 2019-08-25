@@ -3,6 +3,54 @@ use std::ffi::OsStr;
 use super::*;
 
 #[test]
+fn test_wal_initial() {
+    let dir = {
+        let mut dir_path = path::PathBuf::new();
+        dir_path.push(std::env::temp_dir().into_os_string());
+        dir_path.push("test_wal");
+        let dir: &OsStr = dir_path.as_ref();
+        dir.clone().to_os_string()
+    };
+    fs::remove_dir_all(&dir).ok();
+    fs::create_dir_all(&dir);
+
+    let nshards = 1;
+    let mut walo = Wal::create(dir, "users-wal".to_string(), nshards).unwrap();
+    walo.set_journal_limit(40000);
+    let w = walo.spawn_writer().unwrap();
+
+    let mut ops = vec![];
+    for key in 1..=1000_i32 {
+        let value = key * 10;
+        let index = w.set(key, value).unwrap();
+        ops.push(TestWriteOp {
+            index,
+            op: Op::Set { key, value },
+        });
+    }
+    for key in 1..=1000_i32 {
+        let value = key * 100;
+        let i: usize = key.try_into().unwrap();
+        let cas = ops[i - 1].index;
+        let index = w.set_cas(key, value, cas).unwrap();
+        ops.push(TestWriteOp {
+            index,
+            op: Op::SetCAS { key, value, cas },
+        });
+    }
+    for key in 1..=10_i32 {
+        let key = key & 3;
+        let index = w.delete(&key).unwrap();
+        ops.push(TestWriteOp {
+            index,
+            op: Op::Delete { key },
+        });
+    }
+
+    assert_eq!(ops.len(), 2010);
+}
+
+#[test]
 fn test_journal_file() {
     let file_path = Journal::<i32, i32>::parts_to_file_name("users", 1, 1);
     let file: &OsStr = file_path.as_ref();
@@ -167,14 +215,17 @@ fn test_journal() {
     verify_fn(j);
 
     // load test case
-    let mut file_path = path::PathBuf::new();
-    file_path.push(dir);
-    file_path.push(Journal::<i32, i32>::parts_to_file_name(
-        &name, shard_id, num,
-    ));
-    let file: &OsStr = file_path.as_ref();
+    let file = {
+        let mut file_path = path::PathBuf::new();
+        file_path.push(dir);
+        file_path.push(Journal::<i32, i32>::parts_to_file_name(
+            &name, shard_id, num,
+        ));
+        let file: &OsStr = file_path.as_ref();
+        file.clone().to_os_string()
+    };
 
-    let j = Journal::<i32, i32>::load(name, file.clone().to_os_string());
+    let j = Journal::<i32, i32>::load(name, file);
     let mut j = j.unwrap().unwrap();
     j.open().expect("unable to open journal file");
     verify_fn(j);
@@ -456,5 +507,30 @@ fn test_op() {
     match res {
         Op::Delete { key: 34 } => (),
         _ => unreachable!(),
+    }
+}
+
+struct TestWriteOp {
+    index: u64,
+    op: Op<i32, i32>,
+}
+
+impl Ord for TestWriteOp {
+    fn cmp(&self, other: &Self) -> cmp::Ordering {
+        self.index.cmp(&other.index)
+    }
+}
+
+impl Eq for TestWriteOp {}
+
+impl PartialOrd for TestWriteOp {
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
+        self.index.partial_cmp(&other.index)
+    }
+}
+
+impl PartialEq for TestWriteOp {
+    fn eq(&self, other: &Self) -> bool {
+        self.index == other.index
     }
 }

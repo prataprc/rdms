@@ -138,7 +138,7 @@ where
         Q: 'a + Ord + ?Sized;
 }
 
-/// Index read operation.
+/// Index full table scan.
 pub trait FullScan<K, V>
 where
     K: Clone + Ord,
@@ -205,7 +205,7 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    /// Replay set operation on the index.
+    /// Replay set operation on index.
     fn set_index(
         &mut self,
         key: K,
@@ -213,7 +213,7 @@ where
         index: u64, // replay seqno
     ) -> Result<Entry<K, V>>;
 
-    /// Replay set-cas operation on the index.
+    /// Replay set-cas operation on index.
     fn set_cas_index(
         &mut self,
         key: K,
@@ -222,7 +222,7 @@ where
         index: u64, // replay seqno
     ) -> Result<Entry<K, V>>;
 
-    /// Replay delete operation on the index.
+    /// Replay delete operation on index.
     fn delete_index<Q>(&mut self, key: &Q, index: u64) -> Result<Entry<K, V>>;
 }
 

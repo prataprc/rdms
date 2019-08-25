@@ -1,16 +1,16 @@
 //! Write-Ahead-Logging for Bogn index.
 //!
-//! Takes care of batching entries, serializing and appending
-//! them to disk, commiting the appended batch(es).
-//!
-//! A single WAL can be managed using ``nshards``. Each shard manage the
-//! log as a set journal-files.
+//! Takes care of batching write operations, serializing, appending
+//! them to disk, and finally commiting the appended batch(es). A
+//! single WAL can be managed using ``n`` number of shards, where
+//! each shard manages the log using a set of journal-files.
 //!
 //! **Shards**:
 //!
-//! A single shard serializes all log-operations, batches them if possible,
-//! flushes them and return a index-sequence-no for each operation back
-//! to the caller.
+//! Every shard is managed in a separate thread and each shard serializes
+//! the log-operations, batches them if possible, flushes them and return
+//! a index-sequence-no for each operation back to the caller. Basic idea
+//! behind shard is to match with I/O concurrency available in modern SSDs.
 //!
 //! **Journals**:
 //!
@@ -18,31 +18,31 @@
 //! where each journal file do not exceed the configured size-limit.
 //! Journal files are append only and flushed in batches when ever
 //! possible. Journal files are purged once WAL is notified about
-//! durability guarantee for a `before` index-sequence-no.
+//! durability guarantee uptill an index-sequence-no.
 //!
-//! A Typical WAL operations cycles fall under one of the following catogaries:
+//! A Typical WAL operation-cycles fall under one of the following catogaries:
 //!
-//! a. Initial WAL cycle, when new WAL is created on disk.
-//! b. Reload WAL cycle, when opening an existing WAL on disk.
-//! c. Replay WAL cycle, when entries WAL needs to be replayed on DB.
-//! d. Purge WAL cycle, when an existing WAL needs to totally purged.
+//! * Initial WAL cycle, when new WAL is created on disk.
+//! * Reload WAL cycle, when opening an existing WAL on disk.
+//! * Replay WAL cycle, when entries WAL needs to be replayed on DB.
+//! * Purge WAL cycle, when an existing WAL needs to totally purged.
 //!
 //! **Initial WAL cycle**:
 //!
 //! ```ignore
-//!                                        +----------------+
-//!     Wal::create() -> spawn_writer() -> | purge_before() |
-//!                                        |    close()     |
-//!                                        +----------------+
+//!                                        +--------------+
+//!     Wal::create() -> spawn_writer() -> | purge_till() |
+//!                                        |    close()   |
+//!                                        +--------------+
 //! ```
 //!
 //! **Reload WAL cycle**:
 //!
 //! ```ignore
-//!                                      +----------------+
-//!     Wal::load() -> spawn_writer() -> | purge_before() |
-//!                                      |    close()     |
-//!                                      +----------------+
+//!                                      +--------------+
+//!     Wal::load() -> spawn_writer() -> | purge_till() |
+//!                                      |    close()   |
+//!                                      +--------------+
 //! ```
 //!
 //! **Replay WAL cycle**:
@@ -51,7 +51,7 @@
 //!     Wal::load() -> replay() -> close()
 //! ```
 //!
-//! Purge cycle:
+//! **Purge cycle**:
 //!
 //! ```ignore
 //!     +---------------+
@@ -96,6 +96,14 @@ const NIL_TERM: u64 = 0;
 // default block size while loading the WAl/Journal batches.
 const WAL_BLOCK_SIZE: usize = 10 * 1024 * 1024;
 
+/// Write ahead logging for [Bogn] index.
+///
+/// Wal type is generic enough to be used outside this package. To know
+/// more about write-ahead-logging and its use-cases refer to the [wal]
+/// module documentation.
+///
+/// [wal]: crate::wal
+/// [Bogn]: crate::Bogn
 pub struct Wal<K, V>
 where
     K: Send + Serialize,
@@ -116,6 +124,9 @@ where
     K: Send + Serialize,
     V: Send + Serialize,
 {
+    /// Create a new [Wal] instance under directory ``dir``, using specified
+    /// number of shards ``nshards`` and ``name`` must be unique if more than
+    /// only [Wal] instances are going to be created under the same ``dir``.
     pub fn create(
         dir: ffi::OsString,
         name: String,
@@ -129,6 +140,12 @@ where
                 None => (),
             }
         }
+        // curate input parameters.
+        if nshards == 0 {
+            let msg = format!("invalid nshards: {}", nshards);
+            return Err(Error::InvalidWAL(msg));
+        }
+
         // create this WAL. later shards/journals can be added.
         Ok(Wal {
             dir,
@@ -141,6 +158,8 @@ where
         })
     }
 
+    /// Load an existing [Wal] instance identified by ``name`` under
+    /// directory ``dir``.
     pub fn load(dir: ffi::OsString, name: String) -> Result<Wal<K, V>> {
         // gather all the journals.
         let mut shards: HashMap<usize, bool> = HashMap::new();
@@ -179,6 +198,10 @@ where
         })
     }
 
+    /// Set journal file limit to ``limit``, exceeding which, the current
+    /// journal file shall be closed and made immutable. A new journal file
+    /// will be added to the set of journal files and all new write
+    /// operations shall be flushed to new journal file.
     pub fn set_journal_limit(&mut self, limit: usize) -> &mut Self {
         self.journal_limit = limit;
         self
@@ -190,7 +213,10 @@ where
     K: Clone + Ord + Send + Serialize,
     V: Clone + Diff + Send + Serialize,
 {
-    pub fn replay<W: Replay<K, V>>(self, mut w: W) -> Result<usize> {
+    /// When DB suffer a crash and looses latest set of mutations, [Wal] can
+    /// be used to fetch the latest set of mutations and replay them on DB.
+    /// Return total number of operations replayed on DB.
+    pub fn replay<W: Replay<K, V>>(self, mut db: W) -> Result<usize> {
         // validate
         let active = self.threads.len();
         if active > 0 {
@@ -198,28 +224,29 @@ where
             return Err(Error::InvalidWAL(msg));
         }
         // apply
-        let mut nentries = 0;
+        let mut ops = 0;
         for journal in self.journals.into_iter() {
             for entry in journal.into_iter()? {
                 let entry = entry?;
                 let index = entry.to_index();
                 match entry.into_op() {
                     Op::Set { key, value } => {
-                        w.set_index(key, value, index)?;
+                        db.set_index(key, value, index)?;
                     }
                     Op::SetCAS { key, value, cas } => {
-                        w.set_cas_index(key, value, cas, index)?;
+                        db.set_cas_index(key, value, cas, index)?;
                     }
                     Op::Delete { key } => {
-                        w.delete_index(&key, index)?;
+                        db.delete_index(&key, index)?;
                     }
                 }
-                nentries += 1;
+                ops += 1;
             }
         }
-        Ok(nentries)
+        Ok(ops)
     }
 
+    /// Purge this ``Wal`` instance and all its memory and disk footprints.
     pub fn purge(&mut self) -> Result<()> {
         if self.threads.len() > 0 {
             let msg = "cannot purge with active shards".to_string();
@@ -238,6 +265,10 @@ where
     K: 'static + Send + Serialize,
     V: 'static + Send + Serialize,
 {
+    /// Spawn a new thread and return a [`Writer`] handle. Returned Writer
+    /// can be shared with any number of threads to inject write operations
+    /// into [Wal] instance. Also note that ``spawn_writer`` api can be
+    /// called only for configured number of shards, ``nshards``.
     pub fn spawn_writer(&mut self) -> Result<Writer<K, V>> {
         if self.threads.len() < self.threads.capacity() {
             let (tx, rx) = mpsc::channel();
@@ -286,16 +317,19 @@ where
         }
     }
 
-    /// Purge all journal files `before` index-sequence-no.
-    pub fn purge_before(&mut self, before: u64) -> Result<()> {
+    /// Purge all journal files whose ``last_index`` is  less than ``before``.
+    pub fn purge_till(&mut self, before: u64) -> Result<()> {
         for shard_tx in self.shards.iter() {
             let (tx, rx) = mpsc::sync_channel(1);
-            shard_tx.send(OpRequest::new_purge_before(before, tx))?;
+            shard_tx.send(OpRequest::new_purge_till(before, tx))?;
             rx.recv()?;
         }
         Ok(())
     }
 
+    /// Close the [Wal] instance. It is possible to get back the [Wal]
+    /// instance using the [Wal::load] constructor. To purge the instance use
+    /// [Wal::purge] api.
     pub fn close(&mut self) -> Result<u64> {
         // wait for the threads to exit, note that threads could have ended
         // when close() was called on WAL or Writer, or due panic or error.
@@ -312,6 +346,10 @@ where
     }
 }
 
+/// Writer handle for [Wal] instance.
+///
+/// There can be a maximum of ``nshard`` number of Writer handles and each
+/// writer handle can be shared across any number of threads.
 pub struct Writer<K, V>
 where
     K: Send + Serialize,
@@ -361,7 +399,7 @@ where
 }
 
 // shards are monotonically increasing number from 1 to N
-pub struct Shard<K, V>
+struct Shard<K, V>
 where
     K: Serialize,
     V: Serialize,
@@ -483,7 +521,7 @@ where
                     return Ok(true);
                 }
                 OpRequest::PurgeBefore { before, caller } => {
-                    match self.handle_purge_before(before) {
+                    match self.handle_purge_till(before) {
                         ok @ Ok(_) => caller.send(Opresp::new_result(ok)).ok(),
                         Err(e) => {
                             let s = format!("purge-before {}: {:?}", before, e);
@@ -524,7 +562,7 @@ where
     }
 
     // return index or io::Error.
-    fn handle_purge_before(&mut self, before: u64) -> Result<u64> {
+    fn handle_purge_till(&mut self, before: u64) -> Result<u64> {
         let jrns: Vec<usize> = self
             .journals
             .iter()
@@ -602,7 +640,7 @@ where
         OpRequest::Delete { key, caller }
     }
 
-    fn new_purge_before(
+    fn new_purge_till(
         before: u64,                      // purge all entries with seqno <= u64
         caller: mpsc::SyncSender<Opresp>, // response channel
     ) -> OpRequest<K, V> {

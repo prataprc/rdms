@@ -150,7 +150,7 @@ where
         Ok(Wal {
             dir,
             name,
-            index: Arc::new(Box::new(AtomicU64::new(0))),
+            index: Arc::new(Box::new(AtomicU64::new(1))),
             shards: vec![],
             threads: Vec::with_capacity(nshards),
             journals: vec![],
@@ -190,7 +190,7 @@ where
         Ok(Wal {
             dir,
             name,
-            index: Arc::new(Box::new(AtomicU64::new(0))),
+            index: Arc::new(Box::new(AtomicU64::new(1))),
             shards: vec![],
             threads: Vec::with_capacity(ss.len()),
             journals,
@@ -514,6 +514,7 @@ where
         }
     }
 
+    // return true if main loop should exit.
     fn do_cmds(
         &mut self,
         index: &mut u64,
@@ -538,33 +539,32 @@ where
                 }
                 cmd => {
                     *index = self.wal_index.fetch_add(1, Ordering::Relaxed);
-                    self.active.as_mut().unwrap().handle_op(*index, cmd)?;
-                    self.active.as_mut().unwrap().flush()?;
-                    self.try_rotating_journal()?;
+                    self.active.as_mut().unwrap().append_op(*index, cmd)?;
                 }
+            }
+        }
+        match self.active.as_mut().unwrap().flush1(self.journal_limit)? {
+            None => (),
+            Some((buffer, batch)) => {
+                self.rotate_journal()?;
+                self.active.as_mut().unwrap().flush2(&buffer, batch);
             }
         }
         Ok(false)
     }
 
-    fn try_rotating_journal(&mut self) -> Result<()> {
+    fn rotate_journal(&mut self) -> Result<()> {
+        // forget the old active.
         let mut active = self.active.take().unwrap();
-        match active.exceed_limit(self.journal_limit) {
-            Ok(true) => {
-                active.freeze();
-                self.journals.push(active);
-                let name = self.name.clone();
-                let num = self.next_journal_num(1 /*start*/);
-                let (id, dir) = (self.id, self.dir.clone());
-                self.active = Some(Journal::create(dir, name, id, num)?);
-                Ok(())
-            }
-            Ok(false) => {
-                self.active = Some(active);
-                Ok(())
-            }
-            Err(err) => Err(err),
-        }
+        active.freeze();
+        self.journals.push(active);
+        // new journal file.
+        let name = self.name.clone();
+        let num = self.next_journal_num(1 /*start*/);
+        let (id, dir) = (self.id, self.dir.clone());
+        let j = Journal::create(dir, name, id, num)?;
+        self.active = Some(j);
+        Ok(())
     }
 
     // return index or io::Error.
@@ -688,7 +688,6 @@ where
     fd: Option<fs::File>,
     batches: Vec<Batch<K, V>>, // batches sorted by index-seqno.
     active: Batch<K, V>,
-    buffer: Vec<u8>,
 }
 
 impl<K, V> Journal<K, V>
@@ -697,26 +696,24 @@ where
     V: Serialize,
 {
     fn parts_to_file_name(name: &str, shard_id: usize, num: usize) -> String {
-        format!("{}-shard-{}-journal-{}.wal", name, shard_id, num)
+        format!("{}-wal-shard-{}-journal-{}.wal", name, shard_id, num)
     }
 
     fn file_name_to_parts(
         file_path: &ffi::OsString, // directory path and file-name
     ) -> Option<(String, usize, usize)> {
-        let file_name = path::Path::new(&file_path)
-            .file_name()?
-            .to_os_string()
-            .into_string()
-            .ok()?;
-        let file_name = file_name.split('.').next()?.to_string();
+        let file_name = path::Path::new(&file_path).file_name()?;
+        let file_name: &path::Path = file_name.as_ref();
+        let file_name = file_name.file_stem()?.to_os_string().into_string().ok()?;
         let mut iter = file_name.split('-');
 
         let name = iter.next()?.to_string();
+        let wal_name = iter.next()?.to_string();
         let shard = iter.next()?;
         let shard_id = iter.next()?;
         let journal = iter.next()?;
         let num = iter.next()?;
-        if shard != "shard" || journal != "journal" {
+        if shard != "shard" || wal_name != "wal" || journal != "journal" {
             None
         } else {
             Some((name, shard_id.parse().ok()?, num.parse().ok()?))
@@ -748,7 +745,6 @@ where
             }),
             batches: Default::default(),
             active: Batch::new(),
-            buffer: Vec::with_capacity(FLUSH_SIZE),
         })
     }
 
@@ -795,7 +791,6 @@ where
                 fd: Default::default(),
                 batches,
                 active: Batch::new(),
-                buffer: Vec::with_capacity(FLUSH_SIZE),
             })),
             _ => Ok(None),
         }
@@ -823,7 +818,6 @@ where
                 fd: Default::default(),
                 batches: Default::default(),
                 active: Batch::new(),
-                buffer: Vec::with_capacity(FLUSH_SIZE),
             })),
             _ => Ok(None),
         }
@@ -870,7 +864,6 @@ where
 
     fn freeze(&mut self) {
         self.fd.take();
-        self.buffer = vec![];
     }
 
     fn purge(self) -> Result<()> {
@@ -884,10 +877,10 @@ where
     K: Send + Serialize,
     V: Send + Serialize,
 {
-    fn handle_op(&mut self, index: u64, cmd: OpRequest<K, V>) -> Result<()> {
+    fn append_op(&mut self, index: u64, cmd: OpRequest<K, V>) -> Result<()> {
         match cmd {
             OpRequest::Set { key, value, caller } => {
-                self.handle_set(index, key, value);
+                self.append_set(index, key, value);
                 caller.send(Opresp::new_result(Ok(index)))?;
             }
             OpRequest::SetCAS {
@@ -896,11 +889,11 @@ where
                 cas,
                 caller,
             } => {
-                self.handle_set_cas(index, key, value, cas);
+                self.append_set_cas(index, key, value, cas);
                 caller.send(Opresp::new_result(Ok(index)))?;
             }
             OpRequest::Delete { key, caller } => {
-                self.handle_delete(index, key);
+                self.append_delete(index, key);
                 caller.send(Opresp::new_result(Ok(index)))?;
             }
             _ => unreachable!(),
@@ -908,47 +901,77 @@ where
         Ok(())
     }
 
-    fn handle_set(&mut self, index: u64, key: K, value: V) {
+    fn append_set(&mut self, index: u64, key: K, value: V) {
         let op = Op::new_set(key, value);
         let entry = Entry::new_term(op, self.to_current_term(), index);
         self.active.add_entry(entry);
     }
 
-    fn handle_set_cas(&mut self, index: u64, key: K, value: V, cas: u64) {
+    fn append_set_cas(&mut self, index: u64, key: K, value: V, cas: u64) {
         let op = Op::new_set_cas(key, value, cas);
         let entry = Entry::new_term(op, self.to_current_term(), index);
         self.active.add_entry(entry);
     }
 
-    fn handle_delete(&mut self, index: u64, key: K) {
+    fn append_delete(&mut self, index: u64, key: K) {
         let op = Op::new_delete(key);
         let entry = Entry::new_term(op, self.to_current_term(), index);
         self.active.add_entry(entry);
     }
 
-    fn flush(&mut self) -> Result<usize> {
-        if self.active.len() == 0 {
-            return Ok(0);
-        }
+    fn flush1(&mut self, limit: usize) -> Result<Option<(Vec<u8>, Batch<K, V>)>> {
+        let mut buffer = Vec::with_capacity(FLUSH_SIZE);
+        let want = self.active.encode_active(&mut buffer);
 
+        match self.exceed_limit(limit - want) {
+            Ok(true) => {
+                // rotate journal files.
+                let a = self.active.to_start_index().unwrap();
+                let z = self.active.to_last_index().unwrap();
+                let batch = Batch::new_refer(0, want, a, z);
+                Ok(Some((buffer, batch)))
+            }
+            Ok(false) => {
+                let fd = self.fd.as_mut().unwrap();
+                let fpos = fd.metadata()?.len();
+                let n = fd.write(&buffer)?;
+                if want != n {
+                    let f = self.file_path.clone();
+                    let msg = format!("wal-flush: {:?}, {}/{}", f, want, n);
+                    Err(Error::PartialWrite(msg))
+                } else {
+                    fd.sync_all()?; // TODO: <- disk bottle-neck
+
+                    let a = self.active.to_start_index().unwrap();
+                    let z = self.active.to_last_index().unwrap();
+                    let batch = Batch::new_refer(fpos, want, a, z);
+                    self.batches.push(batch);
+                    self.active = Batch::new();
+                    Ok(None)
+                }
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    fn flush2(&mut self, buffer: &[u8], mut batch: Batch<K, V>) -> Result<()> {
+        let length = buffer.len();
         let fd = self.fd.as_mut().unwrap();
         let fpos = fd.metadata()?.len();
-        self.buffer.resize(0, 0);
-        let length = self.active.encode_active(&mut self.buffer);
-        let n = fd.write(&self.buffer)?;
-        if length != n {
-            let file_path = self.file_path.clone();
-            let msg = format!("wal-flush: {:?}, {}/{}", file_path, length, n);
-            Err(Error::PartialWrite(msg))
-        } else {
-            let start_index = self.active.to_start_index().unwrap();
-            let last_index = self.active.to_last_index().unwrap();
+        let n = fd.write(&buffer)?;
+        if length == n {
+            fd.sync_all()?; // TODO: <- disk bottle-neck
 
-            fd.sync_all()?; // TODO: <- bottle-neck for disk latency/throughput.
-            let b = Batch::new_refer(fpos, length, start_index, last_index);
-            self.batches.push(b);
+            let a = batch.to_start_index().unwrap();
+            let z = batch.to_last_index().unwrap();
+            batch = Batch::new_refer(fpos, length, a, z);
+            self.batches.push(batch);
             self.active = Batch::new();
-            Ok(length)
+            Ok(())
+        } else {
+            let f = self.file_path.clone();
+            let msg = format!("wal-flush: {:?}, {}/{}", f, length, n);
+            Err(Error::PartialWrite(msg))
         }
     }
 }

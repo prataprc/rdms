@@ -53,3 +53,4 @@ Release Checklist
   * Mac-OS
   * Windows
   * amazon-aws
+  * Raspberry-pi

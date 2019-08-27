@@ -15,39 +15,17 @@ fn test_wal_initial() {
     fs::create_dir_all(&dir);
 
     let nshards = 1;
-    let mut walo = Wal::create(dir, "users-wal".to_string(), nshards).unwrap();
+    let walo = Wal::create(dir.clone(), "users".to_string(), nshards);
+    let mut walo = walo.unwrap();
     walo.set_journal_limit(40000);
     let w = walo.spawn_writer().unwrap();
 
-    let mut ops = vec![];
-    for key in 1..=1000_i32 {
-        let value = key * 10;
-        let index = w.set(key, value).unwrap();
-        ops.push(TestWriteOp {
-            index,
-            op: Op::Set { key, value },
-        });
-    }
-    for key in 1..=1000_i32 {
-        let value = key * 100;
-        let i: usize = key.try_into().unwrap();
-        let cas = ops[i - 1].index;
-        let index = w.set_cas(key, value, cas).unwrap();
-        ops.push(TestWriteOp {
-            index,
-            op: Op::SetCAS { key, value, cas },
-        });
-    }
-    for key in 1..=10_i32 {
-        let key = key & 3;
-        let index = w.delete(&key).unwrap();
-        ops.push(TestWriteOp {
-            index,
-            op: Op::Delete { key },
-        });
-    }
+    let ops = write_wal(&w);
+    assert_eq!(ops.len(), 610);
 
-    assert_eq!(ops.len(), 2010);
+    validate_journals1_file1(dir.clone(), ops.clone());
+    validate_journals1_file2(dir.clone(), ops.clone());
+    validate_journals1_file3(dir.clone(), ops.clone());
 }
 
 #[test]
@@ -55,7 +33,7 @@ fn test_journal_file() {
     let file_path = Journal::<i32, i32>::parts_to_file_name("users", 1, 1);
     let file: &OsStr = file_path.as_ref();
 
-    assert_eq!(file_path, "users-shard-1-journal-1.wal".to_string());
+    assert_eq!(file_path, "users-wal-shard-1-journal-1.wal".to_string());
 
     match Journal::<i32, i32>::file_name_to_parts(&file.to_os_string()) {
         Some((name, shard_id, num)) => {
@@ -81,66 +59,72 @@ fn test_journal() {
     .expect("failed to create journal file for users");
 
     assert_eq!(j.shard_id(), 1);
+    assert_eq!(j.to_current_term(), NIL_TERM);
     assert_eq!(j.to_start_index(), None);
     assert_eq!(j.to_last_index(), None);
-    assert_eq!(j.to_current_term(), NIL_TERM);
     assert!(!j.exceed_limit(0).expect("exceed limit"));
 
     let (tx, rx) = mpsc::sync_channel(1);
 
-    j.handle_op(1, OpRequest::new_set(10, 2000, tx.clone()))
+    j.append_op(1, OpRequest::new_set(10, 2000, tx.clone()))
         .unwrap();
     assert!(rx.recv().unwrap() == Opresp::Result(Ok(1)));
 
-    j.handle_op(2, OpRequest::new_set(20, 2001, tx.clone()))
+    j.append_op(2, OpRequest::new_set(20, 2001, tx.clone()))
         .unwrap();
     assert!(rx.recv().unwrap() == Opresp::Result(Ok(2)));
 
-    j.handle_op(3, OpRequest::new_set(30, 2002, tx.clone()))
+    j.append_op(3, OpRequest::new_set(30, 2002, tx.clone()))
         .unwrap();
     assert!(rx.recv().unwrap() == Opresp::Result(Ok(3)));
 
-    j.handle_op(4, OpRequest::new_set_cas(10, 3000, 1, tx.clone()))
+    j.append_op(4, OpRequest::new_set_cas(10, 3000, 1, tx.clone()))
         .unwrap();
     assert!(rx.recv().unwrap() == Opresp::Result(Ok(4)));
 
-    j.handle_op(5, OpRequest::new_set_cas(20, 3001, 2, tx.clone()))
+    j.append_op(5, OpRequest::new_set_cas(20, 3001, 2, tx.clone()))
         .unwrap();
     assert!(rx.recv().unwrap() == Opresp::Result(Ok(5)));
 
-    j.handle_op(6, OpRequest::new_delete(30, tx.clone()))
+    j.append_op(6, OpRequest::new_delete(30, tx.clone()))
         .unwrap();
     assert!(rx.recv().unwrap() == Opresp::Result(Ok(6)));
 
-    assert_eq!(j.flush(), Ok(431));
+    assert!(j.flush1(10 * 1024).unwrap().is_none());
+    assert_eq!(j.fd.as_ref().unwrap().metadata().unwrap().len(), 431);
 
-    j.handle_op(7, OpRequest::new_set(40, 2000, tx.clone()))
+    j.append_op(7, OpRequest::new_set(40, 2000, tx.clone()))
         .unwrap();
     assert!(rx.recv().unwrap() == Opresp::Result(Ok(7)));
 
-    j.handle_op(8, OpRequest::new_set(30, 5000, tx.clone()))
+    j.append_op(8, OpRequest::new_set(30, 5000, tx.clone()))
         .unwrap();
     assert!(rx.recv().unwrap() == Opresp::Result(Ok(8)));
 
-    assert_eq!(j.flush(), Ok(235));
+    assert!(j.flush1(10 * 1024).unwrap().is_none());
+    assert_eq!(j.fd.as_ref().unwrap().metadata().unwrap().len(), 431 + 235);
 
-    j.handle_op(9, OpRequest::new_set(50, 2002, tx.clone()))
+    j.append_op(9, OpRequest::new_set(50, 2002, tx.clone()))
         .unwrap();
     assert!(rx.recv().unwrap() == Opresp::Result(Ok(9)));
 
-    j.handle_op(10, OpRequest::new_set_cas(10, 5000, 6, tx.clone()))
+    j.append_op(10, OpRequest::new_set_cas(10, 5000, 6, tx.clone()))
         .unwrap();
     assert!(rx.recv().unwrap() == Opresp::Result(Ok(10)));
 
-    j.handle_op(11, OpRequest::new_set_cas(50, 3001, 9, tx.clone()))
+    j.append_op(11, OpRequest::new_set_cas(50, 3001, 9, tx.clone()))
         .unwrap();
     assert!(rx.recv().unwrap() == Opresp::Result(Ok(11)));
 
-    j.handle_op(12, OpRequest::new_delete(10, tx.clone()))
+    j.append_op(12, OpRequest::new_delete(10, tx.clone()))
         .unwrap();
     assert!(rx.recv().unwrap() == Opresp::Result(Ok(12)));
 
-    assert_eq!(j.flush(), Ok(335));
+    assert!(j.flush1(10 * 1024).unwrap().is_none());
+    assert_eq!(
+        j.fd.as_ref().unwrap().metadata().unwrap().len(),
+        431 + 235 + 335
+    );
 
     let verify_fn = |j: Journal<i32, i32>| {
         assert_eq!(j.shard_id(), 1);
@@ -510,6 +494,7 @@ fn test_op() {
     }
 }
 
+#[derive(Clone)]
 struct TestWriteOp {
     index: u64,
     op: Op<i32, i32>,
@@ -532,5 +517,129 @@ impl PartialOrd for TestWriteOp {
 impl PartialEq for TestWriteOp {
     fn eq(&self, other: &Self) -> bool {
         self.index == other.index
+    }
+}
+
+fn write_wal(w: &Writer<i32, i32>) -> Vec<TestWriteOp> {
+    let mut ops = vec![];
+    for key in 1..=300_i32 {
+        let value = key * 10;
+        let index = w.set(key, value).unwrap();
+        ops.push(TestWriteOp {
+            index,
+            op: Op::Set { key, value },
+        });
+    }
+    for key in 1..=300_i32 {
+        let value = key * 100;
+        let i: usize = key.try_into().unwrap();
+        let cas = ops[i - 1].index;
+        let index = w.set_cas(key, value, cas).unwrap();
+        ops.push(TestWriteOp {
+            index,
+            op: Op::SetCAS { key, value, cas },
+        });
+    }
+    for key in 1..=10_i32 {
+        let key = key & 3;
+        let index = w.delete(&key).unwrap();
+        ops.push(TestWriteOp {
+            index,
+            op: Op::Delete { key },
+        });
+    }
+    ops
+}
+
+fn validate_journals1_file1(dir: ffi::OsString, ops: Vec<TestWriteOp>) {
+    let file = {
+        let mut file = path::PathBuf::new();
+        file.push(dir);
+        file.push("users-wal-shard-1-journal-1.wal".to_string());
+        file.as_path().as_os_str().to_os_string()
+    };
+    let mut j = Journal::<i32, i32>::load("users".to_string(), file.clone())
+        .unwrap()
+        .unwrap();
+    j.open().expect("unable to open journal file");
+    assert_eq!(j.shard_id(), 1);
+    assert_eq!(j.to_current_term(), NIL_TERM);
+    let a = j.to_start_index().unwrap() as usize;
+    assert_eq!(a, 1);
+    let z = j.to_last_index().unwrap() as usize;
+    assert_eq!(z, 213);
+    assert_eq!(j.exceed_limit(40000).expect("exceed limit"), false);
+
+    let ref_ops: Vec<(usize, Op<i32, i32>)> = ops[(a - 1)..(z - 1)]
+        .iter()
+        .enumerate()
+        .map(|(i, op)| (a + i, op.op.clone()))
+        .collect();
+    let iter = j.into_iter().unwrap().zip(ref_ops.into_iter());
+    for (entry, (index, ref_op)) in iter {
+        let e = Entry::new_term(ref_op, NIL_TERM, index as u64);
+        assert!(e == entry.unwrap())
+    }
+}
+
+fn validate_journals1_file2(dir: ffi::OsString, ops: Vec<TestWriteOp>) {
+    let file = {
+        let mut file = path::PathBuf::new();
+        file.push(dir);
+        file.push("users-wal-shard-1-journal-2.wal".to_string());
+        file.as_path().as_os_str().to_os_string()
+    };
+    let mut j = Journal::<i32, i32>::load("users".to_string(), file.clone())
+        .unwrap()
+        .unwrap();
+    j.open().expect("unable to open journal file");
+    assert_eq!(j.shard_id(), 1);
+    assert_eq!(j.to_current_term(), NIL_TERM);
+    let a = j.to_start_index().unwrap() as usize;
+    assert_eq!(a, 214);
+    let z = j.to_last_index().unwrap() as usize;
+    assert_eq!(z, 421);
+    assert_eq!(j.exceed_limit(40000).expect("exceed limit"), false);
+
+    let ref_ops: Vec<(usize, Op<i32, i32>)> = ops[(a - 1)..(z - 1)]
+        .iter()
+        .enumerate()
+        .map(|(i, op)| (a + i, op.op.clone()))
+        .collect();
+    let iter = j.into_iter().unwrap().zip(ref_ops.into_iter());
+    for (entry, (index, ref_op)) in iter {
+        let e = Entry::new_term(ref_op, NIL_TERM, index as u64);
+        assert!(e == entry.unwrap())
+    }
+}
+
+fn validate_journals1_file3(dir: ffi::OsString, ops: Vec<TestWriteOp>) {
+    let file = {
+        let mut file = path::PathBuf::new();
+        file.push(dir);
+        file.push("users-wal-shard-1-journal-3.wal".to_string());
+        file.as_path().as_os_str().to_os_string()
+    };
+    let mut j = Journal::<i32, i32>::load("users".to_string(), file.clone())
+        .unwrap()
+        .unwrap();
+    j.open().expect("unable to open journal file");
+    assert_eq!(j.shard_id(), 1);
+    assert_eq!(j.to_current_term(), NIL_TERM);
+    let a = j.to_start_index().unwrap() as usize;
+    assert_eq!(a, 422);
+    let z = j.to_last_index().unwrap() as usize;
+    assert_eq!(z, 610);
+    assert_eq!(j.exceed_limit(40000).expect("exceed limit"), false);
+
+    let ref_ops: Vec<(usize, Op<i32, i32>)> = ops[(a - 1)..(z - 1)]
+        .iter()
+        .enumerate()
+        .map(|(i, op)| (a + i, op.op.clone()))
+        .collect();
+    let iter = j.into_iter().unwrap().zip(ref_ops.into_iter());
+    for (entry, (index, ref_op)) in iter {
+        let e = Entry::new_term(ref_op, NIL_TERM, index as u64);
+        assert!(e == entry.unwrap())
     }
 }

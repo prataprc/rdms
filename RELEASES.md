@@ -44,3 +44,12 @@ Release Checklist
   * Maintenance-related badges based on isitmaintained.com
   * Documentation
   * Gitpitch
+* Targets
+  * RHEL
+  * SUSE
+  * Debian
+  * Centos
+  * Ubuntu
+  * Mac-OS
+  * Windows
+  * amazon-aws

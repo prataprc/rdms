@@ -223,7 +223,7 @@ where
     ) -> Result<Entry<K, V>>;
 
     /// Replay delete operation on index.
-    fn delete_index<Q>(&mut self, key: &Q, index: u64) -> Result<Entry<K, V>>;
+    fn delete_index(&mut self, key: K, index: u64) -> Result<Entry<K, V>>;
 }
 
 /// Serialize values to binary sequence of bytes.

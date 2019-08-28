@@ -119,14 +119,26 @@ where
     journal_limit: usize,
 }
 
+impl<K, V> Drop for Wal<K, V>
+where
+    K: Send + Serialize,
+    V: Send + Serialize,
+{
+    fn drop(&mut self) {
+        if self.shards.len() > 0 || self.threads.len() > 0 {
+            panic!("Try closing Wal `{}` with Wal::close()", self.name);
+        }
+    }
+}
+
 impl<K, V> Wal<K, V>
 where
     K: Send + Serialize,
     V: Send + Serialize,
 {
-    /// Create a new [Wal] instance under directory ``dir``, using specified
+    /// Create a new [`Wal`] instance under directory ``dir``, using specified
     /// number of shards ``nshards`` and ``name`` must be unique if more than
-    /// only [Wal] instances are going to be created under the same ``dir``.
+    /// only [`Wal`] instances are going to be created under the same ``dir``.
     pub fn create(
         dir: ffi::OsString,
         name: String,
@@ -158,22 +170,29 @@ where
         })
     }
 
-    /// Load an existing [Wal] instance identified by ``name`` under
+    /// Load an existing [`Wal`] instance identified by ``name`` under
     /// directory ``dir``.
     pub fn load(dir: ffi::OsString, name: String) -> Result<Wal<K, V>> {
         // gather all the journals.
         let mut shards: HashMap<usize, bool> = HashMap::new();
         let mut journals = vec![];
+        let mut index = 0;
         for item in fs::read_dir(&dir)? {
-            let dentry = item?;
+            let file_path = {
+                let mut file = path::PathBuf::new();
+                file.push(dir.clone());
+                file.push(item?.file_name());
+                file.as_path().as_os_str().to_os_string()
+            };
             // can this be a journal file ?
-            if let Some(jrn) = Journal::load(name.clone(), dentry.file_name())? {
+            if let Some(jrn) = Journal::load(name.clone(), file_path)? {
                 match shards.get_mut(&jrn.shard_id()) {
                     Some(_) => (),
                     None => {
                         shards.insert(jrn.shard_id(), true);
                     }
                 }
+                index = cmp::max(index, jrn.to_last_index().unwrap_or(0));
                 journals.push(jrn);
             }
         }
@@ -190,7 +209,7 @@ where
         Ok(Wal {
             dir,
             name,
-            index: Arc::new(Box::new(AtomicU64::new(1))),
+            index: Arc::new(Box::new(AtomicU64::new(index + 1))),
             shards: vec![],
             threads: Vec::with_capacity(ss.len()),
             journals,
@@ -213,50 +232,47 @@ where
     K: Clone + Ord + Send + Serialize,
     V: Clone + Diff + Send + Serialize,
 {
-    /// When DB suffer a crash and looses latest set of mutations, [Wal] can
-    /// be used to fetch the latest set of mutations and replay them on DB.
-    /// Return total number of operations replayed on DB.
-    pub fn replay<W: Replay<K, V>>(self, mut db: W) -> Result<usize> {
-        // validate
-        let active = self.threads.len();
-        if active > 0 {
-            let msg = format!("cannot replay with active shards {}", active);
-            return Err(Error::InvalidWAL(msg));
-        }
-        // apply
-        let mut ops = 0;
-        for journal in self.journals.into_iter() {
-            for entry in journal.into_iter()? {
-                let entry = entry?;
-                let index = entry.to_index();
-                match entry.into_op() {
-                    Op::Set { key, value } => {
-                        db.set_index(key, value, index)?;
-                    }
-                    Op::SetCAS { key, value, cas } => {
-                        db.set_cas_index(key, value, cas, index)?;
-                    }
-                    Op::Delete { key } => {
-                        db.delete_index(&key, index)?;
-                    }
-                }
-                ops += 1;
-            }
-        }
-        Ok(ops)
+    fn is_active(&self) -> bool {
+        (self.threads.len() + self.shards.len()) > 0
     }
 
-    /// Purge this ``Wal`` instance and all its memory and disk footprints.
-    pub fn purge(&mut self) -> Result<()> {
-        if self.threads.len() > 0 {
-            let msg = "cannot purge with active shards".to_string();
-            Err(Error::InvalidWAL(msg))
-        } else {
-            while let Some(journal) = self.journals.pop() {
-                journal.purge()?;
-            }
-            Ok(())
+    /// When DB suffer a crash and looses latest set of mutations, [`Wal`]
+    /// can be used to fetch the latest set of mutations and replay them on
+    /// DB. Return total number of operations replayed on DB.
+    pub fn replay<W: Replay<K, V>>(mut self, db: &mut W) -> Result<usize> {
+        // validate
+        if self.is_active() {
+            let msg = format!("cannot replay with active shards");
+            return Err(Error::InvalidWAL(msg));
         }
+        if self.journals.len() == 0 {
+            return Ok(0);
+        }
+        // sort-merge journals from different shards.
+        let journal = self.journals.remove(0);
+        let mut iter = ReplayIter::new_journal(journal.into_iter()?);
+        for journal in self.journals.drain(..) {
+            let y = ReplayIter::new_journal(journal.into_iter()?);
+            iter = ReplayIter::new_merge(iter, y);
+        }
+        let mut ops = 0;
+        for entry in iter {
+            let entry = entry?;
+            let index = entry.to_index();
+            match entry.into_op() {
+                Op::Set { key, value } => {
+                    db.set_index(key, value, index)?;
+                }
+                Op::SetCAS { key, value, cas } => {
+                    db.set_cas_index(key, value, cas, index)?;
+                }
+                Op::Delete { key } => {
+                    db.delete_index(key, index)?;
+                }
+            }
+            ops += 1;
+        }
+        Ok(ops)
     }
 }
 
@@ -267,7 +283,7 @@ where
 {
     /// Spawn a new thread and return a [`Writer`] handle. Returned Writer
     /// can be shared with any number of threads to inject write operations
-    /// into [Wal] instance. Also note that ``spawn_writer`` api can be
+    /// into [`Wal`] instance. Also note that ``spawn_writer`` api can be
     /// called only for configured number of shards, ``nshards``.
     pub fn spawn_writer(&mut self) -> Result<Writer<K, V>> {
         if self.threads.len() < self.threads.capacity() {
@@ -284,10 +300,16 @@ where
                 .drain_filter(|jrn| jrn.shard_id() == id)
                 .collect();
 
+            shard
+                .add_journals(journals) // shall sort the journal order.
+                .set_journal_limit(self.journal_limit);
+
             // check whether journals are in proper order
-            if journals.len() > 0 {
-                let m = journals.len() - 1;
-                for (x, y) in journals[..m].iter().zip(journals[1..].iter()) {
+            if shard.journals.len() > 0 {
+                let m = shard.journals.len() - 1;
+                let zi = shard.journals[1..].iter();
+                let iter = shard.journals[..m].iter().zip(zi);
+                for (x, y) in iter {
                     let a = x.to_start_index().unwrap_or(0);
                     let b = x.to_last_index().unwrap_or(0);
                     let c = y.to_start_index().unwrap_or(0);
@@ -303,10 +325,6 @@ where
                 }
             }
 
-            shard
-                .add_journals(journals)
-                .set_journal_limit(self.journal_limit);
-
             // spawn the shard
             self.threads.push(shard.spawn(rx)?);
             self.shards.push(tx.clone());
@@ -319,6 +337,9 @@ where
 
     /// Purge all journal files whose ``last_index`` is  less than ``before``.
     pub fn purge_till(&mut self, before: u64) -> Result<()> {
+        if self.shards.len() != self.threads.capacity() {
+            panic!("spawn_writers for all shards and try purge_till() API");
+        }
         for shard_tx in self.shards.iter() {
             let (tx, rx) = mpsc::sync_channel(1);
             shard_tx.send(OpRequest::new_purge_till(before, tx))?;
@@ -327,9 +348,9 @@ where
         Ok(())
     }
 
-    /// Close the [Wal] instance. It is possible to get back the [Wal]
-    /// instance using the [Wal::load] constructor. To purge the instance use
-    /// [Wal::purge] api.
+    /// Close the [`Wal`] instance. It is possible to get back the [`Wal`]
+    /// instance using the [`Wal::load`] constructor. To purge the instance use
+    /// [`Wal::purge`] api.
     pub fn close(&mut self) -> Result<u64> {
         // wait for the threads to exit, note that threads could have ended
         // when close() was called on WAL or Writer, or due panic or error.
@@ -344,9 +365,111 @@ where
         }
         Ok(index)
     }
+
+    /// Purge this ``Wal`` instance and all its memory and disk footprints.
+    pub fn purge(mut self) -> Result<()> {
+        self.close();
+        if self.threads.len() > 0 {
+            let msg = "cannot purge with active shards".to_string();
+            Err(Error::InvalidWAL(msg))
+        } else {
+            while let Some(journal) = self.journals.pop() {
+                journal.purge()?;
+            }
+            Ok(())
+        }
+    }
 }
 
-/// Writer handle for [Wal] instance.
+enum ReplayIter<K, V>
+where
+    K: Serialize,
+    V: Serialize,
+{
+    JournalIter {
+        iter: BatchIter<K, V>,
+    },
+    MergeIter {
+        x: Box<ReplayIter<K, V>>,
+        y: Box<ReplayIter<K, V>>,
+        x_entry: Option<Result<Entry<K, V>>>,
+        y_entry: Option<Result<Entry<K, V>>>,
+    },
+}
+
+impl<K, V> ReplayIter<K, V>
+where
+    K: Serialize,
+    V: Serialize,
+{
+    fn new_journal(iter: BatchIter<K, V>) -> ReplayIter<K, V> {
+        ReplayIter::JournalIter { iter }
+    }
+
+    fn new_merge(
+        mut x: ReplayIter<K, V>, // journal iterator
+        mut y: ReplayIter<K, V>, // journal iterator
+    ) -> ReplayIter<K, V> {
+        let x_entry = x.next();
+        let y_entry = y.next();
+        ReplayIter::MergeIter {
+            x: Box::new(x),
+            y: Box::new(y),
+            x_entry,
+            y_entry,
+        }
+    }
+}
+
+impl<K, V> Iterator for ReplayIter<K, V>
+where
+    K: Serialize,
+    V: Serialize,
+{
+    type Item = Result<Entry<K, V>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            ReplayIter::JournalIter { iter } => iter.next(),
+            ReplayIter::MergeIter {
+                x,
+                y,
+                x_entry,
+                y_entry,
+            } => match (x_entry.take(), y_entry.take()) {
+                (Some(Ok(xe)), Some(Ok(ye))) => {
+                    let c = xe.to_index().cmp(&ye.to_index());
+                    match c {
+                        cmp::Ordering::Less => {
+                            *x_entry = x.next();
+                            *y_entry = Some(Ok(ye));
+                            Some(Ok(xe))
+                        }
+                        cmp::Ordering::Equal => unreachable!(),
+                        cmp::Ordering::Greater => {
+                            *y_entry = y.next();
+                            *x_entry = Some(Ok(xe));
+                            Some(Ok(ye))
+                        }
+                    }
+                }
+                (Some(Ok(xe)), None) => {
+                    *x_entry = x.next();
+                    Some(Ok(xe))
+                }
+                (None, Some(Ok(ye))) => {
+                    *y_entry = y.next();
+                    Some(Ok(ye))
+                }
+                (_, Some(Err(err))) => Some(Err(err)),
+                (Some(Err(err)), _) => Some(Err(err)),
+                _ => None,
+            },
+        }
+    }
+}
+
+/// Writer handle for [`Wal`] instance.
 ///
 /// There can be a maximum of ``nshard`` number of Writer handles and each
 /// writer handle can be shared across any number of threads.
@@ -527,7 +650,7 @@ where
                 OpRequest::Close => {
                     return Ok(true);
                 }
-                OpRequest::PurgeBefore { before, caller } => {
+                OpRequest::PurgeTill { before, caller } => {
                     match self.handle_purge_till(before) {
                         ok @ Ok(_) => caller.send(Opresp::new_result(ok)).ok(),
                         Err(e) => {
@@ -605,7 +728,7 @@ where
         key: K,
         caller: mpsc::SyncSender<Opresp>,
     },
-    PurgeBefore {
+    PurgeTill {
         before: u64,
         caller: mpsc::SyncSender<Opresp>,
     },
@@ -650,7 +773,7 @@ where
         before: u64,                      // purge all entries with seqno <= u64
         caller: mpsc::SyncSender<Opresp>, // response channel
     ) -> OpRequest<K, V> {
-        OpRequest::PurgeBefore { before, caller }
+        OpRequest::PurgeTill { before, caller }
     }
 
     fn new_close() -> OpRequest<K, V> {
@@ -702,10 +825,10 @@ where
     fn file_name_to_parts(
         file_path: &ffi::OsString, // directory path and file-name
     ) -> Option<(String, usize, usize)> {
-        let file_name = path::Path::new(&file_path).file_name()?;
-        let file_name: &path::Path = file_name.as_ref();
-        let file_name = file_name.file_stem()?.to_os_string().into_string().ok()?;
-        let mut iter = file_name.split('-');
+        let fname = path::Path::new(&file_path).file_name()?;
+        let fname: &path::Path = fname.as_ref();
+        let fname = fname.file_stem()?.to_os_string().into_string().ok()?;
+        let mut iter = fname.split('-');
 
         let name = iter.next()?.to_string();
         let wal_name = iter.next()?.to_string();
@@ -919,19 +1042,19 @@ where
         self.active.add_entry(entry);
     }
 
-    fn flush1(&mut self, limit: usize) -> Result<Option<(Vec<u8>, Batch<K, V>)>> {
+    fn flush1(&mut self, lmt: usize) -> Result<Option<(Vec<u8>, Batch<K, V>)>> {
         let mut buffer = Vec::with_capacity(FLUSH_SIZE);
         let want = self.active.encode_active(&mut buffer);
 
-        match self.exceed_limit(limit - want) {
-            Ok(true) => {
+        match self.exceed_limit(lmt - want) {
+            Ok(true) if self.active.len() > 0 => {
                 // rotate journal files.
                 let a = self.active.to_start_index().unwrap();
                 let z = self.active.to_last_index().unwrap();
                 let batch = Batch::new_refer(0, want, a, z);
                 Ok(Some((buffer, batch)))
             }
-            Ok(false) => {
+            Ok(false) if self.active.len() > 0 => {
                 let fd = self.fd.as_mut().unwrap();
                 let fpos = fd.metadata()?.len();
                 let n = fd.write(&buffer)?;
@@ -951,6 +1074,7 @@ where
                 }
             }
             Err(err) => Err(err),
+            _ => Ok(None),
         }
     }
 
@@ -1775,12 +1899,21 @@ where
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
         match self {
-            Op::Set { key, value } => write!(f, "<Op::Set<key: {:?} value: {:?}>", key, value),
-            Op::SetCAS { key, value, cas } => {
-                write!(f, "Op::Set<key: {:?} value: {:?} cas: {}>", key, value, cas)
+            Op::Set { key: k, value: v } => {
+                write!(f, "<Op::Set<key: {:?} value: {:?}>", k, v)?;
             }
-            Op::Delete { key } => write!(f, "Op::Set< key: {:?}>", key),
+            Op::SetCAS {
+                key: k,
+                value: v,
+                cas,
+            } => {
+                write!(f, "Op::Set<key:{:?} val:{:?} cas:{}>", k, v, cas)?;
+            }
+            Op::Delete { key } => {
+                write!(f, "Op::Set< key: {:?}>", key)?;
+            }
         }
+        Ok(())
     }
 }
 

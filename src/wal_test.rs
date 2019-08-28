@@ -1,9 +1,10 @@
 use std::ffi::OsStr;
 
 use super::*;
+use crate::core;
 
 #[test]
-fn test_wal_initial() {
+fn test_wal_cycles() {
     let dir = {
         let mut dir_path = path::PathBuf::new();
         dir_path.push(std::env::temp_dir().into_os_string());
@@ -13,19 +14,180 @@ fn test_wal_initial() {
     };
     fs::remove_dir_all(&dir).ok();
     fs::create_dir_all(&dir);
-
+    let name = "users".to_string();
     let nshards = 1;
-    let walo = Wal::create(dir.clone(), "users".to_string(), nshards);
+
+    // create wal
+    let ref_ops = {
+        let mut walo = Wal::create(dir.clone(), name.clone(), nshards).unwrap();
+        walo.set_journal_limit(40000);
+        let w = walo.spawn_writer().unwrap();
+
+        let ref_ops = write_wal1(&w);
+        assert_eq!(ref_ops.len(), 610);
+
+        validate_journals1(dir.clone(), ref_ops.clone());
+        walo.close();
+        ref_ops
+    };
+
+    // replay wal for create
+    {
+        let mut walo = Wal::load(dir.clone(), name.clone()).unwrap();
+        let mut ry = ReplayHandle { ops: vec![] };
+        let n = walo.replay(&mut ry).unwrap(); // replay
+        assert_eq!(n, 610);
+        assert_eq!(ry.ops.len(), ref_ops.len());
+        for (i, ref_op) in ref_ops.clone().into_iter().enumerate() {
+            assert_eq!(ry.ops[i], ref_op);
+        }
+    }
+
+    // purge-till 100
+    {
+        let mut walo = Wal::<i32, i32>::load(dir.clone(), name.clone()).unwrap();
+        walo.set_journal_limit(40000);
+        let w = walo.spawn_writer().unwrap();
+
+        walo.purge_till(100);
+
+        validate_journals1(dir.clone(), ref_ops.clone());
+        walo.close();
+    }
+
+    // replay wal after purge-till 100
+    {
+        let mut walo = Wal::load(dir.clone(), name.clone()).unwrap();
+        let mut ry = ReplayHandle { ops: vec![] };
+        let n = walo.replay(&mut ry).unwrap(); // replay
+        assert_eq!(n, 610);
+        assert_eq!(ry.ops.len(), ref_ops.len());
+        for (i, ref_op) in ref_ops.clone().into_iter().enumerate() {
+            assert_eq!(ry.ops[i], ref_op);
+        }
+    }
+
+    // purge-till 212
+    {
+        let mut walo = Wal::<i32, i32>::load(dir.clone(), name.clone()).unwrap();
+        walo.set_journal_limit(40000);
+        let w = walo.spawn_writer().unwrap();
+
+        walo.purge_till(212);
+
+        validate_journals1(dir.clone(), ref_ops.clone());
+        walo.close();
+    }
+
+    // replay wal after purge-till 212
+    {
+        let mut walo = Wal::load(dir.clone(), name.clone()).unwrap();
+        let mut ry = ReplayHandle { ops: vec![] };
+        let n = walo.replay(&mut ry).unwrap(); // replay
+        assert_eq!(n, 610);
+        assert_eq!(ry.ops.len(), ref_ops.len());
+        for (i, ref_op) in ref_ops.clone().into_iter().enumerate() {
+            assert_eq!(ry.ops[i], ref_op);
+        }
+    }
+
+    // purge-till 213
+    {
+        let mut walo = Wal::<i32, i32>::load(dir.clone(), name.clone()).unwrap();
+        walo.set_journal_limit(40000);
+        let w = walo.spawn_writer().unwrap();
+
+        walo.purge_till(213);
+
+        validate_journals1(dir.clone(), ref_ops.clone());
+        walo.close();
+    }
+
+    // replay wal after purge-till 213
+    {
+        let mut walo = Wal::load(dir.clone(), name.clone()).unwrap();
+        let mut ry = ReplayHandle { ops: vec![] };
+        let n = walo.replay(&mut ry).unwrap(); // replay
+        assert_eq!(n, 610);
+        assert_eq!(ry.ops.len(), ref_ops.len());
+        for (i, ref_op) in ref_ops.clone().into_iter().enumerate() {
+            assert_eq!(ry.ops[i], ref_op);
+        }
+    }
+
+    // purge-till 214
+    {
+        let mut walo = Wal::<i32, i32>::load(dir.clone(), name.clone()).unwrap();
+        walo.set_journal_limit(40000);
+        let w = walo.spawn_writer().unwrap();
+
+        walo.purge_till(214);
+
+        validate_journals2(dir.clone(), ref_ops.to_vec());
+        walo.close();
+    }
+
+    // replay wal after purge-till 214
+    {
+        let mut walo = Wal::load(dir.clone(), name.clone()).unwrap();
+        let mut ry = ReplayHandle { ops: vec![] };
+        let n = walo.replay(&mut ry).unwrap(); // replay
+        assert_eq!(n, 397);
+        assert_eq!(ry.ops.len(), ref_ops.len() - 213);
+        for (i, ref_op) in ref_ops[213..].to_vec().into_iter().enumerate() {
+            assert_eq!(ry.ops[i], ref_op);
+        }
+    }
+
+    // load wal
+    let ref_ops = {
+        let mut walo = Wal::load(dir.clone(), name.clone()).unwrap();
+        walo.set_journal_limit(40000);
+        let w = walo.spawn_writer().unwrap();
+
+        let ref_ops = write_wal2(&w, ref_ops);
+        assert_eq!(ref_ops.len(), 1220);
+
+        validate_journals3(dir.clone(), ref_ops.clone());
+        walo.close();
+        ref_ops
+    };
+
+    // replay wal after load/write
+    {
+        let mut walo = Wal::load(dir.clone(), name.clone()).unwrap();
+        let mut ry = ReplayHandle { ops: vec![] };
+        let n = walo.replay(&mut ry).unwrap(); // replay
+        assert_eq!(n, 397 + 610);
+        assert_eq!(ry.ops.len(), ref_ops.len() - 213);
+        for (i, ref_op) in ref_ops[213..].to_vec().into_iter().enumerate() {
+            assert_eq!(ry.ops[i], ref_op);
+        }
+    }
+
+    let mut walo = Wal::<i32, i32>::load(dir.clone(), name.clone()).unwrap();
+    walo.purge();
+}
+
+#[test]
+#[should_panic]
+fn test_wal_panic() {
+    let dir = {
+        let mut dir_path = path::PathBuf::new();
+        dir_path.push(std::env::temp_dir().into_os_string());
+        dir_path.push("test_wal");
+        let dir: &OsStr = dir_path.as_ref();
+        dir.clone().to_os_string()
+    };
+    fs::remove_dir_all(&dir).ok();
+    fs::create_dir_all(&dir);
+    let name = "users".to_string();
+    let nshards = 1;
+
+    let walo = Wal::<i32, i32>::create(dir.clone(), name.clone(), nshards);
     let mut walo = walo.unwrap();
     walo.set_journal_limit(40000);
-    let w = walo.spawn_writer().unwrap();
-
-    let ops = write_wal(&w);
-    assert_eq!(ops.len(), 610);
-
-    validate_journals1_file1(dir.clone(), ops.clone());
-    validate_journals1_file2(dir.clone(), ops.clone());
-    validate_journals1_file3(dir.clone(), ops.clone());
+    walo.purge_till(100);
 }
 
 #[test]
@@ -494,7 +656,7 @@ fn test_op() {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct TestWriteOp {
     index: u64,
     op: Op<i32, i32>,
@@ -520,7 +682,7 @@ impl PartialEq for TestWriteOp {
     }
 }
 
-fn write_wal(w: &Writer<i32, i32>) -> Vec<TestWriteOp> {
+fn write_wal1(w: &Writer<i32, i32>) -> Vec<TestWriteOp> {
     let mut ops = vec![];
     for key in 1..=300_i32 {
         let value = key * 10;
@@ -541,7 +703,6 @@ fn write_wal(w: &Writer<i32, i32>) -> Vec<TestWriteOp> {
         });
     }
     for key in 1..=10_i32 {
-        let key = key & 3;
         let index = w.delete(&key).unwrap();
         ops.push(TestWriteOp {
             index,
@@ -551,95 +712,216 @@ fn write_wal(w: &Writer<i32, i32>) -> Vec<TestWriteOp> {
     ops
 }
 
-fn validate_journals1_file1(dir: ffi::OsString, ops: Vec<TestWriteOp>) {
-    let file = {
-        let mut file = path::PathBuf::new();
-        file.push(dir);
-        file.push("users-wal-shard-1-journal-1.wal".to_string());
-        file.as_path().as_os_str().to_os_string()
-    };
-    let mut j = Journal::<i32, i32>::load("users".to_string(), file.clone())
-        .unwrap()
-        .unwrap();
-    j.open().expect("unable to open journal file");
-    assert_eq!(j.shard_id(), 1);
-    assert_eq!(j.to_current_term(), NIL_TERM);
-    let a = j.to_start_index().unwrap() as usize;
-    assert_eq!(a, 1);
-    let z = j.to_last_index().unwrap() as usize;
-    assert_eq!(z, 213);
-    assert_eq!(j.exceed_limit(40000).expect("exceed limit"), false);
+fn write_wal2(
+    w: &Writer<i32, i32>,
+    mut ops: Vec<TestWriteOp>, // contains ops from create
+) -> Vec<TestWriteOp> {
+    for key in 1001..=1300_i32 {
+        let value = key * 10;
+        let index = w.set(key, value).unwrap();
+        ops.push(TestWriteOp {
+            index,
+            op: Op::Set { key, value },
+        });
+    }
+    for key in 1001..=1300_i32 {
+        let value = key * 100;
+        let i: usize = key.try_into().unwrap();
+        let cas = (key - 100) as u64; // chumma blah blah blah.
+        let index = w.set_cas(key, value, cas).unwrap();
+        ops.push(TestWriteOp {
+            index,
+            op: Op::SetCAS { key, value, cas },
+        });
+    }
+    for key in 1001..=1010_i32 {
+        let index = w.delete(&key).unwrap();
+        ops.push(TestWriteOp {
+            index,
+            op: Op::Delete { key },
+        });
+    }
+    ops
+}
 
-    let ref_ops: Vec<(usize, Op<i32, i32>)> = ops[(a - 1)..(z - 1)]
-        .iter()
-        .enumerate()
-        .map(|(i, op)| (a + i, op.op.clone()))
+fn validate_journals1(dir: ffi::OsString, ops: Vec<TestWriteOp>) {
+    let files: Vec<ffi::OsString> = (1..4)
+        .map(|i| {
+            let mut file = path::PathBuf::new();
+            file.push(dir.clone());
+            file.push(format!("users-wal-shard-1-journal-{}.wal", i));
+            file.as_path().as_os_str().to_os_string()
+        })
         .collect();
-    let iter = j.into_iter().unwrap().zip(ref_ops.into_iter());
-    for (entry, (index, ref_op)) in iter {
-        let e = Entry::new_term(ref_op, NIL_TERM, index as u64);
-        assert!(e == entry.unwrap())
+    let cases = files
+        .iter()
+        .zip([(1, 213), (214, 421), (422, 610)].into_iter());
+    for (file, (ref_a, ref_z)) in cases {
+        let mut j = Journal::<i32, i32>::load("users".to_string(), file.clone())
+            .unwrap()
+            .unwrap();
+        j.open().expect("unable to open journal file");
+        assert_eq!(j.shard_id(), 1);
+        assert_eq!(j.to_current_term(), NIL_TERM);
+        let a = j.to_start_index().unwrap() as usize;
+        assert_eq!(a, *ref_a as usize);
+        let z = j.to_last_index().unwrap() as usize;
+        assert_eq!(z, *ref_z as usize);
+        assert_eq!(j.exceed_limit(40000).expect("exceed limit"), false);
+
+        let ref_ops: Vec<(usize, Op<i32, i32>)> = ops[(a - 1)..(z - 1)]
+            .iter()
+            .enumerate()
+            .map(|(i, op)| (a + i, op.op.clone()))
+            .collect();
+        let iter = j.into_iter().unwrap().zip(ref_ops.into_iter());
+        for (entry, (index, ref_op)) in iter {
+            let e = Entry::new_term(ref_op, NIL_TERM, index as u64);
+            assert!(e == entry.unwrap())
+        }
     }
 }
 
-fn validate_journals1_file2(dir: ffi::OsString, ops: Vec<TestWriteOp>) {
-    let file = {
-        let mut file = path::PathBuf::new();
-        file.push(dir);
-        file.push("users-wal-shard-1-journal-2.wal".to_string());
-        file.as_path().as_os_str().to_os_string()
-    };
-    let mut j = Journal::<i32, i32>::load("users".to_string(), file.clone())
-        .unwrap()
-        .unwrap();
-    j.open().expect("unable to open journal file");
-    assert_eq!(j.shard_id(), 1);
-    assert_eq!(j.to_current_term(), NIL_TERM);
-    let a = j.to_start_index().unwrap() as usize;
-    assert_eq!(a, 214);
-    let z = j.to_last_index().unwrap() as usize;
-    assert_eq!(z, 421);
-    assert_eq!(j.exceed_limit(40000).expect("exceed limit"), false);
-
-    let ref_ops: Vec<(usize, Op<i32, i32>)> = ops[(a - 1)..(z - 1)]
-        .iter()
-        .enumerate()
-        .map(|(i, op)| (a + i, op.op.clone()))
+fn validate_journals2(dir: ffi::OsString, ops: Vec<TestWriteOp>) {
+    let files: Vec<ffi::OsString> = (2..4)
+        .map(|i| {
+            let mut file = path::PathBuf::new();
+            file.push(dir.clone());
+            file.push(format!("users-wal-shard-1-journal-{}.wal", i));
+            file.as_path().as_os_str().to_os_string()
+        })
         .collect();
-    let iter = j.into_iter().unwrap().zip(ref_ops.into_iter());
-    for (entry, (index, ref_op)) in iter {
-        let e = Entry::new_term(ref_op, NIL_TERM, index as u64);
-        assert!(e == entry.unwrap())
+    let cases = files.iter().zip([(214, 421), (422, 610)].into_iter());
+    for (file, (ref_a, ref_z)) in cases {
+        let mut j = Journal::<i32, i32>::load("users".to_string(), file.clone())
+            .unwrap()
+            .unwrap();
+        j.open().expect("unable to open journal file");
+        assert_eq!(j.shard_id(), 1);
+        assert_eq!(j.to_current_term(), NIL_TERM);
+        let a = j.to_start_index().unwrap() as usize;
+        assert_eq!(a, *ref_a as usize);
+        let z = j.to_last_index().unwrap() as usize;
+        assert_eq!(z, *ref_z as usize);
+        assert_eq!(j.exceed_limit(40000).expect("exceed limit"), false);
+
+        let ref_ops: Vec<(usize, Op<i32, i32>)> = ops[(a - 1)..(z - 1)]
+            .iter()
+            .enumerate()
+            .map(|(i, op)| (a + i, op.op.clone()))
+            .collect();
+        let iter = j.into_iter().unwrap().zip(ref_ops.into_iter());
+        for (entry, (index, ref_op)) in iter {
+            let e = Entry::new_term(ref_op, NIL_TERM, index as u64);
+            assert!(e == entry.unwrap())
+        }
     }
 }
 
-fn validate_journals1_file3(dir: ffi::OsString, ops: Vec<TestWriteOp>) {
-    let file = {
-        let mut file = path::PathBuf::new();
-        file.push(dir);
-        file.push("users-wal-shard-1-journal-3.wal".to_string());
-        file.as_path().as_os_str().to_os_string()
-    };
-    let mut j = Journal::<i32, i32>::load("users".to_string(), file.clone())
-        .unwrap()
-        .unwrap();
-    j.open().expect("unable to open journal file");
-    assert_eq!(j.shard_id(), 1);
-    assert_eq!(j.to_current_term(), NIL_TERM);
-    let a = j.to_start_index().unwrap() as usize;
-    assert_eq!(a, 422);
-    let z = j.to_last_index().unwrap() as usize;
-    assert_eq!(z, 610);
-    assert_eq!(j.exceed_limit(40000).expect("exceed limit"), false);
-
-    let ref_ops: Vec<(usize, Op<i32, i32>)> = ops[(a - 1)..(z - 1)]
-        .iter()
-        .enumerate()
-        .map(|(i, op)| (a + i, op.op.clone()))
+fn validate_journals3(dir: ffi::OsString, ops: Vec<TestWriteOp>) {
+    let files: Vec<ffi::OsString> = (2..11)
+        .map(|i| {
+            let mut file = path::PathBuf::new();
+            file.push(dir.clone());
+            file.push(format!("users-wal-shard-1-journal-{}.wal", i));
+            file.as_path().as_os_str().to_os_string()
+        })
         .collect();
-    let iter = j.into_iter().unwrap().zip(ref_ops.into_iter());
-    for (entry, (index, ref_op)) in iter {
-        let e = Entry::new_term(ref_op, NIL_TERM, index as u64);
-        assert!(e == entry.unwrap())
+    let cases = files.iter().zip(
+        [
+            (214, 421),
+            (422, 610),
+            (0, 0),
+            (0, 0),
+            (0, 0),
+            (0, 0),
+            (611, 823),
+            (824, 1031),
+            (1032, 1220),
+        ]
+        .into_iter(),
+    );
+    for (file, (ref_a, ref_z)) in cases {
+        let mut j = Journal::<i32, i32>::load("users".to_string(), file.clone())
+            .unwrap()
+            .unwrap();
+        j.open().expect("unable to open journal file");
+        assert_eq!(j.shard_id(), 1);
+        assert_eq!(j.to_current_term(), NIL_TERM);
+        let a = j.to_start_index().unwrap_or(0) as usize;
+        assert_eq!(a, *ref_a as usize);
+        let z = j.to_last_index().unwrap_or(0) as usize;
+        assert_eq!(z, *ref_z as usize);
+        assert_eq!(j.exceed_limit(40000).expect("exceed limit"), false);
+
+        if a > 0 && z > 0 {
+            let ref_ops: Vec<(usize, Op<i32, i32>)> = ops[(a - 1)..(z - 1)]
+                .iter()
+                .enumerate()
+                .map(|(i, op)| (a + i, op.op.clone()))
+                .collect();
+            let iter = j.into_iter().unwrap().zip(ref_ops.into_iter());
+            for (entry, (index, ref_op)) in iter {
+                let e = Entry::new_term(ref_op, NIL_TERM, index as u64);
+                assert!(e == entry.unwrap())
+            }
+        } else {
+            let mut iter = j.into_iter().unwrap();
+            assert_eq!(iter.next(), None);
+        }
+    }
+}
+
+struct ReplayHandle {
+    ops: Vec<TestWriteOp>,
+}
+
+impl Replay<i32, i32> for ReplayHandle {
+    fn set_index(
+        &mut self,
+        key: i32,
+        value: i32,
+        index: u64, // replay seqno
+    ) -> Result<core::Entry<i32, i32>> {
+        self.ops.push(TestWriteOp {
+            index,
+            op: Op::Set { key, value },
+        });
+        Ok(core::Entry::new(
+            key,
+            Box::new(core::Value::new_upsert_value(value, index)),
+        ))
+    }
+
+    fn set_cas_index(
+        &mut self,
+        key: i32,
+        value: i32,
+        cas: u64,
+        index: u64, // replay seqno
+    ) -> Result<core::Entry<i32, i32>> {
+        self.ops.push(TestWriteOp {
+            index,
+            op: Op::SetCAS { key, value, cas },
+        });
+        Ok(core::Entry::new(
+            key,
+            Box::new(core::Value::new_upsert_value(value, index)),
+        ))
+    }
+
+    fn delete_index(
+        &mut self,
+        key: i32, // key
+        index: u64,
+    ) -> Result<core::Entry<i32, i32>> {
+        self.ops.push(TestWriteOp {
+            index,
+            op: Op::Delete { key: key },
+        });
+        Ok(core::Entry::new(
+            key,
+            Box::new(core::Value::new_delete(index)),
+        ))
     }
 }

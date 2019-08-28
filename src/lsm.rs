@@ -112,10 +112,12 @@ where
                 match c {
                     cmp::Ordering::Less => {
                         self.x_entry = self.x.next();
+                        self.y_entry = Some(Ok(ye));
                         Some(Ok(xe))
                     }
                     cmp::Ordering::Greater => {
                         self.y_entry = self.y.next();
+                        self.x_entry = Some(Ok(xe));
                         Some(Ok(ye))
                     }
                     cmp::Ordering::Equal => unreachable!(),

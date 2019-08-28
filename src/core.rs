@@ -166,6 +166,8 @@ where
     /// Return the seqno (index) for this mutation and older entry
     /// if present. If operation was invalid or NOOP, returned seqno
     /// shall be ZERO.
+    ///
+    /// *LSM mode*: Add a new version for the key, perserving the old value.
     fn set_index(
         &mut self,
         key: K,
@@ -178,6 +180,8 @@ where
     /// Return the seqno (index) for this mutation and older entry
     /// if present. If operation was invalid or NOOP, returned seqno shall
     /// be ZERO.
+    ///
+    /// *LSM mode*: Add a new version for the key, perserving the old value.
     fn set_cas_index(
         &mut self,
         key: K,
@@ -189,6 +193,13 @@ where
     /// Delete key from index. Return the seqno (index) for this mutation
     /// and entry if present. If operation was invalid or NOOP, returned
     /// seqno shall be ZERO.
+    ///
+    /// *LSM mode*: Mark the entry as deleted along with seqno at which it
+    /// deleted
+    ///
+    /// NOTE: K should be borrowable as &Q and Q must be convertable to
+    /// owned K. This is require in lsm mode, where owned K must be
+    /// inserted into the tree.
     fn delete_index<Q>(
         &mut self,
         key: &Q,

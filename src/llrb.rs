@@ -16,6 +16,8 @@ use crate::llrb_node::{LlrbDepth, Node, Stats};
 use crate::mvcc::MvccRoot;
 use crate::spinlock::{self, RWSpinlock};
 
+// TODO: Rename LlrbWriter to Writer;
+
 include!("llrb_common.rs");
 
 /// Single threaded, in-memory index using [left-leaning-red-black][llrb] tree.
@@ -283,9 +285,9 @@ where
     /// *LSM mode*: Mark the entry as deleted along with seqno at which it
     /// deleted
     ///
-    /// NOTE: K should be borrowable as &Q and Q must be converted to owned K.
-    /// This is require in lsm mode, where owned K must be inserted into the
-    /// tree.
+    /// NOTE: K should be borrowable as &Q and Q must be convertable to
+    /// owned K. This is require in lsm mode, where owned K must be
+    /// inserted into the tree.
     pub fn delete<Q>(&mut self, key: &Q) -> Result<Option<Entry<K, V>>>
     where
         K: Borrow<Q>,
@@ -941,6 +943,11 @@ where
     V: Clone + Diff + Footprint,
 {
     /// Set {key, value} in index. Return older entry if present.
+    /// Return the seqno (index) for this mutation and older entry
+    /// if present. If operation was invalid or NOOP, returned seqno
+    /// shall be ZERO.
+    ///
+    /// *LSM mode*: Add a new version for the key, perserving the old value.
     fn set_index(
         &mut self,
         key: K,
@@ -976,9 +983,11 @@ where
     }
 
     /// Similar to set, but succeeds only when CAS matches with entry's
-    /// last `seqno`. In other words, since seqno is unique to each mutation,
-    /// we use `seqno` of the mutation as the CAS value. Use CAS == 0 to
-    /// enforce a create operation.
+    /// Set {key, value} in index if an older entry exists with the
+    /// same ``cas`` value. To create a fresh entry, pass ``cas`` as ZERO.
+    /// Return the seqno (index) for this mutation and older entry
+    /// if present. If operation was invalid or NOOP, returned seqno shall
+    /// be ZERO.
     ///
     /// *LSM mode*: Add a new version for the key, perserving the old value.
     fn set_cas_index(
@@ -1025,6 +1034,9 @@ where
         }
     }
 
+    /// Delete key from index. Return the seqno (index) for this mutation
+    /// and entry if present. If operation was invalid or NOOP, returned
+    /// seqno shall be ZERO.
     fn delete_index<Q>(
         &mut self,
         key: &Q,

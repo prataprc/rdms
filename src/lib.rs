@@ -52,6 +52,7 @@ mod robt_indx;
 mod robt_levels;
 mod robt_snap;
 mod robt_stats;
+
 /// Read Only BTree for disk based indexes.
 ///
 /// ROBT instances shall have an index file and an optional value-log-file,
@@ -64,11 +65,8 @@ pub mod robt {
     pub use crate::robt_snap::Snapshot;
 }
 
-mod type_bytes;
-mod type_empty;
-mod type_i32;
-mod type_i64;
-pub use crate::type_empty::Empty; // TODO: proper nomenclature.
+mod types;
+pub use crate::types::Empty;
 
 pub mod llrb;
 mod llrb_node;

@@ -7,7 +7,7 @@ use rand::prelude::random;
 use crate::core::Reader;
 use crate::error::Error;
 use crate::llrb::Llrb;
-use crate::type_empty::Empty;
+use crate::types::Empty;
 
 include!("./ref_test.rs");
 

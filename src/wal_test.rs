@@ -13,7 +13,7 @@ fn test_wal_cycles() {
         dir.clone().to_os_string()
     };
     fs::remove_dir_all(&dir).ok();
-    fs::create_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
     let name = "users".to_string();
     let nshards = 1;
 
@@ -27,13 +27,13 @@ fn test_wal_cycles() {
         assert_eq!(ref_ops.len(), 610);
 
         validate_journals1(dir.clone(), ref_ops.clone());
-        walo.close();
+        walo.close().unwrap();
         ref_ops
     };
 
     // replay wal for create
     {
-        let mut walo = Wal::load(dir.clone(), name.clone()).unwrap();
+        let walo = Wal::load(dir.clone(), name.clone()).unwrap();
         let mut ry = ReplayHandle { ops: vec![] };
         let n = walo.replay(&mut ry).unwrap(); // replay
         assert_eq!(n, 610);
@@ -47,17 +47,17 @@ fn test_wal_cycles() {
     {
         let mut walo = Wal::<i32, i32>::load(dir.clone(), name.clone()).unwrap();
         walo.set_journal_limit(40000);
-        let w = walo.spawn_writer().unwrap();
+        let _w = walo.spawn_writer().unwrap(); // needed for purge_till
 
-        walo.purge_till(100);
+        walo.purge_till(100).unwrap();
 
         validate_journals1(dir.clone(), ref_ops.clone());
-        walo.close();
+        walo.close().unwrap();
     }
 
     // replay wal after purge-till 100
     {
-        let mut walo = Wal::load(dir.clone(), name.clone()).unwrap();
+        let walo = Wal::load(dir.clone(), name.clone()).unwrap();
         let mut ry = ReplayHandle { ops: vec![] };
         let n = walo.replay(&mut ry).unwrap(); // replay
         assert_eq!(n, 610);
@@ -71,17 +71,17 @@ fn test_wal_cycles() {
     {
         let mut walo = Wal::<i32, i32>::load(dir.clone(), name.clone()).unwrap();
         walo.set_journal_limit(40000);
-        let w = walo.spawn_writer().unwrap();
+        let _w = walo.spawn_writer().unwrap(); // needed for purge_till
 
-        walo.purge_till(212);
+        walo.purge_till(212).unwrap();
 
         validate_journals1(dir.clone(), ref_ops.clone());
-        walo.close();
+        walo.close().unwrap();
     }
 
     // replay wal after purge-till 212
     {
-        let mut walo = Wal::load(dir.clone(), name.clone()).unwrap();
+        let walo = Wal::load(dir.clone(), name.clone()).unwrap();
         let mut ry = ReplayHandle { ops: vec![] };
         let n = walo.replay(&mut ry).unwrap(); // replay
         assert_eq!(n, 610);
@@ -95,17 +95,17 @@ fn test_wal_cycles() {
     {
         let mut walo = Wal::<i32, i32>::load(dir.clone(), name.clone()).unwrap();
         walo.set_journal_limit(40000);
-        let w = walo.spawn_writer().unwrap();
+        let _w = walo.spawn_writer().unwrap(); // needed for purge_till
 
-        walo.purge_till(213);
+        walo.purge_till(213).unwrap();
 
         validate_journals1(dir.clone(), ref_ops.clone());
-        walo.close();
+        walo.close().unwrap();
     }
 
     // replay wal after purge-till 213
     {
-        let mut walo = Wal::load(dir.clone(), name.clone()).unwrap();
+        let walo = Wal::load(dir.clone(), name.clone()).unwrap();
         let mut ry = ReplayHandle { ops: vec![] };
         let n = walo.replay(&mut ry).unwrap(); // replay
         assert_eq!(n, 610);
@@ -119,17 +119,17 @@ fn test_wal_cycles() {
     {
         let mut walo = Wal::<i32, i32>::load(dir.clone(), name.clone()).unwrap();
         walo.set_journal_limit(40000);
-        let w = walo.spawn_writer().unwrap();
+        let _w = walo.spawn_writer().unwrap(); // needed for purge_till
 
-        walo.purge_till(214);
+        walo.purge_till(214).unwrap();
 
         validate_journals2(dir.clone(), ref_ops.to_vec());
-        walo.close();
+        walo.close().unwrap();
     }
 
     // replay wal after purge-till 214
     {
-        let mut walo = Wal::load(dir.clone(), name.clone()).unwrap();
+        let walo = Wal::load(dir.clone(), name.clone()).unwrap();
         let mut ry = ReplayHandle { ops: vec![] };
         let n = walo.replay(&mut ry).unwrap(); // replay
         assert_eq!(n, 397);
@@ -149,13 +149,13 @@ fn test_wal_cycles() {
         assert_eq!(ref_ops.len(), 1220);
 
         validate_journals3(dir.clone(), ref_ops.clone());
-        walo.close();
+        walo.close().unwrap();
         ref_ops
     };
 
     // replay wal after load/write
     {
-        let mut walo = Wal::load(dir.clone(), name.clone()).unwrap();
+        let walo = Wal::load(dir.clone(), name.clone()).unwrap();
         let mut ry = ReplayHandle { ops: vec![] };
         let n = walo.replay(&mut ry).unwrap(); // replay
         assert_eq!(n, 397 + 610);
@@ -165,8 +165,8 @@ fn test_wal_cycles() {
         }
     }
 
-    let mut walo = Wal::<i32, i32>::load(dir.clone(), name.clone()).unwrap();
-    walo.purge();
+    let walo = Wal::<i32, i32>::load(dir.clone(), name.clone()).unwrap();
+    walo.purge().unwrap();
 }
 
 #[test]
@@ -180,14 +180,14 @@ fn test_wal_panic() {
         dir.clone().to_os_string()
     };
     fs::remove_dir_all(&dir).ok();
-    fs::create_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
     let name = "users".to_string();
     let nshards = 1;
 
     let walo = Wal::<i32, i32>::create(dir.clone(), name.clone(), nshards);
     let mut walo = walo.unwrap();
     walo.set_journal_limit(40000);
-    walo.purge_till(100);
+    walo.purge_till(100).unwrap();
 }
 
 #[test]
@@ -726,7 +726,6 @@ fn write_wal2(
     }
     for key in 1001..=1300_i32 {
         let value = key * 100;
-        let i: usize = key.try_into().unwrap();
         let cas = (key - 100) as u64; // chumma blah blah blah.
         let index = w.set_cas(key, value, cas).unwrap();
         ops.push(TestWriteOp {

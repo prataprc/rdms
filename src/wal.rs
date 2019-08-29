@@ -368,7 +368,7 @@ where
 
     /// Purge this ``Wal`` instance and all its memory and disk footprints.
     pub fn purge(mut self) -> Result<()> {
-        self.close();
+        self.close()?;
         if self.threads.len() > 0 {
             let msg = "cannot purge with active shards".to_string();
             Err(Error::InvalidWAL(msg))
@@ -670,7 +670,7 @@ where
             None => (),
             Some((buffer, batch)) => {
                 self.rotate_journal()?;
-                self.active.as_mut().unwrap().flush2(&buffer, batch);
+                self.active.as_mut().unwrap().flush2(&buffer, batch)?;
             }
         }
         Ok(false)

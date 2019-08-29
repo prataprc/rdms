@@ -1,36 +1,41 @@
-/// RWSpinlock implements the idea of latch-and-spin mechanism normally
-/// used for non-blocking concurrency.
+/// Read-Write-Spinlock implements the idea of latch-and-spin mechanism
+/// normally used for non-blocking concurrency.
 ///
-/// Blocking concurrency can have impact on latency. On the other hand,
-/// when the operations are going to be quick and short, we can use
-/// non-blocking primitives like latch-and-spin.
+/// Blocking concurrency can have impact on latency. When operations
+/// that require [rw-exclusion][rw-lock] is going to be quick and short,
+/// we can use non-blocking primitives like latch-and-spin.
 ///
 /// **What is Latch and spin ?**
 ///
 /// In typical multi-core processors, concurrent read operations are
-/// always safe and consistent. But it becomes unsafe, when there is
-/// a writer concurrently modifying data while readers are loading it
-/// from memory.
+/// always safe and consistent. But it becomes unsafe, when there is a
+/// writer concurrently modifying data while readers are loading it from
+/// memory.
 ///
-/// Latch-and-lock mechanism can be used when we want to allow
-/// one or more concurrent writer(s) along with readers.
+/// Latch-and-lock mechanism can be used when we want to allow one or
+/// more concurrent writer(s) along with readers.
 ///
 /// Imagine a door leading into a room. This door has some special
 /// properties:
-/// a. The door has a latch-and a spin-lock.
-/// b. A _READER_ can enter the room, only when the door is unlocked
-///    and unlatched.
-/// c. A _WRITER_ can enter the room, only when the door is unlocked
-///    and, unlatched and, there are no other reader or writer in the
-///    room.
-/// d. Once the door is latched by a writer, no other writer or reader
-///    can enter the room (because of (a) and (b) properties). But any
-///    readers who are already inside the room, can exit.
-/// e. A writer can enter the room only after locking the door, which
-///    the writer can do only after all the readers have exited.
-/// f. When trying to acquire read-permission or write-permission, the
-///    caller thread shall spin until all the conditions from (a) to (e)
-///    is met.
+///
+/// 1. The door has a latch and a lock.
+/// 2. A **reader** can enter the room only when the door is un-locked
+///    and un-latched.
+/// 3. A **writer** can enter the room only when the door is un-locked
+///    and, un-latched and, there are no other **reader** or **writer**
+///    in the room.
+/// 4. Once the door is latched by a **writer**, no other **writer**
+///    or **reader** can enter the room because of (1) and (2) properties.
+///    But all **readers** who are already inside the room can finish
+///    their job and then exit.
+/// 5. A **writer** can enter the room only after locking the door, which
+///    the **writer** can do only after all the **readers** have exited.
+/// 6. When trying to acquire read-permission or write-permission, the
+///    caller thread shall spin until all the conditions from (1) to (5)
+///    are met. Once a thread acquires necessary permission it can
+///    continue to finish its job and then release the permission.
+///
+/// [rw-lock]: https://en.wikipedia.org/wiki/Readers–writer_lock
 ///
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::{fmt, thread};

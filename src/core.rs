@@ -561,13 +561,14 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    // purge all versions whose seqno < or <= ``cutoff``.
+    // purge all versions whose seqno <= or < ``cutoff``.
     pub(crate) fn purge(mut self, cutoff: Bound<u64>) -> Option<Entry<K, V>> {
-        let e = self.to_seqno();
+        let n = self.to_seqno();
         // If all versions of this entry are before cutoff, then purge entry
         match cutoff {
-            Bound::Included(cutoff) if e <= cutoff => return None,
-            Bound::Excluded(cutoff) if e < cutoff => return None,
+            Bound::Included(cutoff) if n <= cutoff => return None,
+            Bound::Excluded(cutoff) if n < cutoff => return None,
+            Bound::Unbounded => return None,
             _ => (),
         }
         // Otherwise, purge only those versions that are before cutoff
@@ -603,33 +604,33 @@ where
         // skip versions newer than requested range.
         let entry = self.skip_till(start.clone(), end)?;
         // purge versions older than request range.
-        entry.purge(match start {
-            Bound::Included(x) => Bound::Included(x),
-            Bound::Excluded(x) => Bound::Excluded(x),
-            Bound::Unbounded => Bound::Unbounded,
-        })
+        match start {
+            Bound::Included(x) => entry.purge(Bound::Excluded(x)),
+            Bound::Excluded(x) => entry.purge(Bound::Included(x)),
+            Bound::Unbounded => Some(entry),
+        }
     }
 
-    fn skip_till(&self, sb: Bound<u64>, eb: Bound<u64>) -> Option<Entry<K, V>> {
-        use std::ops::Bound::{Excluded, Included};
-
+    fn skip_till(&self, ob: Bound<u64>, nb: Bound<u64>) -> Option<Entry<K, V>> {
         // skip entire entry if it is before the specified range.
-        let e = self.to_seqno();
-        match sb {
-            Included(s_seqno) if e < s_seqno => return None,
-            Excluded(s_seqno) if e <= s_seqno => return None,
+        let n = self.to_seqno();
+        match ob {
+            Bound::Included(o_seqno) if n < o_seqno => return None,
+            Bound::Excluded(o_seqno) if n <= o_seqno => return None,
             _ => (),
         }
         // skip the entire entry if it is after the specified range.
-        let s = self.deltas.last().map_or(e, |d| d.to_seqno());
-        match eb {
-            Included(e_seqno) if s > e_seqno => return None,
-            Excluded(e_seqno) if s >= e_seqno => return None,
-            Included(e_seqno) if e <= e_seqno => return Some(self.clone()),
-            Included(e_seqno) if e < e_seqno => return Some(self.clone()),
+        let o = self.deltas.last().map_or(n, |d| d.to_seqno());
+        match nb {
+            Bound::Included(nb) if o > nb => return None,
+            Bound::Excluded(nb) if o >= nb => return None,
+            Bound::Included(nb) if n <= nb => return Some(self.clone()),
+            Bound::Excluded(nb) if n < nb => return Some(self.clone()),
+            Bound::Unbounded => return Some(self.clone()),
             _ => (),
         };
 
+        // println!("skip_till {} {} {:?}", o, n, nb);
         // partial skip.
         let mut entry = self.clone();
         let mut iter = entry.deltas.into_iter();
@@ -638,14 +639,16 @@ where
             let (value, _) = next_value(value, delta.data);
             entry.value = Box::new(value);
             let seqno = entry.value.to_seqno();
-            let ok = match eb {
-                Included(e_seqno) if seqno <= e_seqno => true,
-                Excluded(e_seqno) if seqno < e_seqno => true,
+            let done = match nb {
+                Bound::Included(n_seqno) if seqno <= n_seqno => true,
+                Bound::Excluded(n_seqno) if seqno < n_seqno => true,
                 _ => false,
             };
-            if ok {
+            // println!("skip_till loop {} {:?} {} ", seqno, nb, done);
+            if done {
                 // collect the remaining deltas and return
                 entry.deltas = iter.collect();
+                // println!("skip_till fin {}", entry.deltas.len());
                 return Some(entry);
             }
         }
@@ -918,3 +921,7 @@ where
         }
     }
 }
+
+#[cfg(test)]
+#[path = "core_test.rs"]
+mod core_test;

@@ -4,9 +4,11 @@ use std::ops::Bound;
 
 use rand::prelude::random;
 
+use super::Stats;
 use crate::core::Reader;
 use crate::error::Error;
 use crate::llrb::Llrb;
+use crate::scans::SkipScan;
 use crate::types::Empty;
 
 include!("./ref_test.rs");
@@ -549,3 +551,182 @@ fn test_crud_lsm() {
         }
     }
 }
+
+#[test]
+fn test_full_scan() {
+    let mut llrb: Llrb<i32, i32> = Llrb::new_lsm("test-llrb");
+    for key in 0..2 {
+        let value = key * 100;
+        assert!(llrb.set(key, value).unwrap().is_none());
+        println!("{}", key);
+    }
+}
+
+//#[test]
+//fn test_full_scan() {
+//    let mut llrb: Llrb<i32, i32> = Llrb::new_lsm("test-llrb");
+//    // populate
+//    for key in 0..1 {
+//        let value = key * 100;
+//        assert!(llrb.set(key, value).unwrap().is_none());
+//        println!("test root {}", llrb.root.is_some());
+//        assert!(llrb.set(key, value).unwrap().is_none());
+//        println!("test root {}", llrb.root.is_some());
+//    }
+//    let node = llrb.root.as_ref().unwrap();
+//    println!("test {}", node.entry.to_key());
+//    println!("test {}", node.left.is_none());
+//    println!("test {}", node.right.is_none());
+//    // skip scan first.
+//    println!(
+//        "get {} {}",
+//        llrb.get(&0).unwrap().to_key(),
+//        llrb.get(&0).unwrap().to_seqno()
+//    );
+//
+//    // populate
+//    for key in 0..10000 {
+//        let value = key * 100;
+//        assert!(llrb.set(key, value).unwrap().is_none());
+//    }
+//
+//    assert_eq!(llrb.len(), 10000);
+//    assert_eq!(llrb.to_seqno(), 10000);
+//    let seqno1 = llrb.to_seqno();
+//
+//    // skip scan first.
+//    println!(
+//        "get {} {}",
+//        llrb.get(&9998).unwrap().to_key(),
+//        llrb.get(&9998).unwrap().to_seqno()
+//    );
+//    let iter = SkipScan::new(&llrb, ..=seqno1);
+//    for (i, entry) in iter.enumerate() {
+//        let entry = entry.unwrap();
+//        let ref_key = i as i32;
+//        let ref_value = ref_key * 100;
+//        assert_eq!(entry.to_key(), ref_key);
+//        assert_eq!(entry.to_native_value().unwrap(), ref_value);
+//    }
+//
+//    // first-inject.
+//    for key in (0..1000).step_by(3) {
+//        let value = key * 1000;
+//        assert!(llrb.set(key, value).unwrap().is_some());
+//    }
+//    assert_eq!(llrb.len(), 10000);
+//    assert_eq!(llrb.to_seqno(), 10334);
+//
+//    // skip scan after first-inject.
+//    let iter = SkipScan::new(&llrb, ..=seqno1);
+//    for (i, entry) in iter.enumerate() {
+//        let entry = entry.unwrap();
+//        let ref_key = i as i32;
+//        let ref_value = ref_key * 100;
+//
+//        let vers: Vec<Entry<i32, i32>> = entry.versions().collect();
+//        assert_eq!(vers.len(), 1);
+//
+//        assert_eq!(entry.to_key(), ref_key);
+//        assert_eq!(entry.to_native_value().unwrap(), ref_value);
+//    }
+//
+//    // second-inject.
+//    for key in (0..1000).step_by(3) {
+//        let value = key * 10000;
+//        assert!(llrb.set(key, value).unwrap().is_some());
+//    }
+//    for key in (0..1000).step_by(5) {
+//        let value = key * 1000;
+//        assert!(llrb.set(key, value).unwrap().is_some());
+//    }
+//
+//    assert_eq!(llrb.len(), 10000);
+//    assert_eq!(llrb.to_seqno(), 10868);
+//
+//    let seqno2 = llrb.to_seqno();
+//
+//    // third-inject.
+//    for key in (0..1000).step_by(15) {
+//        let value = key * 100000;
+//        assert!(llrb.set(key, value).unwrap().is_some());
+//    }
+//    assert_eq!(llrb.len(), 10000);
+//    assert_eq!(llrb.to_seqno(), 10935);
+//
+//    // skip scan final.
+//    let r = (Bound::Excluded(seqno1), Bound::Included(seqno2));
+//    let iter = SkipScan::new(&llrb, r);
+//    for (i, entry) in iter.enumerate() {
+//        let entry = entry.unwrap();
+//        let key = entry.to_key();
+//        match key {
+//            0 => {
+//                let ref_key = 1_i32;
+//                let vers: Vec<Entry<i32, i32>> = entry.versions().collect();
+//                println!("1 {}", vers.len());
+//                assert_eq!(entry.to_key(), ref_key);
+//                for (i, ver) in vers.into_iter().enumerate() {
+//                    match (i, ver.to_native_value().unwrap()) {
+//                        (0, value) => assert_eq!(value, 1000),
+//                        (1, value) => assert_eq!(value, 10000),
+//                        (2, value) => assert_eq!(value, 1000),
+//                        _ => unreachable!(),
+//                    }
+//                }
+//            }
+//            key if key % 15 == 0 => {
+//                let ref_key = key as i32;
+//                let vers: Vec<Entry<i32, i32>> = entry.versions().collect();
+//                assert_eq!(entry.to_key(), ref_key);
+//                for (i, ver) in vers.into_iter().enumerate() {
+//                    match (i, ver.to_native_value().unwrap()) {
+//                        (0, value) => assert_eq!(value, key * 1000),
+//                        (1, value) => assert_eq!(value, key * 10000),
+//                        (2, value) => assert_eq!(value, key * 1000),
+//                        _ => unreachable!(),
+//                    }
+//                }
+//            }
+//            key if key % 3 == 0 => {
+//                let ref_key = key as i32;
+//                let vers: Vec<Entry<i32, i32>> = entry.versions().collect();
+//                assert_eq!(entry.to_key(), ref_key);
+//                for (i, ver) in vers.into_iter().enumerate() {
+//                    match (i, ver.to_native_value().unwrap()) {
+//                        (0, value) => assert_eq!(value, key * 10000),
+//                        (1, value) => assert_eq!(value, key * 1000),
+//                        _ => unreachable!(),
+//                    }
+//                }
+//            }
+//            key if key % 5 == 0 => {
+//                let ref_key = key as i32;
+//                let vers: Vec<Entry<i32, i32>> = entry.versions().collect();
+//                assert_eq!(entry.to_key(), ref_key);
+//                for (i, ver) in vers.into_iter().enumerate() {
+//                    match (i, ver.to_native_value().unwrap()) {
+//                        (0, value) => assert_eq!(value, key * 1000),
+//                        _ => unreachable!(),
+//                    }
+//                }
+//            }
+//            //key => {
+//            //    println!("key {}", key);
+//            //    let ref_key = key as i32;
+//            //    let vers: Vec<Entry<i32, i32>> = entry.versions().collect();
+//            //    assert_eq!(entry.to_key(), ref_key);
+//            //    for (i, ver) in vers.into_iter().enumerate() {
+//            //        match (i, ver) {
+//            //            (0, v) => assert_eq!(v.to_native_value().unwrap(), 100),
+//            //            _ => unreachable!(),
+//            //        }
+//            //    }
+//            //}
+//            key => {
+//                let vers: Vec<Entry<i32, i32>> = entry.versions().collect();
+//                panic!("unexpected key {} num-versions: {}", key, vers.len());
+//            }
+//        }
+//    }
+//}

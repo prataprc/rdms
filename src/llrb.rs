@@ -260,6 +260,7 @@ where
         let mut w = Llrb::to_writer(index)?;
 
         let (_seqno, entry) = w.set_index(key, value, self.seqno + 1);
+        // println!("set, root {}", self.root.is_some());
         entry
     }
 
@@ -962,12 +963,14 @@ where
             let value = Box::new(Value::new_upsert_value(value, seqno));
             Entry::new(key, value)
         };
+        // println!("set_index, root {}", index.root.is_some());
         match Llrb::upsert(index.root.take(), new_entry, index.lsm) {
             UpsertResult {
                 node: Some(mut root),
                 old_entry,
                 size,
             } => {
+                // println!("set_index, result {}", size);
                 root.set_black();
                 index.root = Some(root);
                 if old_entry.is_none() {

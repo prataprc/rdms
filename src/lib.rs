@@ -37,7 +37,7 @@ mod sync_writer;
 mod util;
 mod vlog;
 
-pub mod scans;
+mod scans;
 
 pub use crate::bogn::Bogn;
 pub use crate::core::{Diff, Entry, Replay, Result, Serialize, VersionIter};

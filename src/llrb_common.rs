@@ -207,6 +207,10 @@ where
                         };
                         // include if entry was within the visible time-range
                         let (start, end) = (self.start.clone(), self.end.clone());
+                        // {
+                        //     let seqno = nref.entry.to_seqno();
+                        //     println!("{:?} {:?} {}", start, end, seqno);
+                        // }
                         match nref.entry.filter_within(start, end) {
                             Some(entry) => break Some(Ok(entry)),
                             None => (),

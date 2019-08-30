@@ -10,7 +10,7 @@ use std::{
     fs, marker, mem,
     ops::{Bound, RangeBounds},
     path,
-    sync::{self, Arc},
+    sync::{self},
 };
 
 use crate::core::{Diff, Entry, Footprint, Result, Serialize};
@@ -143,14 +143,17 @@ where
     type W = RobtWriter;
 
     /// Make a new empty index of this type, with same configuration.
-    fn make_new(&self) -> Result<Self> {
-        Snapshot::open(self.name.as_str(), self.dir.as_str())
+    fn make_new(&self) -> Result<Box<Self>> {
+        Ok(Box::new(Snapshot::open(
+            self.name.as_str(),
+            self.dir.as_str(),
+        )?))
     }
 
     /// Create a new writer handle. Note that, not all indexes allow
     /// concurrent writers, and not all indexes support concurrent
     /// read/write.
-    fn to_writer(_index: Arc<Self>) -> Result<Self::W> {
+    fn to_writer(&mut self) -> Self::W {
         panic!("Read-only-btree don't support write operations")
     }
 }

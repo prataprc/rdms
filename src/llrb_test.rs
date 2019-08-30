@@ -4,7 +4,6 @@ use std::ops::Bound;
 
 use rand::prelude::random;
 
-use super::Stats;
 use crate::core::Reader;
 use crate::error::Error;
 use crate::llrb::Llrb;
@@ -17,19 +16,19 @@ include!("./ref_test.rs");
 
 #[test]
 fn test_id() {
-    let llrb: Llrb<i32, Empty> = Llrb::new("test-llrb");
+    let llrb: Box<Llrb<i32, Empty>> = Llrb::new("test-llrb");
     assert_eq!(llrb.to_name(), "test-llrb".to_string());
 }
 
 #[test]
 fn test_len() {
-    let llrb: Llrb<i32, Empty> = Llrb::new("test-llrb");
+    let llrb: Box<Llrb<i32, Empty>> = Llrb::new("test-llrb");
     assert_eq!(llrb.len(), 0);
 }
 
 #[test]
 fn test_set() {
-    let mut llrb: Llrb<i64, i64> = Llrb::new("test-llrb");
+    let mut llrb: Box<Llrb<i64, i64>> = Llrb::new("test-llrb");
     let mut refns = RefNodes::new(false /*lsm*/, 10);
 
     assert!(llrb.set(2, 10).unwrap().is_none());
@@ -75,7 +74,7 @@ fn test_set() {
 
 #[test]
 fn test_cas_lsm() {
-    let mut llrb: Llrb<i64, i64> = Llrb::new_lsm("test-llrb");
+    let mut llrb: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
     let mut refns = RefNodes::new(true /*lsm*/, 11);
 
     assert!(llrb.set(2, 100).unwrap().is_none());
@@ -159,7 +158,7 @@ fn test_cas_lsm() {
 
 #[test]
 fn test_delete() {
-    let mut llrb: Llrb<i64, i64> = Llrb::new("test-llrb");
+    let mut llrb: Box<Llrb<i64, i64>> = Llrb::new("test-llrb");
     let mut refns = RefNodes::new(false /*lsm*/, 11);
 
     assert!(llrb.set(2, 100).unwrap().is_none());
@@ -220,7 +219,7 @@ fn test_delete() {
 
 #[test]
 fn test_iter() {
-    let mut llrb: Llrb<i64, i64> = Llrb::new("test-llrb");
+    let mut llrb: Box<Llrb<i64, i64>> = Llrb::new("test-llrb");
     let mut refns = RefNodes::new(false /*lsm*/, 10);
 
     assert!(llrb.set(2, 10).unwrap().is_none());
@@ -264,7 +263,7 @@ fn test_iter() {
 
 #[test]
 fn test_range() {
-    let mut llrb: Llrb<i64, i64> = Llrb::new("test-llrb");
+    let mut llrb: Box<Llrb<i64, i64>> = Llrb::new("test-llrb");
     let mut refns = RefNodes::new(false /*lsm*/, 10);
 
     assert!(llrb.set(2, 10).unwrap().is_none());
@@ -327,7 +326,7 @@ fn test_range() {
 //TODO: enable this test case once type_str is implemented.
 //#[test]
 //fn test_range_str() {
-//    let mut llrb: Llrb<&str, i64> = Llrb::new("test-llrb");
+//    let mut llrb: Box<Llrb<&str, i64>> = Llrb::new("test-llrb");
 //
 //    assert!(llrb.set("key1", 10).unwrap().is_none());
 //    assert!(llrb.set("key2", 11).unwrap().is_none());
@@ -392,7 +391,7 @@ fn test_range() {
 #[test]
 fn test_crud() {
     let size = 1000;
-    let mut llrb: Llrb<i64, i64> = Llrb::new("test-llrb");
+    let mut llrb: Box<Llrb<i64, i64>> = Llrb::new("test-llrb");
     let mut refns = RefNodes::new(false /*lsm*/, size);
 
     for _ in 0..100000 {
@@ -473,7 +472,7 @@ fn test_crud() {
 #[test]
 fn test_crud_lsm() {
     let size = 1000;
-    let mut llrb: Llrb<i64, i64> = Llrb::new_lsm("test-llrb");
+    let mut llrb: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
     let mut refns = RefNodes::new(true /*lsm*/, size as usize);
 
     for _i in 0..20000 {
@@ -552,19 +551,9 @@ fn test_crud_lsm() {
     }
 }
 
-#[test]
-fn test_full_scan() {
-    let mut llrb: Llrb<i32, i32> = Llrb::new_lsm("test-llrb");
-    for key in 0..2 {
-        let value = key * 100;
-        assert!(llrb.set(key, value).unwrap().is_none());
-        println!("{}", key);
-    }
-}
-
 //#[test]
 //fn test_full_scan() {
-//    let mut llrb: Llrb<i32, i32> = Llrb::new_lsm("test-llrb");
+//    let mut llrb: Box<Llrb<i32, i32>> = Llrb::new_lsm("test-llrb");
 //    // populate
 //    for key in 0..1 {
 //        let value = key * 100;

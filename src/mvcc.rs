@@ -11,7 +11,7 @@ use std::{
     marker, mem,
     ops::{Bound, Deref, DerefMut, RangeBounds},
     sync::{
-        atomic::{AtomicIsize, AtomicPtr, AtomicU8, Ordering::Relaxed},
+        atomic::{AtomicIsize, AtomicPtr, Ordering::Relaxed},
         Arc,
     },
 };
@@ -40,36 +40,9 @@ where
     name: String,
     lsm: bool,
     snapshot: Snapshot<K, V>,
-    writers: AtomicU8,
     key_footprint: AtomicIsize,
     tree_footprint: AtomicIsize,
-}
-
-impl<K, V> Clone for Mvcc<K, V>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-{
-    fn clone(&self) -> Mvcc<K, V> {
-        let cloned = Mvcc {
-            name: self.name.clone(),
-            lsm: self.lsm,
-            snapshot: Snapshot::new(),
-            writers: Default::default(),
-            key_footprint: AtomicIsize::new(self.key_footprint.load(Relaxed)),
-            tree_footprint: AtomicIsize::new(self.tree_footprint.load(Relaxed)),
-        };
-
-        let s: Arc<MvccRoot<K, V>> = Snapshot::clone(&self.snapshot);
-        let root_node = match s.as_root() {
-            None => None,
-            Some(n) => Some(Box::new(n.clone())),
-        };
-        cloned
-            .snapshot
-            .shift_snapshot(root_node, s.seqno, s.n_count, vec![]);
-        cloned
-    }
+    w: Option<MvccWriter<K, V>>,
 }
 
 impl<K, V> Drop for Mvcc<K, V>
@@ -78,12 +51,13 @@ where
     V: Clone + Diff,
 {
     fn drop(&mut self) {
-        // NOTE: Means all references to mvcc are gone and ownership is going out
-        // of scope. This also implies that there are only TWO Arc<> snapshots.
-        // One is held by self.snapshot and another is held by `next`.
+        // NOTE: Means all references to mvcc are gone and ownership is
+        // going out of scope. This also implies that there are only
+        // TWO Arc<> snapshots. One is held by self.snapshot and another
+        // is held by `next`.
 
-        // NOTE: AtomicPtr will fence the drop chain, so we have to get past the
-        // atomic fence and drop it here.
+        // NOTE: Snapshot's AtomicPtr will fence the drop chain, so we have
+        // to get past the atomic fence and drop it here.
 
         // NOTE: Likewise MvccRoot will fence the drop on its `root` field, so we
         // have to get past that and drop it here.
@@ -98,12 +72,84 @@ where
     }
 }
 
-impl<K, V> From<Llrb<K, V>> for Mvcc<K, V>
+/// Construct new instance of Mvcc.
+impl<K, V> Mvcc<K, V>
 where
-    K: Clone + Ord,
-    V: Clone + Diff,
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
 {
-    fn from(mut llrb_index: Llrb<K, V>) -> Mvcc<K, V> {
+    pub fn new<S>(name: S) -> Box<Mvcc<K, V>>
+    where
+        S: AsRef<str>,
+    {
+        let mut index = Box::new(Mvcc {
+            name: name.as_ref().to_string(),
+            lsm: false,
+            snapshot: Snapshot::new(),
+            key_footprint: AtomicIsize::new(0),
+            tree_footprint: AtomicIsize::new(0),
+            w: Default::default(),
+        });
+        let idx = index.as_mut() as *mut Mvcc<K, V>;
+        index.w = Some(MvccWriter::new(idx));
+        index
+    }
+
+    pub fn new_lsm<S>(name: S) -> Box<Mvcc<K, V>>
+    where
+        S: AsRef<str>,
+    {
+        let mut index = Box::new(Mvcc {
+            name: name.as_ref().to_string(),
+            lsm: true,
+            snapshot: Snapshot::new(),
+            key_footprint: AtomicIsize::new(0),
+            tree_footprint: AtomicIsize::new(0),
+            w: unsafe { mem::zeroed() },
+        });
+        let idx = index.as_mut() as *mut Mvcc<K, V>;
+        index.w = Some(MvccWriter::new(idx));
+        index
+    }
+
+    fn shallow_clone(&self) -> Box<Mvcc<K, V>> {
+        let mut index = Box::new(Mvcc {
+            name: self.name.clone(),
+            lsm: self.lsm,
+            snapshot: Snapshot::new(),
+            key_footprint: AtomicIsize::new(self.key_footprint.load(Relaxed)),
+            tree_footprint: AtomicIsize::new(self.tree_footprint.load(Relaxed)),
+            w: unsafe { mem::zeroed() },
+        });
+        let idx = index.as_mut() as *mut Mvcc<K, V>;
+        index.w = Some(MvccWriter::new(idx));
+        index
+    }
+
+    fn clone(&self) -> Box<Mvcc<K, V>> {
+        let mut cloned = Box::new(Mvcc {
+            name: self.name.clone(),
+            lsm: self.lsm,
+            snapshot: Snapshot::new(),
+            key_footprint: AtomicIsize::new(self.key_footprint.load(Relaxed)),
+            tree_footprint: AtomicIsize::new(self.tree_footprint.load(Relaxed)),
+            w: Default::default(),
+        });
+        let idx = cloned.as_mut() as *mut Mvcc<K, V>;
+        cloned.w = Some(MvccWriter::new(idx));
+
+        let s: Arc<MvccRoot<K, V>> = Snapshot::clone(&self.snapshot);
+        let root_node = match s.as_root() {
+            None => None,
+            Some(n) => Some(Box::new(n.clone())),
+        };
+        cloned
+            .snapshot
+            .shift_snapshot(root_node, s.seqno, s.n_count, vec![]);
+        cloned
+    }
+
+    fn from_llrb(llrb_index: Llrb<K, V>) -> Box<Mvcc<K, V>> {
         let mvcc_index = if llrb_index.is_lsm() {
             Mvcc::new_lsm(llrb_index.to_name())
         } else {
@@ -125,52 +171,6 @@ where
             vec![], /*reclaim*/
         );
         mvcc_index
-    }
-}
-
-/// Construct new instance of Mvcc.
-impl<K, V> Mvcc<K, V>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-{
-    pub fn new<S>(name: S) -> Mvcc<K, V>
-    where
-        S: AsRef<str>,
-    {
-        Mvcc {
-            name: name.as_ref().to_string(),
-            lsm: false,
-            snapshot: Snapshot::new(),
-            writers: Default::default(),
-            key_footprint: AtomicIsize::new(0),
-            tree_footprint: AtomicIsize::new(0),
-        }
-    }
-
-    pub fn new_lsm<S>(name: S) -> Mvcc<K, V>
-    where
-        S: AsRef<str>,
-    {
-        Mvcc {
-            name: name.as_ref().to_string(),
-            lsm: true,
-            snapshot: Snapshot::new(),
-            writers: Default::default(),
-            key_footprint: AtomicIsize::new(0),
-            tree_footprint: AtomicIsize::new(0),
-        }
-    }
-
-    fn shallow_clone(&self) -> Mvcc<K, V> {
-        Mvcc {
-            name: self.name.clone(),
-            lsm: self.lsm,
-            snapshot: Snapshot::new(),
-            writers: AtomicU8::new(0),
-            key_footprint: AtomicIsize::new(self.key_footprint.load(Relaxed)),
-            tree_footprint: AtomicIsize::new(self.tree_footprint.load(Relaxed)),
-        }
     }
 }
 
@@ -214,7 +214,7 @@ where
     type W = MvccWriter<K, V>;
 
     /// Make a new empty index of this type, with same configuration.
-    fn make_new(&self) -> Result<Self> {
+    fn make_new(&self) -> Result<Box<Self>> {
         Ok(self.shallow_clone())
     }
 
@@ -222,11 +222,10 @@ where
     /// active at any time, creating more than one writer handle
     /// will panic. Concurrent readers are allowed without using any
     /// underlying locks/latches.
-    fn to_writer(index: Arc<Mvcc<K, V>>) -> Result<Self::W> {
-        if index.writers.compare_and_swap(0, 1, Relaxed) == 0 {
-            Ok(MvccWriter { index })
-        } else {
-            panic!("there cannot be more than one writers!")
+    fn to_writer(&mut self) -> Self::W {
+        match self.w.take() {
+            Some(w) => w,
+            None => panic!("writer not initialized"),
         }
     }
 }
@@ -248,21 +247,25 @@ where
     V: Clone + Diff + Footprint,
 {
     pub fn set(&mut self, key: K, value: V) -> Result<Option<Entry<K, V>>> {
-        let index = unsafe { Arc::from_raw(self as *const Mvcc<K, V>) };
-        let mut w = Mvcc::to_writer(index)?;
-
         let seqno = self.to_seqno();
-        let (_seqno, entry) = w.set_index(key, value, seqno + 1);
-        entry
+        match &mut self.w {
+            Some(w) => {
+                let (_seqno, entry) = w.set_index(key, value, seqno + 1);
+                entry
+            }
+            None => panic!("already given a writer_handle for this index"),
+        }
     }
 
     pub fn set_cas(&mut self, key: K, value: V, cas: u64) -> Result<Option<Entry<K, V>>> {
-        let index = unsafe { Arc::from_raw(self as *const Mvcc<K, V>) };
-        let mut w = Mvcc::to_writer(index)?;
-
         let seqno = self.to_seqno();
-        let (_seqno, entry) = w.set_cas_index(key, value, cas, seqno + 1);
-        entry
+        match &mut self.w {
+            Some(w) => {
+                let (_, entry) = w.set_cas_index(key, value, cas, seqno + 1);
+                entry
+            }
+            None => panic!("already given a writer_handle for this index"),
+        }
     }
 
     pub fn delete<Q>(&mut self, key: &Q) -> Result<Option<Entry<K, V>>>
@@ -271,12 +274,14 @@ where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
     {
-        let index = unsafe { Arc::from_raw(self as *const Mvcc<K, V>) };
-        let mut w = Mvcc::to_writer(index)?;
-
         let seqno = self.to_seqno();
-        let (_seqno, entry) = w.delete_index(key, seqno + 1);
-        entry
+        match &mut self.w {
+            Some(w) => {
+                let (_seqno, entry) = w.delete_index(key, seqno + 1);
+                entry
+            }
+            None => panic!("already given a writer_handle for this index"),
+        }
     }
 }
 
@@ -1144,7 +1149,17 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    index: Arc<Mvcc<K, V>>,
+    index: Option<*mut Mvcc<K, V>>,
+}
+
+impl<K, V> Drop for MvccWriter<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    fn drop(&mut self) {
+        // NOTE: forget the writer, which is a self-reference.
+    }
 }
 
 impl<K, V> MvccWriter<K, V>
@@ -1152,11 +1167,20 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    fn get_index(&self) -> &mut Mvcc<K, V> {
-        let index = self.index.as_ref();
-        unsafe {
-            let index = index as *const Mvcc<K, V> as *mut Mvcc<K, V>;
-            index.as_mut().unwrap()
+    fn new(index: *mut Mvcc<K, V>) -> MvccWriter<K, V> {
+        MvccWriter { index: Some(index) }
+    }
+}
+
+impl<K, V> MvccWriter<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    fn get_index(&mut self) -> &mut Mvcc<K, V> {
+        match &mut self.index {
+            Some(index) => unsafe { index.as_mut().unwrap() },
+            None => unreachable!(),
         }
     }
 }
@@ -1347,20 +1371,6 @@ where
 
         index.snapshot.shift_snapshot(root, seqno, n_count, reclm);
         (Some(seqno), Ok(old_entry))
-    }
-}
-
-impl<K, V> Drop for MvccWriter<K, V>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-{
-    fn drop(&mut self) {
-        use std::sync::atomic::Ordering;
-
-        if self.index.writers.compare_and_swap(1, 0, Ordering::Relaxed) != 1 {
-            unreachable!()
-        }
     }
 }
 

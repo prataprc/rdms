@@ -6,7 +6,7 @@ use std::cmp::{Ord, Ordering};
 use std::convert::TryInto;
 use std::fmt::Debug;
 use std::ops::{Bound, Deref, DerefMut, RangeBounds};
-use std::sync::{atomic::AtomicU8, Arc};
+use std::sync::Arc;
 use std::{marker, mem};
 
 use crate::core::{Diff, Entry, Footprint, Result, Value};
@@ -44,30 +44,9 @@ where
     seqno: u64,
     n_count: usize,
     latch: RWSpinlock,
-    writers: AtomicU8,
     key_footprint: isize,
     tree_footprint: isize,
-}
-
-impl<K, V> Clone for Llrb<K, V>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-{
-    fn clone(&self) -> Llrb<K, V> {
-        Llrb {
-            name: self.name.clone(),
-            lsm: self.lsm,
-            spin: self.spin,
-            root: self.root.clone(),
-            seqno: self.seqno,
-            n_count: self.n_count,
-            latch: RWSpinlock::new(),
-            writers: AtomicU8::new(0),
-            key_footprint: self.key_footprint,
-            tree_footprint: self.tree_footprint,
-        }
-    }
+    w: Option<LlrbWriter<K, V>>,
 }
 
 impl<K, V> Drop for Llrb<K, V>
@@ -100,8 +79,8 @@ where
 {
     /// Create an empty Llrb index, identified by `name`.
     /// Applications can choose unique names.
-    pub fn new<S: AsRef<str>>(name: S) -> Llrb<K, V> {
-        Llrb {
+    pub fn new<S: AsRef<str>>(name: S) -> Box<Llrb<K, V>> {
+        let mut index = Box::new(Llrb {
             name: name.as_ref().to_string(),
             lsm: false,
             spin: true,
@@ -109,21 +88,24 @@ where
             seqno: Default::default(),
             n_count: Default::default(),
             latch: RWSpinlock::new(),
-            writers: AtomicU8::new(0),
             key_footprint: Default::default(),
             tree_footprint: Default::default(),
-        }
+            w: Default::default(),
+        });
+        let idx = index.as_mut() as *mut Llrb<K, V>;
+        index.w = Some(LlrbWriter::new(idx));
+        index
     }
 
     /// Create a new Llrb index in lsm mode. In lsm mode, mutations
     /// are added as log for each key, instead of over-writing previous
     /// mutation. Note that, in case of back-to-back delete, first delete
     /// shall be applied and subsequent deletes shall be ignored.
-    pub fn new_lsm<S>(name: S) -> Llrb<K, V>
+    pub fn new_lsm<S>(name: S) -> Box<Llrb<K, V>>
     where
         S: AsRef<str>,
     {
-        Llrb {
+        let mut index = Box::new(Llrb {
             name: name.as_ref().to_string(),
             lsm: true,
             spin: true,
@@ -131,10 +113,13 @@ where
             seqno: Default::default(),
             n_count: Default::default(),
             latch: RWSpinlock::new(),
-            writers: AtomicU8::new(0),
             key_footprint: Default::default(),
             tree_footprint: Default::default(),
-        }
+            w: Default::default(),
+        });
+        let idx = index.as_mut() as *mut Llrb<K, V>;
+        index.w = Some(LlrbWriter::new(idx));
+        index
     }
 
     pub fn set_spinlatch(&mut self, spin: bool) -> &mut Llrb<K, V> {
@@ -144,7 +129,7 @@ where
 
     /// Squash this index and return the root and its book-keeping.
     /// IMPORTANT: after calling this method, value must be dropped.
-    pub(crate) fn squash(&mut self) -> SquashDebris<K, V> {
+    pub(crate) fn squash(mut self) -> SquashDebris<K, V> {
         SquashDebris {
             root: self.root.take(),
             seqno: self.seqno,
@@ -154,8 +139,8 @@ where
         }
     }
 
-    fn shallow_clone(&self) -> Llrb<K, V> {
-        Llrb {
+    fn shallow_clone(&self) -> Box<Llrb<K, V>> {
+        let mut index = Box::new(Llrb {
             name: self.name.clone(),
             lsm: self.lsm,
             spin: self.spin,
@@ -163,10 +148,31 @@ where
             seqno: Default::default(),
             n_count: Default::default(),
             latch: RWSpinlock::new(),
-            writers: AtomicU8::new(0),
             key_footprint: Default::default(),
             tree_footprint: Default::default(),
-        }
+            w: Default::default(),
+        });
+        let idx = index.as_mut() as *mut Llrb<K, V>;
+        index.w = Some(LlrbWriter::new(idx));
+        index
+    }
+
+    fn clone(&self) -> Box<Llrb<K, V>> {
+        let mut index = Box::new(Llrb {
+            name: self.name.clone(),
+            lsm: self.lsm,
+            spin: self.spin,
+            root: self.root.clone(),
+            seqno: self.seqno,
+            n_count: self.n_count,
+            latch: RWSpinlock::new(),
+            key_footprint: self.key_footprint,
+            tree_footprint: self.tree_footprint,
+            w: Default::default(),
+        });
+        let idx = index.as_mut() as *mut Llrb<K, V>;
+        index.w = Some(LlrbWriter::new(idx));
+        index
     }
 }
 
@@ -215,7 +221,7 @@ where
     type W = LlrbWriter<K, V>;
 
     /// Make a new empty index of this type, with same configuration.
-    fn make_new(&self) -> Result<Self> {
+    fn make_new(&self) -> Result<Box<Self>> {
         Ok(self.shallow_clone())
     }
 
@@ -223,13 +229,10 @@ where
     /// any time, creating more than one writer handle will panic.
     /// Concurrent readers are allowed but the data-structure is protected
     /// via a spin-lock, that can optionally lock.
-    fn to_writer(index: Arc<Llrb<K, V>>) -> Result<Self::W> {
-        use std::sync::atomic::Ordering;
-
-        if index.writers.compare_and_swap(0, 1, Ordering::Relaxed) == 0 {
-            Ok(LlrbWriter { index })
-        } else {
-            panic!("there cannot be more than one writers!")
+    fn to_writer(&mut self) -> Self::W {
+        match self.w.take() {
+            Some(w) => w,
+            None => panic!("writer not initialized"),
         }
     }
 }
@@ -256,12 +259,13 @@ where
     ///
     /// *LSM mode*: Add a new version for the key, perserving the old value.
     pub fn set(&mut self, key: K, value: V) -> Result<Option<Entry<K, V>>> {
-        let index = unsafe { Arc::from_raw(self as *const Llrb<K, V>) };
-        let mut w = Llrb::to_writer(index)?;
-
-        let (_seqno, entry) = w.set_index(key, value, self.seqno + 1);
-        // println!("set, root {}", self.root.is_some());
-        entry
+        match &mut self.w {
+            Some(w) => {
+                let (_seqno, entry) = w.set_index(key, value, self.seqno + 1);
+                entry
+            }
+            None => panic!("already given a writer_handle for this index"),
+        }
     }
 
     /// Similar to set, but succeeds only when CAS matches with entry's
@@ -271,12 +275,14 @@ where
     ///
     /// *LSM mode*: Add a new version for the key, perserving the old value.
     pub fn set_cas(&mut self, key: K, value: V, cas: u64) -> Result<Option<Entry<K, V>>> {
-        let index = unsafe { Arc::from_raw(self as *const Llrb<K, V>) };
-        let mut w = Llrb::to_writer(index)?;
-
-        let seqno = self.seqno + 1;
-        let (_seqno, entry) = w.set_cas_index(key, value, cas, seqno);
-        entry
+        match &mut self.w {
+            Some(w) => {
+                let seqno = self.seqno + 1;
+                let (_seqno, entry) = w.set_cas_index(key, value, cas, seqno);
+                entry
+            }
+            None => panic!("already given a writer_handle for this index"),
+        }
     }
 
     /// Delete the given key. Note that back-to-back delete for the same
@@ -294,11 +300,13 @@ where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
     {
-        let index = unsafe { Arc::from_raw(self as *const Llrb<K, V>) };
-        let mut w = Llrb::to_writer(index)?;
-
-        let (_seqno, entry) = w.delete_index(key, self.seqno + 1);
-        entry
+        match &mut self.w {
+            Some(w) => {
+                let (_seqno, entry) = w.delete_index(key, self.seqno + 1);
+                entry
+            }
+            None => panic!("already given a writer_handle for this index"),
+        }
     }
 }
 
@@ -920,7 +928,17 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    index: Arc<Llrb<K, V>>,
+    index: Option<*mut Llrb<K, V>>,
+}
+
+impl<K, V> Drop for LlrbWriter<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    fn drop(&mut self) {
+        // NOTE: forget the writer, which is a self-reference.
+    }
 }
 
 impl<K, V> LlrbWriter<K, V>
@@ -928,11 +946,20 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    fn get_index(&self) -> &mut Llrb<K, V> {
-        let index = self.index.as_ref();
-        unsafe {
-            let index = index as *const Llrb<K, V> as *mut Llrb<K, V>;
-            index.as_mut().unwrap()
+    fn new(index: *mut Llrb<K, V>) -> LlrbWriter<K, V> {
+        LlrbWriter { index: Some(index) }
+    }
+}
+
+impl<K, V> LlrbWriter<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    fn get_index(&mut self) -> &mut Llrb<K, V> {
+        match &mut self.index {
+            Some(index) => unsafe { index.as_mut().unwrap() },
+            None => unreachable!(),
         }
     }
 }
@@ -955,15 +982,15 @@ where
         value: V,
         seqno: u64, // seqno for this mutation
     ) -> (Option<u64>, Result<Option<Entry<K, V>>>) {
-        let _latch = self.index.latch.acquire_write(self.index.spin);
         let index = self.get_index();
+        let _latch = index.latch.acquire_write(index.spin);
 
         let key_footprint = key.footprint();
         let new_entry = {
             let value = Box::new(Value::new_upsert_value(value, seqno));
             Entry::new(key, value)
         };
-        // println!("set_index, root {}", index.root.is_some());
+        // !("set_index, root {}", index.root.is_some());
         match Llrb::upsert(index.root.take(), new_entry, index.lsm) {
             UpsertResult {
                 node: Some(mut root),
@@ -1000,8 +1027,8 @@ where
         cas: u64,
         seqno: u64,
     ) -> (Option<u64>, Result<Option<Entry<K, V>>>) {
-        let _latch = self.index.latch.acquire_write(self.index.spin);
         let index = self.get_index();
+        let _latch = index.latch.acquire_write(index.spin);
 
         let key_footprint = key.footprint();
         let new_entry = {
@@ -1049,8 +1076,8 @@ where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
     {
-        let _latch = self.index.latch.acquire_write(self.index.spin);
         let index = self.get_index();
+        let _latch = index.latch.acquire_write(index.spin);
 
         let key_footprint = key.to_owned().footprint();
 
@@ -1096,20 +1123,6 @@ where
             } else {
                 (None, Ok(res.old_entry))
             }
-        }
-    }
-}
-
-impl<K, V> Drop for LlrbWriter<K, V>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-{
-    fn drop(&mut self) {
-        use std::sync::atomic::Ordering;
-
-        if self.index.writers.compare_and_swap(1, 0, Ordering::Relaxed) != 1 {
-            unreachable!()
         }
     }
 }

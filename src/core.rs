@@ -1,7 +1,6 @@
 use std::borrow::Borrow;
 use std::convert::TryInto;
 use std::ops::{Bound, RangeBounds};
-use std::sync::Arc;
 use std::{fs, mem};
 
 use crate::error::Error;
@@ -69,12 +68,12 @@ where
     type W: Writer<K, V>;
 
     /// Make a new empty index of this type, with same configuration.
-    fn make_new(&self) -> Result<Self>;
+    fn make_new(&self) -> Result<Box<Self>>;
 
     /// Create a new writer handle. Note that, not all indexes allow
     /// concurrent writers, and not all indexes support concurrent
     /// read/write.
-    fn to_writer(index: Arc<Self>) -> Result<Self::W>;
+    fn to_writer(&mut self) -> Self::W;
 }
 
 /// Index read operations.

@@ -234,7 +234,7 @@ impl Stats {
     ///
     /// ```
     /// use bogn::llrb::Llrb;
-    /// let mut llrb: Llrb<i64,i64> = Llrb::new("myinstance");
+    /// let mut llrb: Box<Llrb<i64,i64>> = Llrb::new("myinstance");
     ///
     /// assert_eq!(llrb.stats().to_node_size(), 64);
     /// ```

@@ -13,19 +13,19 @@ include!("./ref_test.rs");
 
 #[test]
 fn test_id() {
-    let mvcc: Mvcc<i32, Empty> = Mvcc::new("test-mvcc");
+    let mvcc: Box<Mvcc<i32, Empty>> = Mvcc::new("test-mvcc");
     assert_eq!(mvcc.to_name(), "test-mvcc".to_string());
 }
 
 #[test]
 fn test_len() {
-    let mvcc: Mvcc<i32, Empty> = Mvcc::new("test-mvcc");
+    let mvcc: Box<Mvcc<i32, Empty>> = Mvcc::new("test-mvcc");
     assert_eq!(mvcc.len(), 0);
 }
 
 #[test]
 fn test_set() {
-    let mut mvcc: Mvcc<i64, i64> = Mvcc::new("test-mvcc");
+    let mut mvcc: Box<Mvcc<i64, i64>> = Mvcc::new("test-mvcc");
     let mut refns = RefNodes::new(false /*lsm*/, 10);
 
     assert!(mvcc.set(2, 10).unwrap().is_none());
@@ -71,7 +71,7 @@ fn test_set() {
 
 #[test]
 fn test_cas_lsm() {
-    let mut mvcc: Mvcc<i64, i64> = Mvcc::new_lsm("test-mvcc");
+    let mut mvcc: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc");
     let mut refns = RefNodes::new(true /*lsm*/, 11);
 
     assert!(mvcc.set(2, 100).unwrap().is_none());
@@ -155,7 +155,7 @@ fn test_cas_lsm() {
 
 #[test]
 fn test_delete() {
-    let mut mvcc: Mvcc<i64, i64> = Mvcc::new("test-mvcc");
+    let mut mvcc: Box<Mvcc<i64, i64>> = Mvcc::new("test-mvcc");
     let mut refns = RefNodes::new(false /*lsm*/, 11);
 
     assert!(mvcc.set(2, 100).unwrap().is_none());
@@ -213,7 +213,7 @@ fn test_delete() {
 
 #[test]
 fn test_iter() {
-    let mut mvcc: Mvcc<i64, i64> = Mvcc::new("test-mvcc");
+    let mut mvcc: Box<Mvcc<i64, i64>> = Mvcc::new("test-mvcc");
     let mut refns = RefNodes::new(false /*lsm*/, 10);
 
     assert!(mvcc.set(2, 10).unwrap().is_none());
@@ -257,7 +257,7 @@ fn test_iter() {
 
 #[test]
 fn test_range() {
-    let mut mvcc: Mvcc<i64, i64> = Mvcc::new("test-mvcc");
+    let mut mvcc: Box<Mvcc<i64, i64>> = Mvcc::new("test-mvcc");
     let mut refns = RefNodes::new(false /*lsm*/, 10);
 
     assert!(mvcc.set(2, 10).unwrap().is_none());
@@ -321,7 +321,7 @@ fn test_range() {
 #[test]
 fn test_crud() {
     let size = 1000;
-    let mut mvcc: Mvcc<i64, i64> = Mvcc::new("test-mvcc");
+    let mut mvcc: Box<Mvcc<i64, i64>> = Mvcc::new("test-mvcc");
     let mut refns = RefNodes::new(false /*lsm*/, size);
 
     for _ in 0..100000 {
@@ -402,7 +402,7 @@ fn test_crud() {
 #[test]
 fn test_crud_lsm() {
     let size = 1000;
-    let mut mvcc: Mvcc<i64, i64> = Mvcc::new_lsm("test-mvcc");
+    let mut mvcc: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc");
     let mut refns = RefNodes::new(true /*lsm*/, size as usize);
 
     for _i in 0..20000 {

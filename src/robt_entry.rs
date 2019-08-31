@@ -2,7 +2,7 @@ use std::{convert::TryInto, marker, mem};
 
 use crate::core::{self, Diff, Serialize};
 use crate::error::Error;
-use crate::robt_stats::Stats;
+use crate::robt::Stats;
 use crate::vlog;
 
 // Binary format (interMediate-Entry):
@@ -308,7 +308,7 @@ where
         let (ndeltas, is_vlog) = (entry.to_delta_count(), false);
         Self::encode_leaf(entry, ndeltas, is_vlog, leaf, stats)?;
         let doff = leaf.len();
-        stats.diffmem += ZEntry::encode_delta(entry, leaf, blob)?;
+        stats.diff_mem += ZEntry::encode_delta(entry, leaf, blob)?;
         Ok(ZEntry::EncLD { doff, ndeltas })
     }
 
@@ -336,7 +336,7 @@ where
             Ok(voff) => {
                 // encode deltas
                 let doff = leaf.len();
-                stats.diffmem += ZEntry::encode_delta(entry, leaf, blob)?;
+                stats.diff_mem += ZEntry::encode_delta(entry, leaf, blob)?;
                 Ok(ZEntry::EncLVD {
                     voff,
                     doff,
@@ -389,10 +389,10 @@ where
         leaf.resize(m + 24, 0);
         // encode key
         let klen = Self::encode_key(entry.as_key(), leaf)?;
-        stats.keymem += klen;
+        stats.key_mem += klen;
         // encode value
         let (vlen, is_deleted, seqno) = ZEntry::encode_value(entry, leaf)?;
-        stats.valmem += vlen;
+        stats.val_mem += vlen;
         // encode header.
         Self::encode_headers(klen, dlen, vlen, is_deleted, is_vlog, seqno, leaf);
         Ok(())
@@ -411,11 +411,11 @@ where
         leaf.resize(m + 24, 0);
         // encode key
         let klen = Self::encode_key(entry.as_key(), leaf)?;
-        stats.keymem += klen;
+        stats.key_mem += klen;
         // encode value
         let pos = blob.len();
         let (vlen, is_deleted, seqno) = ZEntry::encode_value(entry, blob)?;
-        stats.valmem += vlen;
+        stats.val_mem += vlen;
         let voff = leaf.len();
         let pos: u64 = pos.try_into().unwrap();
         leaf.extend_from_slice(&pos.to_be_bytes());

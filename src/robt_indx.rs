@@ -5,10 +5,10 @@ use std::{borrow::Borrow, cmp::Ordering, convert::TryInto, fs, marker};
 
 use crate::core::{self, Diff, Result, Serialize};
 use crate::error::Error;
+use crate::robt::Config;
+use crate::robt::Stats;
 use crate::robt_build::Flusher;
-use crate::robt_config::Config;
 use crate::robt_entry::{MEntry, ZEntry};
-use crate::robt_stats::Stats;
 use crate::util;
 
 // Binary format (InterMediate-Block prefix):

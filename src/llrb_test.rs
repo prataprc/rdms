@@ -686,7 +686,7 @@ fn test_full_scan() {
     let r = (Bound::Excluded(seqno2), Bound::Unbounded);
     let iter = SkipScan::new(&llrb, r);
     let mut ref_key = 0;
-    for (i, entry) in iter.enumerate() {
+    for entry in iter {
         let entry = entry.unwrap();
         let ref_value = (ref_key + 1) * 100000;
         assert_eq!(entry.to_key(), ref_key);

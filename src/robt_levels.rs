@@ -3,7 +3,7 @@ use std::{marker, mem, thread};
 
 use crate::core::{Diff, Footprint, Index, Result, Serialize};
 use crate::error::Error;
-use crate::robt_config::Config;
+use crate::robt::Config;
 use crate::robt_snap::Snapshot;
 
 struct Levels<K, V>(AtomicPtr<Arc<Vec<Snapshot<K, V>>>>)

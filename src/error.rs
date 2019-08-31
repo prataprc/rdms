@@ -1,5 +1,5 @@
 use std::sync::mpsc;
-use std::{any, io};
+use std::{any, ffi, io};
 
 use crate::jsondata;
 
@@ -86,6 +86,12 @@ pub enum Error {
 impl From<io::Error> for Error {
     fn from(err: io::Error) -> Error {
         Error::IoError(err)
+    }
+}
+
+impl From<ffi::OsString> for Error {
+    fn from(err: ffi::OsString) -> Error {
+        Error::InvalidFile(format!("{:?}", err))
     }
 }
 

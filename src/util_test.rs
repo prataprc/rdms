@@ -11,14 +11,14 @@ use crate::util;
 fn test_open_file_rw() {
     // case 1: try to create empty file.
     let dir = PathBuf::new();
-    let fd = util::open_file_w(dir.to_str().unwrap(), false);
+    let fd = util::open_file_cw(dir.as_os_str().to_os_string());
     let err = fd.expect_err("expected invalid-file");
     assert_eq!(err, Error::InvalidFile("".to_string()));
 
     // case 2: try to create root dir as file.
     let mut dir = PathBuf::new();
     dir.push("/");
-    let fd = util::open_file_w(dir.to_str().unwrap(), false);
+    let fd = util::open_file_cw(dir.as_os_str().to_os_string());
     let err = fd.expect_err("expected invalid-file");
     assert_eq!(err, Error::InvalidFile("/".to_string()));
 
@@ -29,8 +29,8 @@ fn test_open_file_rw() {
 
     fs::remove_file(file).ok();
 
-    let file = file.to_str().unwrap();
-    let mut fd = util::open_file_w(file, false).expect("open-write");
+    let file = file.as_os_str().to_os_string();
+    let mut fd = util::open_file_cw(file.clone()).expect("open-write");
     fd.write("hello world".as_bytes()).expect("write failed");
     fd.seek(io::SeekFrom::Start(1)).expect("seek failed");
     fd.write("i world".as_bytes()).expect("write failed");
@@ -43,8 +43,8 @@ fn test_open_file_rw() {
     dir.push("rust.bogn.util.open_file_rw.txt");
     let file = dir.as_path();
 
-    let file = file.to_str().unwrap();
-    let mut fd = util::open_file_w(file, false).expect("open-write");
+    let file = file.as_os_str().to_os_string();
+    let mut fd = util::open_file_cw(file.clone()).expect("open-write");
     fd.write("hello world".as_bytes()).expect("write failed");
     fd.seek(io::SeekFrom::Start(1)).expect("seek failed");
     fd.write("i world".as_bytes()).expect("write failed");
@@ -57,13 +57,13 @@ fn test_open_file_rw() {
     dir.push("rust.bogn.util.open_file_rw.txt");
     let file = dir.as_path();
 
-    let file = file.to_str().unwrap();
-    let mut fd = util::open_file_w(file, true).expect("open-write");
+    let file = file.as_os_str().to_os_string();
+    let mut fd = util::open_file_w(&file).expect("open-write");
     fd.write("hello world".as_bytes()).expect("write failed");
     fd.seek(io::SeekFrom::Start(1)).expect("seek failed");
     fd.write("i world".as_bytes()).expect("write failed");
 
-    let txt = fs::read(file).expect("read failed");
+    let txt = fs::read(file.clone()).expect("read failed");
     assert_eq!(
         std::str::from_utf8(&txt).unwrap(),
         "hello worldi worldhello worldi world"

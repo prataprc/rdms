@@ -16,10 +16,10 @@ use std::{
 use crate::core::{Diff, Entry, Footprint, Result, Serialize};
 use crate::core::{Index, IndexIter, Reader, Writer};
 use crate::error::Error;
-use crate::robt_config::{self, Config, MetaItem};
+use crate::robt::Stats;
+use crate::robt::{self, Config, MetaItem};
 use crate::robt_entry::MEntry;
 use crate::robt_indx::{MBlock, ZBlock};
-use crate::robt_stats::Stats;
 use crate::util;
 
 /// A read only snapshot of BTree built using [robt] index.
@@ -52,7 +52,7 @@ where
     /// Open BTree snapshot from file that can be constructed from ``dir``
     /// and ``name``.
     pub fn open(dir: &str, name: &str) -> Result<Snapshot<K, V>> {
-        let meta_items = robt_config::read_meta_items(dir, name)?;
+        let meta_items = robt::read_meta_items(dir, name)?;
         let mut snap = Snapshot {
             dir: dir.to_string(),
             name: name.to_string(),
@@ -76,7 +76,7 @@ where
             let mut vpath = path::PathBuf::new();
             vpath.push(path::Path::new(&ipath).parent().unwrap());
             vpath.push(vfile);
-            vpath.to_str().unwrap().to_string()
+            vpath.as_os_str().to_os_string()
         });
         snap.vlog_fd = snap
             .config

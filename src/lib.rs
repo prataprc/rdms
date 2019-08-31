@@ -44,25 +44,11 @@ pub use crate::core::{Footprint, Index, IndexIter, Reader, Writer};
 pub use crate::error::Error;
 pub use crate::spinlock::RWSpinlock;
 
+pub mod robt;
 mod robt_build;
-mod robt_config;
 mod robt_entry;
 mod robt_indx;
-mod robt_levels;
 mod robt_snap;
-mod robt_stats;
-
-/// Read Only BTree for disk based indexes.
-///
-/// ROBT instances shall have an index file and an optional value-log-file,
-/// refer to [Config] for more information.
-///
-/// [Config]: crate::robt_config::Config
-pub mod robt {
-    pub use crate::robt_build::Builder;
-    pub use crate::robt_config::Config;
-    pub use crate::robt_snap::Snapshot;
-}
 
 mod types;
 pub use crate::types::Empty;

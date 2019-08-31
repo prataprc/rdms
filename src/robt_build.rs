@@ -2,13 +2,13 @@
 
 use std::ops::Bound;
 use std::sync::mpsc;
-use std::{cmp, convert::TryInto, fs, io::Write, marker, mem, thread, time};
+use std::{cmp, convert::TryInto, ffi, fs, io::Write, marker, mem, thread, time};
 
 use crate::core::{Diff, Entry, Result, Serialize};
 use crate::error::Error;
-use crate::robt_config::{self, Config, MetaItem, ROOT_MARKER};
+use crate::robt::Stats;
+use crate::robt::{self, Config, MetaItem, ROOT_MARKER};
 use crate::robt_indx::{MBlock, ZBlock};
-use crate::robt_stats::Stats;
 use crate::util;
 
 /// Build a new instance of Read-Only-BTree.
@@ -96,7 +96,7 @@ where
 
         // meta-stats
         let stats = {
-            self.stats.buildtime = took;
+            self.stats.build_time = took;
             let epoch: i128 = time::UNIX_EPOCH
                 .elapsed()
                 .unwrap()
@@ -115,7 +115,7 @@ where
             MetaItem::Root(root),
         ];
         // flush them to disk
-        robt_config::write_meta_items(meta_items, &mut self.iflusher)?;
+        robt::write_meta_items(self.iflusher.file.clone(), meta_items)?;
 
         // flush marker block and close
         self.iflusher.close_wait()?;
@@ -292,24 +292,34 @@ where
 }
 
 pub(crate) struct Flusher {
+    file: ffi::OsString,
     fpos: u64,
     thread: thread::JoinHandle<Result<()>>,
     tx: mpsc::SyncSender<(Vec<u8>, mpsc::SyncSender<Result<()>>)>,
 }
 
 impl Flusher {
-    fn new(file: String, config: Config, reuse: bool) -> Result<Flusher> {
-        let fd = util::open_file_w(&file, reuse)?;
-        let fpos = if reuse {
-            fs::metadata(&file)?.len()
+    fn new(
+        file: ffi::OsString,
+        config: Config,
+        create: bool, // if true create a new file
+    ) -> Result<Flusher> {
+        let (fd, fpos) = if create {
+            (util::open_file_w(&file)?, fs::metadata(&file)?.len())
         } else {
-            Default::default()
+            (util::open_file_cw(file.clone())?, Default::default())
         };
 
         let (tx, rx) = mpsc::sync_channel(config.flush_queue_size);
-        let thread = thread::spawn(move || thread_flush(file, fd, rx));
+        let send_file = file.clone();
+        let thread = thread::spawn(move || thread_flush(send_file, fd, rx));
 
-        Ok(Flusher { tx, thread, fpos })
+        Ok(Flusher {
+            file,
+            fpos,
+            thread,
+            tx,
+        })
     }
 
     // return error if flush thread has exited/paniced.
@@ -334,7 +344,7 @@ impl Flusher {
 }
 
 fn thread_flush(
-    file: String, // for debuging purpose
+    file: ffi::OsString, // for debuging purpose
     mut fd: fs::File,
     rx: mpsc::Receiver<(Vec<u8>, mpsc::SyncSender<Result<()>>)>,
 ) -> Result<()> {

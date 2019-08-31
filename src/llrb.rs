@@ -723,7 +723,7 @@ where
     }
 }
 
-impl<K, V> FullScan<K, V> for Llrb<K, V>
+impl<K, V> FullScan<K, V> for Box<Llrb<K, V>>
 where
     K: Clone + Ord,
     V: Clone + Diff + From<<V as Diff>::D>,

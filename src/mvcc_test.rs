@@ -5,6 +5,7 @@ use rand::prelude::random;
 use crate::core::Reader;
 use crate::error::Error;
 use crate::mvcc::Mvcc;
+use crate::scans::SkipScan;
 use crate::types::Empty;
 
 include!("./ref_test.rs");
@@ -478,5 +479,151 @@ fn test_crud_lsm() {
                 break;
             }
         }
+    }
+}
+
+#[test]
+fn test_full_scan() {
+    let mut index: Box<Mvcc<i32, i32>> = Mvcc::new_lsm("test-mvcc");
+
+    // populate
+    for key in 0..10000 {
+        let value = (key + 1) * 100;
+        assert!(index.set(key, value).unwrap().is_none());
+    }
+
+    assert_eq!(index.len(), 10000);
+    assert_eq!(index.to_seqno(), 10000);
+    let seqno1 = index.to_seqno();
+
+    let iter = SkipScan::new(&index, ..=seqno1);
+    for (i, entry) in iter.enumerate() {
+        let entry = entry.unwrap();
+        let ref_key = i as i32;
+        let ref_value = (ref_key + 1) * 100;
+        assert_eq!(entry.to_key(), ref_key);
+        assert_eq!(entry.to_native_value().unwrap(), ref_value);
+    }
+
+    // first-inject.
+    for key in (0..1000).step_by(3) {
+        let value = (key + 1) * 1000;
+        assert!(index.set(key, value).unwrap().is_some());
+    }
+    assert_eq!(index.len(), 10000);
+    assert_eq!(index.to_seqno(), 10334);
+
+    // skip scan after first-inject.
+    let iter = SkipScan::new(&index, ..=seqno1);
+    for (i, entry) in iter.enumerate() {
+        let entry = entry.unwrap();
+        let ref_key = i as i32;
+        let ref_value = (ref_key + 1) * 100;
+
+        let vers: Vec<Entry<i32, i32>> = entry.versions().collect();
+        assert_eq!(vers.len(), 1);
+
+        assert_eq!(entry.to_key(), ref_key);
+        assert_eq!(entry.to_native_value().unwrap(), ref_value);
+    }
+
+    // second-inject.
+    for key in (0..1000).step_by(3) {
+        let value = (key + 1) * 10000;
+        assert!(index.set(key, value).unwrap().is_some());
+    }
+    for key in (0..1000).step_by(5) {
+        let value = (key + 1) * 1000;
+        assert!(index.set(key, value).unwrap().is_some());
+    }
+
+    assert_eq!(index.len(), 10000);
+    assert_eq!(index.to_seqno(), 10868);
+
+    let seqno2 = index.to_seqno();
+
+    // third-inject.
+    for key in (0..1000).step_by(15) {
+        let value = (key + 1) * 100000;
+        assert!(index.set(key, value).unwrap().is_some());
+    }
+    assert_eq!(index.len(), 10000);
+    assert_eq!(index.to_seqno(), 10935);
+
+    // skip scan in-between.
+    let r = (Bound::Excluded(seqno1), Bound::Included(seqno2));
+    let iter = SkipScan::new(&index, r);
+    for entry in iter {
+        let entry = entry.unwrap();
+        let key = entry.to_key();
+        match key {
+            0 => {
+                let ref_key = 0_i32;
+                let vers: Vec<Entry<i32, i32>> = entry.versions().collect();
+                assert_eq!(entry.to_key(), ref_key);
+                for (i, ver) in vers.into_iter().enumerate() {
+                    match (i, ver.to_native_value().unwrap()) {
+                        (0, value) => assert_eq!(value, 1000),
+                        (1, value) => assert_eq!(value, 10000),
+                        (2, value) => assert_eq!(value, 1000),
+                        _ => unreachable!(),
+                    }
+                }
+            }
+            key if key % 15 == 0 => {
+                let ref_key = key as i32;
+                let vers: Vec<Entry<i32, i32>> = entry.versions().collect();
+                assert_eq!(entry.to_key(), ref_key);
+                for (i, ver) in vers.into_iter().enumerate() {
+                    match (i, ver.to_native_value().unwrap()) {
+                        (0, value) => assert_eq!(value, (key + 1) * 1000),
+                        (1, value) => assert_eq!(value, (key + 1) * 10000),
+                        (2, value) => assert_eq!(value, (key + 1) * 1000),
+                        _ => unreachable!(),
+                    }
+                }
+            }
+            key if key % 3 == 0 => {
+                let ref_key = key as i32;
+                let vers: Vec<Entry<i32, i32>> = entry.versions().collect();
+                assert_eq!(entry.to_key(), ref_key);
+                for (i, ver) in vers.into_iter().enumerate() {
+                    match (i, ver.to_native_value().unwrap()) {
+                        (0, value) => assert_eq!(value, (key + 1) * 10000),
+                        (1, value) => assert_eq!(value, (key + 1) * 1000),
+                        _ => unreachable!(),
+                    }
+                }
+            }
+            key if key % 5 == 0 => {
+                let ref_key = key as i32;
+                let vers: Vec<Entry<i32, i32>> = entry.versions().collect();
+                assert_eq!(entry.to_key(), ref_key);
+                for (i, ver) in vers.into_iter().enumerate() {
+                    match (i, ver.to_native_value().unwrap()) {
+                        (0, value) => assert_eq!(value, (key + 1) * 1000),
+                        _ => unreachable!(),
+                    }
+                }
+            }
+            key => {
+                let vers: Vec<Entry<i32, i32>> = entry.versions().collect();
+                panic!("unexpected key {} num-versions: {}", key, vers.len());
+            }
+        }
+    }
+
+    // skip scan final.
+    let r = (Bound::Excluded(seqno2), Bound::Unbounded);
+    let iter = SkipScan::new(&index, r);
+    let mut ref_key = 0;
+    for (i, entry) in iter.enumerate() {
+        let entry = entry.unwrap();
+        let ref_value = (ref_key + 1) * 100000;
+        assert_eq!(entry.to_key(), ref_key);
+        assert_eq!(entry.to_native_value().unwrap(), ref_value);
+        let vers: Vec<Entry<i32, i32>> = entry.versions().collect();
+        assert_eq!(vers.len(), 1);
+        ref_key += 15;
     }
 }

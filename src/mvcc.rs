@@ -112,21 +112,7 @@ where
         index
     }
 
-    fn shallow_clone(&self) -> Box<Mvcc<K, V>> {
-        let mut index = Box::new(Mvcc {
-            name: self.name.clone(),
-            lsm: self.lsm,
-            snapshot: Snapshot::new(),
-            key_footprint: AtomicIsize::new(self.key_footprint.load(Relaxed)),
-            tree_footprint: AtomicIsize::new(self.tree_footprint.load(Relaxed)),
-            w: unsafe { mem::zeroed() },
-        });
-        let idx = index.as_mut() as *mut Mvcc<K, V>;
-        index.w = Some(MvccWriter::new(idx));
-        index
-    }
-
-    fn clone(&self) -> Box<Mvcc<K, V>> {
+    pub fn clone(&self) -> Box<Mvcc<K, V>> {
         let mut cloned = Box::new(Mvcc {
             name: self.name.clone(),
             lsm: self.lsm,
@@ -149,7 +135,7 @@ where
         cloned
     }
 
-    fn from_llrb(llrb_index: Llrb<K, V>) -> Box<Mvcc<K, V>> {
+    pub fn from_llrb(llrb_index: Llrb<K, V>) -> Box<Mvcc<K, V>> {
         let mvcc_index = if llrb_index.is_lsm() {
             Mvcc::new_lsm(llrb_index.to_name())
         } else {
@@ -171,6 +157,20 @@ where
             vec![], /*reclaim*/
         );
         mvcc_index
+    }
+
+    fn shallow_clone(&self) -> Box<Mvcc<K, V>> {
+        let mut index = Box::new(Mvcc {
+            name: self.name.clone(),
+            lsm: self.lsm,
+            snapshot: Snapshot::new(),
+            key_footprint: AtomicIsize::new(self.key_footprint.load(Relaxed)),
+            tree_footprint: AtomicIsize::new(self.tree_footprint.load(Relaxed)),
+            w: unsafe { mem::zeroed() },
+        });
+        let idx = index.as_mut() as *mut Mvcc<K, V>;
+        index.w = Some(MvccWriter::new(idx));
+        index
     }
 }
 
@@ -755,7 +755,7 @@ where
     }
 }
 
-impl<K, V> FullScan<K, V> for Mvcc<K, V>
+impl<K, V> FullScan<K, V> for Box<Mvcc<K, V>>
 where
     K: Clone + Ord,
     V: Clone + Diff + From<<V as Diff>::D>,

@@ -19,13 +19,13 @@ pub type IndexIter<'a, K, V> = Box<dyn Iterator<Item = Result<Entry<K, V>>> + 'a
 ///
 /// If,
 /// ```notest
-/// O = old value; N = new value; D = difference between O and N
+/// P = old value; C = new value; D = difference between P and C
 /// ```
 ///
 /// Then,
 /// ```notest
-/// D = N - O (diff operation)
-/// O = N - D (merge operation, to get old value)
+/// D = C - P (diff operation)
+/// P = C - D (merge operation, to get old value)
 /// ```
 ///
 /// [Bogn]: crate::Bogn

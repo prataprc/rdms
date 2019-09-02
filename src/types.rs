@@ -11,12 +11,12 @@ pub struct Empty;
 impl Diff for Empty {
     type D = Empty;
 
-    /// D = N - O
+    /// D = C - P
     fn diff(&self, _a: &Self) -> Self::D {
         Empty
     }
 
-    /// O = N - D
+    /// P = C - D
     fn merge(&self, _a: &Self::D) -> Self {
         Empty
     }
@@ -43,12 +43,12 @@ impl Footprint for Empty {
 impl Diff for Vec<u8> {
     type D = Vec<u8>;
 
-    /// D = N - O
+    /// D = C - P
     fn diff(&self, old: &Self) -> Self::D {
         old.clone()
     }
 
-    /// O = N - D
+    /// P = C - D
     fn merge(&self, delta: &Self::D) -> Self {
         delta.clone()
     }
@@ -98,12 +98,12 @@ impl Footprint for Vec<u8> {
 impl Diff for i32 {
     type D = i32;
 
-    /// D = N - O
+    /// D = C - P
     fn diff(&self, old: &Self) -> Self::D {
         old.clone()
     }
 
-    /// O = N - D
+    /// P = C - D
     fn merge(&self, delta: &Self::D) -> Self {
         delta.clone()
     }
@@ -140,12 +140,12 @@ impl Footprint for i32 {
 impl Diff for i64 {
     type D = i64;
 
-    /// D = N - O
+    /// D = C - P
     fn diff(&self, old: &Self) -> Self::D {
         old.clone()
     }
 
-    /// O = N - D
+    /// P = C - D
     fn merge(&self, delta: &Self::D) -> Self {
         delta.clone()
     }

@@ -109,10 +109,10 @@ where
 
         // start building metadata items for index files
         let meta_items: Vec<MetaItem> = vec![
-            MetaItem::Marker(ROOT_MARKER.clone()),
+            MetaItem::Root(root),
             MetaItem::Metadata(metadata),
             MetaItem::Stats(stats),
-            MetaItem::Root(root),
+            MetaItem::Marker(ROOT_MARKER.clone()),
         ];
         // flush them to disk
         robt::write_meta_items(self.iflusher.file.clone(), meta_items)?;

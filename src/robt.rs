@@ -429,56 +429,59 @@ impl Config {
 // *------------------------------------------* SeekFrom::End(0)
 // |                marker-length             |
 // *------------------------------------------* SeekFrom::End(-8)
-// |               metadata-length            |
-// *------------------------------------------* SeekFrom::End(-16)
 // |                stats-length              |
+// *------------------------------------------* SeekFrom::End(-16)
+// |               metadata-length            |
 // *------------------------------------------* SeekFrom::End(-24)
 // |                  root-fpos               |
 // *------------------------------------------* SeekFrom::MetaBlock
 //
 pub enum MetaItem {
     Marker(Vec<u8>), // tip of the file.
-    Metadata(Vec<u8>),
     Stats(String),
+    Metadata(Vec<u8>),
     Root(u64),
 }
 
+// returns bytes appended to file.
 pub(crate) fn write_meta_items(
     file: ffi::OsString,
-    items: Vec<MetaItem>, // list of meta items
+    items: Vec<MetaItem>, // list of meta items, starting from Marker
 ) -> Result<u64> {
     let p = path::Path::new(&file);
     let mut opts = fs::OpenOptions::new();
     let mut fd = opts.append(true).open(p)?;
 
-    let mut block = vec![];
-    block.resize(32, 0);
+    let (mut hdr, mut block) = (vec![], vec![]);
+    hdr.resize(32, 0);
 
     for (i, item) in items.into_iter().enumerate() {
         match (i, item) {
-            (0, MetaItem::Marker(data)) => {
-                block[..8].copy_from_slice(&(data.len() as u64).to_be_bytes());
-                block.extend_from_slice(&data);
+            (0, MetaItem::Root(fpos)) => {
+                hdr[0..8].copy_from_slice(&fpos.to_be_bytes());
             }
             (1, MetaItem::Metadata(md)) => {
-                block[8..16].copy_from_slice(&(md.len() as u64).to_be_bytes());
+                hdr[8..16].copy_from_slice(&(md.len() as u64).to_be_bytes());
                 block.extend_from_slice(&md);
             }
             (2, MetaItem::Stats(s)) => {
-                block[16..24].copy_from_slice(&(s.len() as u64).to_be_bytes());
+                hdr[16..24].copy_from_slice(&(s.len() as u64).to_be_bytes());
                 block.extend_from_slice(s.as_bytes());
             }
-            (3, MetaItem::Root(fpos)) => {
-                block[24..32].copy_from_slice(&fpos.to_be_bytes());
+            (3, MetaItem::Marker(data)) => {
+                hdr[24..32].copy_from_slice(&(data.len() as u64).to_be_bytes());
+                block.extend_from_slice(&data);
             }
-            _ => unreachable!(),
+            (i, _) => panic!("unreachable arm at {}", i),
         }
     }
+    block.extend_from_slice(&hdr[..]);
 
     // flush / append into file.
     let n = Config::compute_root_block(block.len());
+    let (shift, m) = (n - block.len(), block.len());
     block.resize(n, 0);
-    let block: Vec<u8> = block.into_iter().rev().collect();
+    block.copy_within(0..m, shift);
     let ln = block.len();
     let n = fd.write(&block)?;
     if n == ln {
@@ -500,44 +503,41 @@ pub fn read_meta_items(
     // read header
     let hdr = util::read_buffer(&mut fd, m - 32, 32, "read root-block header")?;
     let root = u64::from_be_bytes(hdr[..8].try_into().unwrap());
-    let n_stats = u64::from_be_bytes(hdr[8..16].try_into().unwrap()) as usize;
-    let n_md = u64::from_be_bytes(hdr[16..24].try_into().unwrap()) as usize;
+    let n_md = u64::from_be_bytes(hdr[8..16].try_into().unwrap()) as usize;
+    let n_stats = u64::from_be_bytes(hdr[16..24].try_into().unwrap()) as usize;
     let n_marker = u64::from_be_bytes(hdr[24..32].try_into().unwrap()) as usize;
-
     // read block
     let n = Config::compute_root_block(n_stats + n_md + n_marker + 32)
         .try_into()
         .unwrap();
     let block: Vec<u8> = util::read_buffer(&mut fd, m - n, n, "read root-block")?
         .into_iter()
-        .rev()
         .collect();
 
     let mut metaitems: Vec<MetaItem> = vec![];
-    let (marker, mut off) = {
-        let marker = block[32..32 + n_marker].to_vec();
-        metaitems.push(MetaItem::Marker(marker.clone()));
-        (marker, 32 + n_marker)
-    };
-    off += {
-        metaitems.push(MetaItem::Metadata(block[off..off + n_md].to_vec()));
-        n_md
-    };
-    {
-        metaitems.push(MetaItem::Stats(
-            std::str::from_utf8(&block[off..off + n_stats])?.to_string(),
-        ));
+    let z = (n as usize) - 32;
+
+    let (x, y) = (z - n_marker, z);
+    let marker = block[x..y].to_vec();
+    if marker.ne(&ROOT_MARKER.as_slice()) {
+        let msg = format!("unexpected marker at {:?}", marker);
+        return Err(Error::InvalidSnapshot(msg));
     }
-    {
-        metaitems.push(MetaItem::Root(root));
-    }
+
+    let (x, y) = (z - n_marker - n_stats, z - n_marker);
+    let stats = std::str::from_utf8(&block[x..y])?.to_string();
+
+    let (x, y) = (z - n_marker - n_stats - n_md, z - n_marker - n_stats);
+    let meta_data = block[x..y].to_vec();
+
+    metaitems.push(MetaItem::Root(root));
+    metaitems.push(MetaItem::Metadata(meta_data));
+    metaitems.push(MetaItem::Stats(stats));
+    metaitems.push(MetaItem::Marker(marker.clone()));
 
     // validate and return
     if (m - n) != root {
         let msg = format!("expected root at {}, found {}", root, (m - n));
-        Err(Error::InvalidSnapshot(msg))
-    } else if marker.ne(&ROOT_MARKER.as_slice()) {
-        let msg = format!("unexpected marker at {:?}", marker);
         Err(Error::InvalidSnapshot(msg))
     } else {
         Ok(metaitems)

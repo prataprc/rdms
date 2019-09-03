@@ -47,3 +47,48 @@ fn test_stats() {
     let stats2: Stats = s.parse().unwrap();
     assert!(stats1 == stats2);
 }
+
+#[test]
+fn test_config() {
+    use std::time::SystemTime;
+
+    let dir = std::env::temp_dir().to_str().unwrap().to_string();
+    fs::remove_file(dir.clone()).ok();
+    let name = "users".to_string();
+    let file = Config::stitch_index_file(&dir, &name);
+    fs::write(&file, [1, 2, 3, 4, 5]);
+
+    let n: u64 = (SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos()
+        % (std::u64::MAX as u128))
+        .try_into()
+        .unwrap();
+    let len1 = ROOT_MARKER.len();
+    let stats = <Stats as Default>::default().to_string();
+    let len2 = (n % 65536) as usize;
+    let meta_data: Vec<u8> = (0..len2).map(|x| (x % 256) as u8).collect();
+    let len3 = stats.len();
+
+    let meta_items = vec![
+        MetaItem::Root(5),
+        MetaItem::Metadata(meta_data.clone()),
+        MetaItem::Stats(stats.clone()),
+        MetaItem::Marker(ROOT_MARKER.clone()),
+    ];
+    let n = write_meta_items(file, meta_items).unwrap();
+    let ref_n = Config::compute_root_block(32 + len1 + len2 + len3);
+    assert_eq!(n, ref_n as u64);
+
+    let iter = read_meta_items(&dir, &name).unwrap().into_iter();
+    for (i, item) in iter.enumerate() {
+        match (i, item) {
+            (0, MetaItem::Root(value)) => assert_eq!(value, 5),
+            (1, MetaItem::Metadata(value)) => assert_eq!(value, meta_data),
+            (2, MetaItem::Stats(value)) => assert_eq!(value, stats),
+            (3, MetaItem::Marker(v)) => assert_eq!(v, ROOT_MARKER.clone()),
+            (i, _) => panic!("at {}, failure", i),
+        }
+    }
+}

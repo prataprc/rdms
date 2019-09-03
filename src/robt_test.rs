@@ -49,14 +49,14 @@ fn test_stats() {
 }
 
 #[test]
-fn test_config() {
+fn test_meta_items() {
     use std::time::SystemTime;
 
     let dir = std::env::temp_dir().to_str().unwrap().to_string();
     fs::remove_file(dir.clone()).ok();
     let name = "users".to_string();
     let file = Config::stitch_index_file(&dir, &name);
-    fs::write(&file, [1, 2, 3, 4, 5]);
+    fs::write(&file, [1, 2, 3, 4, 5]).unwrap();
 
     let n: u64 = (SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -91,4 +91,60 @@ fn test_config() {
             (i, _) => panic!("at {}, failure", i),
         }
     }
+}
+
+#[test]
+fn test_config() {
+    let vlog_file: &ffi::OsStr = "same-file.log".as_ref();
+    let mut config1 = Config {
+        z_blocksize: 1024 * 4,
+        v_blocksize: 1024 * 16,
+        m_blocksize: 1024 * 32,
+        tomb_purge: Some(543),
+        delta_ok: true,
+        vlog_file: Some(vlog_file.to_os_string()),
+        value_in_vlog: true,
+        flush_queue_size: 1234,
+    };
+
+    let stats: Stats = config1.clone().into();
+    let config2: Config = stats.into();
+    assert_eq!(config2.z_blocksize, config1.z_blocksize);
+    assert_eq!(config2.v_blocksize, config1.v_blocksize);
+    assert_eq!(config2.m_blocksize, config1.m_blocksize);
+    assert_eq!(config2.delta_ok, config1.delta_ok);
+    assert_eq!(config2.vlog_file, config1.vlog_file);
+    assert_eq!(config2.value_in_vlog, config1.value_in_vlog);
+    assert_eq!(config2.tomb_purge, None);
+    assert_eq!(config2.flush_queue_size, Config::FLUSH_QUEUE_SIZE);
+
+    config1.set_blocksize(1024 * 8, 1024 * 32, 1024 * 64);
+    config1.set_tombstone_purge(782);
+    config1.set_delta(None);
+    config1.set_value_log(None);
+    config1.set_flush_queue_size(1023);
+    assert_eq!(config1.z_blocksize, 1024 * 8);
+    assert_eq!(config1.v_blocksize, 1024 * 32);
+    assert_eq!(config1.m_blocksize, 1024 * 64);
+    assert_eq!(config1.delta_ok, false);
+    assert_eq!(config1.value_in_vlog, false);
+    assert_eq!(config1.tomb_purge, Some(782));
+    assert_eq!(config1.flush_queue_size, 1023);
+
+    assert_eq!(Config::compute_root_block(4095), 4096);
+    assert_eq!(Config::compute_root_block(4096), 4096);
+    assert_eq!(Config::compute_root_block(4097), 8192);
+    let config = Config::new();
+    let dir_path = std::env::temp_dir();
+    let dir: &ffi::OsStr = dir_path.as_ref();
+    let ref_file: &ffi::OsStr = "/tmp/robt-users.indx".as_ref();
+    assert_eq!(
+        config.to_index_file(dir.to_str().unwrap(), "users"),
+        ref_file.to_os_string()
+    );
+    let ref_file: &ffi::OsStr = "/tmp/robt-users.vlog".as_ref();
+    assert_eq!(
+        config.to_value_log(dir.to_str().unwrap(), "users").unwrap(),
+        ref_file.to_os_string()
+    );
 }

@@ -309,8 +309,8 @@ impl From<Stats> for Config {
 
 impl Config {
     pub const ZBLOCKSIZE: usize = 4 * 1024; // 4KB leaf node
-    pub const MBLOCKSIZE: usize = 4 * 1024; // 4KB intermediate node
     pub const VBLOCKSIZE: usize = 4 * 1024; // ~ 4KB of blobs.
+    pub const MBLOCKSIZE: usize = 4 * 1024; // 4KB intermediate node
     const MARKER_BLOCK_SIZE: usize = 1024 * 4;
     const FLUSH_QUEUE_SIZE: usize = 16;
 
@@ -335,23 +335,23 @@ impl Config {
     }
 
     /// Configure differt set of block size for leaf-node, intermediate-node.
-    pub fn set_blocksize(mut self, m: usize, z: usize, v: usize) -> Config {
-        self.m_blocksize = m;
+    pub fn set_blocksize(&mut self, z: usize, v: usize, m: usize) -> &mut Self {
         self.z_blocksize = z;
         self.v_blocksize = v;
+        self.m_blocksize = m;
         self
     }
 
     /// Enable tombstone purge. Deltas and values with sequence number less
     /// than `before` shall be purged.
-    pub fn set_tombstone_purge(mut self, before: u64) -> Config {
+    pub fn set_tombstone_purge(&mut self, before: u64) -> &mut Self {
         self.tomb_purge = Some(before);
         self
     }
 
     /// Enable delta persistence, and configure value-log-file. To disable
     /// delta persistance, pass `vlog_file` as None.
-    pub fn set_delta(mut self, vlog_file: Option<ffi::OsString>) -> Config {
+    pub fn set_delta(&mut self, vlog_file: Option<ffi::OsString>) -> &mut Self {
         match vlog_file {
             Some(vlog_file) => {
                 self.delta_ok = true;
@@ -366,8 +366,8 @@ impl Config {
 
     /// Persist values in a separate file, called value-log file. To persist
     /// values along with leaf node, pass `vlog_file` as None.
-    pub fn set_value_log(mut self, vlog_file: Option<ffi::OsString>) -> Config {
-        match vlog_file {
+    pub fn set_value_log(&mut self, file: Option<ffi::OsString>) -> &mut Self {
+        match file {
             Some(vlog_file) => {
                 self.value_in_vlog = true;
                 self.vlog_file = Some(vlog_file);
@@ -381,7 +381,7 @@ impl Config {
 
     /// Set flush queue size, increasing the queue size will improve batch
     /// flushing.
-    pub fn set_flush_queue_size(mut self, size: usize) -> Config {
+    pub fn set_flush_queue_size(&mut self, size: usize) -> &mut Self {
         self.flush_queue_size = size;
         self
     }

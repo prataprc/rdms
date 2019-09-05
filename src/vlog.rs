@@ -95,6 +95,22 @@ where
             _ => Err(Error::NotNativeValue),
         }
     }
+
+    pub(crate) fn encode_local(&self, buf: &mut Vec<u8>) -> Result<usize>
+    where
+        V: Serialize,
+    {
+        match self {
+            Value::Native { value } => {
+                let vlen = value.encode(buf);
+                if vlen > core::Entry::<i32, i32>::VALUE_SIZE_LIMIT {
+                    return Err(Error::ValueSizeExceeded(vlen));
+                };
+                Ok(vlen)
+            }
+            _ => Err(Error::NotNativeValue),
+        }
+    }
 }
 
 pub(crate) fn fetch_value<V>(fpos: u64, n: u64, fd: &mut fs::File) -> Result<Value<V>>

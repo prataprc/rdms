@@ -548,7 +548,7 @@ where
             } => unreachable!(),
         };
         let size = self.value.footprint();
-        *self.value = Value::D { seqno };
+        *self.value = Value::new_delete(seqno);
         (size + delta_size - self.value.footprint())
             .try_into()
             .unwrap()

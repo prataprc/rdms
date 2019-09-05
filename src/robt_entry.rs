@@ -1,6 +1,6 @@
 use std::{convert::TryInto, marker, mem};
 
-use crate::core::{self, Diff, Serialize};
+use crate::core::{self, Diff, Result, Serialize};
 use crate::error::Error;
 use crate::robt::Stats;
 use crate::vlog;
@@ -46,7 +46,7 @@ where
         MEntry::EncZ { fpos, key }
     }
 
-    pub(crate) fn encode(&self, buf: &mut Vec<u8>) -> Result<usize, Error> {
+    pub(crate) fn encode(&self, buf: &mut Vec<u8>) -> Result<usize> {
         let m = buf.len();
         // adjust space for header.
         buf.resize(m + 16, 0);
@@ -86,7 +86,7 @@ where
         }
     }
 
-    pub(crate) fn decode_key(entry: &[u8]) -> Result<K, Error>
+    pub(crate) fn decode_key(entry: &[u8]) -> Result<K>
     where
         K: 'a + Serialize,
     {
@@ -141,15 +141,15 @@ where
 // * bit 62: reserved
 // * bit 63: reserved
 //
-enum DiskDelta<'a, V>
+struct DiskDelta<V>
 where
     V: Clone + Diff,
     <V as Diff>::D: Serialize,
 {
-    E { delta: &'a core::Delta<V> },
+    value: marker::PhantomData<V>,
 }
 
-impl<'a, V> DiskDelta<'a, V>
+impl<V> DiskDelta<V>
 where
     V: Clone + Diff,
     <V as Diff>::D: Serialize,
@@ -157,18 +157,11 @@ where
     const UPSERT_FLAG: u64 = 0x1000000000000000;
     const DLEN_MASK: u64 = 0x0FFFFFFFFFFFFFFF;
 
-    pub(crate) fn new_encode(delta: &core::Delta<V>) -> DiskDelta<V> {
-        DiskDelta::E { delta }
-    }
-
-    pub(crate) fn encode(
-        &self,
+    fn encode(
+        delta: &core::Delta<V>,
         leaf: &mut Vec<u8>, // leaf output buffer
         blob: &mut Vec<u8>, // block output buffer
-    ) -> Result<usize, Error> {
-        let delta = match self {
-            DiskDelta::E { delta } => delta,
-        };
+    ) -> Result<usize> {
         match delta.as_ref() {
             core::InnerDelta::U { delta, seqno } => {
                 let mpos: u64 = blob.len().try_into().unwrap();
@@ -195,18 +188,24 @@ where
     }
 
     fn re_encode_fpos(buf: &mut [u8], vpos: u64) {
-        let scratch: [u8; 8] = buf[16..24].try_into().unwrap();
-        let fpos = vpos + u64::from_be_bytes(scratch);
-        buf[16..24].copy_from_slice(&fpos.to_be_bytes());
+        let is_deleted = {
+            let scratch: [u8; 8] = buf[..8].try_into().unwrap();
+            (u64::from_be_bytes(scratch) & Self::UPSERT_FLAG) == 0
+        };
+        if !is_deleted {
+            let scratch: [u8; 8] = buf[16..24].try_into().unwrap();
+            let fpos = vpos + u64::from_be_bytes(scratch);
+            buf[16..24].copy_from_slice(&fpos.to_be_bytes());
+        }
     }
 }
 
-impl<'a, V> DiskDelta<'a, V>
+impl<V> DiskDelta<V>
 where
-    V: 'a + Clone + Diff,
+    V: Clone + Diff,
     <V as Diff>::D: Serialize,
 {
-    fn decode_delta(buf: &[u8]) -> Result<core::Delta<V>, Error> {
+    fn decode_delta(buf: &[u8]) -> Result<core::Delta<V>> {
         let (dlen, is_deleted) = {
             let hdr1 = u64::from_be_bytes(buf[0..8].try_into().unwrap());
             (hdr1 & Self::DLEN_MASK, (hdr1 & Self::UPSERT_FLAG) == 0)
@@ -259,7 +258,7 @@ where
     // encode {key, value} entry into Z-Block and delta in value-log
     EncLD {
         doff: usize,
-        ndeltas: usize,
+        n_deltas: usize,
     },
     // encode key entry into Z-Block, while value in value-log
     EncLV {
@@ -269,7 +268,7 @@ where
     EncLVD {
         voff: usize,
         doff: usize,
-        ndeltas: usize,
+        n_deltas: usize,
     },
     _Phantom {
         key: marker::PhantomData<K>,
@@ -290,66 +289,107 @@ where
     const KLEN_SHIFT: u64 = 32;
 
     pub(crate) fn encode_l(
-        entry: &core::Entry<K, V>,
-        leaf: &mut Vec<u8>,
-        stats: &mut Stats,
-    ) -> Result<ZEntry<K, V>, Error> {
-        let (dlen, is_vlog) = (0_usize, false);
-        Self::encode_leaf(entry, dlen, is_vlog, leaf, stats)?;
+        entry: &core::Entry<K, V>, // input
+        leaf: &mut Vec<u8>,        // output
+        stats: &mut Stats,         // output
+    ) -> Result<ZEntry<K, V>> {
+        let (n_deltas, is_vlog) = (0_usize, false);
+        Self::encode_leaf1(entry, n_deltas, is_vlog, leaf, stats)?;
         Ok(ZEntry::EncL)
     }
 
     pub(crate) fn encode_ld(
-        entry: &core::Entry<K, V>,
-        leaf: &mut Vec<u8>,
-        blob: &mut Vec<u8>,
-        stats: &mut Stats,
-    ) -> Result<ZEntry<K, V>, Error> {
-        let (ndeltas, is_vlog) = (entry.to_delta_count(), false);
-        Self::encode_leaf(entry, ndeltas, is_vlog, leaf, stats)?;
+        entry: &core::Entry<K, V>, // input
+        leaf: &mut Vec<u8>,        // output
+        blob: &mut Vec<u8>,        // output
+        stats: &mut Stats,         // output
+    ) -> Result<ZEntry<K, V>> {
+        let (n_deltas, is_vlog) = (entry.to_delta_count(), false);
+        Self::encode_leaf1(entry, n_deltas, is_vlog, leaf, stats)?;
         let doff = leaf.len();
-        stats.diff_mem += ZEntry::encode_delta(entry, leaf, blob)?;
-        Ok(ZEntry::EncLD { doff, ndeltas })
+        stats.diff_mem += ZEntry::encode_deltas(entry, leaf, blob)?;
+        Ok(ZEntry::EncLD { doff, n_deltas })
     }
 
     pub(crate) fn encode_lv(
-        entry: &core::Entry<K, V>,
-        leaf: &mut Vec<u8>,
-        blob: &mut Vec<u8>,
-        stats: &mut Stats,
-    ) -> Result<ZEntry<K, V>, Error> {
-        let (dlen, is_vlog) = (0_usize, true);
-        match Self::encode_leaf_blob(entry, dlen, is_vlog, leaf, blob, stats) {
-            Ok(voff) => Ok(ZEntry::EncLV { voff }),
-            Err(err) => Err(err),
-        }
+        entry: &core::Entry<K, V>, // input
+        leaf: &mut Vec<u8>,        // output
+        blob: &mut Vec<u8>,        // output
+        stats: &mut Stats,         // output
+    ) -> Result<ZEntry<K, V>> {
+        let (n_deltas, is_vlog) = (0_usize, true);
+        let x = Self::encode_leaf2(entry, n_deltas, is_vlog, leaf, blob, stats)?;
+        Ok(ZEntry::EncLV { voff: x })
     }
 
     pub(crate) fn encode_lvd(
-        entry: &core::Entry<K, V>,
-        leaf: &mut Vec<u8>,
-        blob: &mut Vec<u8>,
-        stats: &mut Stats,
-    ) -> Result<ZEntry<K, V>, Error> {
-        let (dlen, is_vlog) = (entry.to_delta_count(), true);
-        match Self::encode_leaf_blob(entry, dlen, is_vlog, leaf, blob, stats) {
-            Ok(voff) => {
-                // encode deltas
-                let doff = leaf.len();
-                stats.diff_mem += ZEntry::encode_delta(entry, leaf, blob)?;
-                Ok(ZEntry::EncLVD {
-                    voff,
-                    doff,
-                    ndeltas: dlen,
-                })
-            }
-            Err(err) => Err(err),
-        }
+        entry: &core::Entry<K, V>, // input
+        leaf: &mut Vec<u8>,        // output
+        blob: &mut Vec<u8>,        // output
+        stats: &mut Stats,         // output
+    ) -> Result<ZEntry<K, V>> {
+        let (n_deltas, is_vlog) = (entry.to_delta_count(), true);
+        let x = Self::encode_leaf2(entry, n_deltas, is_vlog, leaf, blob, stats)?;
+        // encode deltas
+        let doff = leaf.len();
+        stats.diff_mem += ZEntry::encode_deltas(entry, leaf, blob)?;
+        Ok(ZEntry::EncLVD {
+            voff: x,
+            doff,
+            n_deltas,
+        })
     }
 
-    fn encode_headers(
+    fn encode_leaf1(
+        entry: &core::Entry<K, V>, // input
+        n_deltas: usize,           // input
+        is_vlog: bool,             // input
+        leaf: &mut Vec<u8>,        // output
+        stats: &mut Stats,
+    ) -> Result<()> {
+        // adjust space for header.
+        let m = leaf.len();
+        leaf.resize(m + 24, 0);
+        // encode key
+        let klen = Self::encode_key(entry.as_key(), leaf)?;
+        stats.key_mem += klen;
+        // encode value
+        let (vlen, is_del, seqno) = ZEntry::encode_value_leaf(entry, leaf)?;
+        stats.val_mem += vlen;
+        // encode header.
+        Self::encode_header(klen, n_deltas, vlen, is_del, is_vlog, seqno, leaf);
+        Ok(())
+    }
+
+    fn encode_leaf2(
+        entry: &core::Entry<K, V>, // input
+        n_deltas: usize,           // input
+        is_vlog: bool,             // input
+        leaf: &mut Vec<u8>,        // output
+        blob: &mut Vec<u8>,        // output
+        stats: &mut Stats,
+    ) -> Result<usize> {
+        // adjust space for header.
+        let m = leaf.len();
+        leaf.resize(m + 24, 0);
+        // encode key
+        let klen = Self::encode_key(entry.as_key(), leaf)?;
+        stats.key_mem += klen;
+        // encode value
+        let pos = blob.len();
+        let (vlen, is_del, seqno) = ZEntry::encode_value_vlog(entry, blob)?;
+        stats.val_mem += vlen;
+        let voff = leaf.len();
+        let pos: u64 = pos.try_into().unwrap();
+        leaf.extend_from_slice(&pos.to_be_bytes());
+        // encode header.
+        Self::encode_header(klen, n_deltas, vlen, is_del, is_vlog, seqno, leaf);
+        Ok(voff)
+    }
+
+    fn encode_header(
         klen: usize,
-        dlen: usize,
+        n_deltas: usize,
         vlen: usize,
         is_deleted: bool,
         is_vlog: bool,
@@ -358,8 +398,8 @@ where
     ) {
         let hdr1 = {
             let klen: u64 = klen.try_into().unwrap();
-            let dlen: u64 = dlen.try_into().unwrap();
-            ((klen << Self::KLEN_SHIFT) | dlen).to_be_bytes()
+            let n_deltas: u64 = n_deltas.try_into().unwrap();
+            ((klen << Self::KLEN_SHIFT) | n_deltas).to_be_bytes()
         };
         let hdr2 = {
             let mut vlen: u64 = vlen.try_into().unwrap();
@@ -372,62 +412,13 @@ where
             vlen.to_be_bytes()
         };
         let hdr3 = seqno.to_be_bytes();
+
         leaf[..8].copy_from_slice(&hdr1);
         leaf[8..16].copy_from_slice(&hdr2);
         leaf[16..24].copy_from_slice(&hdr3);
     }
 
-    fn encode_leaf(
-        entry: &core::Entry<K, V>, // input
-        dlen: usize,               // input
-        is_vlog: bool,             // input
-        leaf: &mut Vec<u8>,        // output
-        stats: &mut Stats,
-    ) -> Result<(), Error> {
-        // adjust space for header.
-        let m = leaf.len();
-        leaf.resize(m + 24, 0);
-        // encode key
-        let klen = Self::encode_key(entry.as_key(), leaf)?;
-        stats.key_mem += klen;
-        // encode value
-        let (vlen, is_deleted, seqno) = ZEntry::encode_value(entry, leaf)?;
-        stats.val_mem += vlen;
-        // encode header.
-        Self::encode_headers(klen, dlen, vlen, is_deleted, is_vlog, seqno, leaf);
-        Ok(())
-    }
-
-    fn encode_leaf_blob(
-        entry: &core::Entry<K, V>, // input
-        dlen: usize,               // input
-        is_vlog: bool,             // input
-        leaf: &mut Vec<u8>,        // output
-        blob: &mut Vec<u8>,        // output
-        stats: &mut Stats,
-    ) -> Result<usize, Error> {
-        // adjust space for header.
-        let m = leaf.len();
-        leaf.resize(m + 24, 0);
-        // encode key
-        let klen = Self::encode_key(entry.as_key(), leaf)?;
-        stats.key_mem += klen;
-        // encode value
-        let pos = blob.len();
-        let (vlen, is_deleted, seqno) = ZEntry::encode_value(entry, blob)?;
-        stats.val_mem += vlen;
-        let voff = leaf.len();
-        let pos: u64 = pos.try_into().unwrap();
-        leaf.extend_from_slice(&pos.to_be_bytes());
-        // encode header.
-        Self::encode_headers(klen, dlen, vlen, is_deleted, is_vlog, seqno, leaf);
-        Ok(voff)
-    }
-
-    fn encode_key(
-        key: &K,           // input
-        buf: &mut Vec<u8>, // output
-    ) -> Result<usize, Error> {
+    fn encode_key(key: &K, buf: &mut Vec<u8>) -> Result<usize> {
         let n = key.encode(buf);
         if n > core::Entry::<i32, i32>::KEY_SIZE_LIMIT {
             Err(Error::KeySizeExceeded(n))
@@ -436,27 +427,40 @@ where
         }
     }
 
-    fn encode_value(
+    fn encode_value_leaf(
         entry: &core::Entry<K, V>, // input
-        blob: &mut Vec<u8>,        // output
-    ) -> Result<(usize, bool, u64), Error> {
+        buf: &mut Vec<u8>,         // output
+    ) -> Result<(usize, bool, u64)> {
         match entry.as_value() {
             core::Value::U { value, seqno } => {
-                let vlen = value.encode(blob)?;
+                let vlen = value.encode_local(buf)?;
                 Ok((vlen, false, *seqno))
             }
             core::Value::D { seqno } => Ok((0, true, *seqno)),
         }
     }
 
-    fn encode_delta(
+    fn encode_value_vlog(
+        entry: &core::Entry<K, V>, // input
+        buf: &mut Vec<u8>,         // output
+    ) -> Result<(usize, bool, u64)> {
+        match entry.as_value() {
+            core::Value::U { value, seqno } => {
+                let vlen = value.encode(buf)?;
+                Ok((vlen, false, *seqno))
+            }
+            core::Value::D { seqno } => Ok((0, true, *seqno)),
+        }
+    }
+
+    fn encode_deltas(
         entry: &core::Entry<K, V>, // input
         leaf: &mut Vec<u8>,        // output
         blob: &mut Vec<u8>,        // output
-    ) -> Result<usize, Error> {
+    ) -> Result<usize> {
         let mut n = 0_usize;
         for delta in entry.as_deltas() {
-            n += DiskDelta::new_encode(delta).encode(leaf, blob)?;
+            n += DiskDelta::encode(delta, leaf, blob)?;
         }
         Ok(n)
     }
@@ -464,8 +468,8 @@ where
     pub(crate) fn re_encode_fpos(&self, leaf: &mut Vec<u8>, vpos: u64) {
         match self {
             ZEntry::EncL => (),
-            &ZEntry::EncLD { doff, ndeltas } => {
-                Self::re_encode_d(leaf, vpos, doff, ndeltas);
+            &ZEntry::EncLD { doff, n_deltas } => {
+                Self::re_encode_d(leaf, vpos, doff, n_deltas);
             }
             &ZEntry::EncLV { voff } => {
                 Self::re_encode_v(leaf, vpos, voff);
@@ -473,26 +477,32 @@ where
             &ZEntry::EncLVD {
                 voff,
                 doff,
-                ndeltas,
+                n_deltas,
             } => {
-                Self::re_encode_d(leaf, vpos, doff, ndeltas);
+                Self::re_encode_d(leaf, vpos, doff, n_deltas);
                 Self::re_encode_v(leaf, vpos, voff);
             }
             _ => unreachable!(),
         }
     }
 
-    fn re_encode_d(leaf: &mut Vec<u8>, vpos: u64, doff: usize, ndeltas: usize) {
-        for i in 0..ndeltas {
+    fn re_encode_d(leaf: &mut Vec<u8>, vpos: u64, doff: usize, n_deltas: usize) {
+        for i in 0..n_deltas {
             let n = doff + (i * 24);
             DiskDelta::<V>::re_encode_fpos(&mut leaf[n..], vpos);
         }
     }
 
     fn re_encode_v(leaf: &mut Vec<u8>, vpos: u64, voff: usize) {
-        let scratch: [u8; 8] = leaf[voff..voff + 8].try_into().unwrap();
-        let fpos = u64::from_be_bytes(scratch) + vpos;
-        leaf[voff..voff + 8].copy_from_slice(&fpos.to_be_bytes());
+        let is_deleted = {
+            let scratch: [u8; 8] = leaf[8..16].try_into().unwrap();
+            (u64::from_be_bytes(scratch) & Self::UPSERT_FLAG) == 0
+        };
+        if !is_deleted {
+            let scratch: [u8; 8] = leaf[voff..voff + 8].try_into().unwrap();
+            let fpos = u64::from_be_bytes(scratch) + vpos;
+            leaf[voff..voff + 8].copy_from_slice(&fpos.to_be_bytes());
+        }
     }
 }
 
@@ -502,18 +512,18 @@ where
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
 {
-    pub(crate) fn decode_entry(e: &[u8]) -> Result<core::Entry<K, V>, Error> {
-        let (klen, ndeltas) = {
+    pub(crate) fn decode_entry(e: &[u8]) -> Result<core::Entry<K, V>> {
+        let (klen, n_deltas) = {
             let hdr1 = u64::from_be_bytes(e[0..8].try_into().unwrap());
-            let ndeltas: usize = (hdr1 & Self::NDELTA_MASK).try_into().unwrap();
+            let n_deltas: usize = (hdr1 & Self::NDELTA_MASK).try_into().unwrap();
             let klen: usize = (hdr1 >> Self::KLEN_SHIFT).try_into().unwrap();
-            (klen, ndeltas)
+            (klen, n_deltas)
         };
         let (is_deleted, is_vlog, vlen) = {
             let hdr2 = u64::from_be_bytes(e[8..16].try_into().unwrap());
             (
                 (hdr2 & Self::UPSERT_FLAG) == 0,
-                (hdr2 & Self::VLOG_FLAG) == 1,
+                (hdr2 & Self::VLOG_FLAG) != 0,
                 hdr2 & Self::VLEN_MASK,
             )
         };
@@ -542,7 +552,7 @@ where
         let mut entry = core::Entry::new(key, value);
 
         let mut deltas: Vec<core::Delta<V>> = vec![];
-        for _i in 0..ndeltas {
+        for _i in 0..n_deltas {
             deltas.push(DiskDelta::decode_delta(&e[n..])?);
             n += 24;
         }
@@ -551,7 +561,7 @@ where
         Ok(entry)
     }
 
-    pub(crate) fn decode_key(entry: &[u8]) -> Result<K, Error> {
+    pub(crate) fn decode_key(entry: &[u8]) -> Result<K> {
         let mut key: K = unsafe { mem::zeroed() };
 
         let klen: usize = {
@@ -563,3 +573,7 @@ where
         Ok(key)
     }
 }
+
+#[cfg(test)]
+#[path = "robt_entry_test.rs"]
+mod robt_entry_test;

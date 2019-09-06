@@ -54,22 +54,24 @@ where
         let (hdr1, klen, fpos) = match self {
             MEntry::EncM { fpos, key, .. } => {
                 let klen: u64 = key.encode(buf).try_into().unwrap();
-                (klen.to_be_bytes(), klen, fpos)
+                let hdr1 = klen.to_be_bytes();
+                (hdr1, klen, fpos)
             }
             MEntry::EncZ { fpos, key, .. } => {
                 let klen: u64 = key.encode(buf).try_into().unwrap();
-                ((klen | Self::ZBLOCK_FLAG).to_be_bytes(), klen, fpos)
+                let hdr1 = (klen | Self::ZBLOCK_FLAG).to_be_bytes();
+                (hdr1, klen, fpos)
             }
             _ => unreachable!(),
         };
-        let klen = klen as usize;
-        if klen > core::Entry::<i32, i32>::KEY_SIZE_LIMIT {
-            return Err(Error::KeySizeExceeded(klen));
+        let klen: usize = klen.try_into().unwrap();
+        if klen < core::Entry::<i32, i32>::KEY_SIZE_LIMIT {
+            buf[m..m + 8].copy_from_slice(&hdr1);
+            buf[m + 8..m + 16].copy_from_slice(&fpos.to_be_bytes());
+            Ok(klen + 16)
+        } else {
+            Err(Error::KeySizeExceeded(klen))
         }
-        // encode header
-        buf[m..m + 8].copy_from_slice(&hdr1);
-        buf[m + 8..m + 16].copy_from_slice(&fpos.to_be_bytes());
-        Ok(klen + 16)
     }
 }
 

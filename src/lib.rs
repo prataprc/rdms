@@ -47,7 +47,7 @@ pub use crate::spinlock::RWSpinlock;
 pub mod robt;
 mod robt_build;
 mod robt_entry;
-mod robt_indx;
+mod robt_index;
 mod robt_snap;
 
 mod types;

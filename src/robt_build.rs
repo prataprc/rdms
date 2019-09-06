@@ -8,7 +8,7 @@ use crate::core::{Diff, Entry, Result, Serialize};
 use crate::error::Error;
 use crate::robt::Stats;
 use crate::robt::{self, Config, MetaItem, ROOT_MARKER};
-use crate::robt_indx::{MBlock, ZBlock};
+use crate::robt_index::{MBlock, ZBlock};
 use crate::util;
 
 /// Build a new instance of Read-Only-BTree.

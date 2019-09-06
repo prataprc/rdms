@@ -334,7 +334,11 @@ where
         zentries: Vec<ZEntry<K, V>>,
         vpos: u64,
         first_key: Option<K>,
-        config: Config,
+        // configuration
+        z_blocksize: usize,
+        v_blocksize: usize,
+        value_in_vlog: bool,
+        delta_ok: bool,
     },
     Decode {
         block: Vec<u8>,
@@ -351,14 +355,23 @@ where
     <V as Diff>::D: Serialize,
 {
     pub(crate) fn new_encode(vpos: u64, config: Config) -> ZBlock<K, V> {
+        let z_blocksize = config.z_blocksize;
+        let v_blocksize = config.v_blocksize;
+        let value_in_vlog = config.value_in_vlog;
+        let delta_ok = config.delta_ok;
+
         ZBlock::Encode {
-            leaf: Vec::with_capacity(config.z_blocksize),
-            blob: Vec::with_capacity(config.v_blocksize),
+            leaf: Vec::with_capacity(z_blocksize),
+            blob: Vec::with_capacity(v_blocksize),
             offsets: Vec::with_capacity(64),  // TODO: no magic number
             zentries: Vec::with_capacity(64), // TODO: no magic number
             vpos,
             first_key: Default::default(),
-            config,
+            // configuration
+            z_blocksize,
+            v_blocksize,
+            value_in_vlog,
+            delta_ok,
         }
     }
 
@@ -415,11 +428,14 @@ where
                 offsets,
                 zentries,
                 first_key,
-                config,
+                // configuration
+                z_blocksize,
+                value_in_vlog,
+                delta_ok,
                 ..
             } => {
                 let (offset, x) = (leaf.len(), blob.len());
-                let de = match (config.value_in_vlog, config.delta_ok) {
+                let de = match (*value_in_vlog, *delta_ok) {
                     (false, false) => DZ::encode_l(entry, leaf, stats)?,
                     (false, true) => DZ::encode_ld(entry, leaf, blob, stats)?,
                     (true, false) => DZ::encode_lv(entry, leaf, blob, stats)?,
@@ -428,7 +444,7 @@ where
                 zentries.push(de);
 
                 let n = leaf.len();
-                if n < config.z_blocksize {
+                if n < *z_blocksize {
                     offsets.push(offset.try_into().unwrap());
                     first_key.get_or_insert_with(|| entry.as_key().clone());
                     Ok(offsets.len().try_into().unwrap())
@@ -450,7 +466,8 @@ where
                 offsets,
                 zentries,
                 vpos,
-                config,
+                // configuration
+                z_blocksize,
                 ..
             } => {
                 let adjust: u32 = {
@@ -466,7 +483,7 @@ where
                 &leaf[..4].copy_from_slice(&num.to_be_bytes());
                 for (i, offset) in offsets.iter().enumerate() {
                     let x = (i + 1) * 4;
-                    let offset = (offset + adjust).to_be_bytes();
+                    let offset = (adjust + offset).to_be_bytes();
                     leaf[x..x + 4].copy_from_slice(&offset);
                 }
                 // adjust file position offsets for value and delta in vlog.
@@ -474,14 +491,14 @@ where
                     .iter()
                     .for_each(|de| de.re_encode_fpos(leaf, *vpos));
                 // update statistics
-                stats.padding += config.z_blocksize - leaf.len();
-                stats.z_bytes += config.z_blocksize;
+                stats.padding += *z_blocksize - leaf.len();
+                stats.z_bytes += *z_blocksize;
                 stats.v_bytes += blob.len();
                 // align blocks
-                leaf.resize(config.z_blocksize, 0);
+                leaf.resize(*z_blocksize, 0);
 
                 (
-                    config.z_blocksize.try_into().unwrap(), // full block
+                    (*z_blocksize).try_into().unwrap(), // full block
                     blob.len().try_into().unwrap(),
                 )
             }
@@ -492,7 +509,7 @@ where
     pub(crate) fn flush(
         &mut self,
         x: &mut Flusher,         // flush to index file
-        y: Option<&mut Flusher>, // flush to data file
+        y: Option<&mut Flusher>, // flush to optional vlog file
     ) -> Result<()> {
         match self {
             ZBlock::Encode { leaf, blob, .. } => {

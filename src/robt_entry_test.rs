@@ -2,6 +2,60 @@ use super::*;
 use crate::core;
 
 #[test]
+fn test_mentry() {
+    // m-block pointing to m-block.
+    let mut buf = vec![];
+    let (fpos, key) = (0x1234567, 100_i32);
+    let me = MEntry::new_m(fpos, &key);
+    assert_eq!(me.encode(&mut buf).unwrap(), 20);
+
+    let buf_ref = [
+        0, 0, 0, 0, 0x00, 0x00, 0x00, 0x04, // flags, klen
+        0, 0, 0, 0, 0x01, 0x23, 0x45, 0x67, // child fpos
+        /*       */ 0x00, 0x00, 0x00, 0x64, // key
+    ];
+    assert_eq!(buf.len(), buf_ref.len());
+    assert_eq!(buf, buf_ref);
+    // test decode logic
+    assert_eq!(MEntry::<i32>::decode_key(&buf).unwrap(), 100);
+    assert_eq!(me.is_zblock(), false);
+    let index = 0x987;
+    match MEntry::<i32>::decode_entry(&buf, index) {
+        MEntry::DecM { fpos, index } => {
+            assert_eq!(fpos, 0x1234567);
+            assert_eq!(index, 0x987);
+        }
+        _ => unreachable!(),
+    }
+
+    // m-block pointing to z-block.
+    let mut buf = vec![];
+    let (fpos, key) = (0x1234567, 100_i32);
+    let me = MEntry::new_z(fpos, &key);
+    assert_eq!(me.encode(&mut buf).unwrap(), 20);
+
+    // buf.iter().for_each(|x| print!("{:x} ", x));
+    let buf_ref = [
+        0x10, 0, 0, 0, 0x00, 0x00, 0x00, 0x04, // flags, klen
+        0x00, 0, 0, 0, 0x01, 0x23, 0x45, 0x67, // child fpos
+        /*          */ 0x00, 0x00, 0x00, 0x64, // key
+    ];
+    assert_eq!(buf.len(), buf_ref.len());
+    assert_eq!(buf, buf_ref);
+    // test decode logic
+    assert_eq!(MEntry::<i32>::decode_key(&buf).unwrap(), 100);
+    assert_eq!(me.is_zblock(), true);
+    let index = 0x987;
+    match MEntry::<i32>::decode_entry(&buf, index) {
+        MEntry::DecZ { fpos, index } => {
+            assert_eq!(fpos, 0x1234567);
+            assert_eq!(index, 0x987);
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
 fn test_disk_delta() {
     // test encode
     let d = 20.diff(&30);
@@ -207,7 +261,7 @@ fn test_zentry_l() {
 
     let mut leaf = vec![];
     let mut stats: Stats = Default::default();
-    let ze = ZEntry::<i32, i32>::encode_l(&entry, &mut leaf, &mut stats).unwrap();
+    ZEntry::<i32, i32>::encode_l(&entry, &mut leaf, &mut stats).unwrap();
     assert_eq!(stats.key_mem, 4);
     assert_eq!(stats.val_mem, 4);
     assert_eq!(stats.diff_mem, 0);
@@ -245,7 +299,7 @@ fn test_zentry_ld() {
 
     let (mut leaf, mut blob): (Vec<u8>, Vec<u8>) = (vec![], vec![]);
     let mut stats: Stats = Default::default();
-    let mut ze = ZEntry::<i32, i32>::encode_ld(
+    let ze = ZEntry::<i32, i32>::encode_ld(
         &entry, &mut leaf, &mut blob, &mut stats, // arguments
     )
     .unwrap();
@@ -363,7 +417,7 @@ fn test_zentry_lv() {
 
     let (mut leaf, mut blob): (Vec<u8>, Vec<u8>) = (vec![], vec![]);
     let mut stats: Stats = Default::default();
-    let mut ze = ZEntry::<i32, i32>::encode_lv(
+    let ze = ZEntry::<i32, i32>::encode_lv(
         &entry, &mut leaf, &mut blob, &mut stats, // arguments
     )
     .unwrap();
@@ -440,7 +494,7 @@ fn test_zentry_lvd() {
 
     let (mut leaf, mut blob): (Vec<u8>, Vec<u8>) = (vec![], vec![]);
     let mut stats: Stats = Default::default();
-    let mut ze = ZEntry::<i32, i32>::encode_lvd(
+    let ze = ZEntry::<i32, i32>::encode_lvd(
         &entry, &mut leaf, &mut blob, &mut stats, // arguments
     )
     .unwrap();

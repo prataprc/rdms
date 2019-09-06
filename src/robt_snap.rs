@@ -19,7 +19,7 @@ use crate::error::Error;
 use crate::robt::Stats;
 use crate::robt::{self, Config, MetaItem};
 use crate::robt_entry::MEntry;
-use crate::robt_indx::{MBlock, ZBlock};
+use crate::robt_index::{MBlock, ZBlock};
 use crate::util;
 
 /// A read only snapshot of BTree built using [robt] index.
@@ -553,11 +553,11 @@ where
         let mut fpos = self.to_root().unwrap();
         let fd = &mut self.index_fd;
         let config = &self.config;
-        let (from, to) = (Bound::Unbounded, Bound::Unbounded);
+        let (from_min, to_max) = (Bound::Unbounded, Bound::Unbounded);
 
         let zfpos = loop {
             let mblock = MBlock::<K, V>::new_decode(fd, fpos, config)?;
-            match mblock.find(key, from, to) {
+            match mblock.find(key, from_min, to_max) {
                 Ok(mentry) => {
                     if mentry.is_zblock() {
                         break mentry.to_fpos();
@@ -572,7 +572,7 @@ where
         };
 
         let zblock = ZBlock::new_decode(fd, zfpos, config)?;
-        let (index, entry) = zblock.find(key, from, to)?;
+        let (index, entry) = zblock.find(key, from_min, to_max)?;
         mzs.push(MZ::Z { zblock, index });
         Ok(entry)
     }

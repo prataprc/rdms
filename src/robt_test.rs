@@ -134,7 +134,7 @@ fn test_config() {
     assert_eq!(Config::compute_root_block(4095), 4096);
     assert_eq!(Config::compute_root_block(4096), 4096);
     assert_eq!(Config::compute_root_block(4097), 8192);
-    let config = Config::new();
+    let config: Config = Default::default();
     let dir_path = std::env::temp_dir();
     let dir: &ffi::OsStr = dir_path.as_ref();
     let ref_file: &ffi::OsStr = "/tmp/robt-users.indx".as_ref();

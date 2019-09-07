@@ -214,7 +214,7 @@ fn test_zentry_deltas() {
     entry.prepend_version(core::Entry::new(100, value), true);
 
     let (mut leaf, mut blob) = (vec![], vec![]);
-    ZEntry::encode_deltas(&entry, &mut leaf, &mut blob);
+    ZEntry::encode_deltas(&entry, &mut leaf, &mut blob).unwrap();
 
     assert_eq!(leaf.len(), 72);
     assert_eq!(blob.len(), 24);
@@ -260,11 +260,9 @@ fn test_zentry_l() {
     entry.prepend_version(core::Entry::new(100, value), true);
 
     let mut leaf = vec![];
-    let mut stats: Stats = Default::default();
-    ZEntry::<i32, i32>::encode_l(&entry, &mut leaf, &mut stats).unwrap();
-    assert_eq!(stats.key_mem, 4);
-    assert_eq!(stats.val_mem, 4);
-    assert_eq!(stats.diff_mem, 0);
+    let ze = ZEntry::<i32, i32>::encode_l(&entry, &mut leaf).unwrap();
+    let (k, v, d) = ze.to_kvd_stats();
+    assert_eq!((k, v, d), (4, 4, 0));
 
     let leaf_ref = vec![
         0x00, 0, 0, 4, 0, 0, 0x00, 0x00, // klen + n_deltas
@@ -298,14 +296,12 @@ fn test_zentry_ld() {
     entry.prepend_version(core::Entry::new(100, value), true);
 
     let (mut leaf, mut blob): (Vec<u8>, Vec<u8>) = (vec![], vec![]);
-    let mut stats: Stats = Default::default();
     let ze = ZEntry::<i32, i32>::encode_ld(
-        &entry, &mut leaf, &mut blob, &mut stats, // arguments
+        &entry, &mut leaf, &mut blob, // arguments
     )
     .unwrap();
-    assert_eq!(stats.key_mem, 4);
-    assert_eq!(stats.val_mem, 4);
-    assert_eq!(stats.diff_mem, 24);
+    let (k, v, d) = ze.to_kvd_stats();
+    assert_eq!((k, v, d), (4, 4, 24));
 
     // leaf.iter().for_each(|x| print!("{:x} ", x));
     let leaf_ref = vec![
@@ -416,14 +412,12 @@ fn test_zentry_lv() {
     entry.prepend_version(core::Entry::new(100, value), true);
 
     let (mut leaf, mut blob): (Vec<u8>, Vec<u8>) = (vec![], vec![]);
-    let mut stats: Stats = Default::default();
     let ze = ZEntry::<i32, i32>::encode_lv(
-        &entry, &mut leaf, &mut blob, &mut stats, // arguments
+        &entry, &mut leaf, &mut blob, // arguments
     )
     .unwrap();
-    assert_eq!(stats.key_mem, 4);
-    assert_eq!(stats.val_mem, 12);
-    assert_eq!(stats.diff_mem, 0);
+    let (k, v, d) = ze.to_kvd_stats();
+    assert_eq!((4, 12, 0), (k, v, d));
 
     let leaf_ref = vec![
         0x00, 0, 0, 4, 0, 0, 0x00, 0x00, // klen + n_deltas
@@ -493,14 +487,12 @@ fn test_zentry_lvd() {
     entry.prepend_version(core::Entry::new(100, value), true);
 
     let (mut leaf, mut blob): (Vec<u8>, Vec<u8>) = (vec![], vec![]);
-    let mut stats: Stats = Default::default();
     let ze = ZEntry::<i32, i32>::encode_lvd(
-        &entry, &mut leaf, &mut blob, &mut stats, // arguments
+        &entry, &mut leaf, &mut blob, // arguments
     )
     .unwrap();
-    assert_eq!(stats.key_mem, 4);
-    assert_eq!(stats.val_mem, 12);
-    assert_eq!(stats.diff_mem, 24);
+    let (k, v, d) = ze.to_kvd_stats();
+    assert_eq!((k, v, d), (4, 12, 24));
 
     let leaf_ref = vec![
         0x00, 0, 0, 4, 0, 0, 0x00, 0x03, // klen + n_deltas

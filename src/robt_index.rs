@@ -99,14 +99,14 @@ where
                 first_key,
                 config,
             } => {
-                let offset = mblock.len();
+                let block_i = mblock.len();
                 let n = MEntry::new_m(fpos, key).encode(mblock)?;
-                if (offset + n) < config.m_blocksize {
-                    offsets.push(offset.try_into().unwrap());
+                if (block_i + n) < config.m_blocksize {
+                    offsets.push(block_i.try_into().unwrap());
                     first_key.get_or_insert_with(|| key.clone());
                     Ok(offsets.len().try_into().unwrap())
                 } else {
-                    mblock.truncate(offset);
+                    mblock.truncate(block_i);
                     Err(Error::__MBlockOverflow(n))
                 }
             }
@@ -122,14 +122,14 @@ where
                 first_key,
                 config,
             } => {
-                let offset = mblock.len();
+                let block_i = mblock.len();
                 let n = MEntry::new_z(fpos, key).encode(mblock)?;
-                if (offset + n) < config.m_blocksize {
-                    offsets.push(offset.try_into().unwrap());
+                if (block_i + n) < config.m_blocksize {
+                    offsets.push(block_i.try_into().unwrap());
                     first_key.get_or_insert_with(|| key.clone());
                     Ok(offsets.len().try_into().unwrap())
                 } else {
-                    mblock.truncate(offset);
+                    mblock.truncate(block_i);
                     Err(Error::__MBlockOverflow(n))
                 }
             }
@@ -215,7 +215,12 @@ where
 
     // optimized version of find() for mblock. if key is less than the dataset
     // immediately returns with failure.
-    pub(crate) fn get<Q>(&self, key: &Q, from: Bound<usize>, to: Bound<usize>) -> Result<MEntry<K>>
+    pub(crate) fn get<Q>(
+        &self,
+        key: &Q,
+        from: Bound<usize>, // unbounded
+        to: Bound<usize>,   // unbounded
+    ) -> Result<MEntry<K>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -236,7 +241,12 @@ where
         }
     }
 
-    pub(crate) fn find<Q>(&self, key: &Q, from: Bound<usize>, to: Bound<usize>) -> Result<MEntry<K>>
+    pub(crate) fn find<Q>(
+        &self,
+        key: &Q,
+        from: Bound<usize>, // begins as unbounded
+        to: Bound<usize>,   // begins as unbounded
+    ) -> Result<MEntry<K>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -434,23 +444,27 @@ where
                 delta_ok,
                 ..
             } => {
-                let (offset, x) = (leaf.len(), blob.len());
+                let (leaf_i, blob_i) = (leaf.len(), blob.len());
                 let de = match (*value_in_vlog, *delta_ok) {
-                    (false, false) => DZ::encode_l(entry, leaf, stats)?,
-                    (false, true) => DZ::encode_ld(entry, leaf, blob, stats)?,
-                    (true, false) => DZ::encode_lv(entry, leaf, blob, stats)?,
-                    (true, true) => DZ::encode_lvd(entry, leaf, blob, stats)?,
+                    (false, false) => DZ::encode_l(entry, leaf)?,
+                    (false, true) => DZ::encode_ld(entry, leaf, blob)?,
+                    (true, false) => DZ::encode_lv(entry, leaf, blob)?,
+                    (true, true) => DZ::encode_lvd(entry, leaf, blob)?,
                 };
+                let (k, v, d) = de.to_kvd_stats();
                 zentries.push(de);
 
-                let n = leaf.len();
+                let n = 4 + ((offsets.len() + 1) * 4) + leaf.len();
                 if n < *z_blocksize {
-                    offsets.push(offset.try_into().unwrap());
+                    stats.key_mem += k;
+                    stats.val_mem += v;
+                    stats.diff_mem += d;
+                    offsets.push(leaf_i.try_into().unwrap());
                     first_key.get_or_insert_with(|| entry.as_key().clone());
                     Ok(offsets.len().try_into().unwrap())
                 } else {
-                    leaf.truncate(offset);
-                    blob.truncate(x);
+                    leaf.truncate(leaf_i);
+                    blob.truncate(blob_i);
                     Err(Error::__ZBlockOverflow(n))
                 }
             }
@@ -483,13 +497,12 @@ where
                 &leaf[..4].copy_from_slice(&num.to_be_bytes());
                 for (i, offset) in offsets.iter().enumerate() {
                     let x = (i + 1) * 4;
-                    let offset = (adjust + offset).to_be_bytes();
-                    leaf[x..x + 4].copy_from_slice(&offset);
+                    let offset_bytes = (adjust + offset).to_be_bytes();
+                    leaf[x..x + 4].copy_from_slice(&offset_bytes);
+                    // adjust file position offsets for value and delta in vlog.
+                    let j = (adjust + offset) as usize;
+                    zentries[i].re_encode_fpos(&mut leaf[j..], *vpos);
                 }
-                // adjust file position offsets for value and delta in vlog.
-                zentries
-                    .iter()
-                    .for_each(|de| de.re_encode_fpos(leaf, *vpos));
                 // update statistics
                 stats.padding += *z_blocksize - leaf.len();
                 stats.z_bytes += *z_blocksize;
@@ -519,6 +532,14 @@ where
             ZBlock::Decode { .. } => unreachable!(),
         }
         Ok(())
+    }
+
+    #[cfg(test)]
+    fn buffer(&self) -> (Vec<u8>, Vec<u8>) {
+        match self {
+            ZBlock::Encode { leaf, blob, .. } => (leaf.clone(), blob.clone()),
+            _ => unreachable!(),
+        }
     }
 }
 
@@ -573,10 +594,10 @@ where
         let pivot = self.find_pivot(from, to);
 
         match key.cmp(self.to_key(pivot)?.borrow()) {
-            Ordering::Less if pivot == f => unreachable!(),
+            Ordering::Less if pivot == f => Err(Error::__ZBlockExhausted(f)),
             Ordering::Less => self.find(key, from, Bound::Excluded(pivot)),
             Ordering::Equal => self.to_entry(pivot),
-            Ordering::Greater if pivot == f => self.to_entry(pivot),
+            Ordering::Greater if pivot == f => Err(Error::__ZBlockExhausted(f)),
             Ordering::Greater => self.find(key, Bound::Included(pivot), to),
         }
     }
@@ -614,9 +635,11 @@ where
         };
 
         if index < count {
-            let offset = offsets[index..index + 4].try_into().unwrap();
+            let idx = index * 4;
+            let offset = offsets[idx..idx + 4].try_into().unwrap();
             let offset: usize = u32::from_be_bytes(offset).try_into().unwrap();
-            Ok((index, ZEntry::decode_entry(&block[offset..])?))
+            let entry = &block[offset..];
+            Ok((index, ZEntry::decode_entry(entry)?))
         } else {
             Err(Error::__ZBlockExhausted(index))
         }
@@ -627,8 +650,14 @@ where
             ZBlock::Decode { block, offsets, .. } => (block, offsets),
             _ => unreachable!(),
         };
-        let offset = offsets[index..index + 4].try_into().unwrap();
+        let idx = index * 4;
+        let offset = offsets[idx..idx + 4].try_into().unwrap();
         let offset: usize = u32::from_be_bytes(offset).try_into().unwrap();
-        ZEntry::<K, V>::decode_key(&block[offset..])
+        let entry = &block[offset..];
+        ZEntry::<K, V>::decode_key(entry)
     }
 }
+
+#[cfg(test)]
+#[path = "robt_index_test.rs"]
+mod robt_index_test;

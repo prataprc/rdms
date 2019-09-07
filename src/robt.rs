@@ -292,6 +292,28 @@ pub struct Config {
     pub flush_queue_size: usize,
 }
 
+impl Default for Config {
+    /// New configuration with default parameters:
+    ///
+    /// * With ZBLOCKSIZE, MBLOCKSIZE, VBLOCKSIZE.
+    /// * Values are stored in the leaf node.
+    /// * LSM entries are preserved.
+    /// * Deltas are persisted in default value-log-file.
+    /// * Main index is persisted in default index-file.
+    fn default() -> Config {
+        Config {
+            z_blocksize: Self::ZBLOCKSIZE,
+            v_blocksize: Self::VBLOCKSIZE,
+            m_blocksize: Self::MBLOCKSIZE,
+            tomb_purge: Default::default(),
+            delta_ok: true,
+            vlog_file: Default::default(),
+            value_in_vlog: false,
+            flush_queue_size: Self::FLUSH_QUEUE_SIZE,
+        }
+    }
+}
+
 impl From<Stats> for Config {
     fn from(stats: Stats) -> Config {
         Config {
@@ -313,26 +335,6 @@ impl Config {
     pub const MBLOCKSIZE: usize = 4 * 1024; // 4KB intermediate node
     const MARKER_BLOCK_SIZE: usize = 1024 * 4;
     const FLUSH_QUEUE_SIZE: usize = 16;
-
-    /// New configuration with default parameters:
-    ///
-    /// * With ZBLOCKSIZE, MBLOCKSIZE, VBLOCKSIZE.
-    /// * Values are stored in the leaf node.
-    /// * LSM entries are preserved.
-    /// * Deltas are persisted in default value-log-file.
-    /// * Main index is persisted in default index-file.
-    pub fn new() -> Config {
-        Config {
-            z_blocksize: Self::ZBLOCKSIZE,
-            v_blocksize: Self::VBLOCKSIZE,
-            m_blocksize: Self::MBLOCKSIZE,
-            tomb_purge: Default::default(),
-            delta_ok: true,
-            vlog_file: Default::default(),
-            value_in_vlog: false,
-            flush_queue_size: Self::FLUSH_QUEUE_SIZE,
-        }
-    }
 
     /// Configure differt set of block size for leaf-node, intermediate-node.
     pub fn set_blocksize(&mut self, z: usize, v: usize, m: usize) -> &mut Self {

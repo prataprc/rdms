@@ -57,7 +57,7 @@ where
             dir: dir.to_string(),
             name: name.to_string(),
             meta: meta_items,
-            config: Config::new(),
+            config: Default::default(),
             index_fd: {
                 let index_file = Config::stitch_index_file(dir, name);
                 util::open_file_r(&index_file.as_ref())?

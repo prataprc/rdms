@@ -300,6 +300,15 @@ where
 {
     /// Return the underlying `difference` value for this delta.
     #[allow(dead_code)] // TODO: remove if not required.
+    pub(crate) fn to_diff(&self) -> Option<<V as Diff>::D> {
+        match &self.data {
+            InnerDelta::D { .. } => None,
+            InnerDelta::U { delta, .. } => delta.to_native_delta(),
+        }
+    }
+
+    /// Return the underlying `difference` value for this delta.
+    #[allow(dead_code)] // TODO: remove if not required.
     pub(crate) fn into_diff(self) -> Option<<V as Diff>::D> {
         match self.data {
             InnerDelta::D { .. } => None,
@@ -362,6 +371,13 @@ where
                 ..
             } => true,
             _ => false,
+        }
+    }
+
+    pub(crate) fn is_deleted(&self) -> bool {
+        match self.data {
+            InnerDelta::D { .. } => true,
+            InnerDelta::U { .. } => false,
         }
     }
 }

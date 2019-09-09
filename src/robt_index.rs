@@ -34,7 +34,7 @@ pub(crate) enum MBlock<K, V> {
         mblock: Vec<u8>,
         offsets: Vec<u32>,
         first_key: Option<K>,
-        config: Config,
+        m_blocksize: usize,
     },
     Decode {
         block: Vec<u8>,
@@ -54,7 +54,7 @@ where
             mblock: Vec::with_capacity(config.m_blocksize),
             offsets: Default::default(),
             first_key: Default::default(),
-            config,
+            m_blocksize: config.m_blocksize,
         }
     }
 
@@ -97,11 +97,12 @@ where
                 mblock,
                 offsets,
                 first_key,
-                config,
+                m_blocksize,
             } => {
                 let block_i = mblock.len();
-                let n = MEntry::new_m(fpos, key).encode(mblock)?;
-                if (block_i + n) < config.m_blocksize {
+                MEntry::new_m(fpos, key).encode(mblock)?;
+                let n = 4 + (offsets.len() + 1) * 4 + mblock.len();
+                if n < *m_blocksize {
                     offsets.push(block_i.try_into().unwrap());
                     first_key.get_or_insert_with(|| key.clone());
                     Ok(offsets.len().try_into().unwrap())
@@ -120,11 +121,12 @@ where
                 mblock,
                 offsets,
                 first_key,
-                config,
+                m_blocksize,
             } => {
                 let block_i = mblock.len();
-                let n = MEntry::new_z(fpos, key).encode(mblock)?;
-                if (block_i + n) < config.m_blocksize {
+                MEntry::new_z(fpos, key).encode(mblock)?;
+                let n = 4 + (offsets.len() + 1) * 4 + mblock.len();
+                if n < *m_blocksize {
                     offsets.push(block_i.try_into().unwrap());
                     first_key.get_or_insert_with(|| key.clone());
                     Ok(offsets.len().try_into().unwrap())
@@ -142,7 +144,7 @@ where
             MBlock::Encode {
                 mblock,
                 offsets,
-                config,
+                m_blocksize,
                 ..
             } => {
                 let adjust: u32 = {
@@ -158,16 +160,16 @@ where
                 &mblock[..4].copy_from_slice(&num.to_be_bytes());
                 for (i, offset) in offsets.iter().enumerate() {
                     let x = (i + 1) * 4;
-                    let offset = (offset + adjust).to_be_bytes();
-                    mblock[x..x + 4].copy_from_slice(&offset);
+                    let offset_bytes = (adjust + offset).to_be_bytes();
+                    mblock[x..x + 4].copy_from_slice(&offset_bytes);
                 }
                 // update statistics
-                stats.padding += config.m_blocksize - mblock.len();
-                stats.m_bytes += config.m_blocksize;
+                stats.padding += *m_blocksize - mblock.len();
+                stats.m_bytes += *m_blocksize;
                 // align blocks
-                mblock.resize(config.m_blocksize, 0);
+                mblock.resize(*m_blocksize, 0);
 
-                config.m_blocksize.try_into().unwrap()
+                (*m_blocksize).try_into().unwrap()
             }
             MBlock::Decode { .. } => unreachable!(),
         }
@@ -177,6 +179,14 @@ where
         match self {
             MBlock::Encode { mblock, .. } => flusher.send(mblock.clone()),
             MBlock::Decode { .. } => unreachable!(),
+        }
+    }
+
+    #[cfg(test)]
+    fn buffer(&self) -> Vec<u8> {
+        match self {
+            MBlock::Encode { mblock, .. } => mblock.clone(),
+            _ => unreachable!(),
         }
     }
 }
@@ -233,11 +243,11 @@ where
 
         match key.cmp(self.to_key(pivot)?.borrow()) {
             Ordering::Less if pivot == 0 => Err(Error::__LessThan),
-            Ordering::Less if pivot == f => unreachable!(),
-            Ordering::Less => self.find(key, from, Bound::Excluded(pivot)),
+            Ordering::Less if pivot == f => Err(Error::__MBlockExhausted(f)),
+            Ordering::Less => self.get(key, from, Bound::Excluded(pivot)),
             Ordering::Equal => self.to_entry(pivot),
             Ordering::Greater if pivot == f => self.to_entry(pivot),
-            Ordering::Greater => self.find(key, Bound::Included(pivot), to),
+            Ordering::Greater => self.get(key, Bound::Included(pivot), to),
         }
     }
 
@@ -258,7 +268,7 @@ where
         let pivot = self.find_pivot(from, to);
 
         match key.cmp(self.to_key(pivot)?.borrow()) {
-            Ordering::Less if pivot == f => unreachable!(),
+            Ordering::Less if pivot == f => Err(Error::__MBlockExhausted(f)),
             Ordering::Less => self.find(key, from, Bound::Excluded(pivot)),
             Ordering::Equal => self.to_entry(pivot),
             Ordering::Greater if pivot == f => self.to_entry(pivot),
@@ -294,7 +304,8 @@ where
             _ => unreachable!(),
         };
         if index < count {
-            let offset = offsets[index..index + 4].try_into().unwrap();
+            let idx = index * 4;
+            let offset = offsets[idx..idx + 4].try_into().unwrap();
             let offset: usize = u32::from_be_bytes(offset).try_into().unwrap();
             Ok(MEntry::decode_entry(&block[offset..], index))
         } else {
@@ -303,13 +314,23 @@ where
     }
 
     fn to_key(&self, index: usize) -> Result<K> {
-        let (block, offsets) = match self {
-            MBlock::Decode { block, offsets, .. } => (block, offsets),
+        let (block, count, offsets) = match self {
+            MBlock::Decode {
+                block,
+                count,
+                offsets,
+                ..
+            } => (block, *count, offsets),
             _ => unreachable!(),
         };
-        let offset = offsets[index..index + 4].try_into().unwrap();
-        let offset: usize = u32::from_be_bytes(offset).try_into().unwrap();
-        MEntry::decode_key(&block[offset..])
+        if index < count {
+            let idx = index * 4;
+            let offset = offsets[idx..idx + 4].try_into().unwrap();
+            let offset: usize = u32::from_be_bytes(offset).try_into().unwrap();
+            MEntry::decode_key(&block[offset..])
+        } else {
+            Err(Error::__MBlockExhausted(index))
+        }
     }
 }
 

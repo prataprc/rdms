@@ -314,9 +314,10 @@ where
         leaf: &mut Vec<u8>,        // output
         blob: &mut Vec<u8>,        // output
     ) -> Result<ZEntry<K, V>> {
+        let m = leaf.len();
         let (n_deltas, is_vlog) = (entry.to_delta_count(), false);
         let (k, v) = Self::encode_leaf1(entry, n_deltas, is_vlog, leaf)?;
-        let doff = leaf.len();
+        let doff = leaf.len() - m;
         let d = ZEntry::encode_deltas(entry, leaf, blob)?;
         Ok(ZEntry::EncLD {
             doff,
@@ -342,10 +343,11 @@ where
         leaf: &mut Vec<u8>,        // output
         blob: &mut Vec<u8>,        // output
     ) -> Result<ZEntry<K, V>> {
+        let m = leaf.len();
         let (n_deltas, is_vlog) = (entry.to_delta_count(), true);
         let (x, k, v) = Self::encode_leaf2(entry, n_deltas, is_vlog, leaf, blob)?;
         // encode deltas
-        let doff = leaf.len();
+        let doff = leaf.len() - m;
         let d = ZEntry::encode_deltas(entry, leaf, blob)?;
         Ok(ZEntry::EncLVD {
             voff: x,

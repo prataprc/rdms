@@ -11,7 +11,7 @@ use crate::robt::{self, Config, MetaItem, ROOT_MARKER};
 use crate::robt_index::{MBlock, ZBlock};
 use crate::util;
 
-/// Build a new instance of Read-Only-BTree.
+/// Builder type for Read-Only-BTree.
 pub struct Builder<K, V>
 where
     K: Clone + Ord + Serialize,
@@ -35,14 +35,19 @@ where
 {
     /// For initial builds, index file and value-log-file, if any,
     /// are always created new.
-    pub fn initial(config: Config, dir: &str, name: &str) -> Result<Builder<K, V>> {
+    pub fn initial(
+        dir: &str, // directory path where index file(s) are stored
+        name: &str,
+        config: Config,
+    ) -> Result<Builder<K, V>> {
+        let create = true;
         let iflusher = {
             let file = config.to_index_file(dir, name);
-            Flusher::new(file, config.clone(), false /*reuse*/)?
+            Flusher::new(file, config.clone(), create)?
         };
         let vflusher = config
             .to_value_log(dir, name)
-            .map(|file| Flusher::new(file, config.clone(), false /*reuse*/))
+            .map(|file| Flusher::new(file, config.clone(), create))
             .transpose()?;
 
         Ok(Builder {
@@ -60,11 +65,11 @@ where
     pub fn incremental(config: Config, dir: &str, name: &str) -> Result<Builder<K, V>> {
         let iflusher = {
             let file = config.to_index_file(dir, name);
-            Flusher::new(file, config.clone(), false /*reuse*/)?
+            Flusher::new(file, config.clone(), true /*create*/)?
         };
         let vflusher = config
             .to_value_log(dir, name)
-            .map(|file| Flusher::new(file, config.clone(), true /*reuse*/))
+            .map(|file| Flusher::new(file, config.clone(), false /*create*/))
             .transpose()?;
 
         let mut stats: Stats = From::from(config.clone());
@@ -95,7 +100,7 @@ where
         };
 
         // meta-stats
-        let stats = {
+        let stats: String = {
             self.stats.build_time = took;
             let epoch: i128 = time::UNIX_EPOCH
                 .elapsed()
@@ -112,7 +117,7 @@ where
             MetaItem::Root(root),
             MetaItem::Metadata(metadata),
             MetaItem::Stats(stats),
-            MetaItem::Marker(ROOT_MARKER.clone()),
+            MetaItem::Marker(ROOT_MARKER.clone()), // tip of the index.
         ];
         // flush them to disk
         robt::write_meta_items(self.iflusher.file.clone(), meta_items)?;
@@ -125,7 +130,6 @@ where
     }
 
     fn build_tree<I>(&mut self, mut iter: I) -> Result<u64>
-    // return root
     where
         I: Iterator<Item = Result<Entry<K, V>>>,
     {
@@ -295,7 +299,7 @@ pub(crate) struct Flusher {
     file: ffi::OsString,
     fpos: u64,
     thread: thread::JoinHandle<Result<()>>,
-    tx: mpsc::SyncSender<(Vec<u8>, mpsc::SyncSender<Result<()>>)>,
+    tx: mpsc::SyncSender<Vec<u8>>,
 }
 
 impl Flusher {
@@ -305,14 +309,14 @@ impl Flusher {
         create: bool, // if true create a new file
     ) -> Result<Flusher> {
         let (fd, fpos) = if create {
-            (util::open_file_w(&file)?, fs::metadata(&file)?.len())
-        } else {
             (util::open_file_cw(file.clone())?, Default::default())
+        } else {
+            (util::open_file_w(&file)?, fs::metadata(&file)?.len())
         };
 
         let (tx, rx) = mpsc::sync_channel(config.flush_queue_size);
-        let send_file = file.clone();
-        let thread = thread::spawn(move || thread_flush(send_file, fd, rx));
+        let file1 = file.clone();
+        let thread = thread::spawn(move || thread_flush(file1, fd, rx));
 
         Ok(Flusher {
             file,
@@ -324,9 +328,8 @@ impl Flusher {
 
     // return error if flush thread has exited/paniced.
     pub(crate) fn send(&mut self, block: Vec<u8>) -> Result<()> {
-        let (tx, rx) = mpsc::sync_channel(0);
-        self.tx.send((block, tx))?;
-        rx.recv()?
+        self.tx.send(block)?;
+        Ok(())
     }
 
     // return the cause thread failure if there is a failure, or return
@@ -346,21 +349,14 @@ impl Flusher {
 fn thread_flush(
     file: ffi::OsString, // for debuging purpose
     mut fd: fs::File,
-    rx: mpsc::Receiver<(Vec<u8>, mpsc::SyncSender<Result<()>>)>,
+    rx: mpsc::Receiver<Vec<u8>>,
 ) -> Result<()> {
-    let mut write_data = |data: &[u8]| -> Result<()> {
-        let n = fd.write(data)?;
-        if n == data.len() {
-            Ok(())
-        } else {
+    for data in rx.iter() {
+        let n = fd.write(&data)?;
+        if n != data.len() {
             let msg = format!("flusher: {:?} {}/{}...", &file, data.len(), n);
-            Err(Error::PartialWrite(msg))
+            return Err(Error::PartialWrite(msg));
         }
-    };
-
-    for (data, tx) in rx.iter() {
-        write_data(&data)?;
-        tx.send(Ok(()))?;
     }
     // file descriptor and receiver channel shall be dropped.
     Ok(())

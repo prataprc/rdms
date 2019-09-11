@@ -3,6 +3,23 @@
 /// ROBT instances shall have an index file and an optional value-log-file,
 /// refer to [Config] for more information.
 ///
+/// **Index-file format**:
+///
+/// *------------------------------------------* SeekFrom::End(0)
+/// |                marker-length             |
+/// *------------------------------------------* SeekFrom::End(-8)
+/// |                stats-length              |
+/// *------------------------------------------* SeekFrom::End(-16)
+/// |               metadata-length            |
+/// *------------------------------------------* SeekFrom::End(-24)
+/// |                  root-fpos               |
+/// *------------------------------------------* SeekFrom::MetaBlock
+/// *                btree-blocks              *
+/// *                    ...                   *
+/// *                    ...                   *
+/// *------------------------------------------* 0
+///
+///
 /// [Config]: crate::robt_config::Config
 ///
 use lazy_static::lazy_static;
@@ -58,7 +75,7 @@ where
     }
 }
 
-pub(crate) struct Robts<K, V, M>
+pub(crate) struct Robt<K, V, M>
 where
     K: 'static + Sync + Send + Clone + Ord + Serialize + Footprint,
     V: 'static + Sync + Send + Clone + Diff + Serialize + Footprint,
@@ -74,7 +91,7 @@ where
 }
 
 // new instance of multi-level Robt indexes.
-impl<K, V, M> Robts<K, V, M>
+impl<K, V, M> Robt<K, V, M>
 where
     K: 'static + Sync + Send + Clone + Ord + Serialize + Footprint,
     V: 'static + Sync + Send + Clone + Diff + Serialize + Footprint,
@@ -84,8 +101,8 @@ where
     const MEM_RATIO: f64 = 0.2;
     const DISK_RATIO: f64 = 0.5;
 
-    pub(crate) fn new(config: Config) -> Robts<K, V, M> {
-        Robts {
+    pub(crate) fn new(config: Config) -> Robt<K, V, M> {
+        Robt {
             config: config.clone(),
             mem_ratio: Self::MEM_RATIO,
             disk_ratio: Self::DISK_RATIO,
@@ -95,19 +112,19 @@ where
         }
     }
 
-    pub(crate) fn set_mem_ratio(mut self, ratio: f64) -> Robts<K, V, M> {
+    pub(crate) fn set_mem_ratio(mut self, ratio: f64) -> Robt<K, V, M> {
         self.mem_ratio = ratio;
         self
     }
 
-    pub(crate) fn set_disk_ratio(mut self, ratio: f64) -> Robts<K, V, M> {
+    pub(crate) fn set_disk_ratio(mut self, ratio: f64) -> Robt<K, V, M> {
         self.disk_ratio = ratio;
         self
     }
 }
 
 // add new levels.
-impl<K, V, M> Robts<K, V, M>
+impl<K, V, M> Robt<K, V, M>
 where
     K: 'static + Sync + Send + Clone + Ord + Serialize + Footprint,
     V: 'static + Sync + Send + Clone + Diff + Serialize + Footprint,
@@ -334,7 +351,7 @@ impl Config {
     pub const VBLOCKSIZE: usize = 4 * 1024; // ~ 4KB of blobs.
     pub const MBLOCKSIZE: usize = 4 * 1024; // 4KB intermediate node
     const MARKER_BLOCK_SIZE: usize = 1024 * 4;
-    const FLUSH_QUEUE_SIZE: usize = 16;
+    const FLUSH_QUEUE_SIZE: usize = 64;
 
     /// Configure differt set of block size for leaf-node, intermediate-node.
     pub fn set_blocksize(&mut self, z: usize, v: usize, m: usize) -> &mut Self {
@@ -426,22 +443,25 @@ impl Config {
     }
 }
 
-// Disk-Format:
-//
-// *------------------------------------------* SeekFrom::End(0)
-// |                marker-length             |
-// *------------------------------------------* SeekFrom::End(-8)
-// |                stats-length              |
-// *------------------------------------------* SeekFrom::End(-16)
-// |               metadata-length            |
-// *------------------------------------------* SeekFrom::End(-24)
-// |                  root-fpos               |
-// *------------------------------------------* SeekFrom::MetaBlock
-//
+/// Enumerated variants of meta-data items stored in [Robt] index.
+///
+/// [Robt] index is a full-packed immutable [Btree] index. To interpret
+/// the index a list of metadata items are appended to the tip
+/// of index-file.
+///
+/// [Robt]: crate::robt::Robt
+/// [Btree]: https://en.wikipedia.org/wiki/B-tree
 pub enum MetaItem {
+    /// A Unique marker that confirms that index file is valid.
     Marker(Vec<u8>), // tip of the file.
+    /// Contains index-statistics along with configuration values.
     Stats(String),
+    /// Application supplied metadata, typically serialized and opaque
+    /// to [Bogn].
+    ///
+    /// [Bogn]: crate::Bogn
     Metadata(Vec<u8>),
+    /// File-position where the root block for the Btree starts.
     Root(u64),
 }
 
@@ -494,6 +514,13 @@ pub(crate) fn write_meta_items(
     }
 }
 
+/// Read meta data from [Robt] index file.
+///
+/// Metadata is stored at the tip of the index file. If successful,
+/// a vector of metadata components. To learn more about the metadata
+/// components refer to [MetaItem] type.
+///
+/// [Robt]: crate::robt::Robt
 pub fn read_meta_items(
     dir: &str,  // directory of index
     name: &str, // name of index

@@ -44,17 +44,15 @@ pub use crate::core::{Footprint, Index, IndexIter, Reader, Writer};
 pub use crate::error::Error;
 pub use crate::spinlock::RWSpinlock;
 
-pub mod robt;
-mod robt_build;
-mod robt_entry;
-mod robt_index;
-mod robt_snap;
-
-mod types;
-pub use crate::types::Empty;
-
 pub mod llrb;
 mod llrb_node;
 mod lsm;
 pub mod mvcc;
+
+pub mod robt;
+mod robt_entry;
+mod robt_index;
+
+mod types;
+pub use crate::types::Empty;
 pub mod wal;

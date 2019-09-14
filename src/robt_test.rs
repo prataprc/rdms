@@ -1,4 +1,10 @@
+use rand::prelude::random;
+
 use super::*;
+use crate::core::Reader;
+use crate::llrb::Llrb;
+use crate::robt;
+use crate::scans::SkipScan;
 
 #[test]
 fn test_stats() {
@@ -68,12 +74,12 @@ fn test_meta_items() {
     let len1 = ROOT_MARKER.len();
     let stats = <Stats as Default>::default().to_string();
     let len2 = (n % 65536) as usize;
-    let meta_data: Vec<u8> = (0..len2).map(|x| (x % 256) as u8).collect();
+    let app_meta: Vec<u8> = (0..len2).map(|x| (x % 256) as u8).collect();
     let len3 = stats.len();
 
     let meta_items = vec![
         MetaItem::Root(5),
-        MetaItem::Metadata(meta_data.clone()),
+        MetaItem::AppMetadata(app_meta.clone()),
         MetaItem::Stats(stats.clone()),
         MetaItem::Marker(ROOT_MARKER.clone()),
     ];
@@ -85,7 +91,7 @@ fn test_meta_items() {
     for (i, item) in iter.enumerate() {
         match (i, item) {
             (0, MetaItem::Root(value)) => assert_eq!(value, 5),
-            (1, MetaItem::Metadata(value)) => assert_eq!(value, meta_data),
+            (1, MetaItem::AppMetadata(value)) => assert_eq!(value, app_meta),
             (2, MetaItem::Stats(value)) => assert_eq!(value, stats),
             (3, MetaItem::Marker(v)) => assert_eq!(v, ROOT_MARKER.clone()),
             (i, _) => panic!("at {}, failure", i),
@@ -147,4 +153,80 @@ fn test_config() {
         config.to_value_log(dir.to_str().unwrap(), "users").unwrap(),
         ref_file.to_os_string()
     );
+}
+
+#[test]
+fn test_robt_llrb() {
+    let lsm: bool = random();
+    let mut llrb: Box<Llrb<i64, i64>> = if lsm {
+        Llrb::new_lsm("test-llrb")
+    } else {
+        Llrb::new("test-llrb")
+    };
+    let n_ops = 6_000;
+    let key_max = 2_000;
+    for _i in 0..n_ops {
+        let key = ((random::<i32>() as u32) % key_max) as i64;
+        match random::<usize>() % 3 {
+            0 => {
+                let value: i64 = random();
+                llrb.set(key, value).unwrap();
+            }
+            1 => {
+                let value: i64 = random();
+                let cas = match llrb.get(&key) {
+                    Err(Error::KeyNotFound) => 0,
+                    Err(_err) => unreachable!(),
+                    Ok(e) => e.to_seqno(),
+                };
+                llrb.set_cas(key, value, cas).unwrap();
+            }
+            2 => {
+                llrb.delete(&key).unwrap();
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    let dir = {
+        let mut dir = std::env::temp_dir();
+        dir.push("test-robt-build");
+        dir.to_str().unwrap().to_string()
+    };
+    let mut config: robt::Config = Default::default();
+    config.delta_ok = random();
+    config.value_in_vlog = random();
+    config.tomb_purge = match random::<u64>() % 100 {
+        0..=60 => None,
+        61..=70 => Some(0),
+        71..=80 => Some(1),
+        81..=90 => Some(random::<u64>() % n_ops),
+        91..=100 => Some(10_000_000),
+        _ => unreachable!(),
+    };
+    println!(
+        "lsm:{} delta:{} vlog:{} purge:{:?}",
+        lsm, config.delta_ok, config.value_in_vlog, config.tomb_purge
+    );
+
+    let iter = SkipScan::new(&llrb, ..);
+    let refs: Vec<Entry<i64, i64>> = iter.map(|e| e.unwrap()).collect();
+
+    let iter = SkipScan::new(&llrb, ..);
+    let b = Builder::initial(&dir, "test-build", config.clone()).unwrap();
+    let app_meta = "heloo world".to_string();
+    b.build(iter, app_meta.as_bytes().to_vec()).unwrap();
+
+    for e in refs.iter() {
+        println!("{}", e.to_key());
+    }
+    println!("total entries {}", refs.len());
+
+    //let snap = Robt::
+    ////assert_eq!(stats
+}
+
+#[test]
+fn test_robt_mvcc() {
+    // panic!("TBD");
 }

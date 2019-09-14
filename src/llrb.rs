@@ -157,7 +157,7 @@ where
         index
     }
 
-    fn clone(&self) -> Box<Llrb<K, V>> {
+    pub fn clone(&self) -> Box<Llrb<K, V>> {
         let mut index = Box::new(Llrb {
             name: self.name.clone(),
             lsm: self.lsm,

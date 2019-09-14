@@ -5,9 +5,7 @@ use std::{borrow::Borrow, cmp::Ordering, convert::TryInto, fs, marker};
 
 use crate::core::{self, Diff, Result, Serialize};
 use crate::error::Error;
-use crate::robt::Config;
-use crate::robt::Stats;
-use crate::robt_build::Flusher;
+use crate::robt::{Config, Flusher, Stats};
 use crate::robt_entry::{MEntry, ZEntry};
 use crate::util;
 
@@ -367,7 +365,6 @@ where
         first_key: Option<K>,
         // configuration
         z_blocksize: usize,
-        v_blocksize: usize,
         value_in_vlog: bool,
         delta_ok: bool,
     },
@@ -387,20 +384,18 @@ where
 {
     pub(crate) fn new_encode(vpos: u64, config: Config) -> ZBlock<K, V> {
         let z_blocksize = config.z_blocksize;
-        let v_blocksize = config.v_blocksize;
         let value_in_vlog = config.value_in_vlog;
         let delta_ok = config.delta_ok;
 
         ZBlock::Encode {
             leaf: Vec::with_capacity(z_blocksize),
-            blob: Vec::with_capacity(v_blocksize),
+            blob: Vec::with_capacity(config.v_blocksize),
             offsets: Vec::with_capacity(64),  // TODO: no magic number
             zentries: Vec::with_capacity(64), // TODO: no magic number
             vpos,
             first_key: Default::default(),
             // configuration
             z_blocksize,
-            v_blocksize,
             value_in_vlog,
             delta_ok,
         }

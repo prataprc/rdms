@@ -11,11 +11,11 @@
 //! *------------------------------------------* SeekFrom::End(-8)
 //! |                stats-length              |
 //! *------------------------------------------* SeekFrom::End(-16)
-//! |               metadata-length            |
+//! |             app-metadata-length          |
 //! *------------------------------------------* SeekFrom::End(-24)
 //! |                  root-fpos               |
 //! *------------------------------------------* SeekFrom::MetaBlock
-//! *               metadata-blocks            *
+//! *                 meta-blocks              *
 //! *                    ...                   *
 //! *------------------------------------------*
 //! *                btree-blocks              *
@@ -31,31 +31,36 @@
 //! * File-position for btree's root-block.
 //!
 //! Total length of `metadata-blocks` can be computed based on
-//! `marker-length`, `stats-length`, `metadata-length`.
+//! `marker-length`, `stats-length`, `app-metadata-length`.
 //!
 //! [Config]: crate::robt::Config
 //!
 use lazy_static::lazy_static;
 
 use std::{
+    borrow::Borrow,
+    cmp,
     convert::TryInto,
     ffi, fmt,
     fmt::Display,
     fs,
     io::Write,
-    marker, mem, path, result,
+    marker, mem,
+    ops::{Bound, RangeBounds},
+    path, result,
     str::FromStr,
-    sync::{atomic::AtomicPtr, atomic::Ordering, mpsc, Arc},
-    thread,
+    sync::{self, atomic::AtomicPtr, atomic::Ordering, mpsc, Arc},
+    thread, time,
 };
 
-pub use crate::robt_build::Builder;
-pub use crate::robt_snap::Snapshot;
-
-use crate::core::{Diff, Footprint, Index, Result, Serialize};
+use crate::core::{Diff, Entry, Footprint, Result, Serialize};
+use crate::core::{Index, IndexIter, Reader, Writer};
 use crate::error::Error;
 use crate::jsondata::{Json, Property};
 use crate::util;
+
+use crate::robt_entry::MEntry;
+use crate::robt_index::{MBlock, ZBlock};
 
 // TODO: make dir, file, path into OsString and OsStr.
 
@@ -147,11 +152,11 @@ where
     pub(crate) fn flush_to_disk(
         &mut self,
         index: Arc<M>, // full table scan over mem-index
-        metadata: Vec<u8>,
+        app_meta: Vec<u8>,
     ) -> Result<()> {
         let _resp = self.todisk.send(Request::MemFlush {
             index,
-            metadata,
+            app_meta,
             phantom_key: marker::PhantomData,
             phantom_val: marker::PhantomData,
         })?;
@@ -168,7 +173,7 @@ where
 {
     MemFlush {
         index: Arc<M>,
-        metadata: Vec<u8>,
+        app_meta: Vec<u8>,
         phantom_key: marker::PhantomData<K>,
         phantom_val: marker::PhantomData<V>,
     },
@@ -457,10 +462,10 @@ impl Config {
     }
 }
 
-/// Enumerated meta-data types stored in [Robt] index.
+/// Enumerated meta types stored in [Robt] index.
 ///
 /// [Robt] index is a full-packed immutable [Btree] index. To interpret
-/// the index a list of metadata items are appended to the tip
+/// the index a list of meta items are appended to the tip
 /// of index-file.
 ///
 /// [Robt]: crate::robt::Robt
@@ -474,7 +479,7 @@ pub enum MetaItem {
     /// to [Bogn].
     ///
     /// [Bogn]: crate::Bogn
-    Metadata(Vec<u8>),
+    AppMetadata(Vec<u8>),
     /// File-position where the root block for the Btree starts.
     Root(u64),
 }
@@ -496,7 +501,7 @@ pub(crate) fn write_meta_items(
             (0, MetaItem::Root(fpos)) => {
                 hdr[0..8].copy_from_slice(&fpos.to_be_bytes());
             }
-            (1, MetaItem::Metadata(md)) => {
+            (1, MetaItem::AppMetadata(md)) => {
                 hdr[8..16].copy_from_slice(&(md.len() as u64).to_be_bytes());
                 block.extend_from_slice(&md);
             }
@@ -528,11 +533,11 @@ pub(crate) fn write_meta_items(
     }
 }
 
-/// Read meta data from [Robt] index file.
+/// Read meta items from [Robt] index file.
 ///
-/// Metadata is stored at the tip of the index file. If successful,
-/// a vector of metadata components. To learn more about the metadata
-/// components refer to [MetaItem] type.
+/// Meta-items is stored at the tip of the index file. If successful,
+/// a vector of meta items. To learn more about the meta items
+/// refer to [MetaItem] type.
 ///
 /// [Robt]: crate::robt::Robt
 pub fn read_meta_items(
@@ -557,7 +562,7 @@ pub fn read_meta_items(
         .into_iter()
         .collect();
 
-    let mut metaitems: Vec<MetaItem> = vec![];
+    let mut meta_items: Vec<MetaItem> = vec![];
     let z = (n as usize) - 32;
 
     let (x, y) = (z - n_marker, z);
@@ -571,19 +576,19 @@ pub fn read_meta_items(
     let stats = std::str::from_utf8(&block[x..y])?.to_string();
 
     let (x, y) = (z - n_marker - n_stats - n_md, z - n_marker - n_stats);
-    let meta_data = block[x..y].to_vec();
+    let app_data = block[x..y].to_vec();
 
-    metaitems.push(MetaItem::Root(root));
-    metaitems.push(MetaItem::Metadata(meta_data));
-    metaitems.push(MetaItem::Stats(stats));
-    metaitems.push(MetaItem::Marker(marker.clone()));
+    meta_items.push(MetaItem::Root(root));
+    meta_items.push(MetaItem::AppMetadata(app_data));
+    meta_items.push(MetaItem::Stats(stats));
+    meta_items.push(MetaItem::Marker(marker.clone()));
 
     // validate and return
     if (m - n) != root {
         let msg = format!("expected root at {}, found {}", root, (m - n));
         Err(Error::InvalidSnapshot(msg))
     } else {
-        Ok(metaitems)
+        Ok(meta_items)
     }
 }
 
@@ -591,7 +596,7 @@ impl fmt::Display for MetaItem {
     fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
         match self {
             MetaItem::Marker(_) => write!(f, "MetaItem::Marker"),
-            MetaItem::Metadata(_) => write!(f, "MetaItem::Metadata"),
+            MetaItem::AppMetadata(_) => write!(f, "MetaItem::AppMetadata"),
             MetaItem::Stats(_) => write!(f, "MetaItem::Stats"),
             MetaItem::Root(_) => write!(f, "MetaItem::Root"),
         }
@@ -599,8 +604,8 @@ impl fmt::Display for MetaItem {
 }
 
 /// Btree configuration and statistics persisted along with index file.
-/// Note that build-only configuration options like:
 ///
+/// Note that build-only configuration options like:
 /// * `tomb_purge`, configuration option.
 /// * `flush_queue_size`,  configuration option.
 ///
@@ -761,6 +766,1272 @@ impl Display for Stats {
         js.set("/epoch", Json::new(self.epoch)).ok();
 
         write!(f, "{}", js.to_string())
+    }
+}
+
+/// Builder type for Read-Only-BTree.
+pub struct Builder<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Serialize,
+{
+    config: Config,
+    iflusher: Flusher,
+    vflusher: Option<Flusher>,
+    stats: Stats,
+
+    phantom_key: marker::PhantomData<K>,
+    phantom_val: marker::PhantomData<V>,
+}
+
+impl<K, V> Builder<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Serialize,
+{
+    /// For initial builds, index file and value-log-file, if any,
+    /// are always created new.
+    pub fn initial(
+        dir: &str, // directory path where index file(s) are stored
+        name: &str,
+        config: Config,
+    ) -> Result<Builder<K, V>> {
+        let create = true;
+        let iflusher = {
+            let file = config.to_index_file(dir, name);
+            Flusher::new(file, config.clone(), create)?
+        };
+        let vflusher = config
+            .to_value_log(dir, name)
+            .map(|file| Flusher::new(file, config.clone(), create))
+            .transpose()?;
+
+        Ok(Builder {
+            config: config.clone(),
+            iflusher,
+            vflusher,
+            stats: From::from(config),
+            phantom_key: marker::PhantomData,
+            phantom_val: marker::PhantomData,
+        })
+    }
+
+    /// For incremental build, index file is created new, while
+    /// value-log-file, if any, is appended to older version.
+    pub fn incremental(
+        dir: &str, // directory path where index files are stored
+        name: &str,
+        config: Config,
+    ) -> Result<Builder<K, V>> {
+        let iflusher = {
+            let file = config.to_index_file(dir, name);
+            Flusher::new(file, config.clone(), true /*create*/)?
+        };
+        let vflusher = config
+            .to_value_log(dir, name)
+            .map(|file| Flusher::new(file, config.clone(), false /*create*/))
+            .transpose()?;
+
+        let mut stats: Stats = From::from(config.clone());
+        stats.n_abytes += vflusher.as_ref().map_or(0, |vf| vf.fpos) as usize;
+
+        Ok(Builder {
+            config: config.clone(),
+            iflusher,
+            vflusher,
+            stats,
+            phantom_key: marker::PhantomData,
+            phantom_val: marker::PhantomData,
+        })
+    }
+
+    /// Build a new index.
+    pub fn build<I>(mut self, iter: I, app_meta: Vec<u8>) -> Result<()>
+    where
+        I: Iterator<Item = Result<Entry<K, V>>>,
+    {
+        let (took, root): (u64, u64) = {
+            let start = time::SystemTime::now();
+            let root = self.build_tree(iter)?;
+            (
+                start.elapsed().unwrap().as_nanos().try_into().unwrap(),
+                root,
+            )
+        };
+
+        // meta-stats
+        let stats: String = {
+            self.stats.build_time = took;
+            let epoch: i128 = time::UNIX_EPOCH
+                .elapsed()
+                .unwrap()
+                .as_nanos()
+                .try_into()
+                .unwrap();
+            self.stats.epoch = epoch;
+            self.stats.to_string()
+        };
+
+        // start building metadata items for index files
+        let meta_items: Vec<MetaItem> = vec![
+            MetaItem::Root(root),
+            MetaItem::AppMetadata(app_meta),
+            MetaItem::Stats(stats),
+            MetaItem::Marker(ROOT_MARKER.clone()), // tip of the index.
+        ];
+        // flush them to disk
+        write_meta_items(self.iflusher.file.clone(), meta_items)?;
+
+        // flush marker block and close
+        self.iflusher.close_wait()?;
+        self.vflusher.take().map(|x| x.close_wait()).transpose()?;
+
+        Ok(())
+    }
+
+    fn build_tree<I>(&mut self, iter: I) -> Result<u64>
+    where
+        I: Iterator<Item = Result<Entry<K, V>>>,
+    {
+        struct Context<K, V>
+        where
+            K: Clone + Ord + Serialize,
+            V: Clone + Diff + Serialize,
+            <V as Diff>::D: Serialize,
+        {
+            fpos: u64,
+            zfpos: u64,
+            vfpos: u64,
+            z: ZBlock<K, V>,
+            ms: Vec<MBlock<K, V>>,
+        };
+        let mut c = {
+            let vfpos = self.stats.n_abytes.try_into().unwrap();
+            Context {
+                fpos: 0,
+                zfpos: 0,
+                vfpos,
+                z: ZBlock::new_encode(vfpos, self.config.clone()),
+                ms: vec![MBlock::new_encode(self.config.clone())],
+            }
+        };
+
+        for entry in iter {
+            let mut entry = match self.preprocess(entry?) {
+                Some(entry) => entry,
+                None => continue,
+            };
+
+            match c.z.insert(&entry, &mut self.stats) {
+                Ok(_) => (),
+                Err(Error::__ZBlockOverflow(_)) => {
+                    // zbytes is z_blocksize
+                    let (zbytes, vbytes) = c.z.finalize(&mut self.stats);
+                    c.z.flush(&mut self.iflusher, self.vflusher.as_mut())?;
+                    c.fpos += zbytes;
+                    c.vfpos += vbytes;
+
+                    let mut m = c.ms.pop().unwrap();
+                    match m.insertz(c.z.as_first_key(), c.zfpos) {
+                        Ok(_) => c.ms.push(m),
+                        Err(Error::__MBlockOverflow(_)) => {
+                            // x is m_blocksize
+                            let x = m.finalize(&mut self.stats);
+                            m.flush(&mut self.iflusher)?;
+                            let k = m.as_first_key();
+                            let r = self.insertms(c.ms, c.fpos + x, k, c.fpos)?;
+                            c.ms = r.0;
+                            c.fpos = r.1;
+
+                            m.reset();
+                            m.insertz(c.z.as_first_key(), c.zfpos).unwrap();
+                        }
+                        Err(err) => return Err(err),
+                    }
+
+                    c.zfpos = c.fpos;
+                    c.z.reset(c.vfpos);
+
+                    c.z.insert(&entry, &mut self.stats).unwrap();
+                }
+                Err(err) => return Err(err),
+            };
+
+            self.postprocess(&mut entry);
+        }
+
+        // flush final z-block
+        if c.z.has_first_key() {
+            let (zbytes, _vbytes) = c.z.finalize(&mut self.stats);
+            c.z.flush(&mut self.iflusher, self.vflusher.as_mut())?;
+            c.fpos += zbytes;
+            // vfpos += vbytes; TODO: is this required ?
+
+            let mut m = c.ms.pop().unwrap();
+            match m.insertz(c.z.as_first_key(), c.zfpos) {
+                Ok(_) => c.ms.push(m),
+                Err(Error::__MBlockOverflow(_)) => {
+                    let x = m.finalize(&mut self.stats);
+                    m.flush(&mut self.iflusher)?;
+                    let mkey = m.as_first_key();
+                    let res = self.insertms(c.ms, c.fpos + x, mkey, c.fpos)?;
+                    c.ms = res.0;
+                    c.fpos = res.1;
+
+                    m.reset();
+                    m.insertz(c.z.as_first_key(), c.zfpos)?;
+                }
+                Err(err) => return Err(err),
+            }
+        }
+
+        // flush final set of m-blocks
+        while let Some(mut m) = c.ms.pop() {
+            if m.has_first_key() && c.ms.len() == 0 {
+                let x = m.finalize(&mut self.stats);
+                m.flush(&mut self.iflusher)?;
+                c.fpos += x;
+            } else if m.has_first_key() {
+                // x is m_blocksize
+                let x = m.finalize(&mut self.stats);
+                m.flush(&mut self.iflusher)?;
+                let mkey = m.as_first_key();
+                let res = self.insertms(c.ms, c.fpos + x, mkey, c.fpos)?;
+                c.ms = res.0;
+                c.fpos = res.1
+            }
+        }
+        Ok(c.fpos)
+    }
+
+    fn insertms(
+        &mut self,
+        mut ms: Vec<MBlock<K, V>>,
+        mut fpos: u64,
+        key: &K,
+        mfpos: u64,
+    ) -> Result<(Vec<MBlock<K, V>>, u64)> {
+        let m0 = ms.pop();
+        let m0 = match m0 {
+            None => {
+                let mut m0 = MBlock::new_encode(self.config.clone());
+                m0.insertm(key, mfpos).unwrap();
+                m0
+            }
+            Some(mut m0) => match m0.insertm(key, mfpos) {
+                Ok(_) => m0,
+                Err(Error::__MBlockOverflow(_)) => {
+                    // x is m_blocksize
+                    let x = m0.finalize(&mut self.stats);
+                    m0.flush(&mut self.iflusher)?;
+                    let mkey = m0.as_first_key();
+                    let res = self.insertms(ms, fpos + x, mkey, fpos)?;
+                    ms = res.0;
+                    fpos = res.1;
+
+                    m0.reset();
+                    m0.insertm(key, mfpos).unwrap();
+                    m0
+                }
+                Err(err) => return Err(err),
+            },
+        };
+        ms.push(m0);
+        Ok((ms, fpos))
+    }
+
+    fn preprocess(&mut self, entry: Entry<K, V>) -> Option<Entry<K, V>> {
+        self.stats.seqno = cmp::max(self.stats.seqno, entry.to_seqno());
+
+        // if tombstone purge is configured, then purge all versions
+        // on or before the purge-seqno.
+        match self.config.tomb_purge {
+            Some(before) => entry.purge(Bound::Excluded(before)),
+            _ => Some(entry),
+        }
+    }
+
+    fn postprocess(&mut self, entry: &mut Entry<K, V>) {
+        self.stats.n_count += 1;
+        if entry.is_deleted() {
+            self.stats.n_deleted += 1;
+        }
+    }
+}
+
+pub(crate) struct Flusher {
+    file: ffi::OsString,
+    fpos: u64,
+    t: thread::JoinHandle<Result<()>>,
+    tx: mpsc::SyncSender<Vec<u8>>,
+}
+
+impl Flusher {
+    fn new(
+        file: ffi::OsString,
+        config: Config,
+        create: bool, // if true create a new file
+    ) -> Result<Flusher> {
+        let (fd, fpos) = if create {
+            (util::open_file_cw(file.clone())?, Default::default())
+        } else {
+            (util::open_file_w(&file)?, fs::metadata(&file)?.len())
+        };
+
+        let (tx, rx) = mpsc::sync_channel(config.flush_queue_size);
+        let file1 = file.clone();
+        let t = thread::spawn(move || thread_flush(file1, fd, rx));
+
+        Ok(Flusher { file, fpos, t, tx })
+    }
+
+    // return error if flush thread has exited/paniced.
+    pub(crate) fn send(&mut self, block: Vec<u8>) -> Result<()> {
+        self.tx.send(block)?;
+        Ok(())
+    }
+
+    // return the cause for thread failure, if there is a failure, or return
+    // a known error like io::Error or PartialWrite.
+    fn close_wait(self) -> Result<()> {
+        mem::drop(self.tx);
+        match self.t.join() {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(Error::PartialWrite(err))) => Err(Error::PartialWrite(err)),
+            Ok(Err(_)) => unreachable!(),
+            Err(err) => match err.downcast_ref::<String>() {
+                Some(msg) => Err(Error::ThreadFail(msg.to_string())),
+                None => Err(Error::ThreadFail("unknown error".to_string())),
+            },
+        }
+    }
+}
+
+fn thread_flush(
+    file: ffi::OsString, // for debuging purpose
+    mut fd: fs::File,
+    rx: mpsc::Receiver<Vec<u8>>,
+) -> Result<()> {
+    for data in rx.iter() {
+        let n = fd.write(&data)?;
+        if n != data.len() {
+            let msg = format!("flusher: {:?} {}/{}...", &file, data.len(), n);
+            return Err(Error::PartialWrite(msg));
+        }
+    }
+    // file descriptor and receiver channel shall be dropped.
+    Ok(())
+}
+
+/// A read only snapshot of BTree built using [robt] index.
+///
+/// [robt]: crate::robt
+pub struct Snapshot<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+{
+    dir: String,
+    name: String,
+    meta: Vec<MetaItem>,
+    // working fields
+    config: Config,
+    index_fd: fs::File,
+    vlog_fd: Option<fs::File>,
+    mutex: sync::Mutex<i32>,
+
+    phantom_key: marker::PhantomData<K>,
+    phantom_val: marker::PhantomData<V>,
+}
+
+// Construction methods.
+impl<K, V> Snapshot<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+{
+    /// Open BTree snapshot from file that can be constructed from ``dir``
+    /// and ``name``.
+    pub fn open(dir: &str, name: &str) -> Result<Snapshot<K, V>> {
+        let meta_items = read_meta_items(dir, name)?;
+        let mut snap = Snapshot {
+            dir: dir.to_string(),
+            name: name.to_string(),
+            meta: meta_items,
+            config: Default::default(),
+            index_fd: {
+                let index_file = Config::stitch_index_file(dir, name);
+                util::open_file_r(&index_file.as_ref())?
+            },
+            vlog_fd: Default::default(),
+            mutex: sync::Mutex::new(0),
+
+            phantom_key: marker::PhantomData,
+            phantom_val: marker::PhantomData,
+        };
+        snap.config = snap.to_stats()?.into();
+        snap.config.vlog_file = snap.config.vlog_file.map(|vfile| {
+            // stem the file name.
+            let vfile = path::Path::new(&vfile).file_name().unwrap();
+            let ipath = Config::stitch_index_file(&dir, &name);
+            let mut vpath = path::PathBuf::new();
+            vpath.push(path::Path::new(&ipath).parent().unwrap());
+            vpath.push(vfile);
+            vpath.as_os_str().to_os_string()
+        });
+        snap.vlog_fd = snap
+            .config
+            .to_value_log(dir, name)
+            .as_ref()
+            .map(|s| util::open_file_r(s.as_ref()))
+            .transpose()?;
+
+        Ok(snap) // Okey dockey
+    }
+}
+
+// maintanence methods.
+impl<K, V> Snapshot<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+{
+    /// Return number of entries in the snapshot.
+    pub fn len(&self) -> u64 {
+        self.to_stats().unwrap().n_count
+    }
+
+    /// Return the last seqno found in this snapshot.
+    pub fn to_seqno(&self) -> u64 {
+        self.to_stats().unwrap().seqno
+    }
+
+    /// Return the application metadata.
+    pub fn to_app_meta(&self) -> Result<Vec<u8>> {
+        if let MetaItem::AppMetadata(data) = &self.meta[1] {
+            Ok(data.clone())
+        } else {
+            let msg = "snapshot app-metadata missing".to_string();
+            Err(Error::InvalidSnapshot(msg))
+        }
+    }
+
+    /// Return Btree statistics.
+    pub fn to_stats(&self) -> Result<Stats> {
+        if let MetaItem::Stats(stats) = &self.meta[2] {
+            Ok(stats.parse()?)
+        } else {
+            let msg = "snapshot statistics missing".to_string();
+            Err(Error::InvalidSnapshot(msg))
+        }
+    }
+
+    /// Return the file-position for Btree's root node.
+    pub fn to_root(&self) -> Result<u64> {
+        if let MetaItem::Root(root) = self.meta[3] {
+            Ok(root)
+        } else {
+            Err(Error::InvalidSnapshot("snapshot root missing".to_string()))
+        }
+    }
+}
+
+impl<K, V> Index<K, V> for Snapshot<K, V>
+where
+    K: Clone + Ord + Serialize + Footprint,
+    V: Clone + Diff + Serialize + Footprint,
+{
+    type W = RobtWriter;
+
+    /// Make a new empty index of this type, with same configuration.
+    fn make_new(&self) -> Result<Box<Self>> {
+        Ok(Box::new(Snapshot::open(
+            self.name.as_str(),
+            self.dir.as_str(),
+        )?))
+    }
+
+    /// Create a new writer handle. Note that, not all indexes allow
+    /// concurrent writers, and not all indexes support concurrent
+    /// read/write.
+    fn to_writer(&mut self) -> Self::W {
+        panic!("Read-only-btree don't support write operations")
+    }
+}
+
+impl<K, V> Footprint for Snapshot<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+{
+    fn footprint(&self) -> isize {
+        let (dir, name) = (self.dir.as_str(), self.name.as_str());
+        let mut footprint = fs::metadata(self.config.to_index_file(dir, name))
+            .unwrap()
+            .len();
+        footprint += match self.config.to_value_log(dir, name) {
+            Some(vlog_file) => fs::metadata(vlog_file).unwrap().len(),
+            None => 0,
+        };
+        footprint.try_into().unwrap()
+    }
+}
+
+// Read methods
+impl<K, V> Reader<K, V> for Snapshot<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
+{
+    fn get<Q>(&self, key: &Q) -> Result<Entry<K, V>>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        let _lock = self.mutex.lock();
+        let snap = unsafe {
+            let snap = self as *const Snapshot<K, V> as *mut Snapshot<K, V>;
+            snap.as_mut().unwrap()
+        };
+
+        snap.do_get(key, false /*versions*/)
+    }
+
+    fn iter(&self) -> Result<IndexIter<K, V>> {
+        let _lock = self.mutex.lock();
+        let snap = unsafe {
+            let snap = self as *const Snapshot<K, V> as *mut Snapshot<K, V>;
+            snap.as_mut().unwrap()
+        };
+
+        let mut mzs = vec![];
+        snap.build_fwd(snap.to_root().unwrap(), &mut mzs)?;
+        Ok(Iter::new(snap, mzs))
+    }
+
+    fn range<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
+    where
+        K: Borrow<Q>,
+        R: 'a + RangeBounds<Q>,
+        Q: 'a + Ord + ?Sized,
+    {
+        let _lock = self.mutex.lock();
+        let snap = unsafe {
+            let snap = self as *const Snapshot<K, V> as *mut Snapshot<K, V>;
+            snap.as_mut().unwrap()
+        };
+
+        snap.do_range(range, false /*versions*/)
+    }
+
+    fn reverse<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
+    where
+        K: Borrow<Q>,
+        R: 'a + RangeBounds<Q>,
+        Q: 'a + Ord + ?Sized,
+    {
+        let _lock = self.mutex.lock();
+        let snap = unsafe {
+            let snap = self as *const Snapshot<K, V> as *mut Snapshot<K, V>;
+            snap.as_mut().unwrap()
+        };
+
+        snap.do_reverse(range, false /*versions*/)
+    }
+
+    fn get_with_versions<Q>(&self, key: &Q) -> Result<Entry<K, V>>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        let _lock = self.mutex.lock();
+        let snap = unsafe {
+            let snap = self as *const Snapshot<K, V> as *mut Snapshot<K, V>;
+            snap.as_mut().unwrap()
+        };
+
+        snap.do_get(key, true /*versions*/)
+    }
+
+    /// Iterate over all entries in this index. Returned entry shall
+    /// have all its previous versions, can be a costly call.
+    fn iter_with_versions(&self) -> Result<IndexIter<K, V>> {
+        let _lock = self.mutex.lock();
+        let snap = unsafe {
+            let snap = self as *const Snapshot<K, V> as *mut Snapshot<K, V>;
+            snap.as_mut().unwrap()
+        };
+
+        let mut mzs = vec![];
+        snap.build_fwd(snap.to_root().unwrap(), &mut mzs)?;
+        Ok(Iter::new_versions(snap, mzs))
+    }
+
+    /// Iterate from lower bound to upper bound. Returned entry shall
+    /// have all its previous versions, can be a costly call.
+    fn range_with_versions<'a, R, Q>(
+        &'a self,
+        range: R, // range bound
+    ) -> Result<IndexIter<K, V>>
+    where
+        K: Borrow<Q>,
+        R: 'a + RangeBounds<Q>,
+        Q: 'a + Ord + ?Sized,
+    {
+        let _lock = self.mutex.lock();
+        let snap = unsafe {
+            let snap = self as *const Snapshot<K, V> as *mut Snapshot<K, V>;
+            snap.as_mut().unwrap()
+        };
+
+        snap.do_range(range, true /*versions*/)
+    }
+
+    /// Iterate from upper bound to lower bound. Returned entry shall
+    /// have all its previous versions, can be a costly call.
+    fn reverse_with_versions<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
+    where
+        K: Borrow<Q>,
+        R: 'a + RangeBounds<Q>,
+        Q: 'a + Ord + ?Sized,
+    {
+        let _lock = self.mutex.lock();
+        let snap = unsafe {
+            let snap = self as *const Snapshot<K, V> as *mut Snapshot<K, V>;
+            snap.as_mut().unwrap()
+        };
+
+        snap.do_reverse(range, true /*versions*/)
+    }
+}
+
+impl<K, V> Snapshot<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
+{
+    fn get_zpos<Q>(&mut self, key: &Q, fpos: u64) -> Result<u64>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        let fd = &mut self.index_fd;
+        let mblock = MBlock::<K, V>::new_decode(fd, fpos, &self.config)?;
+        match mblock.get(key, Bound::Unbounded, Bound::Unbounded) {
+            Err(Error::__LessThan) => Err(Error::KeyNotFound),
+            Err(Error::__MBlockExhausted(_)) => unreachable!(),
+            Ok(mentry) if mentry.is_zblock() => Ok(mentry.to_fpos()),
+            Ok(mentry) => self.get_zpos(key, mentry.to_fpos()),
+            Err(err) => Err(err),
+        }
+    }
+
+    fn do_get<Q>(&mut self, key: &Q, versions: bool) -> Result<Entry<K, V>>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        let zfpos = self.get_zpos(key, self.to_root().unwrap())?;
+
+        let fd = &mut self.index_fd;
+        let zblock: ZBlock<K, V> = ZBlock::new_decode(fd, zfpos, &self.config)?;
+        match zblock.find(key, Bound::Unbounded, Bound::Unbounded) {
+            Ok((_, entry)) => {
+                if entry.as_key().borrow().eq(key) {
+                    self.fetch(entry, versions)
+                } else {
+                    Err(Error::KeyNotFound)
+                }
+            }
+            Err(Error::__ZBlockExhausted(_)) => unreachable!(),
+            Err(err) => Err(err),
+        }
+    }
+
+    fn do_range<'a, R, Q>(
+        &'a mut self,
+        range: R,
+        versions: bool, // if true include older versions.
+    ) -> Result<IndexIter<K, V>>
+    where
+        K: Borrow<Q>,
+        R: 'a + RangeBounds<Q>,
+        Q: 'a + Ord + ?Sized,
+    {
+        let mut mzs = vec![];
+        let skip_one = match range.start_bound() {
+            Bound::Unbounded => {
+                self.build_fwd(self.to_root().unwrap(), &mut mzs)?;
+                false
+            }
+            Bound::Included(key) => {
+                let entry = self.build(key, &mut mzs)?;
+                match key.cmp(entry.as_key().borrow()) {
+                    cmp::Ordering::Greater => true,
+                    _ => false,
+                }
+            }
+            Bound::Excluded(key) => {
+                let entry = self.build(key, &mut mzs)?;
+                match key.cmp(entry.as_key().borrow()) {
+                    cmp::Ordering::Equal | cmp::Ordering::Greater => true,
+                    _ => false,
+                }
+            }
+        };
+        let mut r = Range::new(self, mzs, range, versions);
+        if skip_one {
+            r.next();
+        }
+        Ok(r)
+    }
+
+    fn do_reverse<'a, R, Q>(
+        &'a mut self,
+        range: R, // reverse range bound
+        versions: bool,
+    ) -> Result<IndexIter<K, V>>
+    where
+        K: Borrow<Q>,
+        R: 'a + RangeBounds<Q>,
+        Q: 'a + Ord + ?Sized,
+    {
+        let mut mzs = vec![];
+        let skip_one = match range.end_bound() {
+            Bound::Unbounded => {
+                self.build_rev(self.to_root().unwrap(), &mut mzs)?;
+                false
+            }
+            Bound::Included(key) => {
+                self.build(&key, &mut mzs)?;
+                false
+            }
+            Bound::Excluded(key) => {
+                let entry = self.build(&key, &mut mzs)?;
+                key.eq(entry.as_key().borrow())
+            }
+        };
+        let mut rr = Reverse::new(self, mzs, range, versions);
+        if skip_one {
+            rr.next();
+        }
+        Ok(rr)
+    }
+
+    fn build_fwd(
+        &mut self,
+        mut fpos: u64,           // from node
+        mzs: &mut Vec<MZ<K, V>>, // output
+    ) -> Result<()> {
+        let fd = &mut self.index_fd;
+        let config = &self.config;
+
+        let zfpos = loop {
+            let mblock = MBlock::<K, V>::new_decode(fd, fpos, config)?;
+            let mentry = mblock.to_entry(0)?;
+            if mentry.is_zblock() {
+                break mentry.to_fpos();
+            }
+            mzs.push(MZ::M { fpos, index: 0 });
+            fpos = mentry.to_fpos();
+        };
+
+        let zblock = ZBlock::new_decode(fd, zfpos, config)?;
+        mzs.push(MZ::Z { zblock, index: 0 });
+        Ok(())
+    }
+
+    fn rebuild_fwd(&mut self, mzs: &mut Vec<MZ<K, V>>) -> Result<()> {
+        let fd = &mut self.index_fd;
+        let config = &self.config;
+
+        match mzs.pop() {
+            None => Ok(()),
+            Some(MZ::Z { .. }) => unreachable!(),
+            Some(MZ::M { fpos, mut index }) => {
+                let mblock = MBlock::<K, V>::new_decode(fd, fpos, config)?;
+                index += 1;
+                match mblock.to_entry(index) {
+                    Ok(MEntry::DecZ { fpos: zfpos, .. }) => {
+                        mzs.push(MZ::M { fpos, index });
+
+                        let zblock = ZBlock::new_decode(fd, zfpos, config)?;
+                        mzs.push(MZ::Z { zblock, index: 0 });
+                        Ok(())
+                    }
+                    Ok(MEntry::DecM { fpos: mfpos, .. }) => {
+                        mzs.push(MZ::M { fpos, index });
+                        self.build_fwd(mfpos, mzs)?;
+                        Ok(())
+                    }
+                    Err(Error::__ZBlockExhausted(_)) => self.rebuild_fwd(mzs),
+                    _ => unreachable!(),
+                }
+            }
+        }
+    }
+
+    fn build_rev(
+        &mut self,
+        mut fpos: u64,           // from node
+        mzs: &mut Vec<MZ<K, V>>, // output
+    ) -> Result<()> {
+        let fd = &mut self.index_fd;
+        let config = &self.config;
+
+        let zfpos = loop {
+            let mblock = MBlock::<K, V>::new_decode(fd, fpos, config)?;
+            let index = mblock.len() - 1;
+            let mentry = mblock.to_entry(index)?;
+            if mentry.is_zblock() {
+                break mentry.to_fpos();
+            }
+            mzs.push(MZ::M { fpos, index });
+            fpos = mentry.to_fpos();
+        };
+
+        let zblock = ZBlock::new_decode(fd, zfpos, config)?;
+        let index = zblock.len() - 1;
+        mzs.push(MZ::Z { zblock, index });
+        Ok(())
+    }
+
+    fn rebuild_rev(&mut self, mzs: &mut Vec<MZ<K, V>>) -> Result<()> {
+        let fd = &mut self.index_fd;
+        let config = &self.config;
+
+        match mzs.pop() {
+            None => Ok(()),
+            Some(MZ::Z { .. }) => unreachable!(),
+            Some(MZ::M { index: 0, .. }) => self.rebuild_rev(mzs),
+            Some(MZ::M { fpos, mut index }) => {
+                let mblock = MBlock::<K, V>::new_decode(fd, fpos, config)?;
+                index -= 1;
+                match mblock.to_entry(index) {
+                    Ok(MEntry::DecZ { fpos: zfpos, .. }) => {
+                        mzs.push(MZ::M { fpos, index });
+
+                        let zblock = ZBlock::new_decode(fd, zfpos, config)?;
+                        let index = zblock.len() - 1;
+                        mzs.push(MZ::Z { zblock, index });
+                        Ok(())
+                    }
+                    Ok(MEntry::DecM { fpos: mfpos, .. }) => {
+                        mzs.push(MZ::M { fpos, index });
+                        self.build_rev(mfpos, mzs)?;
+                        Ok(())
+                    }
+                    _ => unreachable!(),
+                }
+            }
+        }
+    }
+
+    fn build<Q>(
+        &mut self,
+        key: &Q,
+        mzs: &mut Vec<MZ<K, V>>, // output
+    ) -> Result<Entry<K, V>>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        let mut fpos = self.to_root().unwrap();
+        let fd = &mut self.index_fd;
+        let config = &self.config;
+        let (from_min, to_max) = (Bound::Unbounded, Bound::Unbounded);
+
+        let zfpos = loop {
+            let mblock = MBlock::<K, V>::new_decode(fd, fpos, config)?;
+            match mblock.find(key, from_min, to_max) {
+                Ok(mentry) => {
+                    if mentry.is_zblock() {
+                        break mentry.to_fpos();
+                    }
+                    let index = mentry.to_index();
+                    mzs.push(MZ::M { fpos, index });
+                    fpos = mentry.to_fpos();
+                }
+                Err(Error::__LessThan) => unreachable!(),
+                Err(err) => return Err(err),
+            }
+        };
+
+        let zblock = ZBlock::new_decode(fd, zfpos, config)?;
+        let (index, entry) = zblock.find(key, from_min, to_max)?;
+        mzs.push(MZ::Z { zblock, index });
+        Ok(entry)
+    }
+
+    fn fetch(
+        &mut self,
+        mut entry: Entry<K, V>,
+        versions: bool, // fetch deltas as well
+    ) -> Result<Entry<K, V>> {
+        match &mut self.vlog_fd {
+            Some(fd) => entry.fetch_value(fd)?,
+            _ => (),
+        }
+        if versions {
+            match &mut self.vlog_fd {
+                Some(fd) => entry.fetch_deltas(fd)?,
+                _ => (),
+            }
+        }
+        Ok(entry)
+    }
+}
+
+/// Iterate over [Robt] index, from beginning to end.
+///
+/// [Robt]: crate::robt::Robt
+pub struct Iter<'a, K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
+{
+    snap: &'a mut Snapshot<K, V>,
+    mzs: Vec<MZ<K, V>>,
+    versions: bool,
+}
+
+impl<'a, K, V> Iter<'a, K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
+{
+    fn new(snap: &'a mut Snapshot<K, V>, mzs: Vec<MZ<K, V>>) -> Box<Self> {
+        Box::new(Iter {
+            snap,
+            mzs,
+            versions: false,
+        })
+    }
+
+    fn new_versions(
+        snap: &'a mut Snapshot<K, V>, // reference to snapshot
+        mzs: Vec<MZ<K, V>>,
+    ) -> Box<Self> {
+        Box::new(Iter {
+            snap,
+            mzs,
+            versions: true,
+        })
+    }
+}
+
+impl<'a, K, V> Iterator for Iter<'a, K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
+{
+    type Item = Result<Entry<K, V>>;
+
+    fn next(&mut self) -> Option<Result<Entry<K, V>>> {
+        match self.mzs.pop() {
+            None => None,
+            Some(mut z) => match z.next() {
+                Some(Err(err)) => {
+                    self.mzs.truncate(0);
+                    Some(Err(err))
+                }
+                Some(Ok(entry)) => {
+                    self.mzs.push(z);
+                    Some(self.snap.fetch(entry, self.versions))
+                }
+                None => match self.snap.rebuild_fwd(&mut self.mzs) {
+                    Err(err) => Some(Err(err)),
+                    Ok(_) => self.next(),
+                },
+            },
+        }
+    }
+}
+
+/// Iterate over [Robt] index, from a lower bound to upper bound.
+///
+/// [Robt]: crate::robt::Robt
+pub struct Range<'a, K, V, R, Q>
+where
+    K: Clone + Ord + Borrow<Q> + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
+    R: RangeBounds<Q>,
+    Q: Ord + ?Sized,
+{
+    snap: &'a mut Snapshot<K, V>,
+    mzs: Vec<MZ<K, V>>,
+    range: R,
+    high: marker::PhantomData<Q>,
+    versions: bool,
+}
+
+impl<'a, K, V, R, Q> Range<'a, K, V, R, Q>
+where
+    K: Clone + Ord + Borrow<Q> + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
+    R: RangeBounds<Q>,
+    Q: Ord + ?Sized,
+{
+    fn new(
+        snap: &'a mut Snapshot<K, V>,
+        mzs: Vec<MZ<K, V>>,
+        range: R, // range bound
+        versions: bool,
+    ) -> Box<Self> {
+        Box::new(Range {
+            snap,
+            mzs,
+            range,
+            high: marker::PhantomData,
+            versions,
+        })
+    }
+
+    fn till_ok(&self, entry: &Entry<K, V>) -> bool {
+        match self.range.end_bound() {
+            Bound::Unbounded => true,
+            Bound::Included(key) => entry.as_key().borrow().le(key),
+            Bound::Excluded(key) => entry.as_key().borrow().lt(key),
+        }
+    }
+}
+
+impl<'a, K, V, R, Q> Iterator for Range<'a, K, V, R, Q>
+where
+    K: Clone + Ord + Borrow<Q> + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
+    R: RangeBounds<Q>,
+    Q: Ord + ?Sized,
+{
+    type Item = Result<Entry<K, V>>;
+
+    fn next(&mut self) -> Option<Result<Entry<K, V>>> {
+        match self.mzs.pop() {
+            None => None,
+            Some(mut z) => match z.next() {
+                Some(Err(err)) => {
+                    self.mzs.truncate(0);
+                    Some(Err(err))
+                }
+                Some(Ok(entry)) => {
+                    if self.till_ok(&entry) {
+                        self.mzs.push(z);
+                        Some(self.snap.fetch(entry, self.versions))
+                    } else {
+                        self.mzs.truncate(0);
+                        None
+                    }
+                }
+                None => match self.snap.rebuild_fwd(&mut self.mzs) {
+                    Err(err) => Some(Err(err)),
+                    Ok(_) => self.next(),
+                },
+            },
+        }
+    }
+}
+
+/// Iterate over [Robt] index, from an upper bound to lower bound.
+///
+/// [Robt]: crate::robt::Robt
+pub struct Reverse<'a, K, V, R, Q>
+where
+    K: Clone + Ord + Borrow<Q> + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
+    R: RangeBounds<Q>,
+    Q: Ord + ?Sized,
+{
+    snap: &'a mut Snapshot<K, V>,
+    mzs: Vec<MZ<K, V>>,
+    range: R,
+    low: marker::PhantomData<Q>,
+    versions: bool,
+}
+
+impl<'a, K, V, R, Q> Reverse<'a, K, V, R, Q>
+where
+    K: Clone + Ord + Borrow<Q> + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
+    R: RangeBounds<Q>,
+    Q: Ord + ?Sized,
+{
+    fn new(
+        snap: &'a mut Snapshot<K, V>,
+        mzs: Vec<MZ<K, V>>,
+        range: R, // reverse range bound
+        versions: bool,
+    ) -> Box<Self> {
+        Box::new(Reverse {
+            snap,
+            mzs,
+            range,
+            low: marker::PhantomData,
+            versions,
+        })
+    }
+
+    fn till_ok(&self, entry: &Entry<K, V>) -> bool {
+        match self.range.start_bound() {
+            Bound::Unbounded => true,
+            Bound::Included(key) => entry.as_key().borrow().ge(key),
+            Bound::Excluded(key) => entry.as_key().borrow().gt(key),
+        }
+    }
+}
+
+impl<'a, K, V, R, Q> Iterator for Reverse<'a, K, V, R, Q>
+where
+    K: Clone + Ord + Borrow<Q> + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
+    R: RangeBounds<Q>,
+    Q: Ord + ?Sized,
+{
+    type Item = Result<Entry<K, V>>;
+
+    fn next(&mut self) -> Option<Result<Entry<K, V>>> {
+        match self.mzs.pop() {
+            None => None,
+            Some(mut z) => match z.next_back() {
+                Some(Err(err)) => {
+                    self.mzs.truncate(0);
+                    Some(Err(err))
+                }
+                Some(Ok(entry)) => {
+                    if self.till_ok(&entry) {
+                        self.mzs.push(z);
+                        Some(self.snap.fetch(entry, self.versions))
+                    } else {
+                        self.mzs.truncate(0);
+                        None
+                    }
+                }
+                None => match self.snap.rebuild_rev(&mut self.mzs) {
+                    Err(err) => Some(Err(err)),
+                    Ok(_) => self.next(),
+                },
+            },
+        }
+    }
+}
+
+enum MZ<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
+{
+    M { fpos: u64, index: usize },
+    Z { zblock: ZBlock<K, V>, index: usize },
+}
+
+impl<K, V> Iterator for MZ<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
+{
+    type Item = Result<Entry<K, V>>;
+
+    fn next(&mut self) -> Option<Result<Entry<K, V>>> {
+        match self {
+            MZ::Z { zblock, index } => match zblock.to_entry(*index) {
+                Ok((_, entry)) => {
+                    *index += 1;
+                    Some(Ok(entry))
+                }
+                Err(Error::__ZBlockExhausted(_)) => None,
+                Err(err) => Some(Err(err)),
+            },
+            MZ::M { .. } => unreachable!(),
+        }
+    }
+}
+
+impl<K, V> DoubleEndedIterator for MZ<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
+{
+    fn next_back(&mut self) -> Option<Result<Entry<K, V>>> {
+        match self {
+            MZ::Z { zblock, index } => match zblock.to_entry(*index) {
+                Ok((_, entry)) => {
+                    *index -= 1;
+                    Some(Ok(entry))
+                }
+                Err(Error::__ZBlockExhausted(_)) => None,
+                Err(err) => Some(Err(err)),
+            },
+            MZ::M { .. } => unreachable!(),
+        }
+    }
+}
+
+/// Dummy writer exported for consistency sake. [Robt] instances are
+/// immutable index.
+///
+/// [Robt]: crate::robt::Robt
+pub struct RobtWriter;
+
+impl<K, V> Writer<K, V> for RobtWriter
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+{
+    fn set_index(
+        &mut self,
+        key: K,
+        value: V,
+        seqno: u64, // seqno for this mutation
+    ) -> (Option<u64>, Result<Option<Entry<K, V>>>) {
+        panic!(
+            "{} {} {}",
+            mem::size_of_val(&key),
+            mem::size_of_val(&value),
+            seqno
+        )
+    }
+
+    fn set_cas_index(
+        &mut self,
+        key: K,
+        value: V,
+        cas: u64,
+        seqno: u64, // seqno for this mutation
+    ) -> (Option<u64>, Result<Option<Entry<K, V>>>) {
+        panic!(
+            "{} {} {} {}",
+            mem::size_of_val(&key),
+            mem::size_of_val(&value),
+            seqno,
+            cas
+        )
+    }
+
+    fn delete_index<Q>(
+        &mut self,
+        key: &Q,
+        seqno: u64, // seqno for this mutation
+    ) -> (Option<u64>, Result<Option<Entry<K, V>>>)
+    where
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
+    {
+        panic!("{} {}", mem::size_of_val(key), seqno)
     }
 }
 

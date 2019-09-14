@@ -374,6 +374,7 @@ where
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn is_deleted(&self) -> bool {
         match self.data {
             InnerDelta::D { .. } => true,

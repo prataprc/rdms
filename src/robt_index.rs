@@ -219,7 +219,7 @@ where
     pub(crate) fn len(&self) -> usize {
         match self {
             MBlock::Decode { count, .. } => *count,
-            _ => unreachable!(),
+            MBlock::Encode { offsets, .. } => offsets.len(),
         }
     }
 

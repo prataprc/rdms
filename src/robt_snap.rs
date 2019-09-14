@@ -1,7 +1,7 @@
 // TODO: review resize() calls
 // TODO: review "as type conversions" for llrb-index jsondata
-// TODO: implement log() and validate() API.
-// TODO: cache root block.
+// TODO: implement log() and validate() API
+// TODO: cache root block
 
 use std::borrow::Borrow;
 use std::{

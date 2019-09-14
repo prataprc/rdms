@@ -62,7 +62,11 @@ where
 
     /// For incremental build, index file is created new, while
     /// value-log-file, if any, is appended to older version.
-    pub fn incremental(config: Config, dir: &str, name: &str) -> Result<Builder<K, V>> {
+    pub fn incremental(
+        dir: &str, // directory path where index files are stored
+        name: &str,
+        config: Config,
+    ) -> Result<Builder<K, V>> {
         let iflusher = {
             let file = config.to_index_file(dir, name);
             Flusher::new(file, config.clone(), true /*create*/)?
@@ -129,7 +133,7 @@ where
         Ok(())
     }
 
-    fn build_tree<I>(&mut self, mut iter: I) -> Result<u64>
+    fn build_tree<I>(&mut self, iter: I) -> Result<u64>
     where
         I: Iterator<Item = Result<Entry<K, V>>>,
     {
@@ -156,7 +160,7 @@ where
             }
         };
 
-        for entry in iter.next() {
+        for entry in iter {
             let mut entry = match self.preprocess(entry?) {
                 Some(entry) => entry,
                 None => continue,
@@ -165,6 +169,7 @@ where
             match c.z.insert(&entry, &mut self.stats) {
                 Ok(_) => (),
                 Err(Error::__ZBlockOverflow(_)) => {
+                    // zbytes is z_blocksize
                     let (zbytes, vbytes) = c.z.finalize(&mut self.stats);
                     c.z.flush(&mut self.iflusher, self.vflusher.as_mut())?;
                     c.fpos += zbytes;
@@ -172,8 +177,9 @@ where
 
                     let mut m = c.ms.pop().unwrap();
                     match m.insertz(c.z.as_first_key(), c.zfpos) {
-                        Ok(_) => (),
+                        Ok(_) => c.ms.push(m),
                         Err(Error::__MBlockOverflow(_)) => {
+                            // x is m_blocksize
                             let x = m.finalize(&mut self.stats);
                             m.flush(&mut self.iflusher)?;
                             let k = m.as_first_key();
@@ -186,7 +192,6 @@ where
                         }
                         Err(err) => return Err(err),
                     }
-                    c.ms.push(m);
 
                     c.zfpos = c.fpos;
                     c.z.reset(c.vfpos);
@@ -208,7 +213,7 @@ where
 
             let mut m = c.ms.pop().unwrap();
             match m.insertz(c.z.as_first_key(), c.zfpos) {
-                Ok(_) => (),
+                Ok(_) => c.ms.push(m),
                 Err(Error::__MBlockOverflow(_)) => {
                     let x = m.finalize(&mut self.stats);
                     m.flush(&mut self.iflusher)?;
@@ -222,19 +227,22 @@ where
                 }
                 Err(err) => return Err(err),
             }
-            c.ms.push(m);
         }
+
         // flush final set of m-blocks
-        if c.ms.len() > 0 {
-            while let Some(mut m) = c.ms.pop() {
-                if m.has_first_key() {
-                    let x = m.finalize(&mut self.stats);
-                    m.flush(&mut self.iflusher)?;
-                    let mkey = m.as_first_key();
-                    let res = self.insertms(c.ms, c.fpos + x, mkey, c.fpos)?;
-                    c.ms = res.0;
-                    c.fpos = res.1
-                }
+        while let Some(mut m) = c.ms.pop() {
+            if m.has_first_key() && c.ms.len() == 0 {
+                let x = m.finalize(&mut self.stats);
+                m.flush(&mut self.iflusher)?;
+                c.fpos += x;
+            } else if m.has_first_key() {
+                // x is m_blocksize
+                let x = m.finalize(&mut self.stats);
+                m.flush(&mut self.iflusher)?;
+                let mkey = m.as_first_key();
+                let res = self.insertms(c.ms, c.fpos + x, mkey, c.fpos)?;
+                c.ms = res.0;
+                c.fpos = res.1
             }
         }
         Ok(c.fpos)
@@ -257,6 +265,7 @@ where
             Some(mut m0) => match m0.insertm(key, mfpos) {
                 Ok(_) => m0,
                 Err(Error::__MBlockOverflow(_)) => {
+                    // x is m_blocksize
                     let x = m0.finalize(&mut self.stats);
                     m0.flush(&mut self.iflusher)?;
                     let mkey = m0.as_first_key();
@@ -275,12 +284,11 @@ where
         Ok((ms, fpos))
     }
 
-    // return whether this entry can be skipped.
     fn preprocess(&mut self, entry: Entry<K, V>) -> Option<Entry<K, V>> {
         self.stats.seqno = cmp::max(self.stats.seqno, entry.to_seqno());
 
-        // if tombstone purge is configured, then purge all versions on or
-        // before the purge-seqno.
+        // if tombstone purge is configured, then purge all versions
+        // on or before the purge-seqno.
         match self.config.tomb_purge {
             Some(before) => entry.purge(Bound::Excluded(before)),
             _ => Some(entry),
@@ -298,7 +306,7 @@ where
 pub(crate) struct Flusher {
     file: ffi::OsString,
     fpos: u64,
-    thread: thread::JoinHandle<Result<()>>,
+    t: thread::JoinHandle<Result<()>>,
     tx: mpsc::SyncSender<Vec<u8>>,
 }
 
@@ -316,14 +324,9 @@ impl Flusher {
 
         let (tx, rx) = mpsc::sync_channel(config.flush_queue_size);
         let file1 = file.clone();
-        let thread = thread::spawn(move || thread_flush(file1, fd, rx));
+        let t = thread::spawn(move || thread_flush(file1, fd, rx));
 
-        Ok(Flusher {
-            file,
-            fpos,
-            thread,
-            tx,
-        })
+        Ok(Flusher { file, fpos, t, tx })
     }
 
     // return error if flush thread has exited/paniced.
@@ -332,12 +335,14 @@ impl Flusher {
         Ok(())
     }
 
-    // return the cause thread failure if there is a failure, or return
+    // return the cause for thread failure, if there is a failure, or return
     // a known error like io::Error or PartialWrite.
     fn close_wait(self) -> Result<()> {
         mem::drop(self.tx);
-        match self.thread.join() {
-            Ok(res) => res,
+        match self.t.join() {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(Error::PartialWrite(err))) => Err(Error::PartialWrite(err)),
+            Ok(Err(_)) => unreachable!(),
             Err(err) => match err.downcast_ref::<String>() {
                 Some(msg) => Err(Error::ThreadFail(msg.to_string())),
                 None => Err(Error::ThreadFail("unknown error".to_string())),
@@ -361,3 +366,7 @@ fn thread_flush(
     // file descriptor and receiver channel shall be dropped.
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "robt_build_test.rs"]
+mod robt_build_test;

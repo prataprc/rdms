@@ -1,27 +1,40 @@
-/// Read Only BTree for disk based indexes.
-///
-/// ROBT instances shall have an index file and an optional value-log-file,
-/// refer to [Config] for more information.
-///
-/// **Index-file format**:
-///
-/// *------------------------------------------* SeekFrom::End(0)
-/// |                marker-length             |
-/// *------------------------------------------* SeekFrom::End(-8)
-/// |                stats-length              |
-/// *------------------------------------------* SeekFrom::End(-16)
-/// |               metadata-length            |
-/// *------------------------------------------* SeekFrom::End(-24)
-/// |                  root-fpos               |
-/// *------------------------------------------* SeekFrom::MetaBlock
-/// *                btree-blocks              *
-/// *                    ...                   *
-/// *                    ...                   *
-/// *------------------------------------------* 0
-///
-///
-/// [Config]: crate::robt_config::Config
-///
+//! Read Only BTree for disk based indexes.
+//!
+//! ROBT instances shall have an index file and an optional value-log-file,
+//! refer to [Config] for more information.
+//!
+//! **Index-file format**:
+//!
+//! ```text
+//! *------------------------------------------* SeekFrom::End(0)
+//! |                marker-length             |
+//! *------------------------------------------* SeekFrom::End(-8)
+//! |                stats-length              |
+//! *------------------------------------------* SeekFrom::End(-16)
+//! |               metadata-length            |
+//! *------------------------------------------* SeekFrom::End(-24)
+//! |                  root-fpos               |
+//! *------------------------------------------* SeekFrom::MetaBlock
+//! *               metadata-blocks            *
+//! *                    ...                   *
+//! *------------------------------------------*
+//! *                btree-blocks              *
+//! *                    ...                   *
+//! *                    ...                   *
+//! *------------------------------------------* 0
+//! ```
+//!
+//! Tip of the index file contain 32-byte header providing
+//! following details:
+//! * Index statistics
+//! * Application metadata
+//! * File-position for btree's root-block.
+//!
+//! Total length of `metadata-blocks` can be computed based on
+//! `marker-length`, `stats-length`, `metadata-length`.
+//!
+//! [Config]: crate::robt::Config
+//!
 use lazy_static::lazy_static;
 
 use std::{
@@ -284,6 +297,7 @@ where
 /// Configuration options for Read Only BTree.
 #[derive(Clone)]
 pub struct Config {
+    /// Leaf block size in btree index.
     pub z_blocksize: usize,
     /// Intemediate block size in btree index.
     pub m_blocksize: usize,
@@ -443,7 +457,7 @@ impl Config {
     }
 }
 
-/// Enumerated variants of meta-data items stored in [Robt] index.
+/// Enumerated meta-data types stored in [Robt] index.
 ///
 /// [Robt] index is a full-packed immutable [Btree] index. To interpret
 /// the index a list of metadata items are appended to the tip
@@ -584,28 +598,59 @@ impl fmt::Display for MetaItem {
     }
 }
 
+/// Btree configuration and statistics persisted along with index file.
+/// Note that build-only configuration options like:
+///
+/// * `tomb_purge`, configuration option.
+/// * `flush_queue_size`,  configuration option.
+///
+/// are not persisted as part of statistics.
+///
+/// Meanwhile, for `vlog_file` configuration option, only file-name is
+/// relevant, directory-path shall be ignored.
+///
 #[derive(Clone, Default, PartialEq)]
 pub struct Stats {
+    /// Leaf block size in btree index.
     pub z_blocksize: usize,
+    /// Intemediate block size in btree index.
     pub m_blocksize: usize,
+    /// If deltas are indexed and/or value to be stored in separate log file.
     pub v_blocksize: usize,
+    /// Whether delta was included as part of the entry.
     pub delta_ok: bool,
+    /// Separate log file for deltas and value, if `value_in_vlog` is true.
+    /// Note that only file-name is relevat, directory-path shall be ignored.
     pub vlog_file: Option<ffi::OsString>,
+    /// Whether value was persisted in value log file.
     pub value_in_vlog: bool,
 
+    /// Number of entries indexed.
     pub n_count: u64,
+    /// Number of entries that are marked as deleted.
     pub n_deleted: usize,
+    /// Sequence number for the latest entry.
     pub seqno: u64,
+    /// Total disk footprint for all keys.
     pub key_mem: usize,
+    /// Total disk footprint for all deltas.
     pub diff_mem: usize,
+    /// Total disk footprint for all values.
     pub val_mem: usize,
+    /// Total disk footprint for all leaf-nodes.
     pub z_bytes: usize,
-    pub v_bytes: usize,
+    /// Total disk footprint for all intermediate-nodes.
     pub m_bytes: usize,
+    /// Total disk footprint for values and deltas.
+    pub v_bytes: usize,
+    /// Total disk size wasted in padding leaf-nodes and intermediate-nodes.
     pub padding: usize,
+    /// Older size of value-log file, applicable only in incremental build.
     pub n_abytes: usize,
 
+    /// Time take to build this btree.
     pub build_time: u64,
+    /// Timestamp for this index.
     pub epoch: i128,
 }
 

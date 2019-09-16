@@ -157,76 +157,286 @@ fn test_config() {
 
 #[test]
 fn test_robt_llrb() {
-    let lsm: bool = random();
-    let mut llrb: Box<Llrb<i64, i64>> = if lsm {
-        Llrb::new_lsm("test-llrb")
-    } else {
-        Llrb::new("test-llrb")
-    };
-    let n_ops = 6_000;
-    let key_max = 2_000;
-    for _i in 0..n_ops {
-        let key = ((random::<i32>() as u32) % key_max) as i64;
-        match random::<usize>() % 3 {
-            0 => {
-                let value: i64 = random();
-                llrb.set(key, value).unwrap();
+    // TODO: increase them in steps based on n_ops and key_max
+    for _i in 0..10 {
+        // populate llrb
+        let lsm: bool = random();
+        let mut llrb: Box<Llrb<i64, i64>> = if lsm {
+            Llrb::new_lsm("test-llrb")
+        } else {
+            Llrb::new("test-llrb")
+        };
+        let mut n_ops = 6_000;
+        let key_max = 2_000_i64;
+        for _i in 0..n_ops {
+            let key = (random::<i64>() % key_max).abs();
+            match random::<usize>() % 3 {
+                0 => {
+                    let value: i64 = random();
+                    llrb.set(key, value).unwrap();
+                }
+                1 => {
+                    let value: i64 = random();
+                    let cas = match llrb.get(&key) {
+                        Err(Error::KeyNotFound) => 0,
+                        Err(_err) => unreachable!(),
+                        Ok(e) => e.to_seqno(),
+                    };
+                    llrb.set_cas(key, value, cas).unwrap();
+                }
+                2 => {
+                    llrb.delete(&key).unwrap();
+                }
+                _ => unreachable!(),
             }
-            1 => {
-                let value: i64 = random();
-                let cas = match llrb.get(&key) {
-                    Err(Error::KeyNotFound) => 0,
-                    Err(_err) => unreachable!(),
-                    Ok(e) => e.to_seqno(),
-                };
-                llrb.set_cas(key, value, cas).unwrap();
-            }
-            2 => {
-                llrb.delete(&key).unwrap();
-            }
-            _ => unreachable!(),
         }
+        // to avoid screwing up the seqno in non-lsm mode, say, what if
+        // the last operation was a delete.
+        llrb.set(123, 123456789).unwrap();
+        n_ops += 1;
+
+        // build ROBT
+        let mut config: robt::Config = Default::default();
+        config.delta_ok = random();
+        config.value_in_vlog = random();
+        let tomb_purge = match random::<u64>() % 100 {
+            0..=60 => None,
+            61..=70 => Some(0),
+            71..=80 => Some(1),
+            81..=90 => {
+                let x = random::<u64>() % n_ops;
+                Some(x)
+            }
+            91..=100 => Some(n_ops),
+            _ => unreachable!(),
+        };
+        config.tomb_purge = tomb_purge;
+        println!(
+            "lsm:{} delta:{} vlog:{} tombstone:{:?}",
+            lsm, config.delta_ok, config.value_in_vlog, config.tomb_purge
+        );
+        let (llrb, refs) = llrb_to_refs1(llrb, &config);
+        let n_deleted: usize = refs
+            .iter()
+            .map(|e| if e.is_deleted() { 1 } else { 0 })
+            .sum();
+        println!("refs len: {}", refs.len());
+        let iter = SkipScan::new(&llrb, ..);
+        let dir = {
+            let mut dir = std::env::temp_dir();
+            dir.push("test-robt-build");
+            dir.to_str().unwrap().to_string()
+        };
+        let name = "test-build";
+        let b = Builder::initial(&dir, name, config.clone()).unwrap();
+        let app_meta = "heloo world".to_string();
+        match b.build(iter, app_meta.as_bytes().to_vec()) {
+            Err(Error::EmptyIterator) if refs.len() == 0 => continue,
+            Err(err) => panic!("{:?}", err),
+            _ => (),
+        }
+
+        let snap = robt::Snapshot::<i64, i64>::open(&dir, name).unwrap();
+        assert_eq!(snap.len(), refs.len());
+        assert_eq!(snap.to_seqno(), llrb.to_seqno());
+        assert_eq!(snap.to_app_meta().unwrap(), app_meta.as_bytes().to_vec());
+        let stats = snap.to_stats().unwrap();
+        assert_eq!(stats.z_blocksize, config.z_blocksize);
+        assert_eq!(stats.m_blocksize, config.m_blocksize);
+        assert_eq!(stats.v_blocksize, config.v_blocksize);
+        assert_eq!(stats.delta_ok, config.delta_ok);
+        assert_eq!(stats.value_in_vlog, config.value_in_vlog);
+        if lsm {
+            assert_eq!(stats.n_deleted, n_deleted);
+        }
+
+        // test get
+        for entry in refs.iter() {
+            // println!("get entry {} {}", entry.to_key(), entry.to_seqno());
+            let e = snap.get(entry.as_key()).unwrap();
+            check_entry1(&entry, &e);
+        }
+        // test get_with_versions
+        for entry in refs.iter() {
+            let e = snap.get_with_versions(entry.as_key()).unwrap();
+            check_entry1(&entry, &e);
+            check_entry2(&entry, &e)
+        }
+        // test iter
+        let xs = snap.iter().unwrap();
+        let xs: Vec<Entry<i64, i64>> = xs.map(|e| e.unwrap()).collect();
+        for (x, y) in xs.iter().zip(refs.iter()) {
+            println!("iter {}", x.to_key());
+            check_entry1(&x, &y)
+        }
+        assert_eq!(xs.len(), refs.len());
+        // test iter_with_versions
+        let xs = snap.iter_with_versions().unwrap();
+        let xs: Vec<Entry<i64, i64>> = xs.map(|e| e.unwrap()).collect();
+        assert_eq!(xs.len(), refs.len());
+        for (x, y) in xs.iter().zip(refs.iter()) {
+            check_entry1(&x, &y);
+            check_entry2(&x, &y)
+        }
+        for _j in 0..100 {
+            // test range
+            let range = random_low_high(key_max);
+            // println!("range bounds {:?}", range);
+            let refs = llrb_to_refs2(&llrb, range, &config);
+            let xs = snap.range(range).unwrap();
+            let xs: Vec<Entry<i64, i64>> = xs.map(|e| e.unwrap()).collect();
+            assert_eq!(xs.len(), refs.len());
+            for (x, y) in xs.iter().zip(refs.iter()) {
+                check_entry1(&x, &y);
+            }
+            // test range_with_versions
+            let range = random_low_high(key_max);
+            // println!("range..versions bounds {:?}", range);
+            let refs = llrb_to_refs2(&llrb, range, &config);
+            let xs = snap.range_with_versions(range).unwrap();
+            let xs: Vec<Entry<i64, i64>> = xs.map(|e| e.unwrap()).collect();
+            assert_eq!(xs.len(), refs.len());
+            for (x, y) in xs.iter().zip(refs.iter()) {
+                check_entry1(&x, &y);
+                check_entry2(&x, &y);
+            }
+        }
+        // test reverse
+        // let range = random_low_high(key_max);
+        // println!("range bounds {:?}", range);
+        // let refs = llrb_to_refs3(&llrb, range, &config);
+        // let riter = snap.reverse(range).unwrap();
+        // for (x, y) in riter.zip(refs.iter()) {
+        //     let x = x.unwrap();
+        //     assert_eq!(x.to_key(), y.to_key());
+        //     assert_eq!(x.to_seqno(), y.to_seqno());
+        //     assert_eq!(x.to_native_value(), y.to_native_value());
+        //     assert_eq!(x.is_deleted(), y.is_deleted());
+        //     assert_eq!(x.as_deltas().len(), y.as_deltas().len());
+        // }
+        // test reverse_with_versions
+        // let range = random_low_high(key_max);
+        // println!("range..versions bounds {:?}", range);
+        // let refs = llrb_to_refs3(&llrb, range, &config);
+        // let riter = snap.reverse_with_versions(range).unwrap();
+        // for (x, y) in riter.zip(refs.iter()) {
+        //     let x = x.unwrap();
+        //     assert_eq!(x.to_key(), y.to_key());
+        //     assert_eq!(x.to_seqno(), y.to_seqno());
+        //     assert_eq!(x.to_native_value(), y.to_native_value());
+        //     assert_eq!(x.is_deleted(), y.is_deleted());
+        //     assert_eq!(x.as_deltas().len(), y.as_deltas().len());
+        //     for (m, n) in x.to_deltas().iter().zip(y.to_deltas().iter()) {
+        //        assert_eq!(m.to_seqno(), n.to_seqno());
+        //        assert_eq!(m.is_deleted(), n.is_deleted());
+        //        // println!("delta {} {}", m.is_deleted(), x.as_deltas().len());
+        //        assert_eq!(m.to_diff(), n.to_diff());
+        //    }
+        //}
     }
-
-    let dir = {
-        let mut dir = std::env::temp_dir();
-        dir.push("test-robt-build");
-        dir.to_str().unwrap().to_string()
-    };
-    let mut config: robt::Config = Default::default();
-    config.delta_ok = random();
-    config.value_in_vlog = random();
-    config.tomb_purge = match random::<u64>() % 100 {
-        0..=60 => None,
-        61..=70 => Some(0),
-        71..=80 => Some(1),
-        81..=90 => Some(random::<u64>() % n_ops),
-        91..=100 => Some(10_000_000),
-        _ => unreachable!(),
-    };
-    println!(
-        "lsm:{} delta:{} vlog:{} purge:{:?}",
-        lsm, config.delta_ok, config.value_in_vlog, config.tomb_purge
-    );
-
-    let iter = SkipScan::new(&llrb, ..);
-    let refs: Vec<Entry<i64, i64>> = iter.map(|e| e.unwrap()).collect();
-
-    let iter = SkipScan::new(&llrb, ..);
-    let b = Builder::initial(&dir, "test-build", config.clone()).unwrap();
-    let app_meta = "heloo world".to_string();
-    b.build(iter, app_meta.as_bytes().to_vec()).unwrap();
-
-    for e in refs.iter() {
-        println!("{}", e.to_key());
-    }
-    println!("total entries {}", refs.len());
-
-    //let snap = Robt::
-    ////assert_eq!(stats
 }
 
 #[test]
 fn test_robt_mvcc() {
     // panic!("TBD");
+}
+
+fn llrb_to_refs1(
+    llrb: Box<Llrb<i64, i64>>, // reference
+    config: &Config,
+) -> (Box<Llrb<i64, i64>>, Vec<Entry<i64, i64>>) {
+    let iter = SkipScan::new(&llrb, ..);
+    let refs = iter
+        .filter_map(|e| {
+            let mut e = e.unwrap();
+            // println!("llrb_to_refs1 {}", e.to_key());
+            if !config.delta_ok {
+                e.set_deltas(vec![]);
+            }
+            match &config.tomb_purge {
+                None => Some(e),
+                Some(cutoff) => e.purge(Bound::Excluded(*cutoff)),
+            }
+        })
+        .collect();
+    (llrb, refs)
+}
+
+fn llrb_to_refs2<R>(
+    llrb: &Llrb<i64, i64>, // reference
+    range: R,
+    config: &Config,
+) -> Vec<Entry<i64, i64>>
+where
+    R: RangeBounds<i64>,
+{
+    let iter = llrb.range(range).unwrap();
+    iter.filter_map(|e| {
+        let mut e = e.unwrap();
+        if !config.delta_ok {
+            e.set_deltas(vec![]);
+        }
+        match &config.tomb_purge {
+            None => Some(e),
+            Some(cutoff) => e.purge(Bound::Excluded(*cutoff)),
+        }
+    })
+    .collect()
+}
+
+fn llrb_to_refs3<R>(
+    llrb: &Llrb<i64, i64>, // reference
+    range: R,
+    config: &Config,
+) -> Vec<Entry<i64, i64>>
+where
+    R: RangeBounds<i64>,
+{
+    let iter = llrb.reverse(range).unwrap();
+    iter.filter_map(|e| {
+        let mut e = e.unwrap();
+        if !config.delta_ok {
+            e.set_deltas(vec![]);
+        }
+        match &config.tomb_purge {
+            None => Some(e),
+            Some(cutoff) => e.purge(Bound::Excluded(*cutoff)),
+        }
+    })
+    .collect()
+}
+
+fn random_low_high(key_max: i64) -> (Bound<i64>, Bound<i64>) {
+    let (low, high): (i64, i64) = (random(), random());
+    let low = match random::<u8>() % 3 {
+        0 => Bound::Included(low % key_max),
+        1 => Bound::Excluded(low % key_max),
+        2 => Bound::Unbounded,
+        _ => unreachable!(),
+    };
+    let high = match random::<u8>() % 3 {
+        0 => Bound::Included(high % key_max),
+        1 => Bound::Excluded(high % key_max),
+        2 => Bound::Unbounded,
+        _ => unreachable!(),
+    };
+    //println!("low_high {:?} {:?}", low, high);
+    (low, high)
+}
+
+fn check_entry1(e1: &Entry<i64, i64>, e2: &Entry<i64, i64>) {
+    assert_eq!(e1.to_key(), e2.to_key());
+    assert_eq!(e1.to_seqno(), e2.to_seqno());
+    assert_eq!(e1.to_native_value(), e2.to_native_value());
+    assert_eq!(e1.is_deleted(), e2.is_deleted());
+    assert_eq!(e1.as_deltas().len(), e2.as_deltas().len());
+}
+
+fn check_entry2(e1: &Entry<i64, i64>, e2: &Entry<i64, i64>) {
+    for (m, n) in e1.to_deltas().iter().zip(e2.to_deltas().iter()) {
+        assert_eq!(m.to_seqno(), n.to_seqno());
+        assert_eq!(m.is_deleted(), n.is_deleted());
+        // println!("d {} {}", m.is_deleted(), e1.as_deltas().len());
+        assert_eq!(m.to_diff(), n.to_diff());
+    }
 }

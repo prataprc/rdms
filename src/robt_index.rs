@@ -609,6 +609,7 @@ where
         };
         let pivot = self.find_pivot(from, to);
 
+        // println!("zfind {} {}", pivot, f);
         match key.cmp(self.to_key(pivot)?.borrow()) {
             Ordering::Less if pivot == f => Err(Error::__ZBlockExhausted(f)),
             Ordering::Less => self.find(key, from, Bound::Excluded(pivot)),

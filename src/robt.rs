@@ -63,6 +63,8 @@ use crate::robt_entry::MEntry;
 use crate::robt_index::{MBlock, ZBlock};
 
 // TODO: make dir, file, path into OsString and OsStr.
+// TODO: test cases building Robt with an empty iterator.
+// TODO: test cases building Robt with one element iterator.
 
 include!("robt_marker.rs");
 
@@ -311,7 +313,7 @@ pub struct Config {
     /// Tombstone purge. For LSM based index older entries can quickly bloat
     /// system. To avoid this, it is a good idea to purge older versions of
     /// an entry that are seen by all participating entities. When configured
-    /// with `Some(seqno)`, all iterated entries/versions whose seqno is ``<=``
+    /// with `Some(seqno)`, all iterated entry/version whose seqno is ``<=``
     /// purge seqno shall be removed totally from the index.
     pub tomb_purge: Option<u64>,
     /// Include delta as part of entry. Note that delta values are always
@@ -580,12 +582,14 @@ pub fn read_meta_items(
 
     meta_items.push(MetaItem::Root(root));
     meta_items.push(MetaItem::AppMetadata(app_data));
-    meta_items.push(MetaItem::Stats(stats));
+    meta_items.push(MetaItem::Stats(stats.clone()));
     meta_items.push(MetaItem::Marker(marker.clone()));
 
     // validate and return
-    if (m - n) != root {
-        let msg = format!("expected root at {}, found {}", root, (m - n));
+    let stats: Stats = stats.parse()?;
+    let at = m - n - (stats.m_blocksize as u64);
+    if at != root {
+        let msg = format!("expected root at {}, found {}", at, root);
         Err(Error::InvalidSnapshot(msg))
     } else {
         Ok(meta_items)
@@ -923,6 +927,7 @@ where
                 Some(entry) => entry,
                 None => continue,
             };
+            // println!("build entry: {}", entry.to_seqno());
 
             match c.z.insert(&entry, &mut self.stats) {
                 Ok(_) => (),
@@ -985,6 +990,8 @@ where
                 }
                 Err(err) => return Err(err),
             }
+        } else {
+            return Err(Error::EmptyIterator);
         }
 
         // flush final set of m-blocks
@@ -1003,7 +1010,8 @@ where
                 c.fpos = res.1
             }
         }
-        Ok(c.fpos)
+        let n: u64 = self.config.m_blocksize.try_into().unwrap();
+        Ok(c.fpos - n)
     }
 
     fn insertms(
@@ -1043,13 +1051,18 @@ where
     }
 
     fn preprocess(&mut self, entry: Entry<K, V>) -> Option<Entry<K, V>> {
-        self.stats.seqno = cmp::max(self.stats.seqno, entry.to_seqno());
-
         // if tombstone purge is configured, then purge all versions
         // on or before the purge-seqno.
-        match self.config.tomb_purge {
+        let entry = match self.config.tomb_purge {
             Some(before) => entry.purge(Bound::Excluded(before)),
             _ => Some(entry),
+        };
+        match entry {
+            Some(entry) => {
+                self.stats.seqno = cmp::max(self.stats.seqno, entry.to_seqno());
+                Some(entry)
+            }
+            None => None,
         }
     }
 
@@ -1199,8 +1212,8 @@ where
     V: Clone + Diff + Serialize,
 {
     /// Return number of entries in the snapshot.
-    pub fn len(&self) -> u64 {
-        self.to_stats().unwrap().n_count
+    pub fn len(&self) -> usize {
+        self.to_stats().unwrap().n_count.try_into().unwrap()
     }
 
     /// Return the last seqno found in this snapshot.
@@ -1230,7 +1243,7 @@ where
 
     /// Return the file-position for Btree's root node.
     pub fn to_root(&self) -> Result<u64> {
-        if let MetaItem::Root(root) = self.meta[3] {
+        if let MetaItem::Root(root) = self.meta[0] {
             Ok(root)
         } else {
             Err(Error::InvalidSnapshot("snapshot root missing".to_string()))
@@ -1297,7 +1310,8 @@ where
             snap.as_mut().unwrap()
         };
 
-        snap.do_get(key, false /*versions*/)
+        let versions = false;
+        snap.do_get(key, versions)
     }
 
     fn iter(&self) -> Result<IndexIter<K, V>> {
@@ -1324,7 +1338,8 @@ where
             snap.as_mut().unwrap()
         };
 
-        snap.do_range(range, false /*versions*/)
+        let versions = false;
+        snap.do_range(range, versions)
     }
 
     fn reverse<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
@@ -1339,7 +1354,8 @@ where
             snap.as_mut().unwrap()
         };
 
-        snap.do_reverse(range, false /*versions*/)
+        let versions = false;
+        snap.do_reverse(range, versions)
     }
 
     fn get_with_versions<Q>(&self, key: &Q) -> Result<Entry<K, V>>
@@ -1353,7 +1369,8 @@ where
             snap.as_mut().unwrap()
         };
 
-        snap.do_get(key, true /*versions*/)
+        let versions = true;
+        snap.do_get(key, versions)
     }
 
     /// Iterate over all entries in this index. Returned entry shall
@@ -1387,12 +1404,16 @@ where
             snap.as_mut().unwrap()
         };
 
-        snap.do_range(range, true /*versions*/)
+        let versions = true;
+        snap.do_range(range, versions)
     }
 
     /// Iterate from upper bound to lower bound. Returned entry shall
     /// have all its previous versions, can be a costly call.
-    fn reverse_with_versions<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
+    fn reverse_with_versions<'a, R, Q>(
+        &'a self,
+        range: R, // reverse range bound
+    ) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
         R: 'a + RangeBounds<Q>,
@@ -1404,7 +1425,8 @@ where
             snap.as_mut().unwrap()
         };
 
-        snap.do_reverse(range, true /*versions*/)
+        let versions = true;
+        snap.do_reverse(range, versions)
     }
 }
 
@@ -1447,7 +1469,7 @@ where
                     Err(Error::KeyNotFound)
                 }
             }
-            Err(Error::__ZBlockExhausted(_)) => unreachable!(),
+            Err(Error::__ZBlockExhausted(_)) => Err(Error::KeyNotFound),
             Err(err) => Err(err),
         }
     }
@@ -1662,9 +1684,18 @@ where
         };
 
         let zblock = ZBlock::new_decode(fd, zfpos, config)?;
-        let (index, entry) = zblock.find(key, from_min, to_max)?;
-        mzs.push(MZ::Z { zblock, index });
-        Ok(entry)
+        match zblock.find(key, from_min, to_max) {
+            Ok((index, entry)) => {
+                mzs.push(MZ::Z { zblock, index });
+                Ok(entry)
+            }
+            Err(Error::__ZBlockExhausted(index)) => {
+                let (_, entry) = zblock.to_entry(index)?;
+                mzs.push(MZ::Z { zblock, index });
+                Ok(entry)
+            }
+            Err(err) => Err(err),
+        }
     }
 
     fn fetch(
@@ -1981,10 +2012,7 @@ where
     }
 }
 
-/// Dummy writer exported for consistency sake. [Robt] instances are
-/// immutable index.
-///
-/// [Robt]: crate::robt::Robt
+/// ...
 pub struct RobtWriter;
 
 impl<K, V> Writer<K, V> for RobtWriter

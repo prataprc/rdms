@@ -63,6 +63,7 @@ pub enum Error {
     IoError(io::Error),
     JsonError(jsondata::Error),
     ThreadFail(String),
+    EmptyIterator,
     InvalidSnapshot(String),
     Utf8Error(std::str::Utf8Error),
     /// Inter-Process-Communication error

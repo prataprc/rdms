@@ -159,181 +159,183 @@ fn test_config() {
 
 #[test]
 fn test_robt_llrb1() {
-    run_robt_llrb(6_000, 2_000_i64);
-    run_robt_llrb(60_000, 20_000_i64);
+    run_robt_llrb(6_000, 2_000_i64, 10);
+    run_robt_llrb(60_000, 20_000_i64, 2);
 }
 
 #[test]
 #[ignore] // TODO: long running test case
 fn test_robt_llrb2() {
-    run_robt_llrb(600_000, 200_000_i64);
+    run_robt_llrb(600_000, 200_000_i64, 1);
 }
 
 #[test]
 #[ignore] // TODO: long running test case
 fn test_robt_llrb3() {
-    run_robt_llrb(6_000_000, 2_000_000_i64);
+    run_robt_llrb(6_000_000, 2_000_000_i64, 1);
 }
 
-fn run_robt_llrb(mut n_ops: u64, key_max: i64) {
-    // let seed: u128 = 267758138677710051843709887156736556713;
-    let seed: u128 = random();
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
-    // populate llrb
-    let lsm: bool = rng.gen();
-    let mut llrb: Box<Llrb<i64, i64>> = if lsm {
-        Llrb::new_lsm("test-llrb")
-    } else {
-        Llrb::new("test-llrb")
-    };
-    for _i in 0..n_ops {
-        let key = (rng.gen::<i64>() % key_max).abs();
-        match rng.gen::<usize>() % 3 {
-            0 => {
-                let value: i64 = rng.gen();
-                llrb.set(key, value).unwrap();
+fn run_robt_llrb(mut n_ops: u64, key_max: i64, repeat: usize) {
+    for _ in 0..repeat {
+        // let seed: u128 = 267758138677710051843709887156736556713;
+        let seed: u128 = random();
+        let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+        // populate llrb
+        let lsm: bool = rng.gen();
+        let mut llrb: Box<Llrb<i64, i64>> = if lsm {
+            Llrb::new_lsm("test-llrb")
+        } else {
+            Llrb::new("test-llrb")
+        };
+        for _i in 0..n_ops {
+            let key = (rng.gen::<i64>() % key_max).abs();
+            match rng.gen::<usize>() % 3 {
+                0 => {
+                    let value: i64 = rng.gen();
+                    llrb.set(key, value).unwrap();
+                }
+                1 => {
+                    let value: i64 = rng.gen();
+                    let cas = match llrb.get(&key) {
+                        Err(Error::KeyNotFound) => 0,
+                        Err(_err) => unreachable!(),
+                        Ok(e) => e.to_seqno(),
+                    };
+                    llrb.set_cas(key, value, cas).unwrap();
+                }
+                2 => {
+                    llrb.delete(&key).unwrap();
+                }
+                _ => unreachable!(),
             }
-            1 => {
-                let value: i64 = rng.gen();
-                let cas = match llrb.get(&key) {
-                    Err(Error::KeyNotFound) => 0,
-                    Err(_err) => unreachable!(),
-                    Ok(e) => e.to_seqno(),
-                };
-                llrb.set_cas(key, value, cas).unwrap();
+        }
+        // to avoid screwing up the seqno in non-lsm mode, say, what if
+        // the last operation was a delete.
+        llrb.set(123, 123456789).unwrap();
+        n_ops += 1;
+
+        // build ROBT
+        let mut config: robt::Config = Default::default();
+        config.delta_ok = rng.gen();
+        config.value_in_vlog = rng.gen();
+        let tomb_purge = match rng.gen::<u64>() % 100 {
+            0..=60 => None,
+            61..=70 => Some(0),
+            71..=80 => Some(1),
+            81..=90 => {
+                let x = rng.gen::<u64>() % n_ops;
+                Some(x)
             }
-            2 => {
-                llrb.delete(&key).unwrap();
-            }
+            91..=100 => Some(n_ops),
             _ => unreachable!(),
+        };
+        config.tomb_purge = tomb_purge;
+        println!(
+            "seed:{} n_ops:{} lsm:{} delta:{} vlog:{} tombstone:{:?}",
+            seed, n_ops, lsm, config.delta_ok, config.value_in_vlog, tomb_purge
+        );
+        let (llrb, refs) = llrb_to_refs1(llrb, &config);
+        let n_deleted: usize = refs
+            .iter()
+            .map(|e| if e.is_deleted() { 1 } else { 0 })
+            .sum();
+        println!("refs len: {}", refs.len());
+        let iter = SkipScan::new(&llrb, ..);
+        let dir = {
+            let mut dir = std::env::temp_dir();
+            dir.push("test-robt-build");
+            dir.to_str().unwrap().to_string()
+        };
+        let name = "test-build";
+        let b = Builder::initial(&dir, name, config.clone()).unwrap();
+        let app_meta = "heloo world".to_string();
+        match b.build(iter, app_meta.as_bytes().to_vec()) {
+            Err(Error::EmptyIterator) if refs.len() == 0 => continue,
+            Err(err) => panic!("{:?}", err),
+            _ => (),
         }
-    }
-    // to avoid screwing up the seqno in non-lsm mode, say, what if
-    // the last operation was a delete.
-    llrb.set(123, 123456789).unwrap();
-    n_ops += 1;
 
-    // build ROBT
-    let mut config: robt::Config = Default::default();
-    config.delta_ok = rng.gen();
-    config.value_in_vlog = rng.gen();
-    let tomb_purge = match rng.gen::<u64>() % 100 {
-        0..=60 => None,
-        61..=70 => Some(0),
-        71..=80 => Some(1),
-        81..=90 => {
-            let x = rng.gen::<u64>() % n_ops;
-            Some(x)
+        let snap = robt::Snapshot::<i64, i64>::open(&dir, name).unwrap();
+        assert_eq!(snap.len(), refs.len());
+        assert_eq!(snap.to_seqno(), llrb.to_seqno());
+        assert_eq!(snap.to_app_meta().unwrap(), app_meta.as_bytes().to_vec());
+        let stats = snap.to_stats().unwrap();
+        assert_eq!(stats.z_blocksize, config.z_blocksize);
+        assert_eq!(stats.m_blocksize, config.m_blocksize);
+        assert_eq!(stats.v_blocksize, config.v_blocksize);
+        assert_eq!(stats.delta_ok, config.delta_ok);
+        assert_eq!(stats.value_in_vlog, config.value_in_vlog);
+        if lsm {
+            assert_eq!(stats.n_deleted, n_deleted);
         }
-        91..=100 => Some(n_ops),
-        _ => unreachable!(),
-    };
-    config.tomb_purge = tomb_purge;
-    println!(
-        "seed:{} n_ops:{} lsm:{} delta:{} vlog:{} tombstone:{:?}",
-        seed, n_ops, lsm, config.delta_ok, config.value_in_vlog, tomb_purge
-    );
-    let (llrb, refs) = llrb_to_refs1(llrb, &config);
-    let n_deleted: usize = refs
-        .iter()
-        .map(|e| if e.is_deleted() { 1 } else { 0 })
-        .sum();
-    println!("refs len: {}", refs.len());
-    let iter = SkipScan::new(&llrb, ..);
-    let dir = {
-        let mut dir = std::env::temp_dir();
-        dir.push("test-robt-build");
-        dir.to_str().unwrap().to_string()
-    };
-    let name = "test-build";
-    let b = Builder::initial(&dir, name, config.clone()).unwrap();
-    let app_meta = "heloo world".to_string();
-    match b.build(iter, app_meta.as_bytes().to_vec()) {
-        Err(Error::EmptyIterator) if refs.len() == 0 => return,
-        Err(err) => panic!("{:?}", err),
-        _ => (),
-    }
 
-    let snap = robt::Snapshot::<i64, i64>::open(&dir, name).unwrap();
-    assert_eq!(snap.len(), refs.len());
-    assert_eq!(snap.to_seqno(), llrb.to_seqno());
-    assert_eq!(snap.to_app_meta().unwrap(), app_meta.as_bytes().to_vec());
-    let stats = snap.to_stats().unwrap();
-    assert_eq!(stats.z_blocksize, config.z_blocksize);
-    assert_eq!(stats.m_blocksize, config.m_blocksize);
-    assert_eq!(stats.v_blocksize, config.v_blocksize);
-    assert_eq!(stats.delta_ok, config.delta_ok);
-    assert_eq!(stats.value_in_vlog, config.value_in_vlog);
-    if lsm {
-        assert_eq!(stats.n_deleted, n_deleted);
-    }
-
-    // test get
-    for entry in refs.iter() {
-        let e = snap.get(entry.as_key()).unwrap();
-        check_entry1(&entry, &e);
-    }
-    // test get_with_versions
-    for entry in refs.iter() {
-        let e = snap.get_with_versions(entry.as_key()).unwrap();
-        check_entry1(&entry, &e);
-        check_entry2(&entry, &e)
-    }
-    // test iter
-    let xs = snap.iter().unwrap();
-    let xs: Vec<Entry<i64, i64>> = xs.map(|e| e.unwrap()).collect();
-    for (x, y) in xs.iter().zip(refs.iter()) {
-        check_entry1(&x, &y)
-    }
-    assert_eq!(xs.len(), refs.len());
-    // test iter_with_versions
-    let xs = snap.iter_with_versions().unwrap();
-    let xs: Vec<Entry<i64, i64>> = xs.map(|e| e.unwrap()).collect();
-    assert_eq!(xs.len(), refs.len());
-    for (x, y) in xs.iter().zip(refs.iter()) {
-        check_entry1(&x, &y);
-        check_entry2(&x, &y)
-    }
-    for j in 0..100 {
-        // test range
-        let range = random_low_high(key_max, seed + j);
-        let refs = llrb_to_refs2(&llrb, range, &config);
-        // println!("range bounds {:?} {}", range, refs.len());
-        let xs = snap.range(range).unwrap();
+        // test get
+        for entry in refs.iter() {
+            let e = snap.get(entry.as_key()).unwrap();
+            check_entry1(&entry, &e);
+        }
+        // test get_with_versions
+        for entry in refs.iter() {
+            let e = snap.get_with_versions(entry.as_key()).unwrap();
+            check_entry1(&entry, &e);
+            check_entry2(&entry, &e)
+        }
+        // test iter
+        let xs = snap.iter().unwrap();
+        let xs: Vec<Entry<i64, i64>> = xs.map(|e| e.unwrap()).collect();
+        for (x, y) in xs.iter().zip(refs.iter()) {
+            check_entry1(&x, &y)
+        }
+        assert_eq!(xs.len(), refs.len());
+        // test iter_with_versions
+        let xs = snap.iter_with_versions().unwrap();
         let xs: Vec<Entry<i64, i64>> = xs.map(|e| e.unwrap()).collect();
         assert_eq!(xs.len(), refs.len());
         for (x, y) in xs.iter().zip(refs.iter()) {
             check_entry1(&x, &y);
+            check_entry2(&x, &y)
         }
-        // test range_with_versions
-        let range = random_low_high(key_max, seed + j);
-        let refs = llrb_to_refs2(&llrb, range, &config);
-        // println!("range..versions bounds {:?} {}", range, refs.len());
-        let xs = snap.range_with_versions(range).unwrap();
-        let xs: Vec<Entry<i64, i64>> = xs.map(|e| e.unwrap()).collect();
-        assert_eq!(xs.len(), refs.len());
-        for (x, y) in xs.iter().zip(refs.iter()) {
-            check_entry1(&x, &y);
-            check_entry2(&x, &y);
-        }
-        // test reverse
-        let range = random_low_high(key_max, seed + j);
-        let refs = llrb_to_refs3(&llrb, range, &config);
-        // println!("reverse bounds {:?} {}", range, refs.len());
-        let xs = snap.reverse(range).unwrap();
-        let xs: Vec<Entry<i64, i64>> = xs.map(|e| e.unwrap()).collect();
-        for (x, y) in xs.iter().zip(refs.iter()) {
-            check_entry1(&x, &y);
-        }
-        // test reverse_with_versions
-        let range = random_low_high(key_max, seed + j);
-        let refs = llrb_to_refs3(&llrb, range, &config);
-        // println!("reverse..versions bounds {:?} {}", range, refs.len());
-        let xs = snap.reverse_with_versions(range).unwrap();
-        let xs: Vec<Entry<i64, i64>> = xs.map(|e| e.unwrap()).collect();
-        for (x, y) in xs.iter().zip(refs.iter()) {
-            check_entry1(&x, &y);
-            check_entry2(&x, &y);
+        for j in 0..100 {
+            // test range
+            let range = random_low_high(key_max, seed + j);
+            let refs = llrb_to_refs2(&llrb, range, &config);
+            // println!("range bounds {:?} {}", range, refs.len());
+            let xs = snap.range(range).unwrap();
+            let xs: Vec<Entry<i64, i64>> = xs.map(|e| e.unwrap()).collect();
+            assert_eq!(xs.len(), refs.len());
+            for (x, y) in xs.iter().zip(refs.iter()) {
+                check_entry1(&x, &y);
+            }
+            // test range_with_versions
+            let range = random_low_high(key_max, seed + j);
+            let refs = llrb_to_refs2(&llrb, range, &config);
+            // println!("range..versions bounds {:?} {}", range, refs.len());
+            let xs = snap.range_with_versions(range).unwrap();
+            let xs: Vec<Entry<i64, i64>> = xs.map(|e| e.unwrap()).collect();
+            assert_eq!(xs.len(), refs.len());
+            for (x, y) in xs.iter().zip(refs.iter()) {
+                check_entry1(&x, &y);
+                check_entry2(&x, &y);
+            }
+            // test reverse
+            let range = random_low_high(key_max, seed + j);
+            let refs = llrb_to_refs3(&llrb, range, &config);
+            // println!("reverse bounds {:?} {}", range, refs.len());
+            let xs = snap.reverse(range).unwrap();
+            let xs: Vec<Entry<i64, i64>> = xs.map(|e| e.unwrap()).collect();
+            for (x, y) in xs.iter().zip(refs.iter()) {
+                check_entry1(&x, &y);
+            }
+            // test reverse_with_versions
+            let range = random_low_high(key_max, seed + j);
+            let refs = llrb_to_refs3(&llrb, range, &config);
+            // println!("reverse..versions bounds {:?} {}", range, refs.len());
+            let xs = snap.reverse_with_versions(range).unwrap();
+            let xs: Vec<Entry<i64, i64>> = xs.map(|e| e.unwrap()).collect();
+            for (x, y) in xs.iter().zip(refs.iter()) {
+                check_entry1(&x, &y);
+                check_entry2(&x, &y);
+            }
         }
     }
 }

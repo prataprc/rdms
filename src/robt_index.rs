@@ -1,7 +1,7 @@
 // TODO: flush put blocks into tx channel. Right now we simply unwrap()
 
-use std::ops::Bound;
 use std::{borrow::Borrow, cmp::Ordering, convert::TryInto, fs, marker};
+use std::{fmt::Debug, ops::Bound};
 
 use crate::core::{self, Diff, Result, Serialize};
 use crate::error::Error;
@@ -45,7 +45,7 @@ pub(crate) enum MBlock<K, V> {
 // Encode implementation
 impl<K, V> MBlock<K, V>
 where
-    K: Clone + Serialize,
+    K: Clone + Serialize + Debug,
 {
     pub(crate) fn new_encode(config: Config) -> MBlock<K, V> {
         MBlock::Encode {
@@ -90,6 +90,7 @@ where
     }
 
     pub(crate) fn insertm(&mut self, key: &K, fpos: u64) -> Result<u64> {
+        // println!("mblock insertm {:?} {}", key, fpos);
         match self {
             MBlock::Encode {
                 mblock,
@@ -114,6 +115,7 @@ where
     }
 
     pub(crate) fn insertz(&mut self, key: &K, fpos: u64) -> Result<u64> {
+        // println!("mblock insertz {:?} {}", key, fpos);
         match self {
             MBlock::Encode {
                 mblock,
@@ -192,7 +194,7 @@ where
 // Decode implementation
 impl<K, V> MBlock<K, V>
 where
-    K: Ord + Serialize,
+    K: Ord + Serialize + Debug,
 {
     pub(crate) fn new_decode(
         fd: &mut fs::File,
@@ -239,9 +241,17 @@ where
         };
         let pivot = self.find_pivot(from, to);
 
+        //println!(
+        //    "mget {:?} {:?} {} {} {:?}",
+        //    from,
+        //    to,
+        //    pivot,
+        //    self.len(),
+        //    self.to_key(pivot)?
+        //);
         match key.cmp(self.to_key(pivot)?.borrow()) {
             Ordering::Less if pivot == 0 => Err(Error::__LessThan),
-            Ordering::Less if pivot == f => Err(Error::__MBlockExhausted(f)),
+            Ordering::Less if pivot == f => unreachable!(),
             Ordering::Less => self.get(key, from, Bound::Excluded(pivot)),
             Ordering::Equal => self.to_entry(pivot),
             Ordering::Greater if pivot == f => self.to_entry(pivot),
@@ -266,7 +276,8 @@ where
         let pivot = self.find_pivot(from, to);
 
         match key.cmp(self.to_key(pivot)?.borrow()) {
-            Ordering::Less if pivot == f => Err(Error::__MBlockExhausted(f)),
+            Ordering::Less if pivot == 0 => Err(Error::__LessThan),
+            Ordering::Less if pivot == f => unreachable!(),
             Ordering::Less => self.find(key, from, Bound::Excluded(pivot)),
             Ordering::Equal => self.to_entry(pivot),
             Ordering::Greater if pivot == f => self.to_entry(pivot),
@@ -276,14 +287,15 @@ where
 
     // [from, to)
     fn find_pivot(&self, from: Bound<usize>, to: Bound<usize>) -> usize {
+        let from = match from {
+            Bound::Included(from) => from,
+            Bound::Unbounded => 0,
+            Bound::Excluded(_) => unreachable!(),
+        };
         let to = match to {
             Bound::Excluded(to) => to,
             Bound::Unbounded => self.len(),
             Bound::Included(_) => unreachable!(),
-        };
-        let from = match from {
-            Bound::Included(from) | Bound::Excluded(from) => from,
-            Bound::Unbounded => 0,
         };
         match to - from {
             n if n < 1 => unreachable!(),
@@ -561,7 +573,7 @@ where
 
 impl<K, V> ZBlock<K, V>
 where
-    K: Clone + Ord + Serialize,
+    K: Clone + Ord + Serialize + Debug,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
 {
@@ -609,9 +621,17 @@ where
         };
         let pivot = self.find_pivot(from, to);
 
-        // println!("zfind {} {}", pivot, f);
+        //println!(
+        //    "zfind {:?} {:?} {} {} {:?}",
+        //    from,
+        //    to,
+        //    pivot,
+        //    self.len(),
+        //    self.to_key(pivot)?
+        //);
         match key.cmp(self.to_key(pivot)?.borrow()) {
-            Ordering::Less if pivot == f => Err(Error::__ZBlockExhausted(f)),
+            Ordering::Less if pivot == 0 => Err(Error::__LessThan),
+            Ordering::Less if pivot == f => unreachable!(),
             Ordering::Less => self.find(key, from, Bound::Excluded(pivot)),
             Ordering::Equal => self.to_entry(pivot),
             Ordering::Greater if pivot == f => Err(Error::__ZBlockExhausted(f)),
@@ -621,14 +641,14 @@ where
 
     // [from, to)
     fn find_pivot(&self, from: Bound<usize>, to: Bound<usize>) -> usize {
+        let from = match from {
+            Bound::Included(from) | Bound::Excluded(from) => from,
+            Bound::Unbounded => 0,
+        };
         let to = match to {
             Bound::Excluded(to) => to,
             Bound::Unbounded => self.len(),
             Bound::Included(_) => unreachable!(),
-        };
-        let from = match from {
-            Bound::Included(from) | Bound::Excluded(from) => from,
-            Bound::Unbounded => 0,
         };
         match to - from {
             n if n < 1 => unreachable!(),

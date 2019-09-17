@@ -42,7 +42,7 @@ use std::{
     cmp,
     convert::TryInto,
     ffi, fmt,
-    fmt::Display,
+    fmt::{Debug, Display},
     fs,
     io::Write,
     marker, mem,
@@ -791,7 +791,7 @@ where
 
 impl<K, V> Builder<K, V>
 where
-    K: Clone + Ord + Serialize,
+    K: Clone + Ord + Serialize + Debug,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
 {
@@ -927,6 +927,7 @@ where
                 Some(entry) => entry,
                 None => continue,
             };
+            // println!("build key: {:?}", entry.to_key());
             // println!("build entry: {}", entry.to_seqno());
 
             match c.z.insert(&entry, &mut self.stats) {
@@ -952,6 +953,7 @@ where
 
                             m.reset();
                             m.insertz(c.z.as_first_key(), c.zfpos).unwrap();
+                            c.ms.push(m)
                         }
                         Err(err) => return Err(err),
                     }
@@ -966,9 +968,11 @@ where
 
             self.postprocess(&mut entry);
         }
+        // println!(" number of mblocks: {}", c.ms.len());
 
         // flush final z-block
         if c.z.has_first_key() {
+            // println!(" flush final zblock: {:?}", c.z.as_first_key());
             let (zbytes, _vbytes) = c.z.finalize(&mut self.stats);
             c.z.flush(&mut self.iflusher, self.vflusher.as_mut())?;
             c.fpos += zbytes;
@@ -1021,9 +1025,11 @@ where
         key: &K,
         mfpos: u64,
     ) -> Result<(Vec<MBlock<K, V>>, u64)> {
+        // println!("insertms key:{:?} {}", key, mfpos);
         let m0 = ms.pop();
         let m0 = match m0 {
             None => {
+                // println!("new mblock for {:?} {}", key, mfpos);
                 let mut m0 = MBlock::new_encode(self.config.clone());
                 m0.insertm(key, mfpos).unwrap();
                 m0
@@ -1031,6 +1037,7 @@ where
             Some(mut m0) => match m0.insertm(key, mfpos) {
                 Ok(_) => m0,
                 Err(Error::__MBlockOverflow(_)) => {
+                    // println!("overflow for {:?} {}", key, mfpos);
                     // x is m_blocksize
                     let x = m0.finalize(&mut self.stats);
                     m0.flush(&mut self.iflusher)?;
@@ -1127,7 +1134,10 @@ fn thread_flush(
     mut fd: fs::File,
     rx: mpsc::Receiver<Vec<u8>>,
 ) -> Result<()> {
+    // let mut fpos = 0;
     for data in rx.iter() {
+        // println!("flusher {:?} {} {}", file, fpos, data.len());
+        // fpos += data.len();
         let n = fd.write(&data)?;
         if n != data.len() {
             let msg = format!("flusher: {:?} {}/{}...", &file, data.len(), n);
@@ -1295,7 +1305,7 @@ where
 // Read methods
 impl<K, V> Reader<K, V> for Snapshot<K, V>
 where
-    K: Clone + Ord + Serialize,
+    K: Clone + Ord + Serialize + Debug,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
 {
@@ -1432,7 +1442,7 @@ where
 
 impl<K, V> Snapshot<K, V>
 where
-    K: Clone + Ord + Serialize,
+    K: Clone + Ord + Serialize + Debug,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
 {
@@ -1445,7 +1455,6 @@ where
         let mblock = MBlock::<K, V>::new_decode(fd, fpos, &self.config)?;
         match mblock.get(key, Bound::Unbounded, Bound::Unbounded) {
             Err(Error::__LessThan) => Err(Error::KeyNotFound),
-            Err(Error::__MBlockExhausted(_)) => unreachable!(),
             Ok(mentry) if mentry.is_zblock() => Ok(mentry.to_fpos()),
             Ok(mentry) => self.get_zpos(key, mentry.to_fpos()),
             Err(err) => Err(err),
@@ -1459,6 +1468,7 @@ where
     {
         let zfpos = self.get_zpos(key, self.to_root().unwrap())?;
 
+        // println!("do_get {}", zfpos);
         let fd = &mut self.index_fd;
         let zblock: ZBlock<K, V> = ZBlock::new_decode(fd, zfpos, &self.config)?;
         match zblock.find(key, Bound::Unbounded, Bound::Unbounded) {
@@ -1469,6 +1479,7 @@ where
                     Err(Error::KeyNotFound)
                 }
             }
+            Err(Error::__LessThan) => Err(Error::KeyNotFound),
             Err(Error::__ZBlockExhausted(_)) => Err(Error::KeyNotFound),
             Err(err) => Err(err),
         }
@@ -1552,15 +1563,18 @@ where
         let fd = &mut self.index_fd;
         let config = &self.config;
 
+        // println!("build_fwd {} {}", mzs.len(), fpos);
         let zfpos = loop {
             let mblock = MBlock::<K, V>::new_decode(fd, fpos, config)?;
+            mzs.push(MZ::M { fpos, index: 0 });
+
             let mentry = mblock.to_entry(0)?;
             if mentry.is_zblock() {
                 break mentry.to_fpos();
             }
-            mzs.push(MZ::M { fpos, index: 0 });
             fpos = mentry.to_fpos();
         };
+        // println!("build_fwd {}", mzs.len());
 
         let zblock = ZBlock::new_decode(fd, zfpos, config)?;
         mzs.push(MZ::Z { zblock, index: 0 });
@@ -1573,7 +1587,6 @@ where
 
         match mzs.pop() {
             None => Ok(()),
-            Some(MZ::Z { .. }) => unreachable!(),
             Some(MZ::M { fpos, mut index }) => {
                 let mblock = MBlock::<K, V>::new_decode(fd, fpos, config)?;
                 index += 1;
@@ -1590,10 +1603,11 @@ where
                         self.build_fwd(mfpos, mzs)?;
                         Ok(())
                     }
-                    Err(Error::__ZBlockExhausted(_)) => self.rebuild_fwd(mzs),
+                    Err(Error::__MBlockExhausted(_)) => self.rebuild_fwd(mzs),
                     _ => unreachable!(),
                 }
             }
+            Some(MZ::Z { .. }) => unreachable!(),
         }
     }
 
@@ -1608,16 +1622,17 @@ where
         let zfpos = loop {
             let mblock = MBlock::<K, V>::new_decode(fd, fpos, config)?;
             let index = mblock.len() - 1;
+            mzs.push(MZ::M { fpos, index });
+
             let mentry = mblock.to_entry(index)?;
             if mentry.is_zblock() {
                 break mentry.to_fpos();
             }
-            mzs.push(MZ::M { fpos, index });
             fpos = mentry.to_fpos();
         };
 
         let zblock = ZBlock::new_decode(fd, zfpos, config)?;
-        let index = zblock.len() - 1;
+        let index: isize = (zblock.len() - 1).try_into().unwrap();
         mzs.push(MZ::Z { zblock, index });
         Ok(())
     }
@@ -1628,7 +1643,6 @@ where
 
         match mzs.pop() {
             None => Ok(()),
-            Some(MZ::Z { .. }) => unreachable!(),
             Some(MZ::M { index: 0, .. }) => self.rebuild_rev(mzs),
             Some(MZ::M { fpos, mut index }) => {
                 let mblock = MBlock::<K, V>::new_decode(fd, fpos, config)?;
@@ -1638,8 +1652,8 @@ where
                         mzs.push(MZ::M { fpos, index });
 
                         let zblock = ZBlock::new_decode(fd, zfpos, config)?;
-                        let index = zblock.len() - 1;
-                        mzs.push(MZ::Z { zblock, index });
+                        let idx: isize = (zblock.len() - 1).try_into().unwrap();
+                        mzs.push(MZ::Z { zblock, index: idx });
                         Ok(())
                     }
                     Ok(MEntry::DecM { fpos: mfpos, .. }) => {
@@ -1650,6 +1664,7 @@ where
                     _ => unreachable!(),
                 }
             }
+            Some(MZ::Z { .. }) => unreachable!(),
         }
     }
 
@@ -1669,33 +1684,34 @@ where
 
         let zfpos = loop {
             let mblock = MBlock::<K, V>::new_decode(fd, fpos, config)?;
-            match mblock.find(key, from_min, to_max) {
-                Ok(mentry) => {
-                    if mentry.is_zblock() {
-                        break mentry.to_fpos();
-                    }
-                    let index = mentry.to_index();
-                    mzs.push(MZ::M { fpos, index });
-                    fpos = mentry.to_fpos();
-                }
-                Err(Error::__LessThan) => unreachable!(),
-                Err(err) => return Err(err),
+            let mentry = match mblock.find(key, from_min, to_max) {
+                Ok(mentry) => Ok(mentry),
+                Err(Error::__LessThan) => mblock.to_entry(0),
+                Err(err) => Err(err),
+            }?;
+            let index = mentry.to_index();
+            mzs.push(MZ::M { fpos, index });
+            if mentry.is_zblock() {
+                break mentry.to_fpos();
             }
+            fpos = mentry.to_fpos();
         };
 
         let zblock = ZBlock::new_decode(fd, zfpos, config)?;
-        match zblock.find(key, from_min, to_max) {
-            Ok((index, entry)) => {
-                mzs.push(MZ::Z { zblock, index });
-                Ok(entry)
-            }
+        let (index, entry) = match zblock.find(key, from_min, to_max) {
+            Ok((index, entry)) => Ok((index, entry)),
+            Err(Error::__LessThan) => zblock.to_entry(0),
             Err(Error::__ZBlockExhausted(index)) => {
                 let (_, entry) = zblock.to_entry(index)?;
-                mzs.push(MZ::Z { zblock, index });
-                Ok(entry)
+                Ok((index, entry))
             }
             Err(err) => Err(err),
-        }
+        }?;
+        mzs.push(MZ::Z {
+            zblock,
+            index: index.try_into().unwrap(),
+        });
+        Ok(entry)
     }
 
     fn fetch(
@@ -1722,7 +1738,7 @@ where
 /// [Robt]: crate::robt::Robt
 pub struct Iter<'a, K, V>
 where
-    K: Clone + Ord + Serialize,
+    K: Clone + Ord + Serialize + Debug,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
 {
@@ -1733,7 +1749,7 @@ where
 
 impl<'a, K, V> Iter<'a, K, V>
 where
-    K: Clone + Ord + Serialize,
+    K: Clone + Ord + Serialize + Debug,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
 {
@@ -1759,7 +1775,7 @@ where
 
 impl<'a, K, V> Iterator for Iter<'a, K, V>
 where
-    K: Clone + Ord + Serialize,
+    K: Clone + Ord + Serialize + Debug,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
 {
@@ -1769,13 +1785,13 @@ where
         match self.mzs.pop() {
             None => None,
             Some(mut z) => match z.next() {
-                Some(Err(err)) => {
-                    self.mzs.truncate(0);
-                    Some(Err(err))
-                }
                 Some(Ok(entry)) => {
                     self.mzs.push(z);
                     Some(self.snap.fetch(entry, self.versions))
+                }
+                Some(Err(err)) => {
+                    self.mzs.truncate(0);
+                    Some(Err(err))
                 }
                 None => match self.snap.rebuild_fwd(&mut self.mzs) {
                     Err(err) => Some(Err(err)),
@@ -1791,7 +1807,7 @@ where
 /// [Robt]: crate::robt::Robt
 pub struct Range<'a, K, V, R, Q>
 where
-    K: Clone + Ord + Borrow<Q> + Serialize,
+    K: Clone + Ord + Borrow<Q> + Serialize + Debug,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
     R: RangeBounds<Q>,
@@ -1806,7 +1822,7 @@ where
 
 impl<'a, K, V, R, Q> Range<'a, K, V, R, Q>
 where
-    K: Clone + Ord + Borrow<Q> + Serialize,
+    K: Clone + Ord + Borrow<Q> + Serialize + Debug,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
     R: RangeBounds<Q>,
@@ -1838,7 +1854,7 @@ where
 
 impl<'a, K, V, R, Q> Iterator for Range<'a, K, V, R, Q>
 where
-    K: Clone + Ord + Borrow<Q> + Serialize,
+    K: Clone + Ord + Borrow<Q> + Serialize + Debug,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
     R: RangeBounds<Q>,
@@ -1850,10 +1866,6 @@ where
         match self.mzs.pop() {
             None => None,
             Some(mut z) => match z.next() {
-                Some(Err(err)) => {
-                    self.mzs.truncate(0);
-                    Some(Err(err))
-                }
                 Some(Ok(entry)) => {
                     if self.till_ok(&entry) {
                         self.mzs.push(z);
@@ -1862,6 +1874,10 @@ where
                         self.mzs.truncate(0);
                         None
                     }
+                }
+                Some(Err(err)) => {
+                    self.mzs.truncate(0);
+                    Some(Err(err))
                 }
                 None => match self.snap.rebuild_fwd(&mut self.mzs) {
                     Err(err) => Some(Err(err)),
@@ -1877,7 +1893,7 @@ where
 /// [Robt]: crate::robt::Robt
 pub struct Reverse<'a, K, V, R, Q>
 where
-    K: Clone + Ord + Borrow<Q> + Serialize,
+    K: Clone + Ord + Borrow<Q> + Serialize + Debug,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
     R: RangeBounds<Q>,
@@ -1892,7 +1908,7 @@ where
 
 impl<'a, K, V, R, Q> Reverse<'a, K, V, R, Q>
 where
-    K: Clone + Ord + Borrow<Q> + Serialize,
+    K: Clone + Ord + Borrow<Q> + Serialize + Debug,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
     R: RangeBounds<Q>,
@@ -1924,7 +1940,7 @@ where
 
 impl<'a, K, V, R, Q> Iterator for Reverse<'a, K, V, R, Q>
 where
-    K: Clone + Ord + Borrow<Q> + Serialize,
+    K: Clone + Ord + Borrow<Q> + Serialize + Debug,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
     R: RangeBounds<Q>,
@@ -1960,17 +1976,17 @@ where
 
 enum MZ<K, V>
 where
-    K: Clone + Ord + Serialize,
+    K: Clone + Ord + Serialize + Debug,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
 {
     M { fpos: u64, index: usize },
-    Z { zblock: ZBlock<K, V>, index: usize },
+    Z { zblock: ZBlock<K, V>, index: isize },
 }
 
 impl<K, V> Iterator for MZ<K, V>
 where
-    K: Clone + Ord + Serialize,
+    K: Clone + Ord + Serialize + Debug,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
 {
@@ -1978,14 +1994,17 @@ where
 
     fn next(&mut self) -> Option<Result<Entry<K, V>>> {
         match self {
-            MZ::Z { zblock, index } => match zblock.to_entry(*index) {
-                Ok((_, entry)) => {
-                    *index += 1;
-                    Some(Ok(entry))
+            MZ::Z { zblock, index } => {
+                let undex: usize = (*index).try_into().unwrap();
+                match zblock.to_entry(undex) {
+                    Ok((_, entry)) => {
+                        *index += 1;
+                        Some(Ok(entry))
+                    }
+                    Err(Error::__ZBlockExhausted(_)) => None,
+                    Err(err) => Some(Err(err)),
                 }
-                Err(Error::__ZBlockExhausted(_)) => None,
-                Err(err) => Some(Err(err)),
-            },
+            }
             MZ::M { .. } => unreachable!(),
         }
     }
@@ -1993,20 +2012,24 @@ where
 
 impl<K, V> DoubleEndedIterator for MZ<K, V>
 where
-    K: Clone + Ord + Serialize,
+    K: Clone + Ord + Serialize + Debug,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
 {
     fn next_back(&mut self) -> Option<Result<Entry<K, V>>> {
         match self {
-            MZ::Z { zblock, index } => match zblock.to_entry(*index) {
-                Ok((_, entry)) => {
-                    *index -= 1;
-                    Some(Ok(entry))
+            MZ::Z { zblock, index } if *index >= 0 => {
+                let undex: usize = (*index).try_into().unwrap();
+                match zblock.to_entry(undex) {
+                    Ok((_, entry)) => {
+                        *index -= 1;
+                        Some(Ok(entry))
+                    }
+                    Err(Error::__ZBlockExhausted(_)) => None,
+                    Err(err) => Some(Err(err)),
                 }
-                Err(Error::__ZBlockExhausted(_)) => None,
-                Err(err) => Some(Err(err)),
-            },
+            }
+            MZ::Z { .. } => None,
             MZ::M { .. } => unreachable!(),
         }
     }

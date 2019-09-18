@@ -213,7 +213,7 @@ where
     }
 }
 
-impl<K, V> Index<K, V> for Llrb<K, V>
+impl<K, V> Index<K, V> for Box<Llrb<K, V>>
 where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
@@ -221,7 +221,7 @@ where
     type W = LlrbWriter<K, V>;
 
     /// Make a new empty index of this type, with same configuration.
-    fn make_new(&self) -> Result<Box<Self>> {
+    fn make_new(&self) -> Result<Self> {
         Ok(self.shallow_clone())
     }
 
@@ -237,7 +237,7 @@ where
     }
 }
 
-impl<K, V> Footprint for Llrb<K, V>
+impl<K, V> Footprint for Box<Llrb<K, V>>
 where
     K: Clone + Ord,
     V: Clone + Diff,

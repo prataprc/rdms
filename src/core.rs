@@ -68,7 +68,7 @@ where
     type W: Writer<K, V>;
 
     /// Make a new empty index of this type, with same configuration.
-    fn make_new(&self) -> Result<Box<Self>>;
+    fn make_new(&self) -> Result<Self>;
 
     /// Create a new writer handle. Note that, not all indexes allow
     /// concurrent writers, and not all indexes support concurrent

@@ -95,7 +95,8 @@ fn test_mblock_m() {
                 assert_eq!(fpos, ((i - 1) * 4096) as u64);
                 assert_eq!(index, i - 1);
             }
-            Err(Error::__MBlockExhausted(_n)) => (),
+            Err(Error::__LessThan) if key == (entry.0 - 1) => (),
+            Err(Error::__MBlockExhausted(_n)) if key == (entry.0 + 1) => (),
             _ => unreachable!(),
         }
     }
@@ -288,7 +289,7 @@ fn test_zblock1() {
     }
     let key = entries[0].to_key() - 1;
     match zb.find(&key, Bound::Unbounded, Bound::Unbounded) {
-        Err(Error::__ZBlockExhausted(0)) => (),
+        Err(Error::__LessThan) => (),
         _ => unreachable!(),
     }
     let key = entries[entries.len() - 1].to_key() + 1;
@@ -404,7 +405,7 @@ fn test_zblock2() {
     }
     let key = entries[0].to_key() - 1;
     match zb.find(&key, Bound::Unbounded, Bound::Unbounded) {
-        Err(Error::__ZBlockExhausted(0)) => (),
+        Err(Error::__LessThan) => (),
         _ => unreachable!(),
     }
     let key = entries[entries.len() - 1].to_key() + 1;
@@ -509,7 +510,7 @@ fn test_zblock3() {
     }
     let key = entries[0].to_key() - 1;
     match zb.find(&key, Bound::Unbounded, Bound::Unbounded) {
-        Err(Error::__ZBlockExhausted(0)) => (),
+        Err(Error::__LessThan) => (),
         _ => unreachable!(),
     }
     let key = entries[entries.len() - 1].to_key() + 1;
@@ -649,7 +650,7 @@ fn test_zblock4() {
     }
     let key = entries[0].to_key() - 1;
     match zb.find(&key, Bound::Unbounded, Bound::Unbounded) {
-        Err(Error::__ZBlockExhausted(0)) => (),
+        Err(Error::__LessThan) => (),
         _ => unreachable!(),
     }
     let key = entries[entries.len() - 1].to_key() + 1;

@@ -41,6 +41,7 @@ mod scans;
 pub use crate::bogn::Bogn;
 pub use crate::core::{Diff, Entry, Replay, Result, Serialize, VersionIter};
 pub use crate::core::{Footprint, Index, IndexIter, Reader, Writer};
+pub use crate::core::{ScanEntry, ScanIter};
 pub use crate::error::Error;
 pub use crate::spinlock::RWSpinlock;
 

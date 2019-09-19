@@ -16,8 +16,8 @@ use std::{
     },
 };
 
-use crate::core::{Diff, Entry, Footprint, Result, Value};
-use crate::core::{FullScan, Index, IndexIter, Reader, Writer};
+use crate::core::{Diff, Entry, Footprint, Result, ScanEntry, Value};
+use crate::core::{FullScan, Index, IndexIter, Reader, ScanIter, Writer};
 use crate::error::Error;
 use crate::llrb::Llrb;
 use crate::llrb_node::{LlrbDepth, Node, Stats};
@@ -763,7 +763,7 @@ where
     /// Return an iterator over entries that meet following properties
     /// * Only entries greater than range.start_bound().
     /// * Only entries whose modified seqno is within seqno-range.
-    fn full_scan<G>(&self, from: Bound<K>, within: G) -> Result<IndexIter<K, V>>
+    fn full_scan<G>(&self, from: Bound<K>, within: G) -> Result<ScanIter<K, V>>
     where
         G: Clone + RangeBounds<u64>,
     {

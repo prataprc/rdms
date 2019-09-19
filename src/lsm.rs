@@ -1,21 +1,24 @@
 //! Implement get() and iter() for LSM indexes.
+use std::borrow::Borrow;
 use std::cmp;
 
 use crate::core::{Diff, Entry, Footprint, IndexIter, Reader, Result};
 use crate::error::Error;
+use crate::scans::SkipScan;
 
-// TODO: Due to some complex lifetime conflicts, we cannot implement
-// ``get(&Q)`` interface for LsmGet.
-
-pub(crate) type LsmGet<'a, K, V> = Box<dyn Fn(&K) -> Result<Entry<K, V>> + 'a>;
+pub(crate) type LsmGet<'a, K, V, Q> = Box<dyn Fn(&Q) -> Result<Entry<K, V>> + 'a>;
 
 // ``x`` contains newer mutations than ``y``
-pub(crate) fn y_get<'a, K, V>(x: LsmGet<'a, K, V>, y: LsmGet<'a, K, V>) -> LsmGet<'a, K, V>
+pub(crate) fn y_get<'a, 'b, K, V, Q>(
+    x: LsmGet<'a, K, V, Q>,
+    y: LsmGet<'a, K, V, Q>,
+) -> LsmGet<'a, K, V, Q>
 where
-    K: 'static + Clone + Ord,
+    K: 'static + Clone + Ord + Borrow<Q>,
     V: 'static + Clone + Diff,
+    Q: 'a + 'b + Ord + ?Sized,
 {
-    Box::new(move |key: &K| -> Result<Entry<K, V>> {
+    Box::new(move |key: &Q| -> Result<Entry<K, V>> {
         match x(key) {
             Ok(entry) => Ok(entry),
             Err(Error::KeyNotFound) => y(key),
@@ -25,12 +28,16 @@ where
 }
 
 // ``x`` contains newer mutations than ``y``
-pub(crate) fn y_get_versions<'a, K, V>(x: LsmGet<'a, K, V>, y: LsmGet<'a, K, V>) -> LsmGet<'a, K, V>
+pub(crate) fn y_get_versions<'a, 'b, K, V, Q>(
+    x: LsmGet<'a, K, V, Q>,
+    y: LsmGet<'a, K, V, Q>,
+) -> LsmGet<'a, K, V, Q>
 where
-    K: 'static + Clone + Ord,
+    K: 'static + Clone + Ord + Borrow<Q>,
     V: 'static + Clone + Diff + From<<V as Diff>::D> + Footprint,
+    Q: 'a + 'b + Ord + ?Sized,
 {
-    Box::new(move |key: &K| -> Result<Entry<K, V>> {
+    Box::new(move |key: &Q| -> Result<Entry<K, V>> {
         match x(key) {
             Ok(x_entry) => match y(key) {
                 Ok(y_entry) => Ok(x_entry.flush_merge(y_entry)),
@@ -182,13 +189,14 @@ where
     }
 }
 
-pub(crate) fn getter<'a, I, K, V>(index: &'a I) -> LsmGet<'a, K, V>
+pub(crate) fn getter<'a, 'b, I, K, V, Q>(index: &'a I) -> LsmGet<'a, K, V, Q>
 where
-    K: Clone + Ord,
+    K: Clone + Ord + Borrow<Q>,
     V: Clone + Diff,
+    Q: 'b + Ord + ?Sized,
     I: Reader<K, V>,
 {
-    Box::new(move |key: &K| -> Result<Entry<K, V>> { index.get(key) })
+    Box::new(move |key: &Q| -> Result<Entry<K, V>> { index.get(key) })
 }
 
 #[cfg(test)]

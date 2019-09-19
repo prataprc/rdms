@@ -240,7 +240,7 @@ fn run_robt_llrb(mut n_ops: u64, key_max: i64, repeat: usize) {
             .map(|e| if e.is_deleted() { 1 } else { 0 })
             .sum();
         println!("refs len: {}", refs.len());
-        let iter = SkipScan::new(&llrb, ..);
+        let iter = SkipScan::new(&*llrb, ..);
         let dir = {
             let mut dir = std::env::temp_dir();
             dir.push("test-robt-build");
@@ -344,7 +344,7 @@ fn llrb_to_refs1(
     llrb: Box<Llrb<i64, i64>>, // reference
     config: &Config,
 ) -> (Box<Llrb<i64, i64>>, Vec<Entry<i64, i64>>) {
-    let iter = SkipScan::new(&llrb, ..);
+    let iter = SkipScan::new(&*llrb, ..);
     let refs = iter
         .filter_map(|e| {
             let mut e = e.unwrap();

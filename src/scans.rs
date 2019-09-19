@@ -5,7 +5,7 @@
 use std::ops::{Bound, RangeBounds};
 use std::vec;
 
-use crate::core::{Diff, Entry, FullScan, Result};
+use crate::core::{Diff, Entry, FullScan, Result, ScanEntry};
 
 /// SkipScan can be used to stitch piece-wise scanning of LSM
 /// data-structure, only selecting mutations (and versions)
@@ -42,6 +42,16 @@ where
     batch_size: usize,
 }
 
+enum Refill<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    Ok(Vec<Result<Entry<K, V>>>),
+    Retry(K, Vec<Result<Entry<K, V>>>),
+    Finish(Vec<Result<Entry<K, V>>>),
+}
+
 impl<'a, M, K, V, G> SkipScan<'a, M, K, V, G>
 where
     K: 'a + Clone + Ord,
@@ -64,6 +74,38 @@ where
     pub(crate) fn set_batch_size(&mut self, batch_size: usize) {
         self.batch_size = batch_size
     }
+
+    fn refill(&mut self) -> Refill<K, V> {
+        let from = self.from.clone();
+        let mut entries: Vec<Result<Entry<K, V>>> = vec![];
+        match self.index.full_scan(from, self.within.clone()) {
+            Ok(niter) => {
+                let mut niter = niter.enumerate();
+                loop {
+                    match niter.next() {
+                        Some((i, Ok(ScanEntry::Found(entry)))) => {
+                            entries.push(Ok(entry));
+                            if i >= self.batch_size {
+                                break Refill::Ok(entries);
+                            }
+                        }
+                        Some((_, Ok(ScanEntry::Retry(key)))) => {
+                            break Refill::Retry(key, entries);
+                        }
+                        Some((_, Err(err))) => {
+                            entries.push(Err(err));
+                            break Refill::Ok(entries);
+                        }
+                        None => break Refill::Finish(entries),
+                    }
+                }
+            }
+            Err(err) => {
+                entries.push(Err(err));
+                Refill::Ok(entries)
+            }
+        }
+    }
 }
 
 impl<'a, M, K, V, G> Iterator for SkipScan<'a, M, K, V, G>
@@ -76,37 +118,40 @@ where
     type Item = Result<Entry<K, V>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match self.iter.next() {
-            Some(Ok(entry)) => {
-                self.from = Bound::Excluded(entry.to_key());
-                Some(Ok(entry))
-            }
-            Some(Err(err)) => {
-                self.batch_size = 0;
-                Some(Err(err))
-            }
-            None if self.batch_size == 0 => None,
-            None => {
-                let from = self.from.clone();
-                match self.index.full_scan(from, self.within.clone()) {
-                    Ok(iter) => {
-                        let mut entries: Vec<Result<Entry<K, V>>> = vec![];
-                        for (i, item) in iter.enumerate() {
-                            if i >= self.batch_size || item.is_err() {
-                                entries.push(item);
-                                break;
+        loop {
+            match self.iter.next() {
+                Some(Ok(entry)) => {
+                    self.from = Bound::Excluded(entry.to_key());
+                    break Some(Ok(entry));
+                }
+                Some(Err(err)) => {
+                    self.batch_size = 0;
+                    break Some(Err(err));
+                }
+                None if self.batch_size == 0 => break None,
+                None => {
+                    let entries = match self.refill() {
+                        Refill::Ok(entries) => entries,
+                        Refill::Retry(key, entries) => {
+                            self.from = Bound::Excluded(key);
+                            if entries.len() > 0 {
+                                entries
+                            } else {
+                                continue;
                             }
-                            entries.push(item);
                         }
-                        self.iter = entries.into_iter();
-                        return self.iter.next();
-                    }
-                    Err(err) => {
-                        self.batch_size = 0;
-                        Some(Err(err))
-                    }
+                        Refill::Finish(entries) => {
+                            self.batch_size = 0;
+                            entries
+                        }
+                    };
+                    self.iter = entries.into_iter()
                 }
             }
         }
     }
 }
+
+#[cfg(test)]
+#[path = "scans_test.rs"]
+mod scans_test;

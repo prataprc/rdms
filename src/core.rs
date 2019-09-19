@@ -9,8 +9,11 @@ use crate::vlog;
 /// Result returned by bogn functions and methods.
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Type alias to trait-objects iterating over [`Index`] [`Entry`].
+/// Type alias to trait-objects iterating over [`Index`].
 pub type IndexIter<'a, K, V> = Box<dyn Iterator<Item = Result<Entry<K, V>>> + 'a>;
+
+/// Type alias to trait-objects iterating, piece-wise, over [`Index`].
+pub type ScanIter<'a, K, V> = Box<dyn Iterator<Item = Result<ScanEntry<K, V>>> + 'a>;
 
 /// Trait for diffable values.
 ///
@@ -150,7 +153,7 @@ where
     /// This method is typically valid only for memory-only indexes. Also,
     /// returned entry may not have all its previous versions, if it is
     /// costly to fetch from disk.
-    fn full_scan<G>(&self, from: Bound<K>, within: G) -> Result<IndexIter<K, V>>
+    fn full_scan<G>(&self, from: Bound<K>, within: G) -> Result<ScanIter<K, V>>
     where
         G: Clone + RangeBounds<u64>;
 }
@@ -936,6 +939,15 @@ where
             (value, Some(nv))
         }
     }
+}
+
+pub enum ScanEntry<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    Found(Entry<K, V>),
+    Retry(K),
 }
 
 #[cfg(test)]

@@ -183,9 +183,12 @@ where
     K: Ord + Clone,
     V: Clone + Diff + From<<V as Diff>::D>,
 {
-    type Item = Result<Entry<K, V>>;
+    type Item = Result<ScanEntry<K, V>>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        // loop for a maximum of 1000 entries.
+        let mut limit = 1000; // TODO: avoid magic constants
+        let mut key: K = unsafe { mem::zeroed() };
         loop {
             let mut paths = match self.paths.take() {
                 Some(paths) => paths,
@@ -193,6 +196,10 @@ where
                     break None;
                 }
             };
+            limit -= 1;
+            if limit < 0 {
+                break Some(Ok(ScanEntry::Retry(key)));
+            }
 
             match paths.pop() {
                 None => {
@@ -206,14 +213,16 @@ where
                             Some(paths)
                         };
                         // include if entry was within the visible time-range
-                        let (start, end) = (self.start.clone(), self.end.clone());
+                        let (a, z) = (self.start.clone(), self.end.clone());
                         // {
                         //     let seqno = nref.entry.to_seqno();
-                        //     println!("{:?} {:?} {}", start, end, seqno);
+                        //     println!("{:?} {:?} {}", a, z, seqno);
                         // }
-                        match nref.entry.filter_within(start, end) {
-                            Some(entry) => break Some(Ok(entry)),
-                            None => (),
+                        match nref.entry.filter_within(a, z) {
+                            Some(entry) => break Some(Ok(ScanEntry::Found(entry))),
+                            None => {
+                                key = nref.entry.to_key();
+                            }
                         }
                     }
                     (IFlag::Center, nref) => {

@@ -11,7 +11,7 @@ use crate::llrb::Llrb;
 fn test_lsm_get() {
     // test case using 5 llrb versions
     let seed: u128 = random();
-    let mut refi = Llrb::new("test-llrb");
+    let mut refi = Llrb::new_lsm("test-llrb");
 
     let (n_ops, key_max) = (60, 20);
     let mut llrb1: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
@@ -21,9 +21,9 @@ fn test_lsm_get() {
     let mut llrb2 = llrb1.clone();
     random_llrb(n_ops, key_max, seed, &mut llrb2, &mut refi);
 
-    //let (n_ops, key_max) = (6_000, 2_000);
-    //let mut llrb3 = llrb2.clone();
-    //random_llrb(n_ops, key_max, seed, &mut llrb3, &mut refi);
+    let (n_ops, key_max) = (6_000, 2_000);
+    let mut llrb3 = llrb2.clone();
+    random_llrb(n_ops, key_max, seed, &mut llrb3, &mut refi);
 
     //let (n_ops, key_max) = (60_000, 20_000);
     //let mut llrb4 = llrb3.clone();
@@ -33,12 +33,12 @@ fn test_lsm_get() {
     //let mut llrb5 = llrb4.clone();
     //random_llrb(n_ops, key_max, seed, &mut llrb5, &mut refi);
 
-    let yget = y_get(getter(&*llrb2), getter(&*llrb1));
+    let yget = y_get(getter(&*llrb3), y_get(getter(&*llrb2), getter(&*llrb1)));
     for entry in refi.iter().unwrap() {
         let entry = entry.unwrap();
         let key = entry.to_key();
         let e = yget(&key).unwrap();
-        assert_eq!(e.to_seqno(), entry.to_seqno());
+        assert_eq!(e.to_seqno(), entry.to_seqno(), "for key {}", key,);
     }
 }
 
@@ -86,14 +86,6 @@ fn test_lsm_reverse_versions() {
 
 fn test_lsm_skip_scan() {}
 
-fn test_get<'a>(y: LsmGet<'a, i64, i64>, refi: Llrb<i64, i64>) {
-    // TBD
-}
-
-fn test_iter<'a>(y: IndexIter<'a, i64, i64>, refi: IndexIter<'a, i64, i64>) {
-    // TBD
-}
-
 fn random_llrb(
     n_ops: i64,
     key_max: i64,
@@ -104,11 +96,13 @@ fn random_llrb(
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
     for _i in 0..n_ops {
         let key = (rng.gen::<i64>() % key_max).abs();
-        match rng.gen::<usize>() % 3 {
+        let op = rng.gen::<usize>() % 3;
+        //println!("key {} {} {} {}", key, llrb.to_seqno(), refi.to_seqno(), op);
+        match op {
             0 => {
                 let value: i64 = rng.gen();
                 llrb.set(key, value).unwrap();
-                refi.set(key, value);
+                refi.set(key, value).unwrap();
             }
             1 => {
                 let value: i64 = rng.gen();
@@ -145,3 +139,16 @@ fn random_llrb(
 //) -> Robt<i64, i64> {
 //    // TBD
 //}
+
+fn log_entry(e: &Entry<i64, i64>) {
+    println!(
+        "key: {} value: {:?}, seqno: {}, deleted: {}",
+        e.to_key(),
+        e.to_native_value(),
+        e.to_seqno(),
+        e.is_deleted()
+    );
+    for d in e.as_deltas() {
+        println!("seqno: {}, deleted: {}", d.to_seqno(), d.is_deleted());
+    }
+}

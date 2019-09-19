@@ -9,8 +9,8 @@ use std::ops::{Bound, Deref, DerefMut, RangeBounds};
 use std::sync::Arc;
 use std::{marker, mem};
 
-use crate::core::{Diff, Entry, Footprint, Result, Value};
-use crate::core::{FullScan, Index, IndexIter, Reader, Writer};
+use crate::core::{Diff, Entry, Footprint, Result, ScanEntry, Value};
+use crate::core::{FullScan, Index, IndexIter, Reader, ScanIter, Writer};
 use crate::error::Error;
 use crate::llrb_node::{LlrbDepth, Node, Stats};
 use crate::mvcc::MvccRoot;
@@ -122,6 +122,9 @@ where
         index
     }
 
+    /// Configure behaviour of spin-latch. If `spin` is true, calling
+    /// thread shall spin until a latch is acquired or released, if false
+    /// calling thread will yield to scheduler.
     pub fn set_spinlatch(&mut self, spin: bool) -> &mut Llrb<K, V> {
         self.spin = spin;
         self
@@ -723,7 +726,7 @@ where
     }
 }
 
-impl<K, V> FullScan<K, V> for Box<Llrb<K, V>>
+impl<K, V> FullScan<K, V> for Llrb<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff + From<<V as Diff>::D>,
@@ -731,7 +734,7 @@ where
     /// Return an iterator over entries that meet following properties
     /// * Only entries greater than from bound,
     /// * Only entries whose modified seqno is within seqno-range.
-    fn full_scan<G>(&self, from: Bound<K>, prd: G) -> Result<IndexIter<K, V>>
+    fn full_scan<G>(&self, from: Bound<K>, within: G) -> Result<ScanIter<K, V>>
     where
         G: Clone + RangeBounds<u64>,
     {
@@ -748,12 +751,12 @@ where
                 paths
             }
         };
-        let start = match prd.start_bound() {
+        let start = match within.start_bound() {
             Bound::Included(x) => Bound::Included(*x),
             Bound::Excluded(x) => Bound::Excluded(*x),
             Bound::Unbounded => Bound::Unbounded,
         };
-        let end = match prd.end_bound() {
+        let end = match within.end_bound() {
             Bound::Included(x) => Bound::Included(*x),
             Bound::Excluded(x) => Bound::Excluded(*x),
             Bound::Unbounded => Bound::Unbounded,

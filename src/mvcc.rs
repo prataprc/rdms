@@ -11,7 +11,8 @@ use std::{
     marker, mem,
     ops::{Bound, Deref, DerefMut, RangeBounds},
     sync::{
-        atomic::{AtomicIsize, AtomicPtr, Ordering::Relaxed},
+        self,
+        atomic::{AtomicIsize, AtomicPtr, Ordering::SeqCst},
         Arc,
     },
 };
@@ -39,7 +40,7 @@ where
 {
     name: String,
     lsm: bool,
-    snapshot: Snapshot<K, V>,
+    snapshot: OuterSnapshot<K, V>,
     key_footprint: AtomicIsize,
     tree_footprint: AtomicIsize,
     w: Option<MvccWriter<K, V>>,
@@ -53,22 +54,20 @@ where
     fn drop(&mut self) {
         // NOTE: Means all references to mvcc are gone and ownership is
         // going out of scope. This also implies that there are only
-        // TWO Arc<> snapshots. One is held by self.snapshot and another
+        // TWO Arc<snapshots>. One is held by self.snapshot and another
         // is held by `next`.
 
-        // NOTE: Snapshot's AtomicPtr will fence the drop chain, so we have
-        // to get past the atomic fence and drop it here.
+        // NOTE: self.snapshot's AtomicPtr will fence the drop chain, so
+        // we have to get past the atomic fence and drop it here.
+        // NOTE: Likewise Snapshot's drop will fence the drop on its
+        // `root` field, so we have to get past that and drop it here.
+        // TODO: move this logic to OuterSnapshot::Drop
+        let mut curr_s: Box<Arc<Snapshot<K,V>>> = // current snapshot
+            unsafe { Box::from_raw(self.snapshot.inner.load(SeqCst)) };
+        let snapshot = Arc::get_mut(&mut *curr_s).unwrap();
 
-        // NOTE: Likewise MvccRoot will fence the drop on its `root` field, so we
-        // have to get past that and drop it here.
-
-        let snapshot_ptr = self.snapshot.value.load(Relaxed);
-        // snapshot shall be dropped, along with it MvccRoot.
-        let mut snapshot = unsafe { Box::from_raw(snapshot_ptr) };
-        let mvcc_root = Arc::get_mut(&mut *snapshot).unwrap();
-
-        //println!("drop mvcc {:p} {:p}", self, mvcc_root);
-        mvcc_root.root.take().map(|root| drop_tree(root));
+        // println!("drop mvcc {:p} {:p}", self, snapshot);
+        snapshot.root.take().map(|root| drop_tree(root));
     }
 }
 
@@ -85,7 +84,7 @@ where
         let mut index = Box::new(Mvcc {
             name: name.as_ref().to_string(),
             lsm: false,
-            snapshot: Snapshot::new(),
+            snapshot: OuterSnapshot::new(),
             key_footprint: AtomicIsize::new(0),
             tree_footprint: AtomicIsize::new(0),
             w: Default::default(),
@@ -102,7 +101,7 @@ where
         let mut index = Box::new(Mvcc {
             name: name.as_ref().to_string(),
             lsm: true,
-            snapshot: Snapshot::new(),
+            snapshot: OuterSnapshot::new(),
             key_footprint: AtomicIsize::new(0),
             tree_footprint: AtomicIsize::new(0),
             w: unsafe { mem::zeroed() },
@@ -116,15 +115,15 @@ where
         let mut cloned = Box::new(Mvcc {
             name: self.name.clone(),
             lsm: self.lsm,
-            snapshot: Snapshot::new(),
-            key_footprint: AtomicIsize::new(self.key_footprint.load(Relaxed)),
-            tree_footprint: AtomicIsize::new(self.tree_footprint.load(Relaxed)),
+            snapshot: OuterSnapshot::new(),
+            key_footprint: AtomicIsize::new(self.key_footprint.load(SeqCst)),
+            tree_footprint: AtomicIsize::new(self.tree_footprint.load(SeqCst)),
             w: Default::default(),
         });
         let idx = cloned.as_mut() as *mut Mvcc<K, V>;
         cloned.w = Some(MvccWriter::new(idx));
 
-        let s: Arc<MvccRoot<K, V>> = Snapshot::clone(&self.snapshot);
+        let s: Arc<Snapshot<K, V>> = OuterSnapshot::clone(&self.snapshot);
         let root_node = match s.as_root() {
             None => None,
             Some(n) => Some(Box::new(n.clone())),
@@ -143,12 +142,10 @@ where
         };
 
         let debris = llrb_index.squash();
-        mvcc_index
-            .key_footprint
-            .store(debris.key_footprint, Relaxed);
+        mvcc_index.key_footprint.store(debris.key_footprint, SeqCst);
         mvcc_index
             .tree_footprint
-            .store(debris.tree_footprint, Relaxed);
+            .store(debris.tree_footprint, SeqCst);
 
         mvcc_index.snapshot.shift_snapshot(
             debris.root,
@@ -159,13 +156,20 @@ where
         mvcc_index
     }
 
+    #[allow(dead_code)] // TODO: remove this once bogn is weaved-up.
+    pub(crate) fn set_seqno(&mut self, seqno: u64) {
+        let s = OuterSnapshot::clone(&self.snapshot);
+        let root = s.root_duplicate();
+        self.snapshot.shift_snapshot(root, seqno, s.n_count, vec![]);
+    }
+
     fn shallow_clone(&self) -> Box<Mvcc<K, V>> {
         let mut index = Box::new(Mvcc {
             name: self.name.clone(),
             lsm: self.lsm,
-            snapshot: Snapshot::new(),
-            key_footprint: AtomicIsize::new(self.key_footprint.load(Relaxed)),
-            tree_footprint: AtomicIsize::new(self.tree_footprint.load(Relaxed)),
+            snapshot: OuterSnapshot::new(),
+            key_footprint: AtomicIsize::new(self.key_footprint.load(SeqCst)),
+            tree_footprint: AtomicIsize::new(self.tree_footprint.load(SeqCst)),
             w: unsafe { mem::zeroed() },
         });
         let idx = index.as_mut() as *mut Mvcc<K, V>;
@@ -183,7 +187,7 @@ where
     /// Return number of entries in this instance.
     #[inline]
     pub fn len(&self) -> usize {
-        Snapshot::clone(&self.snapshot).n_count
+        OuterSnapshot::clone(&self.snapshot).n_count
     }
 
     /// Identify this instance. Applications can choose unique names while
@@ -196,7 +200,7 @@ where
     /// Return current seqno.
     #[inline]
     pub fn to_seqno(&self) -> u64 {
-        Snapshot::clone(&self.snapshot).seqno
+        OuterSnapshot::clone(&self.snapshot).seqno
     }
 
     /// Return quickly with basic statisics, only entries() method is valid
@@ -236,7 +240,7 @@ where
     V: Clone + Diff,
 {
     fn footprint(&self) -> isize {
-        self.tree_footprint.load(Relaxed)
+        self.tree_footprint.load(SeqCst)
     }
 }
 
@@ -650,13 +654,25 @@ where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        get(Snapshot::clone(&self.snapshot).as_root(), key)
+        let snapshot: Arc<Snapshot<K, V>> = OuterSnapshot::clone(&self.snapshot);
+        println!(
+            "get snapshot {:p} {}",
+            snapshot.as_ref(),
+            Arc::strong_count(&snapshot)
+        );
+        let res = get(snapshot.as_root(), key);
+        // match &res {
+        //     Ok(_entry) => (),
+        //     Err(err) => println!("get err: {:?}", err),
+        // }
+        // println!("ok");
+        res
     }
 
     fn iter(&self) -> Result<IndexIter<K, V>> {
         let mut iter = Box::new(Iter {
             _latch: Default::default(),
-            _arc: Snapshot::clone(&self.snapshot),
+            _arc: OuterSnapshot::clone(&self.snapshot),
             paths: Default::default(),
         });
         let root = iter
@@ -676,7 +692,7 @@ where
     {
         let mut r = Box::new(Range {
             _latch: Default::default(),
-            _arc: Snapshot::clone(&self.snapshot),
+            _arc: OuterSnapshot::clone(&self.snapshot),
             range,
             paths: Default::default(),
             high: marker::PhantomData,
@@ -702,7 +718,7 @@ where
     {
         let mut r = Box::new(Reverse {
             _latch: Default::default(),
-            _arc: Snapshot::clone(&self.snapshot),
+            _arc: OuterSnapshot::clone(&self.snapshot),
             range,
             paths: Default::default(),
             low: marker::PhantomData,
@@ -781,7 +797,7 @@ where
         // similar to range pre-processing
         let mut iter = Box::new(IterFullScan {
             _latch: Default::default(),
-            _arc: Snapshot::clone(&self.snapshot),
+            _arc: OuterSnapshot::clone(&self.snapshot),
             start,
             end,
             paths: Default::default(),
@@ -823,7 +839,7 @@ where
     /// Additionally return full statistics on the tree. Refer to [`Stats`]
     /// for more information.
     pub fn validate(&self) -> Result<Stats> {
-        let arc_mvcc = Snapshot::clone(&self.snapshot);
+        let arc_mvcc = OuterSnapshot::clone(&self.snapshot);
         let root = arc_mvcc.as_root();
         let (red, blacks, depth) = (is_red(root), 0, 0);
         let mut depths: LlrbDepth = Default::default();
@@ -1003,33 +1019,44 @@ where
     }
 }
 
-#[derive(Default)]
-struct Snapshot<K, V>
+// TODO: we are using Arc<Snapshot> behind AtomicPtr for concurrent access
+// is it okay to avoid AtomicPtr altogther ? In otherwords, if `inner`
+// field is of type Arc<Snapshot> instead of AtomicPtr<Arc<Snapshot>> is
+// okay to allow concurrent r/w access to inner field.
+
+struct OuterSnapshot<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    value: AtomicPtr<Arc<MvccRoot<K, V>>>,
+    lock: sync::RwLock<i32>,
+    inner: AtomicPtr<Arc<Snapshot<K, V>>>,
 }
 
-impl<K, V> Snapshot<K, V>
+impl<K, V> OuterSnapshot<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff,
 {
     // create the first snapshot and a placeholder `next` snapshot for Mvcc.
-    fn new() -> Snapshot<K, V> {
-        let mvcc_root = MvccRoot::new(Some(Arc::new(MvccRoot::new(None))));
-        let arc = Box::new(Arc::new(mvcc_root));
-        //println!("new snapshot {:p} {}", arc, Arc::strong_count(&arc));
-        Snapshot {
-            value: AtomicPtr::new(Box::leak(arc)),
+    fn new() -> OuterSnapshot<K, V> {
+        let next_snapshot: Option<Arc<Snapshot<K,V>>> = // dummy next snapshot
+            Some(Arc::new(*Snapshot::new(None)));
+        let snapshot: Box<Snapshot<K, V>> = Snapshot::new(next_snapshot);
+
+        let arc: Box<Arc<Snapshot<K, V>>> = Box::new(Arc::new(*snapshot));
+        OuterSnapshot {
+            lock: sync::RwLock::new(0),
+            inner: AtomicPtr::new(Box::leak(arc)),
         }
     }
 
-    // similar to Arc::clone for AtomicPtr<Arc<MvccRoot<K,V>>>
-    fn clone(this: &Snapshot<K, V>) -> Arc<MvccRoot<K, V>> {
-        Arc::clone(unsafe { this.value.load(Relaxed).as_ref().unwrap() })
+    // similar to Arc::clone for AtomicPtr<Arc<Snapshot<K,V>>>
+    fn clone(this: &OuterSnapshot<K, V>) -> Arc<Snapshot<K, V>> {
+        let _r = this.lock.read().unwrap();
+        let inner_snap: &Arc<Snapshot<K,V>> =  // from heap
+            unsafe { this.inner.load(SeqCst).as_ref().unwrap() };
+        Arc::clone(inner_snap)
     }
 
     fn shift_snapshot(
@@ -1039,30 +1066,55 @@ where
         n_count: usize,
         reclaim: Vec<Box<Node<K, V>>>,
     ) {
+        let _w = self.lock.write().unwrap();
+
         // * curr_s points to next_s, and currently the only reference to next_s.
         // * curr_s gets dropped, but there can be readers holding a reference.
-        // * when curr_s gets dropped it reference to next_s is decremented.
         // * before curr_s gets dropped next_s is cloned, leaked, stored.
 
-        let curr_s = unsafe { Box::from_raw(self.value.load(Relaxed)) };
-        let next_s = Box::new(Arc::clone(curr_s.next.as_ref().unwrap()));
-        let mvcc_root = unsafe {
-            (&**next_s as *const MvccRoot<K, V> as *mut MvccRoot<K, V>)
+        let curr_s: Box<Arc<Snapshot<K,V>>> = // current snapshot
+            unsafe { Box::from_raw(self.inner.load(SeqCst)) };
+        let curr_r: &Snapshot<K, V> = curr_s.as_ref().as_ref();
+
+        let curr_m: &mut Snapshot<K, V> = unsafe {
+            (curr_r as *const Snapshot<K,V> // safe extract
+            as *mut Snapshot<K,V>)
                 .as_mut()
                 .unwrap()
         };
+        // next snapshot mutable reference.
+        let next_m = Arc::get_mut(curr_m.next.as_mut().unwrap()).unwrap();
+        // populate the next snapshot.
+        next_m.root = root;
+        next_m.seqno = seqno;
+        next_m.n_count = n_count;
+        next_m.next = Some(Arc::new(*Snapshot::new(None)));
+        next_m.reclaim = reclaim;
 
-        mvcc_root.root = root;
-        mvcc_root.seqno = seqno;
-        mvcc_root.n_count = n_count;
-        mvcc_root.next = Some(Arc::new(MvccRoot::new(None)));
-        mvcc_root.reclaim = reclaim;
+        let next_s: Box<Arc<Snapshot<K, V>>> = Box::new(Arc::clone(
+            // clone a Arc reference of next snapshot and make it current
+            curr_r.next.as_ref().unwrap(),
+        ));
 
-        self.value.store(Box::leak(next_s), Relaxed);
+        let x = Arc::strong_count(curr_s.as_ref());
+        let y = Arc::strong_count(next_s.as_ref());
+        println!(
+            "shiftsnap {:p} {:p} {} {} ",
+            curr_r,
+            next_s.as_ref().as_ref(),
+            x,
+            y
+        );
+
+        self.inner.store(Box::leak(next_s), SeqCst);
+    }
+
+    fn as_inner(&self) -> &Arc<Snapshot<K, V>> {
+        unsafe { self.inner.load(SeqCst).as_ref().unwrap() }
     }
 }
 
-pub(crate) struct MvccRoot<K, V>
+pub(crate) struct Snapshot<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff,
@@ -1071,30 +1123,30 @@ where
     reclaim: Vec<Box<Node<K, V>>>,
     seqno: u64,     // starts from 0 and incr for every mutation.
     n_count: usize, // number of entries in the tree.
-    next: Option<Arc<MvccRoot<K, V>>>,
+    next: Option<Arc<Snapshot<K, V>>>,
 }
 
-impl<K, V> MvccRoot<K, V>
+impl<K, V> Snapshot<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff,
 {
     // shall be called twice while creating the Mvcc index and once
     // for every new snapshot that gets created and shifted into the chain.
-    fn new(next: Option<Arc<MvccRoot<K, V>>>) -> MvccRoot<K, V> {
-        //println!("new mvcc-root {:p}", mvcc_root);
-        let mut mvcc_root: MvccRoot<K, V> = Default::default();
-        mvcc_root.next = next;
-        mvcc_root
+    fn new(next: Option<Arc<Snapshot<K, V>>>) -> Box<Snapshot<K, V>> {
+        // println!("new mvcc-root {:p}", snapshot);
+        let mut snapshot: Box<Snapshot<K, V>> = Box::new(Default::default());
+        snapshot.next = next;
+        snapshot
     }
 
     fn root_duplicate(&self) -> Option<Box<Node<K, V>>> {
         match &self.root {
-            None => None,
             Some(node) => {
                 let node = node.deref() as *const Node<K, V> as *mut Node<K, V>;
                 Some(unsafe { Box::from_raw(node) })
             }
+            None => unreachable!(),
         }
     }
 
@@ -1103,7 +1155,7 @@ where
     }
 }
 
-impl<K, V> Drop for MvccRoot<K, V>
+impl<K, V> Drop for Snapshot<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff,
@@ -1114,21 +1166,21 @@ where
         // NOTE: `reclaim` nodes will be dropped, but due the Drop
         // implementation of Node, child nodes won't be dropped.
 
-        // NOTE: `next` snapshot will be dropped and its reference
-        // count decremented, whether it is freed is based on the last
-        // active reference at that moment.
-
+        match self.next.as_ref() {
+            Some(x) => println!("drop snapshot {:p} {}", self, Arc::strong_count(x)),
+            None => (),
+        }
         self.root.take().map(Box::leak); // Leak root
     }
 }
 
-impl<K, V> Default for MvccRoot<K, V>
+impl<K, V> Default for Snapshot<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    fn default() -> MvccRoot<K, V> {
-        MvccRoot {
+    fn default() -> Snapshot<K, V> {
+        Snapshot {
             root: Default::default(),
             reclaim: Default::default(),
             seqno: Default::default(),
@@ -1149,17 +1201,7 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    index: Option<*mut Mvcc<K, V>>,
-}
-
-impl<K, V> Drop for MvccWriter<K, V>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-{
-    fn drop(&mut self) {
-        // NOTE: forget the writer, which is a self-reference.
-    }
+    index: Option<AtomicPtr<Mvcc<K, V>>>,
 }
 
 impl<K, V> MvccWriter<K, V>
@@ -1168,20 +1210,49 @@ where
     V: Clone + Diff,
 {
     fn new(index: *mut Mvcc<K, V>) -> MvccWriter<K, V> {
-        MvccWriter { index: Some(index) }
+        MvccWriter {
+            index: Some(AtomicPtr::new(index)),
+        }
     }
 }
 
 impl<K, V> MvccWriter<K, V>
 where
-    K: Clone + Ord,
-    V: Clone + Diff,
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
 {
     fn get_index(&mut self) -> &mut Mvcc<K, V> {
         match &mut self.index {
-            Some(index) => unsafe { index.as_mut().unwrap() },
+            Some(index) => unsafe { index.load(SeqCst).as_mut().unwrap() },
             None => unreachable!(),
         }
+    }
+
+    pub fn set(&mut self, key: K, value: V) -> Result<Option<Entry<K, V>>> {
+        let index = self.get_index();
+        let seqno = index.to_seqno();
+        let (_seqno, entry) = self.set_index(key, value, seqno + 1);
+        println!("set {}", seqno);
+        entry
+    }
+
+    pub fn set_cas(&mut self, key: K, value: V, cas: u64) -> Result<Option<Entry<K, V>>> {
+        let index = self.get_index();
+        let seqno = index.to_seqno();
+        let (_seqno, entry) = self.set_cas_index(key, value, cas, seqno + 1);
+        entry
+    }
+
+    pub fn delete<Q>(&mut self, key: &Q) -> Result<Option<Entry<K, V>>>
+    where
+        // TODO: From<Q> and Clone will fail if V=String and Q=str
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
+    {
+        let index = self.get_index();
+        let seqno = index.to_seqno();
+        let (_seqno, entry) = self.delete_index(key, seqno + 1);
+        entry
     }
 }
 
@@ -1198,7 +1269,7 @@ where
     ) -> (Option<u64>, Result<Option<Entry<K, V>>>) {
         let index = self.get_index();
         let lsm = index.lsm;
-        let snapshot = Snapshot::clone(&index.snapshot);
+        let snapshot: &Arc<Snapshot<K, V>> = index.snapshot.as_inner();
         let key_footprint = key.footprint();
 
         let mut n_count = snapshot.n_count;
@@ -1217,9 +1288,9 @@ where
                 root.set_black();
                 if old_entry.is_none() {
                     n_count += 1;
-                    index.key_footprint.fetch_add(key_footprint, Relaxed);
+                    index.key_footprint.fetch_add(key_footprint, SeqCst);
                 }
-                index.tree_footprint.fetch_add(size, Relaxed);
+                index.tree_footprint.fetch_add(size, SeqCst);
                 n.dirty = false;
                 Box::leak(n);
                 index
@@ -1240,7 +1311,7 @@ where
     ) -> (Option<u64>, Result<Option<Entry<K, V>>>) {
         let index = self.get_index();
         let lsm = index.lsm;
-        let snapshot = Snapshot::clone(&index.snapshot);
+        let snapshot = OuterSnapshot::clone(&index.snapshot);
         let key_footprint = key.footprint();
 
         let mut n_count = snapshot.n_count;
@@ -1268,10 +1339,10 @@ where
             } => {
                 root.set_black();
                 if old_entry.is_none() {
-                    index.key_footprint.fetch_add(key_footprint, Relaxed);
+                    index.key_footprint.fetch_add(key_footprint, SeqCst);
                     n_count += 1
                 }
-                index.tree_footprint.fetch_add(size, Relaxed);
+                index.tree_footprint.fetch_add(size, SeqCst);
                 (root, new_node, Ok(old_entry))
             }
             _ => panic!("set_cas: impossible case, call programmer"),
@@ -1301,7 +1372,7 @@ where
         Q: ToOwned<Owned = K> + Ord + ?Sized,
     {
         let index = self.get_index();
-        let snapshot = Snapshot::clone(&index.snapshot);
+        let snapshot = OuterSnapshot::clone(&index.snapshot);
 
         let key_footprint = key.to_owned().footprint();
 
@@ -1328,11 +1399,11 @@ where
             };
             let (root, new_node, old_entry, size) = s;
 
-            //println!("delete {:?}", entry.as_ref().map(|e| e.is_deleted()));
+            // println!("delete {:?}", entry.as_ref().map(|e| e.is_deleted()));
             match &old_entry {
                 None => {
-                    index.key_footprint.fetch_add(key_footprint, Relaxed);
-                    index.tree_footprint.fetch_add(size, Relaxed);
+                    index.key_footprint.fetch_add(key_footprint, SeqCst);
+                    index.tree_footprint.fetch_add(size, SeqCst);
 
                     n_count += 1;
                 }
@@ -1340,7 +1411,7 @@ where
                     seqno = index.to_seqno();
                 }
                 _ /* not-deleted */ => {
-                    index.tree_footprint.fetch_add(size, Relaxed);
+                    index.tree_footprint.fetch_add(size, SeqCst);
                 }
             }
 
@@ -1359,8 +1430,8 @@ where
                 }
             };
             if res.old_entry.is_some() {
-                index.key_footprint.fetch_add(key_footprint, Relaxed);
-                index.tree_footprint.fetch_add(res.size, Relaxed);
+                index.key_footprint.fetch_add(key_footprint, SeqCst);
+                index.tree_footprint.fetch_add(res.size, SeqCst);
 
                 n_count -= 1;
             } else {

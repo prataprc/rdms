@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering::AcqRel};
 
 /// SyncWriter is used to make sure that only one writer is going to
 /// access MVCC index. Calling lock() from more than one thread will
@@ -19,7 +19,7 @@ impl SyncWriter {
     }
 
     pub(crate) fn lock<'a>(&'a self) -> Fence<'a> {
-        if self.writers.compare_and_swap(0, 1, Ordering::Relaxed) != 0 {
+        if self.writers.compare_and_swap(0, 1, AcqRel) != 0 {
             panic!("Mvcc cannot have concurrent writers");
         }
         Fence { fence: self }
@@ -32,7 +32,7 @@ pub(crate) struct Fence<'a> {
 
 impl<'a> Drop for Fence<'a> {
     fn drop(&mut self) {
-        if self.fence.writers.compare_and_swap(1, 0, Ordering::Relaxed) != 1 {
+        if self.fence.writers.compare_and_swap(1, 0, AcqRel) != 1 {
             unreachable!();
         }
     }

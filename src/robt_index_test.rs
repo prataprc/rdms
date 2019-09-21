@@ -187,7 +187,6 @@ fn test_mblock_z() {
             }
             Ok(MEntry::DecZ { index, .. }) => panic!("why ok {}", index),
             Err(Error::__LessThan) if i == 0 => (),
-            Err(Error::__MBlockExhausted(_n)) if i == (keys.len() - 1) => (),
             Err(err) => panic!("unexpected err {:?}", err),
             _ => unreachable!(),
         }
@@ -202,7 +201,8 @@ fn test_mblock_z() {
                 assert_eq!(fpos, ((i - 1) * 4096) as u64);
                 assert_eq!(index, i - 1);
             }
-            Err(Error::__MBlockExhausted(_n)) => (),
+            Ok(MEntry::DecZ { index, .. }) => panic!("why ok {}", index),
+            Err(Error::__LessThan) if i == 0 => (),
             _ => unreachable!(),
         }
     }

@@ -49,7 +49,14 @@ use std::{
     ops::{Bound, RangeBounds},
     path, result,
     str::FromStr,
-    sync::{self, atomic::AtomicPtr, atomic::Ordering, mpsc, Arc},
+    sync::{
+        self,
+        atomic::{
+            AtomicPtr,
+            Ordering::{Acquire, Release},
+        },
+        mpsc, Arc,
+    },
     thread, time,
 };
 
@@ -85,13 +92,13 @@ where
     }
 
     fn get_snapshots(&self) -> Arc<Vec<Snapshot<K, V>>> {
-        unsafe { Arc::clone(self.0.load(Ordering::Relaxed).as_ref().unwrap()) }
+        unsafe { Arc::clone(self.0.load(Acquire).as_ref().unwrap()) }
     }
 
     fn compare_swap_snapshots(&self, new_snapshots: Vec<Snapshot<K, V>>) {
-        let _olds = unsafe { Box::from_raw(self.0.load(Ordering::Relaxed)) };
+        let _olds = unsafe { Box::from_raw(self.0.load(Acquire)) };
         let new_snapshots = Box::leak(Box::new(Arc::new(new_snapshots)));
-        self.0.store(new_snapshots, Ordering::Relaxed);
+        self.0.store(new_snapshots, Release);
     }
 }
 
@@ -193,7 +200,7 @@ where
     M: 'static + Sync + Send + Index<K, V>,
 {
     config: Config,
-    thread: thread::JoinHandle<Result<()>>,
+    t_handle: thread::JoinHandle<Result<()>>,
     tx: mpsc::SyncSender<(Request<K, V, M>, mpsc::SyncSender<Response>)>,
 }
 
@@ -207,8 +214,12 @@ where
     fn new(config: Config) -> MemToDisk<K, V, M> {
         let (tx, rx) = mpsc::sync_channel(1);
         let conf = config.clone();
-        let thread = thread::spawn(move || thread_mem_to_disk(conf, rx));
-        MemToDisk { config, thread, tx }
+        let t_handle = thread::spawn(move || thread_mem_to_disk(conf, rx));
+        MemToDisk {
+            config,
+            t_handle,
+            tx,
+        }
     }
 
     fn send(&mut self, req: Request<K, V, M>) -> Result<Response> {
@@ -219,7 +230,7 @@ where
 
     fn close_wait(self) -> Result<()> {
         mem::drop(self.tx);
-        match self.thread.join() {
+        match self.t_handle.join() {
             Ok(res) => res,
             Err(err) => match err.downcast_ref::<String>() {
                 Some(msg) => Err(Error::ThreadFail(msg.to_string())),
@@ -251,7 +262,7 @@ where
     M: 'static + Sync + Send + Index<K, V>,
 {
     config: Config,
-    thread: thread::JoinHandle<Result<()>>,
+    t_handle: thread::JoinHandle<Result<()>>,
     tx: mpsc::SyncSender<(Request<K, V, M>, mpsc::SyncSender<Response>)>,
 }
 
@@ -265,8 +276,12 @@ where
     fn new(config: Config) -> DiskCompact<K, V, M> {
         let (tx, rx) = mpsc::sync_channel(1);
         let conf = config.clone();
-        let thread = thread::spawn(move || thread_disk_compact(conf, rx));
-        DiskCompact { config, thread, tx }
+        let t_handle = thread::spawn(move || thread_disk_compact(conf, rx));
+        DiskCompact {
+            config,
+            t_handle,
+            tx,
+        }
     }
 
     fn send(&mut self, req: Request<K, V, M>) -> Result<Response> {
@@ -277,7 +292,7 @@ where
 
     fn close_wait(self) -> Result<()> {
         mem::drop(self.tx);
-        match self.thread.join() {
+        match self.t_handle.join() {
             Ok(res) => res,
             Err(err) => match err.downcast_ref::<String>() {
                 Some(msg) => Err(Error::ThreadFail(msg.to_string())),
@@ -1084,7 +1099,7 @@ where
 pub(crate) struct Flusher {
     file: ffi::OsString,
     fpos: u64,
-    t: thread::JoinHandle<Result<()>>,
+    t_handle: thread::JoinHandle<Result<()>>,
     tx: mpsc::SyncSender<Vec<u8>>,
 }
 
@@ -1102,9 +1117,14 @@ impl Flusher {
 
         let (tx, rx) = mpsc::sync_channel(config.flush_queue_size);
         let file1 = file.clone();
-        let t = thread::spawn(move || thread_flush(file1, fd, rx));
+        let t_handle = thread::spawn(move || thread_flush(file1, fd, rx));
 
-        Ok(Flusher { file, fpos, t, tx })
+        Ok(Flusher {
+            file,
+            fpos,
+            t_handle,
+            tx,
+        })
     }
 
     // return error if flush thread has exited/paniced.
@@ -1117,7 +1137,7 @@ impl Flusher {
     // a known error like io::Error or PartialWrite.
     fn close_wait(self) -> Result<()> {
         mem::drop(self.tx);
-        match self.t.join() {
+        match self.t_handle.join() {
             Ok(Ok(())) => Ok(()),
             Ok(Err(Error::PartialWrite(err))) => Err(Error::PartialWrite(err)),
             Ok(Err(_)) => unreachable!(),
@@ -1311,6 +1331,7 @@ where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
+        // println!("robt get ..");
         let _lock = self.mutex.lock();
         let snap = unsafe {
             let snap = self as *const Snapshot<K, V> as *mut Snapshot<K, V>;

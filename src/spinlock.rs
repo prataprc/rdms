@@ -37,7 +37,7 @@
 ///
 /// [rw-lock]: https://en.wikipedia.org/wiki/Readers–writer_lock
 ///
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering::SeqCst};
 use std::{fmt, thread};
 
 /// RWSpinlock implements latch-and-spin mechanism for non-blocking
@@ -47,8 +47,6 @@ use std::{fmt, thread};
 /// a. ref-count, bits [0-61].
 /// b. latch flag, bit 62.
 /// c. lock flag, bit 63.
-///
-/// All atomic operations use Ordering::Relaxed.
 ///
 pub struct RWSpinlock {
     value: AtomicU64,
@@ -77,16 +75,16 @@ impl RWSpinlock {
     /// thread will yield to scheduler before re-trying the latch.
     pub fn acquire_read(&self, spin: bool) -> Reader {
         loop {
-            let c = self.value.load(Ordering::Relaxed);
+            let c = self.value.load(SeqCst);
             if (c & Self::LATCH_LOCK_FLAG) == 0 {
                 // latch is not acquired by a writer
                 let n = c + 1;
-                if self.value.compare_and_swap(c, n, Ordering::Relaxed) == c {
-                    self.reads.fetch_add(1, Ordering::Relaxed);
+                if self.value.compare_and_swap(c, n, SeqCst) == c {
+                    self.reads.fetch_add(1, SeqCst);
                     break Reader { door: self };
                 }
             }
-            self.conflicts.fetch_add(1, Ordering::Relaxed);
+            self.conflicts.fetch_add(1, SeqCst);
             if !spin {
                 thread::yield_now();
             }
@@ -98,34 +96,34 @@ impl RWSpinlock {
     pub fn acquire_write(&self, spin: bool) -> Writer {
         // acquire latch
         loop {
-            let c = self.value.load(Ordering::Relaxed);
+            let c = self.value.load(SeqCst);
             if (c & Self::LATCH_FLAG) == 0 {
                 // latch is not acquired by a writer
                 if (c & Self::LOCK_FLAG) != 0 {
                     panic!("if latch is flipped-off, lock can't be flipped-on !");
                 }
                 let n = c | Self::LATCH_FLAG;
-                if self.value.compare_and_swap(c, n, Ordering::Relaxed) == c {
+                if self.value.compare_and_swap(c, n, SeqCst) == c {
                     break;
                 }
             }
-            self.conflicts.fetch_add(1, Ordering::Relaxed);
+            self.conflicts.fetch_add(1, SeqCst);
             if !spin {
                 thread::yield_now();
             }
         }
         // acquire lock
         loop {
-            let c = self.value.load(Ordering::Relaxed);
+            let c = self.value.load(SeqCst);
             if (c & Self::READERS_FLAG) == 0 {
                 let n = c | Self::LOCK_FLAG;
-                if self.value.compare_and_swap(c, n, Ordering::Relaxed) == c {
-                    self.writes.fetch_add(1, Ordering::Relaxed);
+                if self.value.compare_and_swap(c, n, SeqCst) == c {
+                    self.writes.fetch_add(1, SeqCst);
                     break Writer { door: self };
                 }
                 panic!("latch is acquired, ZERO readers, but unable to lock !")
             }
-            self.conflicts.fetch_add(1, Ordering::Relaxed);
+            self.conflicts.fetch_add(1, SeqCst);
             if !spin {
                 thread::yield_now();
             }
@@ -139,7 +137,7 @@ pub struct Reader<'a> {
 
 impl<'a> Drop for Reader<'a> {
     fn drop(&mut self) {
-        self.door.value.fetch_sub(1, Ordering::Relaxed);
+        self.door.value.fetch_sub(1, SeqCst);
     }
 }
 
@@ -149,11 +147,11 @@ pub struct Writer<'a> {
 
 impl<'a> Drop for Writer<'a> {
     fn drop(&mut self) {
-        let c = self.door.value.load(Ordering::Relaxed);
+        let c = self.door.value.load(SeqCst);
         if (c & RWSpinlock::READERS_FLAG) > 0 {
             panic!("can't have active readers, when lock is held");
         }
-        if self.door.value.compare_and_swap(c, 0, Ordering::Relaxed) != c {
+        if self.door.value.compare_and_swap(c, 0, SeqCst) != c {
             panic!("cant' have readers/writers to modify when locked")
         }
     }
@@ -164,10 +162,10 @@ impl fmt::Display for RWSpinlock {
         write!(
             f,
             "value:{:X} rs:{} ws:{} cs:{}",
-            self.value.load(Ordering::Relaxed),
-            self.reads.load(Ordering::Relaxed),
-            self.writes.load(Ordering::Relaxed),
-            self.conflicts.load(Ordering::Relaxed),
+            self.value.load(SeqCst),
+            self.reads.load(SeqCst),
+            self.writes.load(SeqCst),
+            self.conflicts.load(SeqCst),
         )
     }
 }

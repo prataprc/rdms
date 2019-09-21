@@ -95,7 +95,7 @@ where
     K: Ord + Clone,
     V: Clone + Diff,
 {
-    //println!("drop_tree - node {:p}", node);
+    // println!("drop_tree - node {:p}", node);
 
     // left child shall be dropped after drop_tree() returns.
     node.left.take().map(|left| drop_tree(left));
@@ -113,7 +113,7 @@ where
     V: Clone + Diff,
 {
     _latch: Option<spinlock::Reader<'a>>, // only used for latching
-    _arc: Arc<MvccRoot<K, V>>,            // only used for MVCC-snapshot refcount.
+    _arc: Arc<Snapshot<K, V>>,            // only used for MVCC-snapshot refcount.
     paths: Option<Vec<Fragment<'a, K, V>>>,
 }
 
@@ -172,7 +172,7 @@ where
     V: Clone + Diff + From<<V as Diff>::D>,
 {
     _latch: Option<spinlock::Reader<'a>>,
-    _arc: Arc<MvccRoot<K, V>>, // only used for ref-count-ing MVCC-snapshot.
+    _arc: Arc<Snapshot<K, V>>, // only used for ref-count-ing MVCC-snapshot.
     start: Bound<u64>,
     end: Bound<u64>,
     paths: Option<Vec<Fragment<'a, K, V>>>,
@@ -253,7 +253,7 @@ where
     Q: Ord + ?Sized,
 {
     _latch: Option<spinlock::Reader<'a>>, // only used for latching
-    _arc: Arc<MvccRoot<K, V>>,            // only used for MVCC-snapshot refcount.
+    _arc: Arc<Snapshot<K, V>>,            // only used for MVCC-snapshot refcount.
     range: R,
     paths: Option<Vec<Fragment<'a, K, V>>>,
     high: marker::PhantomData<Q>,
@@ -334,7 +334,7 @@ where
     Q: Ord + ?Sized,
 {
     _latch: Option<spinlock::Reader<'a>>, // only used for latching
-    _arc: Arc<MvccRoot<K, V>>,            // only used for MVCC-snapshot refcount.
+    _arc: Arc<Snapshot<K, V>>,            // only used for MVCC-snapshot refcount.
     range: R,
     paths: Option<Vec<Fragment<'a, K, V>>>,
     low: marker::PhantomData<Q>,

@@ -643,7 +643,7 @@ where
         index: &mut u64,
         cmds: Vec<OpRequest<K, V>>, // gather a batch of commands/entries
     ) -> Result<bool> {
-        use std::sync::atomic::Ordering;
+        use std::sync::atomic::Ordering::AcqRel;
 
         for cmd in cmds {
             match cmd {
@@ -661,7 +661,7 @@ where
                     };
                 }
                 cmd => {
-                    *index = self.wal_index.fetch_add(1, Ordering::Relaxed);
+                    *index = self.wal_index.fetch_add(1, AcqRel);
                     self.active.as_mut().unwrap().append_op(*index, cmd)?;
                 }
             }

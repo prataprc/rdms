@@ -13,7 +13,7 @@ use crate::core::{Diff, Entry, Footprint, Result, ScanEntry, Value};
 use crate::core::{FullScan, Index, IndexIter, Reader, ScanIter, Writer};
 use crate::error::Error;
 use crate::llrb_node::{LlrbDepth, Node, Stats};
-use crate::mvcc::MvccRoot;
+use crate::mvcc::Snapshot;
 use crate::spinlock::{self, RWSpinlock};
 
 // TODO: Rename LlrbWriter to Writer;
@@ -127,6 +127,12 @@ where
     /// calling thread will yield to scheduler.
     pub fn set_spinlatch(&mut self, spin: bool) -> &mut Llrb<K, V> {
         self.spin = spin;
+        self
+    }
+
+    #[allow(dead_code)] // TODO: remove this once bogn is weaved-up.
+    pub(crate) fn set_seqno(&mut self, seqno: u64) -> &mut Llrb<K, V> {
+        self.seqno = seqno;
         self
     }
 

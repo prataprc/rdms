@@ -42,7 +42,7 @@ use std::{
     cmp,
     convert::TryInto,
     ffi, fmt,
-    fmt::{Debug, Display},
+    fmt::Display,
     fs,
     io::Write,
     marker, mem,
@@ -806,7 +806,7 @@ where
 
 impl<K, V> Builder<K, V>
 where
-    K: Clone + Ord + Serialize + Debug,
+    K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
 {
@@ -1285,19 +1285,24 @@ impl<K, V> Index<K, V> for Snapshot<K, V>
 where
     K: Clone + Ord + Serialize + Footprint,
     V: Clone + Diff + Serialize + Footprint,
+    <V as Diff>::D: Serialize,
 {
     type W = RobtWriter;
+    type R = Snapshot<K, V>;
 
     /// Make a new empty index of this type, with same configuration.
     fn make_new(&self) -> Result<Self> {
         Ok(Snapshot::open(self.name.as_str(), self.dir.as_str())?)
     }
 
-    /// Create a new writer handle. Note that, not all indexes allow
-    /// concurrent writers, and not all indexes support concurrent
-    /// read/write.
-    fn to_writer(&mut self) -> Self::W {
-        panic!("Read-only-btree don't support write operations")
+    /// Create a new read handle, for multi-threading.
+    fn to_reader(&mut self) -> Result<Self::R> {
+        Snapshot::open(&self.dir, &self.name)
+    }
+
+    /// writes not allowed !!
+    fn to_writer(&mut self) -> Result<Self::W> {
+        panic!("write ops are not allowed in Read-Only-Btree snapshots!!");
     }
 }
 
@@ -1322,7 +1327,7 @@ where
 // Read methods
 impl<K, V> Reader<K, V> for Snapshot<K, V>
 where
-    K: Clone + Ord + Serialize + Debug,
+    K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
 {
@@ -1460,7 +1465,7 @@ where
 
 impl<K, V> Snapshot<K, V>
 where
-    K: Clone + Ord + Serialize + Debug,
+    K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
 {
@@ -1756,7 +1761,7 @@ where
 /// [Robt]: crate::robt::Robt
 pub struct Iter<'a, K, V>
 where
-    K: Clone + Ord + Serialize + Debug,
+    K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
 {
@@ -1767,7 +1772,7 @@ where
 
 impl<'a, K, V> Iter<'a, K, V>
 where
-    K: Clone + Ord + Serialize + Debug,
+    K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
 {
@@ -1793,7 +1798,7 @@ where
 
 impl<'a, K, V> Iterator for Iter<'a, K, V>
 where
-    K: Clone + Ord + Serialize + Debug,
+    K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
 {
@@ -1825,7 +1830,7 @@ where
 /// [Robt]: crate::robt::Robt
 pub struct Range<'a, K, V, R, Q>
 where
-    K: Clone + Ord + Borrow<Q> + Serialize + Debug,
+    K: Clone + Ord + Borrow<Q> + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
     R: RangeBounds<Q>,
@@ -1840,7 +1845,7 @@ where
 
 impl<'a, K, V, R, Q> Range<'a, K, V, R, Q>
 where
-    K: Clone + Ord + Borrow<Q> + Serialize + Debug,
+    K: Clone + Ord + Borrow<Q> + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
     R: RangeBounds<Q>,
@@ -1872,7 +1877,7 @@ where
 
 impl<'a, K, V, R, Q> Iterator for Range<'a, K, V, R, Q>
 where
-    K: Clone + Ord + Borrow<Q> + Serialize + Debug,
+    K: Clone + Ord + Borrow<Q> + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
     R: RangeBounds<Q>,
@@ -1911,7 +1916,7 @@ where
 /// [Robt]: crate::robt::Robt
 pub struct Reverse<'a, K, V, R, Q>
 where
-    K: Clone + Ord + Borrow<Q> + Serialize + Debug,
+    K: Clone + Ord + Borrow<Q> + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
     R: RangeBounds<Q>,
@@ -1926,7 +1931,7 @@ where
 
 impl<'a, K, V, R, Q> Reverse<'a, K, V, R, Q>
 where
-    K: Clone + Ord + Borrow<Q> + Serialize + Debug,
+    K: Clone + Ord + Borrow<Q> + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
     R: RangeBounds<Q>,
@@ -1958,7 +1963,7 @@ where
 
 impl<'a, K, V, R, Q> Iterator for Reverse<'a, K, V, R, Q>
 where
-    K: Clone + Ord + Borrow<Q> + Serialize + Debug,
+    K: Clone + Ord + Borrow<Q> + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
     R: RangeBounds<Q>,
@@ -1994,7 +1999,7 @@ where
 
 enum MZ<K, V>
 where
-    K: Clone + Ord + Serialize + Debug,
+    K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
 {
@@ -2004,7 +2009,7 @@ where
 
 impl<K, V> Iterator for MZ<K, V>
 where
-    K: Clone + Ord + Serialize + Debug,
+    K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
 {
@@ -2030,7 +2035,7 @@ where
 
 impl<K, V> DoubleEndedIterator for MZ<K, V>
 where
-    K: Clone + Ord + Serialize + Debug,
+    K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
 {
@@ -2061,46 +2066,20 @@ where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
 {
-    fn set_index(
-        &mut self,
-        key: K,
-        value: V,
-        seqno: u64, // seqno for this mutation
-    ) -> (Option<u64>, Result<Option<Entry<K, V>>>) {
-        panic!(
-            "{} {} {}",
-            mem::size_of_val(&key),
-            mem::size_of_val(&value),
-            seqno
-        )
+    fn set(&mut self, _key: K, _value: V) -> Result<Option<Entry<K, V>>> {
+        panic!("set operation not allwed on Read-Only-Btree snapshot !!");
     }
 
-    fn set_cas_index(
-        &mut self,
-        key: K,
-        value: V,
-        cas: u64,
-        seqno: u64, // seqno for this mutation
-    ) -> (Option<u64>, Result<Option<Entry<K, V>>>) {
-        panic!(
-            "{} {} {} {}",
-            mem::size_of_val(&key),
-            mem::size_of_val(&value),
-            seqno,
-            cas
-        )
+    fn set_cas(&mut self, _: K, _: V, _: u64) -> Result<Option<Entry<K, V>>> {
+        panic!("set operation not allwed on Read-Only-Btree snapshot !!");
     }
 
-    fn delete_index<Q>(
-        &mut self,
-        key: &Q,
-        seqno: u64, // seqno for this mutation
-    ) -> (Option<u64>, Result<Option<Entry<K, V>>>)
+    fn delete<Q>(&mut self, _key: &Q) -> Result<Option<Entry<K, V>>>
     where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
     {
-        panic!("{} {}", mem::size_of_val(key), seqno)
+        panic!("set operation not allwed on Read-Only-Btree snapshot !!");
     }
 }
 

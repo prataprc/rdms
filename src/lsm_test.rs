@@ -12,8 +12,10 @@ use crate::error::Error;
 use crate::llrb::Llrb;
 use crate::mvcc::{Mvcc, MvccWriter};
 use crate::robt;
+use crate::scans::SkipScan;
 
 #[test]
+#[ignore]
 fn test_lsm_get1() {
     // test case using 5 mvcc versions
     let seed: u128 = random();
@@ -55,6 +57,7 @@ fn test_lsm_get1() {
 }
 
 #[test]
+#[ignore]
 fn test_lsm_get2() {
     // test case using 2 robt version and 1 mvcc versions
     let seed: u128 = random();

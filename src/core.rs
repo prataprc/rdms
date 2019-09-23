@@ -56,6 +56,87 @@ pub trait Footprint {
     fn footprint(&self) -> isize;
 }
 
+/// Index write operations.
+pub trait WalWriter<K, V>
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+{
+    /// Set {key, value} in index. Return older entry if present.
+    /// Return the seqno (index) for this mutation and older entry
+    /// if present. If operation was invalid or NOOP, returned seqno
+    /// shall be ZERO.
+    ///
+    /// *LSM mode*: Add a new version for the key, perserving the old value.
+    fn set_index(
+        &mut self,
+        key: K,
+        value: V,
+        index: u64, // seqno for this mutation
+    ) -> (Option<u64>, Result<Option<Entry<K, V>>>);
+
+    /// Set {key, value} in index if an older entry exists with the
+    /// same ``cas`` value. To create a fresh entry, pass ``cas`` as ZERO.
+    /// Return the seqno (index) for this mutation and older entry
+    /// if present. If operation was invalid or NOOP, returned seqno shall
+    /// be ZERO.
+    ///
+    /// *LSM mode*: Add a new version for the key, perserving the old value.
+    fn set_cas_index(
+        &mut self,
+        key: K,
+        value: V,
+        cas: u64,
+        index: u64,
+    ) -> (Option<u64>, Result<Option<Entry<K, V>>>);
+
+    /// Delete key from index. Return the seqno (index) for this mutation
+    /// and entry if present. If operation was invalid or NOOP, returned
+    /// seqno shall be ZERO.
+    ///
+    /// *LSM mode*: Mark the entry as deleted along with seqno at which it
+    /// deleted
+    ///
+    /// NOTE: K should be borrowable as &Q and Q must be convertable to
+    /// owned K. This is require in lsm mode, where owned K must be
+    /// inserted into the tree.
+    fn delete_index<Q>(
+        &mut self,
+        key: &Q,
+        index: u64, // seqno for this mutation
+    ) -> (Option<u64>, Result<Option<Entry<K, V>>>)
+    where
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized;
+}
+
+/// Replay WAL (Write-Ahead-Log) entries on index.
+pub trait Replay<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    /// Replay set operation on index.
+    fn set_index(
+        &mut self,
+        key: K,
+        value: V,
+        index: u64, // replay seqno
+    ) -> Result<Entry<K, V>>;
+
+    /// Replay set-cas operation on index.
+    fn set_cas_index(
+        &mut self,
+        key: K,
+        value: V,
+        cas: u64,
+        index: u64, // replay seqno
+    ) -> Result<Entry<K, V>>;
+
+    /// Replay delete operation on index.
+    fn delete_index(&mut self, key: K, index: u64) -> Result<Entry<K, V>>;
+}
+
 /// Index trait implemented by [Bogn]'s underlying data-structures that
 /// can ingest key, value pairs.
 ///
@@ -70,13 +151,20 @@ where
     /// this index.
     type W: Writer<K, V>;
 
+    /// A writer type, that can ingest key-value pairs, associated with
+    /// this index.
+    type R: Reader<K, V>;
+
     /// Make a new empty index of this type, with same configuration.
     fn make_new(&self) -> Result<Self>;
 
-    /// Create a new writer handle. Note that, not all indexes allow
-    /// concurrent writers, and not all indexes support concurrent
-    /// read/write.
-    fn to_writer(&mut self) -> Self::W;
+    /// Create a new read handle, for multi-threading. Note that not all
+    /// indexes allow concurrent readers. Refer to index API for more details.
+    fn to_reader(&mut self) -> Result<Self::R>;
+
+    /// Create a new write handle, for multi-threading. Note that not all
+    /// indexes allow concurrent writers. Refer to index API for more details.
+    fn to_writer(&mut self) -> Result<Self::W>;
 }
 
 /// Index read operations.
@@ -165,36 +253,22 @@ where
     V: Clone + Diff + Footprint,
 {
     /// Set {key, value} in index. Return older entry if present.
-    /// Return the seqno (index) for this mutation and older entry
-    /// if present. If operation was invalid or NOOP, returned seqno
-    /// shall be ZERO.
+    /// Return the older entry if present. If operation was invalid or
+    /// NOOP, returned seqno shall be ZERO.
     ///
     /// *LSM mode*: Add a new version for the key, perserving the old value.
-    fn set_index(
-        &mut self,
-        key: K,
-        value: V,
-        index: u64, // seqno for this mutation
-    ) -> (Option<u64>, Result<Option<Entry<K, V>>>);
+    fn set(&mut self, k: K, v: V) -> Result<Option<Entry<K, V>>>;
 
     /// Set {key, value} in index if an older entry exists with the
     /// same ``cas`` value. To create a fresh entry, pass ``cas`` as ZERO.
-    /// Return the seqno (index) for this mutation and older entry
-    /// if present. If operation was invalid or NOOP, returned seqno shall
-    /// be ZERO.
+    /// Return the older entry if present. If operation was invalid or
+    /// NOOP, returned seqno shall be ZERO.
     ///
     /// *LSM mode*: Add a new version for the key, perserving the old value.
-    fn set_cas_index(
-        &mut self,
-        key: K,
-        value: V,
-        cas: u64,
-        index: u64,
-    ) -> (Option<u64>, Result<Option<Entry<K, V>>>);
+    fn set_cas(&mut self, k: K, v: V, cas: u64) -> Result<Option<Entry<K, V>>>;
 
-    /// Delete key from index. Return the seqno (index) for this mutation
-    /// and entry if present. If operation was invalid or NOOP, returned
-    /// seqno shall be ZERO.
+    /// Delete key from index. Return the mutation and entry if present.
+    /// If operation was invalid or NOOP, returned seqno shall be ZERO.
     ///
     /// *LSM mode*: Mark the entry as deleted along with seqno at which it
     /// deleted
@@ -202,41 +276,10 @@ where
     /// NOTE: K should be borrowable as &Q and Q must be convertable to
     /// owned K. This is require in lsm mode, where owned K must be
     /// inserted into the tree.
-    fn delete_index<Q>(
-        &mut self,
-        key: &Q,
-        index: u64, // seqno for this mutation
-    ) -> (Option<u64>, Result<Option<Entry<K, V>>>)
+    fn delete<Q>(&mut self, key: &Q) -> Result<Option<Entry<K, V>>>
     where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized;
-}
-
-/// Replay WAL (Write-Ahead-Log) entries on index.
-pub trait Replay<K, V>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-{
-    /// Replay set operation on index.
-    fn set_index(
-        &mut self,
-        key: K,
-        value: V,
-        index: u64, // replay seqno
-    ) -> Result<Entry<K, V>>;
-
-    /// Replay set-cas operation on index.
-    fn set_cas_index(
-        &mut self,
-        key: K,
-        value: V,
-        cas: u64,
-        index: u64, // replay seqno
-    ) -> Result<Entry<K, V>>;
-
-    /// Replay delete operation on index.
-    fn delete_index(&mut self, key: K, index: u64) -> Result<Entry<K, V>>;
 }
 
 /// Serialize values to binary sequence of bytes.

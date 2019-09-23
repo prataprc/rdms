@@ -4,7 +4,6 @@ use std::cmp;
 
 use crate::core::{Diff, Entry, Footprint, IndexIter, Reader, Result};
 use crate::error::Error;
-use crate::scans::SkipScan;
 
 pub(crate) type LsmGet<'a, K, V, Q> = Box<dyn Fn(&Q) -> Result<Entry<K, V>> + 'a>;
 

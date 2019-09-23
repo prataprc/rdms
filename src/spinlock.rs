@@ -40,6 +40,8 @@
 use std::sync::atomic::{AtomicU64, Ordering::SeqCst};
 use std::{fmt, thread};
 
+// TODO: Experiment with different atomic::Ordering to improve performance.
+
 /// RWSpinlock implements latch-and-spin mechanism for non-blocking
 /// concurrency.
 ///

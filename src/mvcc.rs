@@ -11,22 +11,25 @@ use std::{
     marker, mem,
     ops::{Bound, Deref, DerefMut, RangeBounds},
     sync::{
-        self,
         atomic::{AtomicIsize, AtomicPtr, Ordering::SeqCst},
-        Arc,
+        mpsc, Arc,
     },
+    thread::{self, JoinHandle},
 };
 
 use crate::core::{Diff, Entry, Footprint, Result, ScanEntry, Value};
-use crate::core::{FullScan, Index, IndexIter, Reader, ScanIter, Writer};
+use crate::core::{FullScan, Index, IndexIter, ScanIter};
+use crate::core::{Reader, WalWriter, Writer};
 use crate::error::Error;
 use crate::llrb::Llrb;
 use crate::llrb_node::{LlrbDepth, Node, Stats};
-use crate::spinlock;
+use crate::spinlock::{self, RWSpinlock};
 
 const RECLAIM_CAP: usize = 128;
 
 include!("llrb_common.rs");
+
+// TODO: Experiment with different atomic::Ordering to improve performance.
 
 /// [LLRB][llrb] index for concurrent readers, single writer using
 /// [Multi-Version-Concurrency-Control][mvcc].
@@ -40,10 +43,13 @@ where
 {
     name: String,
     lsm: bool,
+    spin: bool,
+
     snapshot: OuterSnapshot<K, V>,
+    latch: RWSpinlock,
     key_footprint: AtomicIsize,
     tree_footprint: AtomicIsize,
-    w: Option<MvccWriter<K, V>>,
+    gc: Option<JoinHandle<Result<()>>>, // garbage collection in separate thread.
 }
 
 impl<K, V> Drop for Mvcc<K, V>
@@ -55,73 +61,91 @@ where
         // NOTE: Means all references to mvcc are gone and ownership is
         // going out of scope. This also implies that there are only
         // TWO Arc<snapshots>. One is held by self.snapshot and another
-        // is held by `next`.
+        // is held by its `next`.
 
         // NOTE: self.snapshot's AtomicPtr will fence the drop chain, so
         // we have to get past the atomic fence and drop it here.
         // NOTE: Likewise Snapshot's drop will fence the drop on its
         // `root` field, so we have to get past that and drop it here.
         // TODO: move this logic to OuterSnapshot::Drop
-        let mut curr_s: Box<Arc<Snapshot<K,V>>> = // current snapshot
-            unsafe { Box::from_raw(self.snapshot.inner.load(SeqCst)) };
-        let snapshot = Arc::get_mut(&mut *curr_s).unwrap();
+        {
+            let mut curr_s: Box<Arc<Snapshot<K,V>>> = // current snapshot
+                unsafe { Box::from_raw(self.snapshot.inner.load(SeqCst)) };
+            let snapshot = Arc::get_mut(&mut *curr_s).unwrap();
+            // println!("drop mvcc {:p} {:p}", self, snapshot);
+            snapshot.root.take().map(|root| drop_tree(root));
+        }
 
-        // println!("drop mvcc {:p} {:p}", self, snapshot);
-        snapshot.root.take().map(|root| drop_tree(root));
+        mem::drop(self.snapshot.gc_tx.take().unwrap());
+        self.gc.take().unwrap().join().ok(); // ignore gc thread's error here.
     }
 }
 
 /// Construct new instance of Mvcc.
 impl<K, V> Mvcc<K, V>
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
+    K: 'static + Send + Clone + Ord + Footprint,
+    V: 'static + Send + Clone + Diff + Footprint,
+    <V as Diff>::D: Send,
 {
     pub fn new<S>(name: S) -> Box<Mvcc<K, V>>
     where
         S: AsRef<str>,
     {
-        let mut index = Box::new(Mvcc {
+        // spawn gc thread.
+        let (gc_tx, gc_rx) = mpsc::channel();
+        let gc: Option<JoinHandle<Result<()>>> = // thread.
+            Some(thread::spawn(move || gc::<K, V>(gc_rx)));
+        Box::new(Mvcc {
             name: name.as_ref().to_string(),
             lsm: false,
-            snapshot: OuterSnapshot::new(),
+            spin: true,
+
+            snapshot: OuterSnapshot::new(gc_tx),
+            latch: RWSpinlock::new(),
             key_footprint: AtomicIsize::new(0),
             tree_footprint: AtomicIsize::new(0),
-            w: Default::default(),
-        });
-        let idx = index.as_mut() as *mut Mvcc<K, V>;
-        index.w = Some(MvccWriter::new(idx));
-        index
+            gc,
+        })
     }
 
     pub fn new_lsm<S>(name: S) -> Box<Mvcc<K, V>>
     where
         S: AsRef<str>,
     {
-        let mut index = Box::new(Mvcc {
+        // spawn gc thread.
+        let (gc_tx, gc_rx) = mpsc::channel();
+        let gc: Option<JoinHandle<Result<()>>> = // thread.
+            Some(thread::spawn(move || gc::<K, V>(gc_rx)));
+        Box::new(Mvcc {
             name: name.as_ref().to_string(),
             lsm: true,
-            snapshot: OuterSnapshot::new(),
+            spin: true,
+
+            snapshot: OuterSnapshot::new(gc_tx),
+            latch: RWSpinlock::new(),
             key_footprint: AtomicIsize::new(0),
             tree_footprint: AtomicIsize::new(0),
-            w: unsafe { mem::zeroed() },
-        });
-        let idx = index.as_mut() as *mut Mvcc<K, V>;
-        index.w = Some(MvccWriter::new(idx));
-        index
+            gc,
+        })
     }
 
     pub fn clone(&self) -> Box<Mvcc<K, V>> {
-        let mut cloned = Box::new(Mvcc {
+        // spawn gc thread.
+        let (gc_tx, gc_rx) = mpsc::channel();
+        let gc: Option<JoinHandle<Result<()>>> = // thread.
+            Some(thread::spawn(move || gc::<K, V>(gc_rx)));
+        let cloned = Box::new(Mvcc {
             name: self.name.clone(),
             lsm: self.lsm,
-            snapshot: OuterSnapshot::new(),
+            spin: self.spin,
+
+            snapshot: OuterSnapshot::new(gc_tx),
+            latch: RWSpinlock::new(),
             key_footprint: AtomicIsize::new(self.key_footprint.load(SeqCst)),
             tree_footprint: AtomicIsize::new(self.tree_footprint.load(SeqCst)),
-            w: Default::default(),
+            gc,
         });
-        let idx = cloned.as_mut() as *mut Mvcc<K, V>;
-        cloned.w = Some(MvccWriter::new(idx));
 
         let s: Arc<Snapshot<K, V>> = OuterSnapshot::clone(&self.snapshot);
         let root_node = match s.as_root() {
@@ -135,18 +159,18 @@ where
     }
 
     pub fn from_llrb(llrb_index: Llrb<K, V>) -> Box<Mvcc<K, V>> {
-        let mvcc_index = if llrb_index.is_lsm() {
+        let mut mvcc_index = if llrb_index.is_lsm() {
             Mvcc::new_lsm(llrb_index.to_name())
         } else {
             Mvcc::new(llrb_index.to_name())
         };
+        mvcc_index.set_spinlatch(llrb_index.to_spin());
 
         let debris = llrb_index.squash();
         mvcc_index.key_footprint.store(debris.key_footprint, SeqCst);
         mvcc_index
             .tree_footprint
             .store(debris.tree_footprint, SeqCst);
-
         mvcc_index.snapshot.shift_snapshot(
             debris.root,
             debris.seqno,
@@ -156,25 +180,37 @@ where
         mvcc_index
     }
 
-    #[allow(dead_code)] // TODO: remove this once bogn is weaved-up.
-    pub(crate) fn set_seqno(&mut self, seqno: u64) {
-        let s = OuterSnapshot::clone(&self.snapshot);
-        let root = s.root_duplicate();
-        self.snapshot.shift_snapshot(root, seqno, s.n_count, vec![]);
+    /// application can set the start sequence number for this index.
+    pub fn set_seqno(&mut self, seqno: u64) {
+        let snapshot = OuterSnapshot::clone(&self.snapshot);
+        let root = snapshot.root_duplicate();
+        self.snapshot
+            .shift_snapshot(root, seqno, snapshot.n_count, vec![]);
+    }
+
+    /// Configure behaviour of spin-latch. If `spin` is true, calling
+    /// thread shall spin until a latch is acquired or released, if false
+    /// calling thread will yield to scheduler.
+    pub fn set_spinlatch(&mut self, spin: bool) {
+        self.spin = spin;
     }
 
     fn shallow_clone(&self) -> Box<Mvcc<K, V>> {
-        let mut index = Box::new(Mvcc {
+        // spawn gc thread.
+        let (gc_tx, gc_rx) = mpsc::channel();
+        let gc: Option<JoinHandle<Result<()>>> = // thread.
+            Some(thread::spawn(move || gc::<K, V>(gc_rx)));
+        Box::new(Mvcc {
             name: self.name.clone(),
             lsm: self.lsm,
-            snapshot: OuterSnapshot::new(),
+            spin: self.spin,
+
+            snapshot: OuterSnapshot::new(gc_tx),
+            latch: RWSpinlock::new(),
             key_footprint: AtomicIsize::new(self.key_footprint.load(SeqCst)),
             tree_footprint: AtomicIsize::new(self.tree_footprint.load(SeqCst)),
-            w: unsafe { mem::zeroed() },
-        });
-        let idx = index.as_mut() as *mut Mvcc<K, V>;
-        index.w = Some(MvccWriter::new(idx));
-        index
+            gc,
+        })
     }
 }
 
@@ -184,6 +220,12 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
+    /// Return whether this index support lsm mode.
+    #[inline]
+    pub fn is_lsm(&self) -> bool {
+        self.lsm
+    }
+
     /// Return number of entries in this instance.
     #[inline]
     pub fn len(&self) -> usize {
@@ -212,25 +254,37 @@ where
 
 impl<K, V> Index<K, V> for Box<Mvcc<K, V>>
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
+    K: 'static + Send + Clone + Ord + Footprint,
+    V: 'static + Send + Clone + Diff + Footprint,
+    <V as Diff>::D: Send,
 {
     type W = MvccWriter<K, V>;
+    type R = MvccReader<K, V>;
 
     /// Make a new empty index of this type, with same configuration.
     fn make_new(&self) -> Result<Self> {
         Ok(self.shallow_clone())
     }
 
-    /// Create a new writer handle. Only one writer handle can be
-    /// active at any time, creating more than one writer handle
-    /// will panic. Concurrent readers are allowed without using any
-    /// underlying locks/latches.
-    fn to_writer(&mut self) -> Self::W {
-        match self.w.take() {
-            Some(w) => w,
-            None => panic!("writer not initialized"),
-        }
+    /// Lockless concurrent readers are supported
+    fn to_reader(&mut self) -> Result<Self::R> {
+        let index: Box<std::ffi::c_void> = unsafe {
+            // transmute self as void pointer.
+            let index = self.as_mut();
+            Box::from_raw(index as *mut Mvcc<K, V> as *mut std::ffi::c_void)
+        };
+        Ok(MvccReader::<K, V>::new(index))
+    }
+
+    /// Create a new writer handle. Multiple writers uses spin-lock to
+    /// serialize write operation.
+    fn to_writer(&mut self) -> Result<Self::W> {
+        let index: Box<std::ffi::c_void> = unsafe {
+            // transmute self as void pointer.
+            let index = self.as_mut();
+            Box::from_raw(index as *mut Mvcc<K, V> as *mut std::ffi::c_void)
+        };
+        Ok(MvccWriter::<K, V>::new(index))
     }
 }
 
@@ -244,48 +298,252 @@ where
     }
 }
 
-/// Create/Update/Delete operations on Mvcc instance.
 impl<K, V> Mvcc<K, V>
 where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
 {
-    pub fn set(&mut self, key: K, value: V) -> Result<Option<Entry<K, V>>> {
-        let seqno = self.to_seqno();
-        match &mut self.w {
-            Some(w) => {
-                let (_seqno, entry) = w.set_index(key, value, seqno + 1);
-                entry
+    fn set_index(
+        &mut self,
+        key: K,
+        value: V,
+        seqno: Option<u64>, // seqno for this mutation
+    ) -> (Option<u64>, Result<Option<Entry<K, V>>>) {
+        let _w = self.latch.acquire_write(self.spin);
+        let snapshot: &Arc<Snapshot<K, V>> = self.snapshot.as_ref();
+
+        let seqno = match seqno {
+            Some(seqno) => seqno,
+            None => snapshot.seqno + 1,
+        };
+        let key_footprint = key.footprint();
+
+        let mut n_count = snapshot.n_count;
+        let value = Box::new(Value::new_upsert_value(value, seqno));
+        let new_entry = Entry::new(key, value);
+
+        let root = snapshot.root_duplicate();
+        let mut reclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
+        match Mvcc::upsert(root, new_entry, self.lsm, &mut reclm) {
+            UpsertResult {
+                node: Some(mut root),
+                new_node: Some(mut n),
+                old_entry,
+                size,
+            } => {
+                root.set_black();
+                if old_entry.is_none() {
+                    n_count += 1;
+                    self.key_footprint.fetch_add(key_footprint, SeqCst);
+                }
+                self.tree_footprint.fetch_add(size, SeqCst);
+                n.dirty = false;
+                Box::leak(n);
+                self.snapshot
+                    .shift_snapshot(Some(root), seqno, n_count, reclm);
+                (Some(seqno), Ok(old_entry))
             }
-            None => panic!("already given a writer_handle for this index"),
+            _ => unreachable!(),
         }
     }
 
-    pub fn set_cas(&mut self, key: K, value: V, cas: u64) -> Result<Option<Entry<K, V>>> {
-        let seqno = self.to_seqno();
-        match &mut self.w {
-            Some(w) => {
-                let (_, entry) = w.set_cas_index(key, value, cas, seqno + 1);
-                entry
+    fn set_cas_index(
+        &mut self,
+        key: K,
+        value: V,
+        cas: u64,
+        seqno: Option<u64>, // seqno for this mutation
+    ) -> (Option<u64>, Result<Option<Entry<K, V>>>) {
+        let _w = self.latch.acquire_write(self.spin);
+        let snapshot: &Arc<Snapshot<K, V>> = self.snapshot.as_ref();
+
+        let seqno = match seqno {
+            Some(seqno) => seqno,
+            None => snapshot.seqno + 1,
+        };
+        let lsm = self.lsm;
+        let key_footprint = key.footprint();
+
+        let mut n_count = snapshot.n_count;
+        let value = Box::new(Value::new_upsert_value(value, seqno));
+        let new_entry = Entry::new(key, value);
+
+        let root = snapshot.root_duplicate();
+        let mut rclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
+        let s = match Mvcc::upsert_cas(root, new_entry, cas, lsm, &mut rclm) {
+            UpsertCasResult {
+                node: Some(mut root),
+                new_node,
+                old_entry,
+                err: None,
+                size,
+            } => {
+                root.set_black();
+                if old_entry.is_none() {
+                    self.key_footprint.fetch_add(key_footprint, SeqCst);
+                    n_count += 1
+                }
+                self.tree_footprint.fetch_add(size, SeqCst);
+                (seqno, root, new_node, Ok(old_entry))
             }
-            None => panic!("already given a writer_handle for this index"),
+            UpsertCasResult {
+                node: Some(mut root),
+                new_node,
+                err: Some(err),
+                ..
+            } => {
+                root.set_black();
+                (snapshot.seqno, root, new_node, Err(err))
+            }
+            _ => panic!("set_cas: impossible case, call programmer"),
+        };
+        let (seqno, root, optn, entry) = s;
+
+        if let Some(mut n) = optn {
+            n.dirty = false;
+            Box::leak(n);
         }
+
+        // TODO: can we optimize this for no-op cases (err cases) ?
+        self.snapshot
+            .shift_snapshot(Some(root), seqno, n_count, rclm);
+
+        (Some(seqno), entry)
     }
 
-    pub fn delete<Q>(&mut self, key: &Q) -> Result<Option<Entry<K, V>>>
+    fn delete_index<Q>(
+        &mut self,
+        key: &Q,
+        seqno: Option<u64>, // seqno for this mutation
+    ) -> (Option<u64>, Result<Option<Entry<K, V>>>)
     where
         // TODO: From<Q> and Clone will fail if V=String and Q=str
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
     {
-        let seqno = self.to_seqno();
-        match &mut self.w {
-            Some(w) => {
-                let (_seqno, entry) = w.delete_index(key, seqno + 1);
-                entry
+        let _w = self.latch.acquire_write(self.spin);
+        let snapshot: &Arc<Snapshot<K, V>> = self.snapshot.as_ref();
+
+        let seqno = match seqno {
+            Some(seqno) => seqno,
+            None => snapshot.seqno + 1,
+        };
+        let key_footprint = key.to_owned().footprint();
+        let mut n_count = snapshot.n_count;
+
+        let root = snapshot.root_duplicate();
+        let mut reclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
+        let (seqno, root, old_entry) = if self.lsm {
+            let s = match Mvcc::delete_lsm(root, key, seqno, &mut reclm) {
+                DeleteResult {
+                    node: Some(mut root),
+                    new_node,
+                    old_entry,
+                    size,
+                } => {
+                    root.set_black();
+                    (Some(root), new_node, old_entry, size)
+                }
+                DeleteResult {
+                    node: None,
+                    new_node,
+                    old_entry,
+                    size,
+                } => (None, new_node, old_entry, size),
+            };
+            let (root, new_node, old_entry, size) = s;
+
+            // println!("delete {:?}", entry.as_ref().map(|e| e.is_deleted()));
+            let seqno = match &old_entry {
+                None => {
+                    self.key_footprint.fetch_add(key_footprint, SeqCst);
+                    self.tree_footprint.fetch_add(size, SeqCst);
+
+                    n_count += 1;
+                    seqno
+                }
+                Some(e) if e.is_deleted() => snapshot.seqno,
+                _ /* not-deleted */ => {
+                    self.tree_footprint.fetch_add(size, SeqCst);
+                    seqno
+                }
+            };
+
+            if let Some(mut n) = new_node {
+                n.dirty = false;
+                Box::leak(n);
             }
-            None => panic!("already given a writer_handle for this index"),
-        }
+            (seqno, root, old_entry)
+        } else {
+            // in non-lsm mode remove the entry from the tree.
+            let res = match Mvcc::do_delete(root, key, &mut reclm) {
+                res @ DeleteResult { node: None, .. } => res,
+                mut res => {
+                    res.node.as_mut().map(|node| node.set_black());
+                    res
+                }
+            };
+            let seqno = if res.old_entry.is_some() {
+                self.key_footprint.fetch_add(key_footprint, SeqCst);
+                self.tree_footprint.fetch_add(res.size, SeqCst);
+                n_count -= 1;
+                seqno
+            } else {
+                snapshot.seqno
+            };
+            (seqno, res.node, res.old_entry)
+        };
+
+        self.snapshot.shift_snapshot(root, seqno, n_count, reclm);
+        (Some(seqno), Ok(old_entry))
+    }
+}
+
+/// Create/Update/Delete operations on Mvcc instance.
+impl<K, V> Writer<K, V> for Mvcc<K, V>
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+{
+    /// Set {key, value} pair into index. If key is already
+    /// present, update the value and return the previous entry, else
+    /// create a new entry.
+    ///
+    /// *LSM mode*: Add a new version for the key, perserving the old value.
+    fn set(&mut self, key: K, value: V) -> Result<Option<Entry<K, V>>> {
+        let (_seqno, entry) = self.set_index(key, value, None);
+        entry
+    }
+
+    /// Similar to set, but succeeds only when CAS matches with entry's
+    /// last `seqno`. In other words, since seqno is unique to each mutation,
+    /// we use `seqno` of the mutation as the CAS value. Use CAS == 0 to
+    /// enforce a create operation.
+    ///
+    /// *LSM mode*: Add a new version for the key, perserving the old value.
+    fn set_cas(&mut self, key: K, value: V, cas: u64) -> Result<Option<Entry<K, V>>> {
+        let (_seqno, entry) = self.set_cas_index(key, value, cas, None);
+        entry
+    }
+
+    /// Delete the given key. Note that back-to-back delete for the same
+    /// key shall collapse into a single delete, first delete is ingested
+    /// while the rest are ignored.
+    ///
+    /// *LSM mode*: Mark the entry as deleted along with seqno at which it
+    /// deleted
+    ///
+    /// NOTE: K should be borrowable as &Q and Q must be convertable to
+    /// owned K. This is require in lsm mode, where owned K must be
+    /// inserted into the tree.
+    fn delete<Q>(&mut self, key: &Q) -> Result<Option<Entry<K, V>>>
+    where
+        // TODO: From<Q> and Clone will fail if V=String and Q=str
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
+    {
+        let (_seqno, entry) = self.delete_index(key, None);
+        entry
     }
 }
 
@@ -655,17 +913,7 @@ where
         Q: Ord + ?Sized,
     {
         let snapshot: Arc<Snapshot<K, V>> = OuterSnapshot::clone(&self.snapshot);
-        println!(
-            "get snapshot {:p} {}",
-            snapshot.as_ref(),
-            Arc::strong_count(&snapshot)
-        );
         let res = get(snapshot.as_root(), key);
-        // match &res {
-        //     Ok(_entry) => (),
-        //     Err(err) => println!("get err: {:?}", err),
-        // }
-        // println!("ok");
         res
     }
 
@@ -1019,18 +1267,24 @@ where
     }
 }
 
-// TODO: we are using Arc<Snapshot> behind AtomicPtr for concurrent access
-// is it okay to avoid AtomicPtr altogther ? In otherwords, if `inner`
-// field is of type Arc<Snapshot> instead of AtomicPtr<Arc<Snapshot>> is
-// okay to allow concurrent r/w access to inner field.
-
 struct OuterSnapshot<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    lock: sync::RwLock<i32>,
+    ulatch: RWSpinlock,
     inner: AtomicPtr<Arc<Snapshot<K, V>>>,
+    gc_tx: Option<mpsc::Sender<Vec<Box<Node<K, V>>>>>,
+}
+
+impl<K, V> AsRef<Arc<Snapshot<K, V>>> for OuterSnapshot<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    fn as_ref(&self) -> &Arc<Snapshot<K, V>> {
+        unsafe { self.inner.load(SeqCst).as_ref().unwrap() }
+    }
 }
 
 impl<K, V> OuterSnapshot<K, V>
@@ -1039,21 +1293,23 @@ where
     V: Clone + Diff,
 {
     // create the first snapshot and a placeholder `next` snapshot for Mvcc.
-    fn new() -> OuterSnapshot<K, V> {
+    fn new(gc_tx: mpsc::Sender<Vec<Box<Node<K, V>>>>) -> OuterSnapshot<K, V> {
         let next_snapshot: Option<Arc<Snapshot<K,V>>> = // dummy next snapshot
-            Some(Arc::new(*Snapshot::new(None)));
-        let snapshot: Box<Snapshot<K, V>> = Snapshot::new(next_snapshot);
+            Some(Arc::new(*Snapshot::new(None, gc_tx.clone())));
+        let curr_snapshot: Box<Snapshot<K, V>> = // current snapshot
+            Snapshot::new(next_snapshot, gc_tx.clone());
 
-        let arc: Box<Arc<Snapshot<K, V>>> = Box::new(Arc::new(*snapshot));
+        let arc: Box<Arc<Snapshot<K, V>>> = Box::new(Arc::new(*curr_snapshot));
         OuterSnapshot {
-            lock: sync::RwLock::new(0),
+            ulatch: RWSpinlock::new(),
             inner: AtomicPtr::new(Box::leak(arc)),
+            gc_tx: Some(gc_tx),
         }
     }
 
     // similar to Arc::clone for AtomicPtr<Arc<Snapshot<K,V>>>
     fn clone(this: &OuterSnapshot<K, V>) -> Arc<Snapshot<K, V>> {
-        let _r = this.lock.read().unwrap();
+        let _r = this.ulatch.acquire_read(true /*spin*/);
         let inner_snap: &Arc<Snapshot<K,V>> =  // from heap
             unsafe { this.inner.load(SeqCst).as_ref().unwrap() };
         Arc::clone(inner_snap)
@@ -1066,7 +1322,7 @@ where
         n_count: usize,
         reclaim: Vec<Box<Node<K, V>>>,
     ) {
-        let _w = self.lock.write().unwrap();
+        let _w = self.ulatch.acquire_write(true /*spin*/);
 
         // * curr_s points to next_s, and currently the only reference to next_s.
         // * curr_s gets dropped, but there can be readers holding a reference.
@@ -1086,10 +1342,11 @@ where
         let next_m = Arc::get_mut(curr_m.next.as_mut().unwrap()).unwrap();
         // populate the next snapshot.
         next_m.root = root;
+        next_m.reclaim = reclaim;
         next_m.seqno = seqno;
         next_m.n_count = n_count;
-        next_m.next = Some(Arc::new(*Snapshot::new(None)));
-        next_m.reclaim = reclaim;
+        let gc_tx = self.gc_tx.as_ref().unwrap().clone();
+        next_m.next = Some(Arc::new(*Snapshot::new(None, gc_tx)));
 
         let next_s: Box<Arc<Snapshot<K, V>>> = Box::new(Arc::clone(
             // clone a Arc reference of next snapshot and make it current
@@ -1108,10 +1365,6 @@ where
 
         self.inner.store(Box::leak(next_s), SeqCst);
     }
-
-    fn as_inner(&self) -> &Arc<Snapshot<K, V>> {
-        unsafe { self.inner.load(SeqCst).as_ref().unwrap() }
-    }
 }
 
 pub(crate) struct Snapshot<K, V>
@@ -1124,6 +1377,7 @@ where
     seqno: u64,     // starts from 0 and incr for every mutation.
     n_count: usize, // number of entries in the tree.
     next: Option<Arc<Snapshot<K, V>>>,
+    gc_tx: Option<mpsc::Sender<Vec<Box<Node<K, V>>>>>,
 }
 
 impl<K, V> Snapshot<K, V>
@@ -1133,11 +1387,19 @@ where
 {
     // shall be called twice while creating the Mvcc index and once
     // for every new snapshot that gets created and shifted into the chain.
-    fn new(next: Option<Arc<Snapshot<K, V>>>) -> Box<Snapshot<K, V>> {
+    fn new(
+        next: Option<Arc<Snapshot<K, V>>>,
+        gc_tx: mpsc::Sender<Vec<Box<Node<K, V>>>>,
+    ) -> Box<Snapshot<K, V>> {
         // println!("new mvcc-root {:p}", snapshot);
-        let mut snapshot: Box<Snapshot<K, V>> = Box::new(Default::default());
-        snapshot.next = next;
-        snapshot
+        Box::new(Snapshot {
+            root: Default::default(),
+            reclaim: Default::default(),
+            seqno: Default::default(),
+            n_count: Default::default(),
+            next,
+            gc_tx: Some(gc_tx),
+        })
     }
 
     fn root_duplicate(&self) -> Option<Box<Node<K, V>>> {
@@ -1163,14 +1425,16 @@ where
     fn drop(&mut self) {
         // NOTE: `root` will be leaked, so that the tree is intact.
 
+        self.root.take().map(Box::leak); // Leak root
+
         // NOTE: `reclaim` nodes will be dropped, but due the Drop
         // implementation of Node, child nodes won't be dropped.
 
-        match self.next.as_ref() {
-            Some(x) => println!("drop snapshot {:p} {}", self, Arc::strong_count(x)),
-            None => (),
+        let mut reclaim = vec![];
+        while let Some(node) = self.reclaim.pop() {
+            reclaim.push(node);
         }
-        self.root.take().map(Box::leak); // Leak root
+        self.gc_tx.as_ref().unwrap().send(reclaim).ok();
     }
 }
 
@@ -1186,14 +1450,141 @@ where
             seqno: Default::default(),
             n_count: Default::default(),
             next: Default::default(),
+            gc_tx: Default::default(),
         }
     }
 }
 
+/// Multi-threaded read-handle for Mvcc.
+pub struct MvccReader<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    index: Option<Box<std::ffi::c_void>>, // Box<Mvcc<K, V>>
+    phantom_key: marker::PhantomData<K>,
+    phantom_val: marker::PhantomData<V>,
+}
+
+impl<K, V> Drop for MvccReader<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    fn drop(&mut self) {
+        // leak this index, it is only a reference
+        Box::leak(self.index.take().unwrap());
+    }
+}
+
+impl<K, V> AsRef<Mvcc<K, V>> for MvccReader<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    fn as_ref(&self) -> &Mvcc<K, V> {
+        unsafe {
+            // transmute void pointer to mutable reference into index.
+            let index_ptr = self.index.as_ref().unwrap().as_ref();
+            let index_ptr = index_ptr as *const std::ffi::c_void;
+            (index_ptr as *const Mvcc<K, V>).as_ref().unwrap()
+        }
+    }
+}
+
+impl<K, V> MvccReader<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    fn new(index: Box<std::ffi::c_void>) -> MvccReader<K, V> {
+        MvccReader {
+            index: Some(index),
+            phantom_key: marker::PhantomData,
+            phantom_val: marker::PhantomData,
+        }
+    }
+}
+
+impl<K, V> Reader<K, V> for MvccReader<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    /// Get ``key`` from index.
+    fn get<Q>(&self, key: &Q) -> Result<Entry<K, V>>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        let index: &Mvcc<K, V> = self.as_ref();
+        index.get(key)
+    }
+
+    /// Iterate over all entries in this index.
+    fn iter(&self) -> Result<IndexIter<K, V>> {
+        let index: &Mvcc<K, V> = self.as_ref();
+        index.iter()
+    }
+
+    /// Iterate from lower bound to upper bound.
+    fn range<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
+    where
+        K: Borrow<Q>,
+        R: 'a + RangeBounds<Q>,
+        Q: 'a + Ord + ?Sized,
+    {
+        let index: &Mvcc<K, V> = self.as_ref();
+        index.range(range)
+    }
+
+    /// Iterate from upper bound to lower bound.
+    fn reverse<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
+    where
+        K: Borrow<Q>,
+        R: 'a + RangeBounds<Q>,
+        Q: 'a + Ord + ?Sized,
+    {
+        let index: &Mvcc<K, V> = self.as_ref();
+        index.reverse(range)
+    }
+
+    /// Short circuited to get().
+    fn get_with_versions<Q>(&self, key: &Q) -> Result<Entry<K, V>>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        self.get(key)
+    }
+
+    /// Short circuited to iter().
+    fn iter_with_versions(&self) -> Result<IndexIter<K, V>> {
+        self.iter()
+    }
+
+    /// Short circuited to range().
+    fn range_with_versions<'a, R, Q>(&'a self, r: R) -> Result<IndexIter<K, V>>
+    where
+        K: Borrow<Q>,
+        R: 'a + RangeBounds<Q>,
+        Q: 'a + Ord + ?Sized,
+    {
+        self.range(r)
+    }
+
+    /// Short circuited to reverse()
+    fn reverse_with_versions<'a, R, Q>(&'a self, r: R) -> Result<IndexIter<K, V>>
+    where
+        K: Borrow<Q>,
+        R: 'a + RangeBounds<Q>,
+        Q: 'a + Ord + ?Sized,
+    {
+        self.reverse(r)
+    }
+}
+
 /// MvccWriter handle for [`Mvcc`] index.
-///
-/// Note that only one writer handle can be active at any given
-/// time to write into Mvcc index.
 ///
 /// [Mvcc]: crate::mvcc::Mvcc
 pub struct MvccWriter<K, V>
@@ -1201,7 +1592,35 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    index: Option<AtomicPtr<Mvcc<K, V>>>,
+    index: Option<Box<std::ffi::c_void>>,
+    phantom_key: marker::PhantomData<K>,
+    phantom_val: marker::PhantomData<V>,
+}
+
+impl<K, V> Drop for MvccWriter<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    fn drop(&mut self) {
+        // leak this index, it is only a reference
+        Box::leak(self.index.take().unwrap());
+    }
+}
+
+impl<K, V> AsMut<Mvcc<K, V>> for MvccWriter<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    fn as_mut(&mut self) -> &mut Mvcc<K, V> {
+        unsafe {
+            // transmute void pointer to mutable reference into index.
+            let index_ptr = self.index.as_mut().unwrap().as_mut();
+            let index_ptr = index_ptr as *mut std::ffi::c_void;
+            (index_ptr as *mut Mvcc<K, V>).as_mut().unwrap()
+        }
+    }
 }
 
 impl<K, V> MvccWriter<K, V>
@@ -1209,50 +1628,12 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    fn new(index: *mut Mvcc<K, V>) -> MvccWriter<K, V> {
+    fn new(index: Box<std::ffi::c_void>) -> MvccWriter<K, V> {
         MvccWriter {
-            index: Some(AtomicPtr::new(index)),
+            index: Some(index),
+            phantom_key: marker::PhantomData,
+            phantom_val: marker::PhantomData,
         }
-    }
-}
-
-impl<K, V> MvccWriter<K, V>
-where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
-{
-    fn get_index(&mut self) -> &mut Mvcc<K, V> {
-        match &mut self.index {
-            Some(index) => unsafe { index.load(SeqCst).as_mut().unwrap() },
-            None => unreachable!(),
-        }
-    }
-
-    pub fn set(&mut self, key: K, value: V) -> Result<Option<Entry<K, V>>> {
-        let index = self.get_index();
-        let seqno = index.to_seqno();
-        let (_seqno, entry) = self.set_index(key, value, seqno + 1);
-        println!("set {}", seqno);
-        entry
-    }
-
-    pub fn set_cas(&mut self, key: K, value: V, cas: u64) -> Result<Option<Entry<K, V>>> {
-        let index = self.get_index();
-        let seqno = index.to_seqno();
-        let (_seqno, entry) = self.set_cas_index(key, value, cas, seqno + 1);
-        entry
-    }
-
-    pub fn delete<Q>(&mut self, key: &Q) -> Result<Option<Entry<K, V>>>
-    where
-        // TODO: From<Q> and Clone will fail if V=String and Q=str
-        K: Borrow<Q>,
-        Q: ToOwned<Owned = K> + Ord + ?Sized,
-    {
-        let index = self.get_index();
-        let seqno = index.to_seqno();
-        let (_seqno, entry) = self.delete_index(key, seqno + 1);
-        entry
     }
 }
 
@@ -1261,188 +1642,118 @@ where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
 {
+    /// Set {key, value} pair into index. If key is already
+    /// present, update the value and return the previous entry, else
+    /// create a new entry.
+    ///
+    /// *LSM mode*: Add a new version for the key, perserving the old value.
+    fn set(&mut self, key: K, value: V) -> Result<Option<Entry<K, V>>> {
+        let index: &mut Mvcc<K, V> = self.as_mut();
+        let (_seqno, entry) = index.set_index(key, value, None);
+        entry
+    }
+
+    /// Similar to set, but succeeds only when CAS matches with entry's
+    /// last `seqno`. In other words, since seqno is unique to each mutation,
+    /// we use `seqno` of the mutation as the CAS value. Use CAS == 0 to
+    /// enforce a create operation.
+    ///
+    /// *LSM mode*: Add a new version for the key, perserving the old value.
+    fn set_cas(&mut self, key: K, value: V, cas: u64) -> Result<Option<Entry<K, V>>> {
+        let index: &mut Mvcc<K, V> = self.as_mut();
+        let (_seqno, entry) = index.set_cas_index(key, value, cas, None);
+        entry
+    }
+
+    /// Delete the given key. Note that back-to-back delete for the same
+    /// key shall collapse into a single delete, first delete is ingested
+    /// while the rest are ignored.
+    ///
+    /// *LSM mode*: Mark the entry as deleted along with seqno at which it
+    /// deleted
+    ///
+    /// NOTE: K should be borrowable as &Q and Q must be convertable to
+    /// owned K. This is require in lsm mode, where owned K must be
+    /// inserted into the tree.
+    fn delete<Q>(&mut self, key: &Q) -> Result<Option<Entry<K, V>>>
+    where
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
+    {
+        let index: &mut Mvcc<K, V> = self.as_mut();
+        let (_seqno, entry) = index.delete_index(key, None);
+        entry
+    }
+}
+
+impl<K, V> WalWriter<K, V> for MvccWriter<K, V>
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+{
+    /// Set {key, value} in index. Return older entry if present.
+    /// Return the seqno (index) for this mutation and older entry
+    /// if present. If operation was invalid or NOOP, returned seqno
+    /// shall be ZERO.
+    ///
+    /// *LSM mode*: Add a new version for the key, perserving the old value.
     fn set_index(
         &mut self,
         key: K,
         value: V,
         seqno: u64, // seqno for this mutation
     ) -> (Option<u64>, Result<Option<Entry<K, V>>>) {
-        let index = self.get_index();
-        let lsm = index.lsm;
-        let snapshot: &Arc<Snapshot<K, V>> = index.snapshot.as_inner();
-        let key_footprint = key.footprint();
-
-        let mut n_count = snapshot.n_count;
-        let value = Box::new(Value::new_upsert_value(value, seqno));
-        let new_entry = Entry::new(key, value);
-
-        let root = snapshot.root_duplicate();
-        let mut reclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
-        match Mvcc::upsert(root, new_entry, lsm, &mut reclm) {
-            UpsertResult {
-                node: Some(mut root),
-                new_node: Some(mut n),
-                old_entry,
-                size,
-            } => {
-                root.set_black();
-                if old_entry.is_none() {
-                    n_count += 1;
-                    index.key_footprint.fetch_add(key_footprint, SeqCst);
-                }
-                index.tree_footprint.fetch_add(size, SeqCst);
-                n.dirty = false;
-                Box::leak(n);
-                index
-                    .snapshot
-                    .shift_snapshot(Some(root), seqno, n_count, reclm);
-                (Some(seqno), Ok(old_entry))
-            }
-            _ => unreachable!(),
-        }
+        let index: &mut Mvcc<K, V> = self.as_mut();
+        index.set_index(key, value, Some(seqno))
     }
 
+    /// Similar to set, but succeeds only when CAS matches with entry's
+    /// Set {key, value} in index if an older entry exists with the
+    /// same ``cas`` value. To create a fresh entry, pass ``cas`` as ZERO.
+    /// Return the seqno (index) for this mutation and older entry
+    /// if present. If operation was invalid or NOOP, returned seqno shall
+    /// be ZERO.
+    ///
+    /// *LSM mode*: Add a new version for the key, perserving the old value.
     fn set_cas_index(
         &mut self,
         key: K,
         value: V,
         cas: u64,
-        mut seqno: u64, // seqno for this mutation
+        seqno: u64,
     ) -> (Option<u64>, Result<Option<Entry<K, V>>>) {
-        let index = self.get_index();
-        let lsm = index.lsm;
-        let snapshot = OuterSnapshot::clone(&index.snapshot);
-        let key_footprint = key.footprint();
-
-        let mut n_count = snapshot.n_count;
-        let value = Box::new(Value::new_upsert_value(value, seqno));
-        let new_entry = Entry::new(key, value);
-        let root = snapshot.root_duplicate();
-        let mut rclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
-        let s = match Mvcc::upsert_cas(root, new_entry, cas, lsm, &mut rclm) {
-            UpsertCasResult {
-                node: Some(mut root),
-                new_node,
-                err: Some(err),
-                ..
-            } => {
-                seqno = index.to_seqno();
-                root.set_black();
-                (root, new_node, Err(err))
-            }
-            UpsertCasResult {
-                node: Some(mut root),
-                new_node,
-                old_entry,
-                err: None,
-                size,
-            } => {
-                root.set_black();
-                if old_entry.is_none() {
-                    index.key_footprint.fetch_add(key_footprint, SeqCst);
-                    n_count += 1
-                }
-                index.tree_footprint.fetch_add(size, SeqCst);
-                (root, new_node, Ok(old_entry))
-            }
-            _ => panic!("set_cas: impossible case, call programmer"),
-        };
-        let (root, optn, entry) = s;
-
-        // TODO: can we optimize this for no-op cases (err cases) ?
-        index
-            .snapshot
-            .shift_snapshot(Some(root), seqno, n_count, rclm);
-
-        if let Some(mut n) = optn {
-            n.dirty = false;
-            Box::leak(n);
-        }
-        (Some(seqno), entry)
+        let index: &mut Mvcc<K, V> = self.as_mut();
+        index.set_cas_index(key, value, cas, Some(seqno))
     }
 
+    /// Delete key from index. Return the seqno (index) for this mutation
+    /// and entry if present. If operation was invalid or NOOP, returned
+    /// seqno shall be ZERO.
     fn delete_index<Q>(
         &mut self,
         key: &Q,
-        mut seqno: u64, // seqno for this mutation
+        seqno: u64, // seqno for this delete
     ) -> (Option<u64>, Result<Option<Entry<K, V>>>)
     where
-        // TODO: From<Q> and Clone will fail if V=String and Q=str
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
     {
-        let index = self.get_index();
-        let snapshot = OuterSnapshot::clone(&index.snapshot);
-
-        let key_footprint = key.to_owned().footprint();
-
-        let mut n_count = snapshot.n_count;
-        let root = snapshot.root_duplicate();
-        let mut reclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
-        let (root, old_entry) = if index.lsm {
-            let s = match Mvcc::delete_lsm(root, key, seqno, &mut reclm) {
-                DeleteResult {
-                    node: Some(mut root),
-                    new_node,
-                    old_entry,
-                    size,
-                } => {
-                    root.set_black();
-                    (Some(root), new_node, old_entry, size)
-                }
-                DeleteResult {
-                    node: None,
-                    new_node,
-                    old_entry,
-                    size,
-                } => (None, new_node, old_entry, size),
-            };
-            let (root, new_node, old_entry, size) = s;
-
-            // println!("delete {:?}", entry.as_ref().map(|e| e.is_deleted()));
-            match &old_entry {
-                None => {
-                    index.key_footprint.fetch_add(key_footprint, SeqCst);
-                    index.tree_footprint.fetch_add(size, SeqCst);
-
-                    n_count += 1;
-                }
-                Some(e) if e.is_deleted() => {
-                    seqno = index.to_seqno();
-                }
-                _ /* not-deleted */ => {
-                    index.tree_footprint.fetch_add(size, SeqCst);
-                }
-            }
-
-            if let Some(mut n) = new_node {
-                n.dirty = false;
-                Box::leak(n);
-            }
-            (root, old_entry)
-        } else {
-            // in non-lsm mode remove the entry from the tree.
-            let res = match Mvcc::do_delete(root, key, &mut reclm) {
-                res @ DeleteResult { node: None, .. } => res,
-                mut res => {
-                    res.node.as_mut().map(|node| node.set_black());
-                    res
-                }
-            };
-            if res.old_entry.is_some() {
-                index.key_footprint.fetch_add(key_footprint, SeqCst);
-                index.tree_footprint.fetch_add(res.size, SeqCst);
-
-                n_count -= 1;
-            } else {
-                seqno = index.to_seqno();
-            }
-            (res.node, res.old_entry)
-        };
-
-        index.snapshot.shift_snapshot(root, seqno, n_count, reclm);
-        (Some(seqno), Ok(old_entry))
+        let index: &mut Mvcc<K, V> = self.as_mut();
+        index.delete_index(key, Some(seqno))
     }
+}
+
+fn gc<K, V>(rx: mpsc::Receiver<Vec<Box<Node<K, V>>>>) -> Result<()>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    for nodes in rx {
+        for _node in nodes {
+            // drop the node here.
+        }
+    }
+    Ok(())
 }
 
 #[allow(dead_code)]

@@ -1,7 +1,7 @@
 // TODO: flush put blocks into tx channel. Right now we simply unwrap()
 
+use std::ops::Bound;
 use std::{borrow::Borrow, cmp::Ordering, convert::TryInto, fs, marker};
-use std::{fmt::Debug, ops::Bound};
 
 use crate::core::{self, Diff, Result, Serialize};
 use crate::error::Error;
@@ -45,7 +45,7 @@ pub(crate) enum MBlock<K, V> {
 // Encode implementation
 impl<K, V> MBlock<K, V>
 where
-    K: Clone + Serialize + Debug,
+    K: Clone + Serialize,
 {
     pub(crate) fn new_encode(config: Config) -> MBlock<K, V> {
         MBlock::Encode {
@@ -194,7 +194,7 @@ where
 // Decode implementation
 impl<K, V> MBlock<K, V>
 where
-    K: Ord + Serialize + Debug,
+    K: Ord + Serialize,
 {
     pub(crate) fn new_decode(
         fd: &mut fs::File,
@@ -573,7 +573,7 @@ where
 
 impl<K, V> ZBlock<K, V>
 where
-    K: Clone + Ord + Serialize + Debug,
+    K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
 {

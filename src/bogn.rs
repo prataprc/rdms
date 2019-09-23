@@ -114,19 +114,14 @@ where
 {
     /// Set {key, value} in index. Return older entry if present.
     pub fn set(&mut self, key: K, value: V) -> Result<Option<Entry<K, V>>> {
-        let (seqno, entry) = self.mem.set_index(key, value, self.seqno + 1);
-        self.seqno = seqno.unwrap_or(self.seqno);
-        entry
+        self.mem.set(key, value)
     }
 
     /// Set {key, value} in index if an older entry exists with the
     /// same ``cas`` value. To create a fresh entry, pass ``cas`` as ZERO.
     /// Return the older entry if present.
     pub fn set_cas(&mut self, key: K, value: V, cas: u64) -> Result<Option<Entry<K, V>>> {
-        let seqno = self.seqno + 1;
-        let (seqno, entry) = self.mem.set_cas_index(key, value, cas, seqno);
-        self.seqno = seqno.unwrap_or(self.seqno);
-        entry
+        self.mem.set_cas(key, value, cas)
     }
 
     /// Delete key from DB. Return the entry if it is already present.
@@ -135,9 +130,7 @@ where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
     {
-        let (seqno, entry) = self.mem.delete_index(key, self.seqno + 1);
-        self.seqno = seqno.unwrap_or(self.seqno);
-        entry
+        self.mem.delete(key)
     }
 }
 

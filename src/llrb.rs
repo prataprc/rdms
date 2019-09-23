@@ -10,13 +10,12 @@ use std::sync::Arc;
 use std::{marker, mem};
 
 use crate::core::{Diff, Entry, Footprint, Result, ScanEntry, Value};
-use crate::core::{FullScan, Index, IndexIter, Reader, ScanIter, Writer};
+use crate::core::{FullScan, Index, IndexIter, ScanIter};
+use crate::core::{Reader, WalWriter, Writer};
 use crate::error::Error;
 use crate::llrb_node::{LlrbDepth, Node, Stats};
 use crate::mvcc::Snapshot;
 use crate::spinlock::{self, RWSpinlock};
-
-// TODO: Rename LlrbWriter to Writer;
 
 include!("llrb_common.rs");
 
@@ -46,7 +45,8 @@ where
     latch: RWSpinlock,
     key_footprint: isize,
     tree_footprint: isize,
-    w: Option<LlrbWriter<K, V>>,
+    readers: Arc<u32>,
+    writers: Arc<u32>,
 }
 
 impl<K, V> Drop for Llrb<K, V>
@@ -80,21 +80,20 @@ where
     /// Create an empty Llrb index, identified by `name`.
     /// Applications can choose unique names.
     pub fn new<S: AsRef<str>>(name: S) -> Box<Llrb<K, V>> {
-        let mut index = Box::new(Llrb {
+        Box::new(Llrb {
             name: name.as_ref().to_string(),
             lsm: false,
             spin: true,
+
             root: None,
             seqno: Default::default(),
             n_count: Default::default(),
             latch: RWSpinlock::new(),
             key_footprint: Default::default(),
             tree_footprint: Default::default(),
-            w: Default::default(),
-        });
-        let idx = index.as_mut() as *mut Llrb<K, V>;
-        index.w = Some(LlrbWriter::new(idx));
-        index
+            readers: Arc::new(0xC0FFEE),
+            writers: Arc::new(0xC0FFEE),
+        })
     }
 
     /// Create a new Llrb index in lsm mode. In lsm mode, mutations
@@ -105,33 +104,38 @@ where
     where
         S: AsRef<str>,
     {
-        let mut index = Box::new(Llrb {
+        Box::new(Llrb {
             name: name.as_ref().to_string(),
             lsm: true,
             spin: true,
+
             root: None,
             seqno: Default::default(),
             n_count: Default::default(),
             latch: RWSpinlock::new(),
             key_footprint: Default::default(),
             tree_footprint: Default::default(),
-            w: Default::default(),
-        });
-        let idx = index.as_mut() as *mut Llrb<K, V>;
-        index.w = Some(LlrbWriter::new(idx));
-        index
+            readers: Arc::new(0xC0FFEE),
+            writers: Arc::new(0xC0FFEE),
+        })
     }
 
     /// Configure behaviour of spin-latch. If `spin` is true, calling
     /// thread shall spin until a latch is acquired or released, if false
     /// calling thread will yield to scheduler.
     pub fn set_spinlatch(&mut self, spin: bool) -> &mut Llrb<K, V> {
+        if self.multi_rw() {
+            panic!("configuration not allowed after spawning readers/writers")
+        }
         self.spin = spin;
         self
     }
 
-    #[allow(dead_code)] // TODO: remove this once bogn is weaved-up.
-    pub(crate) fn set_seqno(&mut self, seqno: u64) -> &mut Llrb<K, V> {
+    /// application can set the start sequence number for this index.
+    pub fn set_seqno(&mut self, seqno: u64) -> &mut Llrb<K, V> {
+        if self.multi_rw() {
+            panic!("configuration not allowed after spawning readers/writers")
+        }
         self.seqno = seqno;
         self
     }
@@ -139,6 +143,9 @@ where
     /// Squash this index and return the root and its book-keeping.
     /// IMPORTANT: after calling this method, value must be dropped.
     pub(crate) fn squash(mut self) -> SquashDebris<K, V> {
+        if self.multi_rw() {
+            panic!("cannot squash with active readers/writer !!");
+        }
         SquashDebris {
             root: self.root.take(),
             seqno: self.seqno,
@@ -149,39 +156,42 @@ where
     }
 
     fn shallow_clone(&self) -> Box<Llrb<K, V>> {
-        let mut index = Box::new(Llrb {
+        Box::new(Llrb {
             name: self.name.clone(),
             lsm: self.lsm,
             spin: self.spin,
-            root: None, // this the shallow part
+
+            root: None, // this is the shallow part
             seqno: Default::default(),
             n_count: Default::default(),
             latch: RWSpinlock::new(),
             key_footprint: Default::default(),
             tree_footprint: Default::default(),
-            w: Default::default(),
-        });
-        let idx = index.as_mut() as *mut Llrb<K, V>;
-        index.w = Some(LlrbWriter::new(idx));
-        index
+            readers: Arc::new(0xC0FFEE),
+            writers: Arc::new(0xC0FFEE),
+        })
     }
 
     pub fn clone(&self) -> Box<Llrb<K, V>> {
-        let mut index = Box::new(Llrb {
+        Box::new(Llrb {
             name: self.name.clone(),
             lsm: self.lsm,
             spin: self.spin,
+
             root: self.root.clone(),
             seqno: self.seqno,
             n_count: self.n_count,
             latch: RWSpinlock::new(),
             key_footprint: self.key_footprint,
             tree_footprint: self.tree_footprint,
-            w: Default::default(),
-        });
-        let idx = index.as_mut() as *mut Llrb<K, V>;
-        index.w = Some(LlrbWriter::new(idx));
-        index
+            readers: Arc::new(0xC0FFEE),
+            writers: Arc::new(0xC0FFEE),
+        })
+    }
+
+    fn multi_rw(&self) -> bool {
+        let ok = Arc::strong_count(&self.readers) > 1;
+        ok || Arc::strong_count(&self.writers) > 1
     }
 }
 
@@ -193,13 +203,14 @@ where
 {
     /// Return whether this index support lsm mode.
     #[inline]
-    pub(crate) fn is_lsm(&self) -> bool {
+    pub fn is_lsm(&self) -> bool {
         self.lsm
     }
 
     /// Return number of entries in this index.
     #[inline]
     pub fn len(&self) -> usize {
+        let _latch = self.latch.acquire_read(self.spin);
         self.n_count
     }
 
@@ -212,6 +223,7 @@ where
 
     /// Return current seqno.
     pub fn to_seqno(&self) -> u64 {
+        let _latch = self.latch.acquire_read(self.spin);
         self.seqno
     }
 
@@ -219,6 +231,10 @@ where
     /// with this statisics.
     pub fn stats(&self) -> Stats {
         Stats::new_partial(self.len(), mem::size_of::<Node<K, V>>())
+    }
+
+    pub(crate) fn to_spin(&self) -> bool {
+        self.spin
     }
 }
 
@@ -228,21 +244,35 @@ where
     V: Clone + Diff + Footprint,
 {
     type W = LlrbWriter<K, V>;
+    type R = LlrbReader<K, V>;
 
     /// Make a new empty index of this type, with same configuration.
     fn make_new(&self) -> Result<Self> {
         Ok(self.shallow_clone())
     }
 
-    /// Create a new writer handle. Only one writer handle can be active at
-    /// any time, creating more than one writer handle will panic.
-    /// Concurrent readers are allowed but the data-structure is protected
-    /// via a spin-lock, that can optionally lock.
-    fn to_writer(&mut self) -> Self::W {
-        match self.w.take() {
-            Some(w) => w,
-            None => panic!("writer not initialized"),
-        }
+    /// Create a new reader handle, for multi-threading.
+    /// Llrb uses spin-lock to coordinate between readers and writers.
+    fn to_reader(&mut self) -> Result<Self::R> {
+        let index = unsafe {
+            // transmute self as void pointer.
+            let index = self.as_mut();
+            Box::from_raw(index as *mut Llrb<K, V> as *mut std::ffi::c_void)
+        };
+        let reader = Arc::clone(&self.readers);
+        Ok(LlrbReader::<K, V>::new(index, reader))
+    }
+
+    /// Create a new writer handle, for multi-threading.
+    /// Llrb uses spin-lock to coordinate between readers and writers.
+    fn to_writer(&mut self) -> Result<Self::W> {
+        let index = unsafe {
+            // transmute self as void pointer.
+            let index = self.as_mut();
+            Box::from_raw(index as *mut Llrb<K, V> as *mut std::ffi::c_void)
+        };
+        let writer = Arc::clone(&self.writers);
+        Ok(LlrbWriter::<K, V>::new(index, writer))
     }
 }
 
@@ -252,6 +282,7 @@ where
     V: Clone + Diff,
 {
     fn footprint(&self) -> isize {
+        let _latch = self.latch.acquire_read(self.spin);
         self.tree_footprint
     }
 }
@@ -262,19 +293,186 @@ where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
 {
+    /// Set {key, value} in index. Return older entry if present.
+    /// Return the seqno (index) for this mutation and older entry
+    /// if present. If operation was invalid or NOOP, returned seqno
+    /// shall be ZERO.
+    ///
+    /// *LSM mode*: Add a new version for the key, perserving the old value.
+    fn set_index(
+        &mut self,
+        key: K,
+        value: V,
+        seqno: Option<u64>, // seqno for this mutation
+    ) -> (Option<u64>, Result<Option<Entry<K, V>>>) {
+        let _latch = self.latch.acquire_write(self.spin);
+        let seqno = match seqno {
+            Some(seqno) => seqno,
+            None => self.seqno + 1,
+        };
+
+        let key_footprint = key.footprint();
+        let new_entry = {
+            let value = Box::new(Value::new_upsert_value(value, seqno));
+            Entry::new(key, value)
+        };
+        // !("set_index, root {}", self.root.is_some());
+        match Llrb::upsert(self.root.take(), new_entry, self.lsm) {
+            UpsertResult {
+                node: Some(mut root),
+                old_entry,
+                size,
+            } => {
+                // println!("set_index, result {}", size);
+                root.set_black();
+                self.root = Some(root);
+                if old_entry.is_none() {
+                    self.n_count += 1;
+                    self.key_footprint += key_footprint;
+                }
+                self.seqno = seqno;
+                self.tree_footprint += size;
+                (Some(seqno), Ok(old_entry))
+            }
+            _ => panic!("set: impossible case, call programmer"),
+        }
+    }
+
+    /// Similar to set, but succeeds only when CAS matches with entry's
+    /// Set {key, value} in index if an older entry exists with the
+    /// same ``cas`` value. To create a fresh entry, pass ``cas`` as ZERO.
+    /// Return the seqno (index) for this mutation and older entry
+    /// if present. If operation was invalid or NOOP, returned seqno shall
+    /// be ZERO.
+    ///
+    /// *LSM mode*: Add a new version for the key, perserving the old value.
+    fn set_cas_index(
+        &mut self,
+        key: K,
+        value: V,
+        cas: u64,
+        seqno: Option<u64>,
+    ) -> (Option<u64>, Result<Option<Entry<K, V>>>) {
+        let _latch = self.latch.acquire_write(self.spin);
+        let seqno = match seqno {
+            Some(seqno) => seqno,
+            None => self.seqno + 1,
+        };
+
+        let key_footprint = key.footprint();
+        let new_entry = {
+            let value = Box::new(Value::new_upsert_value(value, seqno));
+            Entry::new(key, value)
+        };
+        match Llrb::upsert_cas(self.root.take(), new_entry, cas, self.lsm) {
+            UpsertCasResult {
+                node: root,
+                err: Some(err),
+                ..
+            } => {
+                self.root = root;
+                (None, Err(err))
+            }
+            UpsertCasResult {
+                node: Some(mut root),
+                old_entry,
+                size,
+                err: None,
+            } => {
+                root.set_black();
+                self.root = Some(root);
+                if old_entry.is_none() {
+                    self.n_count += 1;
+                    self.key_footprint += key_footprint;
+                }
+                self.seqno = seqno;
+                self.tree_footprint += size;
+                (Some(seqno), Ok(old_entry))
+            }
+            _ => panic!("set_cas: impossible case, call programmer"),
+        }
+    }
+
+    /// Delete key from index. Return the seqno (index) for this mutation
+    /// and entry if present. If operation was invalid or NOOP, returned
+    /// seqno shall be ZERO.
+    fn delete_index<Q>(
+        &mut self,
+        key: &Q,
+        seqno: Option<u64>, // seqno for this delete
+    ) -> (Option<u64>, Result<Option<Entry<K, V>>>)
+    where
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
+    {
+        let _latch = self.latch.acquire_write(self.spin);
+        let seqno = match seqno {
+            Some(seqno) => seqno,
+            None => self.seqno + 1,
+        };
+
+        let key_footprint = key.to_owned().footprint();
+
+        if self.lsm {
+            let res = Llrb::delete_lsm(self.root.take(), key, seqno);
+            self.root = res.node;
+            self.root.as_mut().map(|r| r.set_black());
+
+            return match res.old_entry {
+                None => {
+                    self.key_footprint += key_footprint;
+                    self.tree_footprint += res.size;
+
+                    self.n_count += 1;
+                    self.seqno = seqno;
+                    (Some(seqno), Ok(None))
+                }
+                Some(entry) if !entry.is_deleted() => {
+                    self.tree_footprint += res.size;
+
+                    self.seqno = seqno;
+                    (Some(seqno), Ok(Some(entry)))
+                }
+                entry => (None, Ok(entry)),
+            };
+        } else {
+            // in non-lsm mode remove the entry from the tree.
+            let res = match Llrb::do_delete(self.root.take(), key) {
+                res @ DeleteResult { node: None, .. } => res,
+                mut res => {
+                    res.node.as_mut().map(|node| node.set_black());
+                    res
+                }
+            };
+            self.root = res.node;
+            if res.old_entry.is_some() {
+                self.key_footprint -= key_footprint;
+                self.tree_footprint += res.size;
+
+                self.n_count -= 1;
+                self.seqno = seqno;
+                (Some(seqno), Ok(res.old_entry))
+            } else {
+                (None, Ok(res.old_entry))
+            }
+        }
+    }
+}
+
+/// Create/Update/Delete operations on Llrb index.
+impl<K, V> Writer<K, V> for Llrb<K, V>
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+{
     /// Set {key, value} pair into index. If key is already
     /// present, update the value and return the previous entry, else
     /// create a new entry.
     ///
     /// *LSM mode*: Add a new version for the key, perserving the old value.
-    pub fn set(&mut self, key: K, value: V) -> Result<Option<Entry<K, V>>> {
-        match &mut self.w {
-            Some(w) => {
-                let (_seqno, entry) = w.set_index(key, value, self.seqno + 1);
-                entry
-            }
-            None => panic!("already given a writer_handle for this index"),
-        }
+    fn set(&mut self, key: K, value: V) -> Result<Option<Entry<K, V>>> {
+        let (_seqno, entry) = self.set_index(key, value, None);
+        entry
     }
 
     /// Similar to set, but succeeds only when CAS matches with entry's
@@ -283,15 +481,9 @@ where
     /// enforce a create operation.
     ///
     /// *LSM mode*: Add a new version for the key, perserving the old value.
-    pub fn set_cas(&mut self, key: K, value: V, cas: u64) -> Result<Option<Entry<K, V>>> {
-        match &mut self.w {
-            Some(w) => {
-                let seqno = self.seqno + 1;
-                let (_seqno, entry) = w.set_cas_index(key, value, cas, seqno);
-                entry
-            }
-            None => panic!("already given a writer_handle for this index"),
-        }
+    fn set_cas(&mut self, key: K, value: V, cas: u64) -> Result<Option<Entry<K, V>>> {
+        let (_seqno, entry) = self.set_cas_index(key, value, cas, None);
+        entry
     }
 
     /// Delete the given key. Note that back-to-back delete for the same
@@ -304,18 +496,13 @@ where
     /// NOTE: K should be borrowable as &Q and Q must be convertable to
     /// owned K. This is require in lsm mode, where owned K must be
     /// inserted into the tree.
-    pub fn delete<Q>(&mut self, key: &Q) -> Result<Option<Entry<K, V>>>
+    fn delete<Q>(&mut self, key: &Q) -> Result<Option<Entry<K, V>>>
     where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
     {
-        match &mut self.w {
-            Some(w) => {
-                let (_seqno, entry) = w.delete_index(key, self.seqno + 1);
-                entry
-            }
-            None => panic!("already given a writer_handle for this index"),
-        }
+        let (_seqno, entry) = self.delete_index(key, None);
+        entry
     }
 }
 
@@ -644,9 +831,11 @@ where
 
     /// Return an iterator over all entries in this index.
     fn iter(&self) -> Result<IndexIter<K, V>> {
+        let _latch = Some(self.latch.acquire_read(self.spin));
+
         let node = self.root.as_ref().map(Deref::deref);
         Ok(Box::new(Iter {
-            _latch: Some(self.latch.acquire_read(self.spin)),
+            _latch,
             _arc: Default::default(),
             paths: Some(build_iter(IFlag::Left, node, vec![])),
         }))
@@ -659,6 +848,8 @@ where
         R: 'a + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
+        let _latch = Some(self.latch.acquire_read(self.spin));
+
         let root = self.root.as_ref().map(Deref::deref);
         let paths = match range.start_bound() {
             Bound::Unbounded => Some(build_iter(IFlag::Left, root, vec![])),
@@ -666,7 +857,7 @@ where
             Bound::Excluded(low) => Some(find_start(root, low, false, vec![])),
         };
         Ok(Box::new(Range {
-            _latch: Some(self.latch.acquire_read(self.spin)),
+            _latch,
             _arc: Default::default(),
             range,
             paths,
@@ -681,6 +872,8 @@ where
         R: 'a + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
+        let _latch = Some(self.latch.acquire_read(self.spin));
+
         let root = self.root.as_ref().map(Deref::deref);
         let paths = match range.end_bound() {
             Bound::Unbounded => Some(build_iter(IFlag::Right, root, vec![])),
@@ -689,7 +882,7 @@ where
         };
         let low = marker::PhantomData;
         Ok(Box::new(Reverse {
-            _latch: Some(self.latch.acquire_read(self.spin)),
+            _latch,
             _arc: Default::default(),
             range,
             paths,
@@ -744,6 +937,8 @@ where
     where
         G: Clone + RangeBounds<u64>,
     {
+        let _latch = Some(self.latch.acquire_read(self.spin));
+
         // similar to range pre-processing
         let root = self.root.as_ref().map(Deref::deref);
         let paths = match from {
@@ -768,7 +963,7 @@ where
             Bound::Unbounded => Bound::Unbounded,
         };
         Ok(Box::new(IterFullScan {
-            _latch: Some(self.latch.acquire_read(self.spin)),
+            _latch,
             _arc: Default::default(),
             start,
             end,
@@ -931,13 +1126,147 @@ where
     }
 }
 
-/// Writer handle for Llrb.
+/// Multi-threaded read-handle for Llrb.
+pub struct LlrbReader<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    refn: Arc<u32>,
+    index: Option<Box<std::ffi::c_void>>, // Box<Llrb<K, V>>
+    phantom_key: marker::PhantomData<K>,
+    phantom_val: marker::PhantomData<V>,
+}
+
+impl<K, V> Drop for LlrbReader<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    fn drop(&mut self) {
+        // leak this index, it is only a reference
+        Box::leak(self.index.take().unwrap());
+    }
+}
+
+impl<K, V> AsRef<Llrb<K, V>> for LlrbReader<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    fn as_ref(&self) -> &Llrb<K, V> {
+        unsafe {
+            // transmute void pointer to mutable reference into index.
+            let index_ptr = self.index.as_ref().unwrap().as_ref();
+            let index_ptr = index_ptr as *const std::ffi::c_void;
+            (index_ptr as *const Llrb<K, V>).as_ref().unwrap()
+        }
+    }
+}
+
+impl<K, V> LlrbReader<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    fn new(index: Box<std::ffi::c_void>, refn: Arc<u32>) -> LlrbReader<K, V> {
+        LlrbReader {
+            refn,
+            index: Some(index),
+            phantom_key: marker::PhantomData,
+            phantom_val: marker::PhantomData,
+        }
+    }
+}
+
+impl<K, V> Reader<K, V> for LlrbReader<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    /// Get ``key`` from index.
+    fn get<Q>(&self, key: &Q) -> Result<Entry<K, V>>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        let index: &Llrb<K, V> = self.as_ref();
+        index.get(key)
+    }
+
+    /// Iterate over all entries in this index.
+    fn iter(&self) -> Result<IndexIter<K, V>> {
+        let index: &Llrb<K, V> = self.as_ref();
+        index.iter()
+    }
+
+    /// Iterate from lower bound to upper bound.
+    fn range<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
+    where
+        K: Borrow<Q>,
+        R: 'a + RangeBounds<Q>,
+        Q: 'a + Ord + ?Sized,
+    {
+        let index: &Llrb<K, V> = self.as_ref();
+        index.range(range)
+    }
+
+    /// Iterate from upper bound to lower bound.
+    fn reverse<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
+    where
+        K: Borrow<Q>,
+        R: 'a + RangeBounds<Q>,
+        Q: 'a + Ord + ?Sized,
+    {
+        let index: &Llrb<K, V> = self.as_ref();
+        index.reverse(range)
+    }
+
+    /// Short circuited to get().
+    fn get_with_versions<Q>(&self, key: &Q) -> Result<Entry<K, V>>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        self.get(key)
+    }
+
+    /// Short circuited to iter().
+    fn iter_with_versions(&self) -> Result<IndexIter<K, V>> {
+        self.iter()
+    }
+
+    /// Short circuited to range().
+    fn range_with_versions<'a, R, Q>(&'a self, r: R) -> Result<IndexIter<K, V>>
+    where
+        K: Borrow<Q>,
+        R: 'a + RangeBounds<Q>,
+        Q: 'a + Ord + ?Sized,
+    {
+        self.range(r)
+    }
+
+    /// Short circuited to reverse()
+    fn reverse_with_versions<'a, R, Q>(&'a self, r: R) -> Result<IndexIter<K, V>>
+    where
+        K: Borrow<Q>,
+        R: 'a + RangeBounds<Q>,
+        Q: 'a + Ord + ?Sized,
+    {
+        self.reverse(r)
+    }
+}
+
+/// Multi threaded write-handle for Llrb.
 pub struct LlrbWriter<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    index: Option<*mut Llrb<K, V>>,
+    refn: Arc<u32>,
+    index: Option<Box<std::ffi::c_void>>,
+    phantom_key: marker::PhantomData<K>,
+    phantom_val: marker::PhantomData<V>,
 }
 
 impl<K, V> Drop for LlrbWriter<K, V>
@@ -946,35 +1275,92 @@ where
     V: Clone + Diff,
 {
     fn drop(&mut self) {
-        // NOTE: forget the writer, which is a self-reference.
+        // leak this index, it is only a reference
+        Box::leak(self.index.take().unwrap());
     }
 }
 
-impl<K, V> LlrbWriter<K, V>
+impl<K, V> AsMut<Llrb<K, V>> for LlrbWriter<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    fn new(index: *mut Llrb<K, V>) -> LlrbWriter<K, V> {
-        LlrbWriter { index: Some(index) }
-    }
-}
-
-impl<K, V> LlrbWriter<K, V>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-{
-    fn get_index(&mut self) -> &mut Llrb<K, V> {
-        match &mut self.index {
-            Some(index) => unsafe { index.as_mut().unwrap() },
-            None => unreachable!(),
+    fn as_mut(&mut self) -> &mut Llrb<K, V> {
+        unsafe {
+            // transmute void pointer to mutable reference into index.
+            let index_ptr = self.index.as_mut().unwrap().as_mut();
+            let index_ptr = index_ptr as *mut std::ffi::c_void;
+            (index_ptr as *mut Llrb<K, V>).as_mut().unwrap()
         }
     }
 }
 
-/// Create/Update/Delete operations on Llrb index.
+impl<K, V> LlrbWriter<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    fn new(index: Box<std::ffi::c_void>, refn: Arc<u32>) -> LlrbWriter<K, V> {
+        LlrbWriter {
+            refn,
+            index: Some(index),
+            phantom_key: marker::PhantomData,
+            phantom_val: marker::PhantomData,
+        }
+    }
+}
+
 impl<K, V> Writer<K, V> for LlrbWriter<K, V>
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+{
+    /// Set {key, value} pair into index. If key is already
+    /// present, update the value and return the previous entry, else
+    /// create a new entry.
+    ///
+    /// *LSM mode*: Add a new version for the key, perserving the old value.
+    fn set(&mut self, key: K, value: V) -> Result<Option<Entry<K, V>>> {
+        let index: &mut Llrb<K, V> = self.as_mut();
+        let (_seqno, entry) = index.set_index(key, value, None);
+        entry
+    }
+
+    /// Similar to set, but succeeds only when CAS matches with entry's
+    /// last `seqno`. In other words, since seqno is unique to each mutation,
+    /// we use `seqno` of the mutation as the CAS value. Use CAS == 0 to
+    /// enforce a create operation.
+    ///
+    /// *LSM mode*: Add a new version for the key, perserving the old value.
+    fn set_cas(&mut self, key: K, value: V, cas: u64) -> Result<Option<Entry<K, V>>> {
+        let index: &mut Llrb<K, V> = self.as_mut();
+        let (_seqno, entry) = index.set_cas_index(key, value, cas, None);
+        entry
+    }
+
+    /// Delete the given key. Note that back-to-back delete for the same
+    /// key shall collapse into a single delete, first delete is ingested
+    /// while the rest are ignored.
+    ///
+    /// *LSM mode*: Mark the entry as deleted along with seqno at which it
+    /// deleted
+    ///
+    /// NOTE: K should be borrowable as &Q and Q must be convertable to
+    /// owned K. This is require in lsm mode, where owned K must be
+    /// inserted into the tree.
+    fn delete<Q>(&mut self, key: &Q) -> Result<Option<Entry<K, V>>>
+    where
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
+    {
+        let index: &mut Llrb<K, V> = self.as_mut();
+        let (_seqno, entry) = index.delete_index(key, None);
+        entry
+    }
+}
+
+/// Create/Update/Delete operations on Llrb index.
+impl<K, V> WalWriter<K, V> for LlrbWriter<K, V>
 where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
@@ -991,34 +1377,8 @@ where
         value: V,
         seqno: u64, // seqno for this mutation
     ) -> (Option<u64>, Result<Option<Entry<K, V>>>) {
-        let index = self.get_index();
-        let _latch = index.latch.acquire_write(index.spin);
-
-        let key_footprint = key.footprint();
-        let new_entry = {
-            let value = Box::new(Value::new_upsert_value(value, seqno));
-            Entry::new(key, value)
-        };
-        // !("set_index, root {}", index.root.is_some());
-        match Llrb::upsert(index.root.take(), new_entry, index.lsm) {
-            UpsertResult {
-                node: Some(mut root),
-                old_entry,
-                size,
-            } => {
-                // println!("set_index, result {}", size);
-                root.set_black();
-                index.root = Some(root);
-                if old_entry.is_none() {
-                    index.n_count += 1;
-                    index.key_footprint += key_footprint;
-                }
-                index.seqno = seqno;
-                index.tree_footprint += size;
-                (Some(seqno), Ok(old_entry))
-            }
-            _ => panic!("set: impossible case, call programmer"),
-        }
+        let index: &mut Llrb<K, V> = self.as_mut();
+        index.set_index(key, value, Some(seqno))
     }
 
     /// Similar to set, but succeeds only when CAS matches with entry's
@@ -1036,41 +1396,8 @@ where
         cas: u64,
         seqno: u64,
     ) -> (Option<u64>, Result<Option<Entry<K, V>>>) {
-        let index = self.get_index();
-        let _latch = index.latch.acquire_write(index.spin);
-
-        let key_footprint = key.footprint();
-        let new_entry = {
-            let value = Box::new(Value::new_upsert_value(value, seqno));
-            Entry::new(key, value)
-        };
-        match Llrb::upsert_cas(index.root.take(), new_entry, cas, index.lsm) {
-            UpsertCasResult {
-                node: root,
-                err: Some(err),
-                ..
-            } => {
-                index.root = root;
-                (None, Err(err))
-            }
-            UpsertCasResult {
-                node: Some(mut root),
-                old_entry,
-                size,
-                err: None,
-            } => {
-                root.set_black();
-                index.root = Some(root);
-                if old_entry.is_none() {
-                    index.n_count += 1;
-                    index.key_footprint += key_footprint;
-                }
-                index.seqno = seqno;
-                index.tree_footprint += size;
-                (Some(seqno), Ok(old_entry))
-            }
-            _ => panic!("set_cas: impossible case, call programmer"),
-        }
+        let index: &mut Llrb<K, V> = self.as_mut();
+        index.set_cas_index(key, value, cas, Some(seqno))
     }
 
     /// Delete key from index. Return the seqno (index) for this mutation
@@ -1085,54 +1412,8 @@ where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
     {
-        let index = self.get_index();
-        let _latch = index.latch.acquire_write(index.spin);
-
-        let key_footprint = key.to_owned().footprint();
-
-        if index.lsm {
-            let res = Llrb::delete_lsm(index.root.take(), key, seqno);
-            index.root = res.node;
-            index.root.as_mut().map(|r| r.set_black());
-
-            return match res.old_entry {
-                None => {
-                    index.key_footprint += key_footprint;
-                    index.tree_footprint += res.size;
-
-                    index.n_count += 1;
-                    index.seqno = seqno;
-                    (Some(seqno), Ok(None))
-                }
-                Some(entry) if !entry.is_deleted() => {
-                    index.tree_footprint += res.size;
-
-                    index.seqno = seqno;
-                    (Some(seqno), Ok(Some(entry)))
-                }
-                entry => (None, Ok(entry)),
-            };
-        } else {
-            // in non-lsm mode remove the entry from the tree.
-            let res = match Llrb::do_delete(index.root.take(), key) {
-                res @ DeleteResult { node: None, .. } => res,
-                mut res => {
-                    res.node.as_mut().map(|node| node.set_black());
-                    res
-                }
-            };
-            index.root = res.node;
-            if res.old_entry.is_some() {
-                index.key_footprint -= key_footprint;
-                index.tree_footprint += res.size;
-
-                index.n_count -= 1;
-                index.seqno = seqno;
-                (Some(seqno), Ok(res.old_entry))
-            } else {
-                (None, Ok(res.old_entry))
-            }
-        }
+        let index: &mut Llrb<K, V> = self.as_mut();
+        index.delete_index(key, Some(seqno))
     }
 }
 

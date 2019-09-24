@@ -17,25 +17,31 @@ use crate::scans::SkipScan;
 fn test_lsm_get1() {
     // test case using 5 mvcc versions
     let seed: u128 = random();
+    println!("seed {}", seed);
     let mut refi = Llrb::new_lsm("test-llrb");
 
-    let (n_ops, key_max) = (60, 20);
+    let (n_ops, key_max) = random_ops_keys(seed, 60, 20);
+    println!("mvcc1 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc1: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc");
     random_mvcc(n_ops, key_max, seed, &mut mvcc1, &mut refi);
 
-    let (n_ops, key_max) = (600, 200);
+    let (n_ops, key_max) = random_ops_keys(seed, 600, 200);
+    println!("mvcc2 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc2 = mvcc1.clone();
     random_mvcc(n_ops, key_max, seed, &mut mvcc2, &mut refi);
 
-    let (n_ops, key_max) = (6_000, 2_000);
+    let (n_ops, key_max) = random_ops_keys(seed, 6_000, 2_000);
+    println!("mvcc3 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc3 = mvcc2.clone();
     random_mvcc(n_ops, key_max, seed, &mut mvcc3, &mut refi);
 
-    let (n_ops, key_max) = (60_000, 20_000);
+    let (n_ops, key_max) = random_ops_keys(seed, 60_000, 20_000);
+    println!("mvcc4 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc4 = mvcc3.clone();
     random_mvcc(n_ops, key_max, seed, &mut mvcc4, &mut refi);
 
-    let (n_ops, key_max) = (600_000, 200_000);
+    let (n_ops, key_max) = random_ops_keys(seed, 600_000, 200_000);
+    println!("mvcc5 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc5 = mvcc4.clone();
     random_mvcc(n_ops, key_max, seed, &mut mvcc5, &mut refi);
 
@@ -55,13 +61,16 @@ fn test_lsm_get1() {
 }
 
 #[test]
+#[ignore]
 fn test_lsm_get2() {
     // test case using 2 robt version and 1 mvcc versions
     let seed: u128 = random();
+    println!("seed {}", seed);
     let mut refi = Llrb::new_lsm("test-llrb");
 
     let mut llrb: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
-    let (n_ops, key_max) = (60_000, 20_000);
+    let (n_ops, key_max) = random_ops_keys(seed, 60_000, 20_000);
+    let n_ops = n_ops + 1;
     random_llrb(n_ops, key_max, seed, &mut llrb, &mut refi);
     let delta_ok = false;
     let name = "test_lsm_get2-1";
@@ -70,8 +79,10 @@ fn test_lsm_get2() {
         let iter = Box::new(SkipScan::new(&*llrb, within));
         random_robt(name, seed, delta_ok, iter)
     };
+    println!("disk1 n_ops: {} key_max: {}", n_ops, key_max);
 
-    let (n_ops, key_max) = (120_000, 40_000);
+    let (n_ops, key_max) = random_ops_keys(seed, 120_000, 40_000);
+    let n_ops = n_ops + 1;
     random_llrb(n_ops, key_max, seed, &mut llrb, &mut refi);
     let delta_ok = false;
     let name = "test_lsm_get2-2";
@@ -80,44 +91,39 @@ fn test_lsm_get2() {
         let iter = Box::new(SkipScan::new(&*llrb, within));
         random_robt(name, seed, delta_ok, iter)
     };
+    println!("disk2 n_ops: {} key_max: {}", n_ops, key_max);
 
-    let (n_ops, key_max) = (200_000, 60_000);
+    let (n_ops, key_max) = random_ops_keys(seed, 200_000, 60_000);
     let mut mvcc: Box<Mvcc<i64, i64>> = Mvcc::from_llrb(*llrb);
     random_mvcc(n_ops, key_max, seed, mvcc.as_mut(), &mut refi);
+    println!("mvcc n_ops: {} key_max: {}", n_ops, key_max);
 
     let seqno = mvcc.to_seqno();
     let w = mvcc.to_writer().unwrap();
     let r = mvcc.to_reader().unwrap();
     let t_handle = {
-        let (n_ops, key_max) = (400_000, 60_000);
+        let (n_ops, key_max) = random_ops_keys(seed, 400_000, 400_000);
+        println!("concurrent n_ops: {} key_max: {}", n_ops, key_max);
         thread::spawn(move || concurrent_write(n_ops, key_max, seed, r, w))
     };
 
     // println!("start verification mvcc seqno {}", seqno);
     let yget = y_get(getter(&*mvcc), y_get(getter(&disk2), getter(&disk1)));
-    let start = std::time::SystemTime::now();
+    let _start = std::time::SystemTime::now();
     for entry in refi.iter().unwrap() {
         let entry = entry.unwrap();
         let key = entry.to_key();
         let e = yget(&key).unwrap();
 
-        let e1 = mvcc.get(&key);
-
         let (a, z) = (Bound::Unbounded, Bound::Included(seqno));
         let e = e.filter_within(a, z).unwrap();
         assert_eq!(entry.to_key(), e.to_key());
-        assert_eq!(
-            entry.to_seqno(),
-            e.to_seqno(),
-            "for key {} {:?}",
-            key,
-            e1.map(|e| e.to_seqno())
-        );
+        assert_eq!(entry.to_seqno(), e.to_seqno(), "for key {}", key,);
         assert_eq!(entry.is_deleted(), e.is_deleted(), "for key {}", key);
         assert_eq!(entry.to_native_value(), e.to_native_value(), "key {}", key);
         assert_eq!(entry.as_deltas().len(), e.as_deltas().len());
     }
-    // println!("get elapsed {:?}", start.elapsed().unwrap().as_nanos());
+    // println!("get elapsed {:?}", _start.elapsed().unwrap().as_nanos());
     t_handle.join().unwrap();
 }
 
@@ -213,6 +219,7 @@ fn random_llrb(
             _ => unreachable!(),
         }
     }
+    println!("random_llrb {}", llrb.to_seqno());
 }
 
 fn random_mvcc(
@@ -225,7 +232,7 @@ fn random_mvcc(
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
     for _i in 0..n_ops {
         let key = (rng.gen::<i64>() % key_max).abs();
-        let op = rng.gen::<usize>() % 1;
+        let op = rng.gen::<usize>() % 3;
         //println!(
         //    "mvcc key {} {} {} {}",
         //    key,
@@ -239,29 +246,29 @@ fn random_mvcc(
                 mvcc.set(key, value).unwrap();
                 refi.set(key, value).unwrap();
             }
-            //1 => {
-            //    let value: i64 = rng.gen();
-            //    {
-            //        let cas = match mvcc.get(&key) {
-            //            Err(Error::KeyNotFound) => 0,
-            //            Err(_err) => unreachable!(),
-            //            Ok(e) => e.to_seqno(),
-            //        };
-            //        mvcc.set_cas(key, value, cas).unwrap();
-            //    }
-            //    {
-            //        let cas = match refi.get(&key) {
-            //            Err(Error::KeyNotFound) => 0,
-            //            Err(_err) => unreachable!(),
-            //            Ok(e) => e.to_seqno(),
-            //        };
-            //        refi.set_cas(key, value, cas).unwrap();
-            //    }
-            //}
-            //2 => {
-            //    mvcc.delete(&key).unwrap();
-            //    refi.delete(&key).unwrap();
-            //}
+            1 => {
+                let value: i64 = rng.gen();
+                {
+                    let cas = match mvcc.get(&key) {
+                        Err(Error::KeyNotFound) => 0,
+                        Err(_err) => unreachable!(),
+                        Ok(e) => e.to_seqno(),
+                    };
+                    mvcc.set_cas(key, value, cas).unwrap();
+                }
+                {
+                    let cas = match refi.get(&key) {
+                        Err(Error::KeyNotFound) => 0,
+                        Err(_err) => unreachable!(),
+                        Ok(e) => e.to_seqno(),
+                    };
+                    refi.set_cas(key, value, cas).unwrap();
+                }
+            }
+            2 => {
+                mvcc.delete(&key).unwrap();
+                refi.delete(&key).unwrap();
+            }
             _ => unreachable!(),
         }
     }
@@ -297,10 +304,10 @@ fn concurrent_write(
     mut w: MvccWriter<i64, i64>,
 ) {
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
-    let start = std::time::SystemTime::now();
+    let _start = std::time::SystemTime::now();
     for _i in 0..n_ops {
         let key = (rng.gen::<i64>() % key_max).abs();
-        let op = rng.gen::<usize>() % 2;
+        let op = rng.gen::<usize>() % 3;
         // println!("concurrent key {} {}", key, op);
         match op {
             0 => {
@@ -316,16 +323,49 @@ fn concurrent_write(
                 };
                 w.set_cas(key, value, cas).unwrap();
             }
-            //2 => {
-            //    w.delete(&key).unwrap();
-            //}
+            2 => {
+                w.delete(&key).unwrap();
+            }
             _ => unreachable!(),
         }
     }
     //println!(
     //    "concurrent write elapsed {:?}",
-    //    start.elapsed().unwrap().as_nanos()
+    //    _start.elapsed().unwrap().as_nanos()
     //);
+}
+
+fn random_ops_keys(seed: u128, ops_limit: i64, key_limit: i64) -> (i64, i64) {
+    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+
+    let n_ops_set: Vec<i64> = vec![
+        0,
+        ops_limit / 10,
+        ops_limit / 100,
+        ops_limit / 1000,
+        ops_limit / 10000,
+    ];
+    let i = rng.gen::<usize>() % (n_ops_set.len() + 1);
+    let n_ops = if i == n_ops_set.len() {
+        10000 + (rng.gen::<u64>() % (ops_limit as u64))
+    } else {
+        n_ops_set[i] as u64
+    };
+    let n_ops = n_ops as i64;
+
+    let max_key_set: Vec<i64> = vec![
+        (key_limit / 10) + 1,
+        (key_limit / 100) + 1,
+        (key_limit / 1000) + 1,
+        (key_limit / 10000) + 1,
+    ];
+    let i: usize = rng.gen::<usize>() % (max_key_set.len() + 1);
+    let max_key = if i == max_key_set.len() {
+        10000 + (rng.gen::<i64>() % key_limit)
+    } else {
+        max_key_set[i]
+    };
+    (n_ops, i64::abs(max_key))
 }
 
 fn log_entry(e: &Entry<i64, i64>) {

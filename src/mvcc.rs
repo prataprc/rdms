@@ -1366,8 +1366,8 @@ where
             curr_r.next.as_ref().unwrap(),
         ));
 
-        let x = Arc::strong_count(curr_s.as_ref());
-        let y = Arc::strong_count(next_s.as_ref());
+        // let x = Arc::strong_count(curr_s.as_ref());
+        // let y = Arc::strong_count(next_s.as_ref());
         //println!(
         //    "shiftsnap {:p} {:p} {} {} ",
         //    curr_r,
@@ -1449,12 +1449,13 @@ where
 
         match (self.reclaim.take(), self.gc_tx.take()) {
             (Some(reclaim), Some(gc_tx)) => gc_tx.send(reclaim).ok(),
-            (Some(reclaim), None) => unreachable!(),
+            (Some(_reclaim), None) => unreachable!(),
             _ => None,
         };
-        let n = self.n_active.fetch_sub(1, SeqCst);
+        let _n = self.n_active.fetch_sub(1, SeqCst);
+
         //if n > 10 {
-        //    println!("active snapshots {}", n);
+        //    println!("active snapshots {}", _n);
         //}
         //println!("drop snapshot {:p}", self);
     }

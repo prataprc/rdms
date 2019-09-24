@@ -542,6 +542,7 @@ pub(crate) fn write_meta_items(
     block.copy_within(0..m, shift);
     let ln = block.len();
     let n = fd.write(&block)?;
+    fd.sync_all()?;
     if n == ln {
         Ok(n.try_into().unwrap())
     } else {
@@ -585,7 +586,7 @@ pub fn read_meta_items(
     let (x, y) = (z - n_marker, z);
     let marker = block[x..y].to_vec();
     if marker.ne(&ROOT_MARKER.as_slice()) {
-        let msg = format!("unexpected marker at {:?}", marker);
+        let msg = format!("unexpected marker {:?}", marker);
         return Err(Error::InvalidSnapshot(msg));
     }
 
@@ -900,12 +901,15 @@ where
             MetaItem::Stats(stats),
             MetaItem::Marker(ROOT_MARKER.clone()), // tip of the index.
         ];
-        // flush them to disk
-        write_meta_items(self.iflusher.file.clone(), meta_items)?;
 
-        // flush marker block and close
+        let index_file: ffi::OsString = self.iflusher.file.clone();
+
+        // flush blocks and close
         self.iflusher.close_wait()?;
         self.vflusher.take().map(|x| x.close_wait()).transpose()?;
+
+        // flush meta items to disk and close
+        write_meta_items(index_file, meta_items)?;
 
         Ok(())
     }
@@ -1164,6 +1168,7 @@ fn thread_flush(
             return Err(Error::PartialWrite(msg));
         }
     }
+    fd.sync_all()?;
     // file descriptor and receiver channel shall be dropped.
     Ok(())
 }

@@ -159,26 +159,28 @@ fn test_config() {
 
 #[test]
 fn test_robt_llrb1() {
-    run_robt_llrb(6_000, 2_000_i64, 10);
-    run_robt_llrb(60_000, 20_000_i64, 2);
+    let seed: u128 = random();
+    run_robt_llrb(6_000, 2_000_i64, 10, seed);
+    run_robt_llrb(60_000, 20_000_i64, 2, seed);
 }
 
 #[test]
 #[ignore] // TODO: long running test case
 fn test_robt_llrb2() {
-    run_robt_llrb(600_000, 200_000_i64, 1);
+    let seed: u128 = random();
+    run_robt_llrb(600_000, 200_000_i64, 1, seed);
 }
 
 #[test]
 #[ignore] // TODO: long running test case
 fn test_robt_llrb3() {
-    run_robt_llrb(6_000_000, 2_000_000_i64, 1);
+    let seed: u128 = random();
+    run_robt_llrb(6_000_000, 2_000_000_i64, 1, seed);
 }
 
-fn run_robt_llrb(mut n_ops: u64, key_max: i64, repeat: usize) {
-    for _ in 0..repeat {
-        // let seed: u128 = 267758138677710051843709887156736556713;
-        let seed: u128 = random();
+fn run_robt_llrb(mut n_ops: u64, key_max: i64, repeat: usize, seed: u128) {
+    for i in 0..repeat {
+        let seed = seed + (i as u128);
         let mut rng = SmallRng::from_seed(seed.to_le_bytes());
         // populate llrb
         let lsm: bool = rng.gen();

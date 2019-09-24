@@ -17,7 +17,7 @@ where
 }
 
 /// Get the latest version for key.
-fn get<K, V, Q>(mut node: Option<&Node<K, V>>, key: &Q) -> Result<Entry<K, V>>
+fn get<K, V, Q>(node: Option<&Node<K, V>>, key: &Q) -> Result<Entry<K, V>>
 where
     K: Clone + Ord + Borrow<Q>,
     V: Clone + Diff,

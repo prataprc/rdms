@@ -3,7 +3,7 @@ use rand::{rngs::SmallRng, Rng, SeedableRng};
 
 use super::*;
 
-use crate::core::Reader;
+use crate::core::{Reader, Writer};
 use crate::error::Error;
 use crate::llrb::Llrb;
 

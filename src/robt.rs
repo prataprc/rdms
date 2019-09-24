@@ -1291,8 +1291,11 @@ where
     type R = Snapshot<K, V>;
 
     /// Make a new empty index of this type, with same configuration.
-    fn make_new(&self) -> Result<Self> {
-        Ok(Snapshot::open(self.name.as_str(), self.dir.as_str())?)
+    fn make_new(&self) -> Result<Box<Self>> {
+        Ok(Box::new(Snapshot::open(
+            self.name.as_str(),
+            self.dir.as_str(),
+        )?))
     }
 
     /// Create a new read handle, for multi-threading.

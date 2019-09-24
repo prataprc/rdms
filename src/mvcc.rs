@@ -11,7 +11,7 @@ use std::{
     marker, mem,
     ops::{Bound, Deref, DerefMut, RangeBounds},
     sync::{
-        atomic::{AtomicIsize, AtomicPtr, Ordering::SeqCst},
+        atomic::{AtomicIsize, AtomicPtr, AtomicUsize, Ordering::SeqCst},
         mpsc, Arc,
     },
     thread::{self, JoinHandle},
@@ -78,6 +78,11 @@ where
 
         mem::drop(self.snapshot.gc_tx.take().unwrap());
         self.gc.take().unwrap().join().ok(); // ignore gc thread's error here.
+
+        let n = self.snapshot.n_active.load(SeqCst);
+        if n > 0 {
+            panic!("active snapshots: {}", n);
+        }
     }
 }
 
@@ -252,7 +257,7 @@ where
     }
 }
 
-impl<K, V> Index<K, V> for Box<Mvcc<K, V>>
+impl<K, V> Index<K, V> for Mvcc<K, V>
 where
     K: 'static + Send + Clone + Ord + Footprint,
     V: 'static + Send + Clone + Diff + Footprint,
@@ -262,7 +267,7 @@ where
     type R = MvccReader<K, V>;
 
     /// Make a new empty index of this type, with same configuration.
-    fn make_new(&self) -> Result<Self> {
+    fn make_new(&self) -> Result<Box<Self>> {
         Ok(self.shallow_clone())
     }
 
@@ -270,8 +275,7 @@ where
     fn to_reader(&mut self) -> Result<Self::R> {
         let index: Box<std::ffi::c_void> = unsafe {
             // transmute self as void pointer.
-            let index = self.as_mut();
-            Box::from_raw(index as *mut Mvcc<K, V> as *mut std::ffi::c_void)
+            Box::from_raw(self as *mut Mvcc<K, V> as *mut std::ffi::c_void)
         };
         Ok(MvccReader::<K, V>::new(index))
     }
@@ -281,14 +285,13 @@ where
     fn to_writer(&mut self) -> Result<Self::W> {
         let index: Box<std::ffi::c_void> = unsafe {
             // transmute self as void pointer.
-            let index = self.as_mut();
-            Box::from_raw(index as *mut Mvcc<K, V> as *mut std::ffi::c_void)
+            Box::from_raw(self as *mut Mvcc<K, V> as *mut std::ffi::c_void)
         };
         Ok(MvccWriter::<K, V>::new(index))
     }
 }
 
-impl<K, V> Footprint for Box<Mvcc<K, V>>
+impl<K, V> Footprint for Mvcc<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff,
@@ -317,11 +320,12 @@ where
             None => snapshot.seqno + 1,
         };
         let key_footprint = key.footprint();
+        let new_entry = {
+            let value = Box::new(Value::new_upsert_value(value, seqno));
+            Entry::new(key, value)
+        };
 
         let mut n_count = snapshot.n_count;
-        let value = Box::new(Value::new_upsert_value(value, seqno));
-        let new_entry = Entry::new(key, value);
-
         let root = snapshot.root_duplicate();
         let mut reclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
         match Mvcc::upsert(root, new_entry, self.lsm, &mut reclm) {
@@ -364,10 +368,10 @@ where
         let lsm = self.lsm;
         let key_footprint = key.footprint();
 
-        let mut n_count = snapshot.n_count;
         let value = Box::new(Value::new_upsert_value(value, seqno));
         let new_entry = Entry::new(key, value);
 
+        let mut n_count = snapshot.n_count;
         let root = snapshot.root_duplicate();
         let mut rclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
         let s = match Mvcc::upsert_cas(root, new_entry, cas, lsm, &mut rclm) {
@@ -429,8 +433,8 @@ where
             None => snapshot.seqno + 1,
         };
         let key_footprint = key.to_owned().footprint();
-        let mut n_count = snapshot.n_count;
 
+        let mut n_count = snapshot.n_count;
         let root = snapshot.root_duplicate();
         let mut reclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
         let (seqno, root, old_entry) = if self.lsm {
@@ -1019,7 +1023,7 @@ where
     }
 }
 
-impl<K, V> FullScan<K, V> for Box<Mvcc<K, V>>
+impl<K, V> FullScan<K, V> for Mvcc<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff + From<<V as Diff>::D>,
@@ -1113,14 +1117,16 @@ where
         mut node: Box<Node<K, V>>,
         reclaim: &mut Vec<Box<Node<K, V>>>, /* reclaim */
     ) -> Box<Node<K, V>> {
-        if is_red(node.as_right_deref()) && !is_red(node.as_left_deref()) {
+        let (left, right) = (node.as_left_deref(), node.as_right_deref());
+        if is_red(right) && !is_red(left) {
             node = Mvcc::rotate_left(node, reclaim);
         }
         let left = node.as_left_deref();
         if is_red(left) && is_red(left.unwrap().as_left_deref()) {
             node = Mvcc::rotate_right(node, reclaim);
         }
-        if is_red(node.as_left_deref()) && is_red(node.as_right_deref()) {
+        let (left, right) = (node.as_left_deref(), node.as_right_deref());
+        if is_red(left) && is_red(right) {
             Mvcc::flip(node.deref_mut(), reclaim)
         }
         node
@@ -1128,13 +1134,13 @@ where
 
     //              (i)                       (i)
     //               |                         |
-    //              node                       x
+    //              node                     right
     //              /  \                      / \
     //             /    (r)                 (r)  \
     //            /       \                 /     \
-    //          left       x             node      xr
+    //          left     right           node     r-r
     //                    / \            /  \
-    //                  xl   xr       left   xl
+    //                 r-l  r-r       left  r-l
     //
     fn rotate_left(
         mut node: Box<Node<K, V>>,
@@ -1161,13 +1167,13 @@ where
 
     //              (i)                       (i)
     //               |                         |
-    //              node                       x
+    //              node                      left
     //              /  \                      / \
     //            (r)   \                   (r)  \
     //           /       \                 /      \
-    //          x       right             xl      node
+    //         left     right            l-l      node
     //         / \                                / \
-    //       xl   xr                             xr  right
+    //      l-l  l-r                            l-r  right
     //
     fn rotate_right(
         mut node: Box<Node<K, V>>,
@@ -1275,6 +1281,7 @@ where
     ulatch: RWSpinlock,
     inner: AtomicPtr<Arc<Snapshot<K, V>>>,
     gc_tx: Option<mpsc::Sender<Vec<Box<Node<K, V>>>>>,
+    n_active: Arc<AtomicUsize>,
 }
 
 impl<K, V> AsRef<Arc<Snapshot<K, V>>> for OuterSnapshot<K, V>
@@ -1294,16 +1301,21 @@ where
 {
     // create the first snapshot and a placeholder `next` snapshot for Mvcc.
     fn new(gc_tx: mpsc::Sender<Vec<Box<Node<K, V>>>>) -> OuterSnapshot<K, V> {
+        let n_active = Arc::new(AtomicUsize::new(2));
+        let m = Arc::clone(&n_active);
+        let n = Arc::clone(&n_active);
+
         let next_snapshot: Option<Arc<Snapshot<K,V>>> = // dummy next snapshot
-            Some(Arc::new(*Snapshot::new(None, gc_tx.clone())));
+            Some(Arc::new(*Snapshot::new(None, gc_tx.clone(), m)));
         let curr_snapshot: Box<Snapshot<K, V>> = // current snapshot
-            Snapshot::new(next_snapshot, gc_tx.clone());
+            Snapshot::new(next_snapshot, gc_tx.clone(), n);
 
         let arc: Box<Arc<Snapshot<K, V>>> = Box::new(Arc::new(*curr_snapshot));
         OuterSnapshot {
             ulatch: RWSpinlock::new(),
             inner: AtomicPtr::new(Box::leak(arc)),
             gc_tx: Some(gc_tx),
+            n_active,
         }
     }
 
@@ -1323,6 +1335,7 @@ where
         reclaim: Vec<Box<Node<K, V>>>,
     ) {
         let _w = self.ulatch.acquire_write(true /*spin*/);
+        let m = Arc::clone(&self.n_active);
 
         // * curr_s points to next_s, and currently the only reference to next_s.
         // * curr_s gets dropped, but there can be readers holding a reference.
@@ -1342,11 +1355,11 @@ where
         let next_m = Arc::get_mut(curr_m.next.as_mut().unwrap()).unwrap();
         // populate the next snapshot.
         next_m.root = root;
-        next_m.reclaim = reclaim;
+        next_m.reclaim = Some(reclaim);
         next_m.seqno = seqno;
         next_m.n_count = n_count;
         let gc_tx = self.gc_tx.as_ref().unwrap().clone();
-        next_m.next = Some(Arc::new(*Snapshot::new(None, gc_tx)));
+        next_m.next = Some(Arc::new(*Snapshot::new(None, gc_tx, m)));
 
         let next_s: Box<Arc<Snapshot<K, V>>> = Box::new(Arc::clone(
             // clone a Arc reference of next snapshot and make it current
@@ -1355,13 +1368,14 @@ where
 
         let x = Arc::strong_count(curr_s.as_ref());
         let y = Arc::strong_count(next_s.as_ref());
-        println!(
-            "shiftsnap {:p} {:p} {} {} ",
-            curr_r,
-            next_s.as_ref().as_ref(),
-            x,
-            y
-        );
+        //println!(
+        //    "shiftsnap {:p} {:p} {} {} ",
+        //    curr_r,
+        //    next_s.as_ref().as_ref(),
+        //    x,
+        //    y
+        //);
+        self.n_active.fetch_add(1, SeqCst);
 
         self.inner.store(Box::leak(next_s), SeqCst);
     }
@@ -1373,11 +1387,12 @@ where
     V: Clone + Diff,
 {
     root: Option<Box<Node<K, V>>>,
-    reclaim: Vec<Box<Node<K, V>>>,
+    reclaim: Option<Vec<Box<Node<K, V>>>>,
     seqno: u64,     // starts from 0 and incr for every mutation.
     n_count: usize, // number of entries in the tree.
     next: Option<Arc<Snapshot<K, V>>>,
     gc_tx: Option<mpsc::Sender<Vec<Box<Node<K, V>>>>>,
+    n_active: Arc<AtomicUsize>,
 }
 
 impl<K, V> Snapshot<K, V>
@@ -1390,6 +1405,7 @@ where
     fn new(
         next: Option<Arc<Snapshot<K, V>>>,
         gc_tx: mpsc::Sender<Vec<Box<Node<K, V>>>>,
+        n_active: Arc<AtomicUsize>,
     ) -> Box<Snapshot<K, V>> {
         // println!("new mvcc-root {:p}", snapshot);
         Box::new(Snapshot {
@@ -1399,16 +1415,17 @@ where
             n_count: Default::default(),
             next,
             gc_tx: Some(gc_tx),
+            n_active,
         })
     }
 
     fn root_duplicate(&self) -> Option<Box<Node<K, V>>> {
         match &self.root {
+            None => None,
             Some(node) => {
                 let node = node.deref() as *const Node<K, V> as *mut Node<K, V>;
                 Some(unsafe { Box::from_raw(node) })
             }
-            None => unreachable!(),
         }
     }
 
@@ -1430,11 +1447,16 @@ where
         // NOTE: `reclaim` nodes will be dropped, but due the Drop
         // implementation of Node, child nodes won't be dropped.
 
-        let mut reclaim = vec![];
-        while let Some(node) = self.reclaim.pop() {
-            reclaim.push(node);
-        }
-        self.gc_tx.as_ref().unwrap().send(reclaim).ok();
+        match (self.reclaim.take(), self.gc_tx.take()) {
+            (Some(reclaim), Some(gc_tx)) => gc_tx.send(reclaim).ok(),
+            (Some(reclaim), None) => unreachable!(),
+            _ => None,
+        };
+        let n = self.n_active.fetch_sub(1, SeqCst);
+        //if n > 10 {
+        //    println!("active snapshots {}", n);
+        //}
+        //println!("drop snapshot {:p}", self);
     }
 }
 
@@ -1451,6 +1473,7 @@ where
             n_count: Default::default(),
             next: Default::default(),
             gc_tx: Default::default(),
+            n_active: Default::default(),
         }
     }
 }

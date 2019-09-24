@@ -1,5 +1,4 @@
 use std::ops::Bound;
-use std::sync::Arc;
 use std::thread;
 
 use rand::prelude::random;
@@ -7,15 +6,14 @@ use rand::{rngs::SmallRng, Rng, SeedableRng};
 
 use super::*;
 
-use crate::core::{Index, IndexIter, Reader};
+use crate::core::{Index, IndexIter, Reader, Writer};
 use crate::error::Error;
 use crate::llrb::Llrb;
-use crate::mvcc::{Mvcc, MvccWriter};
+use crate::mvcc::{Mvcc, MvccReader, MvccWriter};
 use crate::robt;
 use crate::scans::SkipScan;
 
 #[test]
-#[ignore]
 fn test_lsm_get1() {
     // test case using 5 mvcc versions
     let seed: u128 = random();
@@ -57,7 +55,6 @@ fn test_lsm_get1() {
 }
 
 #[test]
-#[ignore]
 fn test_lsm_get2() {
     // test case using 2 robt version and 1 mvcc versions
     let seed: u128 = random();
@@ -85,34 +82,26 @@ fn test_lsm_get2() {
     };
 
     let (n_ops, key_max) = (200_000, 60_000);
-    println!("before from_llrb");
-    let mut mvcc1: Arc<Box<Mvcc<i64, i64>>> = Arc::new(Mvcc::from_llrb(*llrb));
-    println!("after from_llrb, before final mvcc population");
-    {
-        let mvcc: &mut Box<Mvcc<i64, i64>> = Arc::get_mut(&mut mvcc1).unwrap();
-        random_mvcc(n_ops, key_max, seed, &mut **mvcc, &mut refi);
-    }
-    let seqno = mvcc1.to_seqno();
+    let mut mvcc: Box<Mvcc<i64, i64>> = Mvcc::from_llrb(*llrb);
+    random_mvcc(n_ops, key_max, seed, mvcc.as_mut(), &mut refi);
+
+    let seqno = mvcc.to_seqno();
+    let w = mvcc.to_writer().unwrap();
+    let r = mvcc.to_reader().unwrap();
     let t_handle = {
-        let mvcc_w = Arc::get_mut(&mut mvcc1).unwrap().to_writer();
-        let mvcc = Arc::clone(&mvcc1);
-        let (n_ops, key_max) = (200_000, 60_000);
-        thread::spawn(move || {
-            concurrent_write(
-                n_ops, key_max, seed, mvcc_w, // writer handle
-                mvcc,
-            )
-        })
+        let (n_ops, key_max) = (400_000, 60_000);
+        thread::spawn(move || concurrent_write(n_ops, key_max, seed, r, w))
     };
 
-    println!("start verification mvcc seqno {}", seqno);
-    let yget = y_get(getter(&**mvcc1), y_get(getter(&disk2), getter(&disk1)));
+    // println!("start verification mvcc seqno {}", seqno);
+    let yget = y_get(getter(&*mvcc), y_get(getter(&disk2), getter(&disk1)));
+    let start = std::time::SystemTime::now();
     for entry in refi.iter().unwrap() {
         let entry = entry.unwrap();
         let key = entry.to_key();
         let e = yget(&key).unwrap();
 
-        let e1 = mvcc1.get(&key);
+        let e1 = mvcc.get(&key);
 
         let (a, z) = (Bound::Unbounded, Bound::Included(seqno));
         let e = e.filter_within(a, z).unwrap();
@@ -128,10 +117,8 @@ fn test_lsm_get2() {
         assert_eq!(entry.to_native_value(), e.to_native_value(), "key {}", key);
         assert_eq!(entry.as_deltas().len(), e.as_deltas().len());
     }
-
-    println!("test_lsm_get2 finished get ops");
+    // println!("get elapsed {:?}", start.elapsed().unwrap().as_nanos());
     t_handle.join().unwrap();
-    println!("test_lsm_get2 finished concurrent writes sync");
 }
 
 #[test]
@@ -306,35 +293,39 @@ fn concurrent_write(
     n_ops: i64,
     key_max: i64,
     seed: u128,
-    mut w: MvccWriter<i64, i64>, // writer handle into mvcc argument.
-    mvcc: Arc<Box<Mvcc<i64, i64>>>,
+    r: MvccReader<i64, i64>,
+    mut w: MvccWriter<i64, i64>,
 ) {
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let start = std::time::SystemTime::now();
     for _i in 0..n_ops {
         let key = (rng.gen::<i64>() % key_max).abs();
-        let op = rng.gen::<usize>() % 1;
-        // println!("concurrent key {} {} {}", key, mvcc.to_seqno(), op);
+        let op = rng.gen::<usize>() % 2;
+        // println!("concurrent key {} {}", key, op);
         match op {
             0 => {
                 let value: i64 = rng.gen();
                 w.set(key, value).unwrap();
             }
-            //1 => {
-            //    let value: i64 = rng.gen();
-            //    let cas = match mvcc.get(&key) {
-            //        Err(Error::KeyNotFound) => 0,
-            //        Err(_err) => unreachable!(),
-            //        Ok(e) => e.to_seqno(),
-            //    };
-            //    w.set_cas(key, value, cas).unwrap();
-            //}
+            1 => {
+                let value: i64 = rng.gen();
+                let cas = match r.get(&key) {
+                    Err(Error::KeyNotFound) => 0,
+                    Err(_err) => unreachable!(),
+                    Ok(e) => e.to_seqno(),
+                };
+                w.set_cas(key, value, cas).unwrap();
+            }
             //2 => {
             //    w.delete(&key).unwrap();
             //}
             _ => unreachable!(),
         }
     }
-    println!("finished concurrent writes to mvcc {}", mvcc.to_seqno());
+    //println!(
+    //    "concurrent write elapsed {:?}",
+    //    start.elapsed().unwrap().as_nanos()
+    //);
 }
 
 fn log_entry(e: &Entry<i64, i64>) {

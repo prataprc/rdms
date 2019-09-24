@@ -23,14 +23,14 @@ where
     V: Clone + Diff,
     Q: Ord + ?Sized,
 {
-    while let Some(nref) = node {
-        node = match nref.as_key().borrow().cmp(key) {
-            Ordering::Less => nref.as_right_deref(),
-            Ordering::Greater => nref.as_left_deref(),
-            Ordering::Equal => return Ok(nref.entry.clone()),
-        };
+    match node {
+        Some(nref) => match nref.as_key().borrow().cmp(key) {
+            Ordering::Less => get(nref.as_right_deref(), key),
+            Ordering::Greater => get(nref.as_left_deref(), key),
+            Ordering::Equal => Ok(nref.entry.clone()),
+        },
+        None => Err(Error::KeyNotFound),
     }
-    Err(Error::KeyNotFound)
 }
 
 fn validate_tree<K, V>(

@@ -156,7 +156,7 @@ where
     type R: Reader<K, V>;
 
     /// Make a new empty index of this type, with same configuration.
-    fn make_new(&self) -> Result<Self>;
+    fn make_new(&self) -> Result<Box<Self>>;
 
     /// Create a new read handle, for multi-threading. Note that not all
     /// indexes allow concurrent readers. Refer to index API for more details.

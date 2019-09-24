@@ -4,7 +4,7 @@ use std::ops::Bound;
 
 use rand::prelude::random;
 
-use crate::core::Reader;
+use crate::core::{Reader, Writer};
 use crate::error::Error;
 use crate::llrb::Llrb;
 use crate::scans::SkipScan;

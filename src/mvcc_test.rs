@@ -2,7 +2,7 @@ use std::ops::Bound;
 
 use rand::prelude::random;
 
-use crate::core::Reader;
+use crate::core::{Reader, Writer};
 use crate::error::Error;
 use crate::mvcc::Mvcc;
 use crate::scans::SkipScan;
@@ -496,7 +496,7 @@ fn test_full_scan() {
     assert_eq!(index.to_seqno(), 10000);
     let seqno1 = index.to_seqno();
 
-    let iter = SkipScan::new(&index, ..=seqno1);
+    let iter = SkipScan::new(&*index, ..=seqno1);
     for (i, entry) in iter.enumerate() {
         let entry = entry.unwrap();
         let ref_key = i as i32;
@@ -514,7 +514,7 @@ fn test_full_scan() {
     assert_eq!(index.to_seqno(), 10334);
 
     // skip scan after first-inject.
-    let iter = SkipScan::new(&index, ..=seqno1);
+    let iter = SkipScan::new(&*index, ..=seqno1);
     for (i, entry) in iter.enumerate() {
         let entry = entry.unwrap();
         let ref_key = i as i32;
@@ -552,7 +552,7 @@ fn test_full_scan() {
 
     // skip scan in-between.
     let r = (Bound::Excluded(seqno1), Bound::Included(seqno2));
-    let iter = SkipScan::new(&index, r);
+    let iter = SkipScan::new(&*index, r);
     for entry in iter {
         let entry = entry.unwrap();
         let key = entry.to_key();
@@ -615,7 +615,7 @@ fn test_full_scan() {
 
     // skip scan final.
     let r = (Bound::Excluded(seqno2), Bound::Unbounded);
-    let iter = SkipScan::new(&index, r);
+    let iter = SkipScan::new(&*index, r);
     let mut ref_key = 0;
     for entry in iter {
         let entry = entry.unwrap();

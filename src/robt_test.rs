@@ -239,7 +239,7 @@ fn run_robt_llrb(mut n_ops: u64, key_max: i64, repeat: usize) {
             .iter()
             .map(|e| if e.is_deleted() { 1 } else { 0 })
             .sum();
-        println!("refs len: {}", refs.len());
+        // println!("refs len: {}", refs.len());
         let iter = SkipScan::new(&*llrb, ..);
         let dir = {
             let mut dir = std::env::temp_dir();

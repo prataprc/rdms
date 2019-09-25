@@ -275,6 +275,14 @@ where
         };
         let pivot = self.find_pivot(from, to);
 
+        //println!(
+        //    "mfind {:?} {:?} {} {} {:?}",
+        //    from,
+        //    to,
+        //    pivot,
+        //    self.len(),
+        //    self.to_key(pivot)?
+        //);
         match key.cmp(self.to_key(pivot)?.borrow()) {
             Ordering::Less if pivot == 0 => Err(Error::__LessThan),
             Ordering::Less if pivot == f => unreachable!(),

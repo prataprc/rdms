@@ -345,7 +345,6 @@ where
     V: Clone + Diff,
 {
     /// Return the underlying `difference` value for this delta.
-    #[allow(dead_code)] // TODO: remove if not required.
     pub(crate) fn to_diff(&self) -> Option<<V as Diff>::D> {
         match &self.data {
             InnerDelta::D { .. } => None,
@@ -366,7 +365,6 @@ where
     /// which includes Create and Delete operations.
     /// To differentiate between Create and Delete operations
     /// use born_seqno() and dead_seqno() methods respectively.
-    #[allow(dead_code)] // TODO: remove if not required.
     pub(crate) fn to_seqno(&self) -> u64 {
         match &self.data {
             InnerDelta::U { seqno, .. } => *seqno,
@@ -546,8 +544,11 @@ where
     K: Clone + Ord,
     V: Clone + Diff + Footprint,
 {
-    // Prepend a new version, also the latest version, for this entry.
-    // In non-lsm mode this is equivalent to over-writing previous value.
+    // Corresponds to CREATE and UPDATE operations also the latest version,
+    // for this entry. In non-lsm mode this is equivalent to over-writing
+    // previous value.
+    //
+    // `nentry` is new_entry to be CREATE/UPDATE into index.
     pub(crate) fn prepend_version(&mut self, nentry: Self, lsm: bool) -> isize {
         if lsm {
             self.prepend_version_lsm(nentry)
@@ -556,23 +557,28 @@ where
         }
     }
 
+    // `nentry` is new_entry to be CREATE/UPDATE into index.
     fn prepend_version_nolsm(&mut self, nentry: Self) -> isize {
         let size = self.value.footprint();
         self.value = nentry.value.clone();
         (self.value.footprint() - size).try_into().unwrap()
     }
 
+    // `nentry` is new_entry to be CREATE/UPDATE into index.
     fn prepend_version_lsm(&mut self, nentry: Self) -> isize {
         let delta = match self.value.as_ref() {
             Value::D { seqno } => Delta::new_delete(*seqno),
             Value::U {
                 value: vlog::Value::Native { value },
                 seqno,
-            } => {
-                let d = nentry.to_native_value().unwrap().diff(value);
-                let nd = vlog::Delta::new_native(d);
-                Delta::new_upsert(nd, *seqno)
-            }
+            } => match nentry.value.as_ref() {
+                Value::D { .. } => Delta::new_delete(*seqno),
+                Value::U { value: nvalue, .. } => {
+                    let d = nvalue.to_native_value().unwrap().diff(value);
+                    let nd = vlog::Delta::new_native(d);
+                    Delta::new_upsert(nd, *seqno)
+                }
+            },
             Value::U {
                 value: vlog::Value::Reference { .. },
                 ..
@@ -589,10 +595,13 @@ where
         size.try_into().unwrap()
     }
 
-    // only lsm, if entry is already deleted this call becomes a no-op.
+    // DELETE operation, only in lsm-mode.
     pub(crate) fn delete(&mut self, seqno: u64) -> isize {
         let delta_size = match self.value.as_ref() {
-            Value::D { .. } => 0, // NOOP
+            Value::D { seqno } => {
+                self.deltas.insert(0, Delta::new_delete(*seqno));
+                0
+            }
             Value::U {
                 value: vlog::Value::Native { value },
                 seqno,
@@ -960,8 +969,9 @@ where
     V: Clone + Diff + From<<V as Diff>::D>,
 {
     match (value, delta) {
-        (None, InnerDelta::D { .. }) => {
-            panic!("consecutive versions can't be a delete");
+        (None, InnerDelta::D { seqno }) => {
+            // consequitive delete
+            (Value::new_delete(seqno), None)
         }
         (Some(_), InnerDelta::D { seqno }) => {
             // this entry is deleted.

@@ -159,8 +159,12 @@ fn test_config() {
 
 #[test]
 fn test_robt_llrb1() {
+    let seed: u128 = 279765853267557126686238657580803488536;
+    run_robt_llrb(60_000, 20_000_i64, 2, seed);
     let seed: u128 = random();
+    println!("test_robt_llrb1 first run ...");
     run_robt_llrb(6_000, 2_000_i64, 10, seed);
+    println!("test_robt_llrb1 second run ...");
     run_robt_llrb(60_000, 20_000_i64, 2, seed);
 }
 
@@ -191,7 +195,9 @@ fn run_robt_llrb(mut n_ops: u64, key_max: i64, repeat: usize, seed: u128) {
         };
         for _i in 0..n_ops {
             let key = (rng.gen::<i64>() % key_max).abs();
-            match rng.gen::<usize>() % 3 {
+            let op = rng.gen::<usize>() % 3;
+            // println!("run_robt_llrb key: {} op:{}", key, op);
+            match op {
                 0 => {
                     let value: i64 = rng.gen();
                     llrb.set(key, value).unwrap();

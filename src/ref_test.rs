@@ -5,14 +5,14 @@ use crate::core::Entry;
 #[derive(Clone, Debug)]
 enum RefValue {
     U { value: i64, seqno: u64 },
-    D { deleted: u64 },
+    D { seqno: u64 },
 }
 
 impl RefValue {
     fn to_seqno(&self) -> u64 {
         match self {
             RefValue::U { seqno, .. } => *seqno,
-            RefValue::D { deleted } => *deleted,
+            RefValue::D { seqno } => *seqno,
         }
     }
 
@@ -200,7 +200,7 @@ impl RefNodes {
 
     fn delete(&mut self, key: i64) -> Option<RefNode> {
         let newver = RefValue::D {
-            deleted: self.seqno + 1,
+            seqno: self.seqno + 1,
         };
         let off: usize = key.try_into().unwrap();
         let entry = &mut self.entries[off];
@@ -211,16 +211,7 @@ impl RefNodes {
         };
 
         entry.key = key;
-        if self.lsm && entry.is_present() {
-            match entry.versions[0] {
-                RefValue::U { .. } => {
-                    entry.versions.insert(0, newver);
-                    self.seqno += 1;
-                    old
-                }
-                RefValue::D { .. } => old,
-            }
-        } else if self.lsm {
+        if self.lsm {
             entry.versions.insert(0, newver);
             self.seqno += 1;
             old

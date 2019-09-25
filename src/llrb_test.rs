@@ -479,7 +479,7 @@ fn test_crud_lsm() {
         let key: i64 = (random::<i64>() % size).abs();
         let value: i64 = random();
         let op: i64 = (random::<i64>() % 3).abs();
-        // println!("op {} on {}", op, key);
+        // println!("test_crud_lsm seqno:{} op:{} key:{}", _i + 1, op, key);
         match op {
             0 => {
                 let entry = llrb.set(key, value).unwrap();
@@ -496,7 +496,7 @@ fn test_crud_lsm() {
                     0
                 };
 
-                //println!("set_cas {} {}", key, seqno);
+                // println!("set_cas {} {}", key, cas);
                 let entry = llrb.set_cas(key, value, cas).ok().unwrap();
                 let refn = refns.set_cas(key, value, cas);
                 check_node(entry, refn);
@@ -510,11 +510,12 @@ fn test_crud_lsm() {
             }
             op => panic!("unreachable {}", op),
         };
+        assert_eq!(llrb.to_seqno(), refns.to_seqno());
 
         assert!(llrb.validate().is_ok());
     }
 
-    //println!("len {}", llrb.len());
+    // println!("len {}", llrb.len());
 
     assert_eq!(refns.to_seqno(), llrb.to_seqno());
     // test iter
@@ -529,7 +530,7 @@ fn test_crud_lsm() {
     // ranges and reverses
     for _ in 0..3000 {
         let (low, high) = random_low_high(size as usize);
-        //println!("test loop {:?} {:?}", low, high);
+        // println!("test loop {:?} {:?}", low, high);
 
         let mut iter = llrb.range((low, high)).unwrap();
         let mut iter_ref = refns.range(low, high);

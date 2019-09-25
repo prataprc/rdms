@@ -415,23 +415,16 @@ where
             let res = Llrb::delete_lsm(self.root.take(), key, seqno);
             self.root = res.node;
             self.root.as_mut().map(|r| r.set_black());
+            self.seqno = seqno;
+            self.tree_footprint += res.size;
 
             return match res.old_entry {
                 None => {
                     self.key_footprint += key_footprint;
-                    self.tree_footprint += res.size;
-
                     self.n_count += 1;
-                    self.seqno = seqno;
                     (Some(seqno), Ok(None))
                 }
-                Some(entry) if !entry.is_deleted() => {
-                    self.tree_footprint += res.size;
-
-                    self.seqno = seqno;
-                    (Some(seqno), Ok(Some(entry)))
-                }
-                entry => (None, Ok(entry)),
+                Some(entry) => (Some(seqno), Ok(Some(entry))),
             };
         } else {
             // in non-lsm mode remove the entry from the tree.
@@ -695,11 +688,7 @@ where
                     }
                     Ordering::Equal => {
                         let entry = node.entry.clone();
-                        let size = if !node.is_deleted() {
-                            node.delete(seqno)
-                        } else {
-                            0
-                        };
+                        let size = node.delete(seqno);
                         DeleteResult {
                             node: Some(Llrb::walkuprot_23(node)),
                             old_entry: Some(entry),
@@ -1130,7 +1119,7 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    refn: Arc<u32>,
+    _refn: Arc<u32>,
     index: Option<Box<std::ffi::c_void>>, // Box<Llrb<K, V>>
     phantom_key: marker::PhantomData<K>,
     phantom_val: marker::PhantomData<V>,
@@ -1167,9 +1156,9 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    fn new(index: Box<std::ffi::c_void>, refn: Arc<u32>) -> LlrbReader<K, V> {
+    fn new(index: Box<std::ffi::c_void>, _refn: Arc<u32>) -> LlrbReader<K, V> {
         LlrbReader {
-            refn,
+            _refn,
             index: Some(index),
             phantom_key: marker::PhantomData,
             phantom_val: marker::PhantomData,
@@ -1261,7 +1250,7 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    refn: Arc<u32>,
+    _refn: Arc<u32>,
     index: Option<Box<std::ffi::c_void>>,
     phantom_key: marker::PhantomData<K>,
     phantom_val: marker::PhantomData<V>,
@@ -1298,9 +1287,9 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    fn new(index: Box<std::ffi::c_void>, refn: Arc<u32>) -> LlrbWriter<K, V> {
+    fn new(index: Box<std::ffi::c_void>, _refn: Arc<u32>) -> LlrbWriter<K, V> {
         LlrbWriter {
-            refn,
+            _refn,
             index: Some(index),
             phantom_key: marker::PhantomData,
             phantom_val: marker::PhantomData,

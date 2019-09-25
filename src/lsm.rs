@@ -26,7 +26,9 @@ where
     })
 }
 
-// ``x`` contains newer mutations than ``y``
+// ``x`` contains newer mutations than ``y``.
+// TODO NOTE: flush_merge called by this function assumes that all
+// mutations held by each index are mutually exclusive.
 pub(crate) fn y_get_versions<'a, 'b, K, V, Q>(
     x: LsmGet<'a, K, V, Q>,
     y: LsmGet<'a, K, V, Q>,
@@ -37,12 +39,13 @@ where
     Q: 'a + 'b + Ord + ?Sized,
 {
     Box::new(move |key: &Q| -> Result<Entry<K, V>> {
-        match x(key) {
-            Ok(x_entry) => match y(key) {
-                Ok(y_entry) => Ok(x_entry.flush_merge(y_entry)),
+        match y(key) {
+            Ok(y_entry) => match x(key) {
+                Ok(x_entry) => Ok(x_entry.flush_merge(y_entry)),
+                Err(Error::KeyNotFound) => Ok(y_entry),
                 res => res,
             },
-            Err(Error::KeyNotFound) => y(key),
+            Err(Error::KeyNotFound) => x(key),
             res => res,
         }
     })
@@ -168,6 +171,8 @@ where
                     Some(Ok(ye))
                 }
                 cmp::Ordering::Equal => {
+                    // TODO NOTE: flush_merge assumes that all mutations
+                    // held by each index are mutually exclusive.
                     self.x_entry = self.x.next();
                     self.y_entry = self.y.next();
                     Some(Ok(xe.flush_merge(ye)))
@@ -188,14 +193,24 @@ where
     }
 }
 
-pub(crate) fn getter<'a, 'b, I, K, V, Q>(index: &'a I) -> LsmGet<'a, K, V, Q>
+pub(crate) fn getter<'a, 'b, I, K, V, Q>(
+    index: &'a I,
+    versions: bool, // if true, use get_versions
+) -> LsmGet<'a, K, V, Q>
 where
     K: Clone + Ord + Borrow<Q>,
     V: Clone + Diff,
     Q: 'b + Ord + ?Sized,
     I: Reader<K, V>,
 {
-    Box::new(move |key: &Q| -> Result<Entry<K, V>> { index.get(key) })
+    if versions {
+        Box::new(move |key: &Q| -> Result<Entry<K, V>> {
+            // get with previous versions
+            index.get_with_versions(key)
+        })
+    } else {
+        Box::new(move |key: &Q| -> Result<Entry<K, V>> { index.get(key) })
+    }
 }
 
 #[cfg(test)]

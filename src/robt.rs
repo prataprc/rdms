@@ -946,6 +946,7 @@ where
                 Some(entry) => entry,
                 None => continue,
             };
+
             // println!("build key: {:?}", entry.to_key());
             // println!("build entry: {}", entry.to_seqno());
 
@@ -992,10 +993,10 @@ where
         // flush final z-block
         if c.z.has_first_key() {
             // println!(" flush final zblock: {:?}", c.z.as_first_key());
-            let (zbytes, _vbytes) = c.z.finalize(&mut self.stats);
+            let (zbytes, vbytes) = c.z.finalize(&mut self.stats);
             c.z.flush(&mut self.iflusher, self.vflusher.as_mut())?;
             c.fpos += zbytes;
-            // vfpos += vbytes; TODO: is this required ?
+            c.vfpos += vbytes;
 
             let mut m = c.ms.pop().unwrap();
             match m.insertz(c.z.as_first_key(), c.zfpos) {
@@ -1010,6 +1011,7 @@ where
 
                     m.reset();
                     m.insertz(c.z.as_first_key(), c.zfpos)?;
+                    c.ms.push(m);
                 }
                 Err(err) => return Err(err),
             }
@@ -1019,7 +1021,8 @@ where
 
         // flush final set of m-blocks
         while let Some(mut m) = c.ms.pop() {
-            if m.has_first_key() && c.ms.len() == 0 {
+            let is_root = m.has_first_key() && c.ms.len() == 0;
+            if is_root {
                 let x = m.finalize(&mut self.stats);
                 m.flush(&mut self.iflusher)?;
                 c.fpos += x;

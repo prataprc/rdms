@@ -457,22 +457,15 @@ where
             };
             let (root, new_node, old_entry, size) = s;
 
+            self.tree_footprint.fetch_add(size, SeqCst);
             // println!("delete {:?}", entry.as_ref().map(|e| e.is_deleted()));
-            let seqno = match &old_entry {
+            match &old_entry {
                 None => {
                     self.key_footprint.fetch_add(key_footprint, SeqCst);
-                    self.tree_footprint.fetch_add(size, SeqCst);
-
                     n_count += 1;
-                    seqno
                 }
-                Some(e) if e.is_deleted() => snapshot.seqno,
-                _ /* not-deleted */ => {
-                    self.tree_footprint.fetch_add(size, SeqCst);
-                    seqno
-                }
-            };
-
+                _ => (),
+            }
             if let Some(mut n) = new_node {
                 n.dirty = false;
                 Box::leak(n);
@@ -761,11 +754,7 @@ where
             }
             Ordering::Equal => {
                 let old_entry = node.entry.clone();
-                let size = if !node.is_deleted() {
-                    new_node.delete(seqno)
-                } else {
-                    0
-                };
+                let size = new_node.delete(seqno);
                 new_node.dirty = true;
                 let n = new_node.duplicate();
                 (Some(n), Some(old_entry), size)
@@ -916,6 +905,7 @@ where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
+        println!("get-mvcc {}", self.name);
         let snapshot: Arc<Snapshot<K, V>> = OuterSnapshot::clone(&self.snapshot);
         let res = get(snapshot.as_root(), key);
         res

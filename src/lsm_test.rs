@@ -22,46 +22,60 @@ fn test_lsm_get1() {
 
     let (n_ops, key_max) = random_ops_keys(seed, 60, 20);
     println!("mvcc1 n_ops: {} key_max: {}", n_ops, key_max);
-    let mut mvcc1: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc");
+    let mut mvcc1: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc1");
     random_mvcc(n_ops, key_max, seed, &mut mvcc1, &mut refi);
 
     let (n_ops, key_max) = random_ops_keys(seed, 600, 200);
     println!("mvcc2 n_ops: {} key_max: {}", n_ops, key_max);
-    let mut mvcc2 = mvcc1.clone();
+    let mut mvcc2: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc2");
+    mvcc2.set_seqno(mvcc1.to_seqno());
     random_mvcc(n_ops, key_max, seed, &mut mvcc2, &mut refi);
 
     let (n_ops, key_max) = random_ops_keys(seed, 6_000, 2_000);
     println!("mvcc3 n_ops: {} key_max: {}", n_ops, key_max);
-    let mut mvcc3 = mvcc2.clone();
+    let mut mvcc3: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc3");
+    mvcc3.set_seqno(mvcc2.to_seqno());
     random_mvcc(n_ops, key_max, seed, &mut mvcc3, &mut refi);
 
     let (n_ops, key_max) = random_ops_keys(seed, 60_000, 20_000);
     println!("mvcc4 n_ops: {} key_max: {}", n_ops, key_max);
-    let mut mvcc4 = mvcc3.clone();
+    let mut mvcc4: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc4");
+    mvcc4.set_seqno(mvcc3.to_seqno());
     random_mvcc(n_ops, key_max, seed, &mut mvcc4, &mut refi);
 
     let (n_ops, key_max) = random_ops_keys(seed, 600_000, 200_000);
     println!("mvcc5 n_ops: {} key_max: {}", n_ops, key_max);
-    let mut mvcc5 = mvcc4.clone();
+    let mut mvcc5: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc5");
+    mvcc5.set_seqno(mvcc4.to_seqno());
     random_mvcc(n_ops, key_max, seed, &mut mvcc5, &mut refi);
 
+    let seqno = mvcc5.to_seqno();
+
     let yget = y_get(
-        getter(&*mvcc5),
+        getter(&*mvcc5, false),
         y_get(
-            getter(&*mvcc4),
-            y_get(getter(&*mvcc3), y_get(getter(&*mvcc2), getter(&*mvcc1))),
+            getter(&*mvcc4, false),
+            y_get(
+                getter(&*mvcc3, false),
+                y_get(getter(&*mvcc2, false), getter(&*mvcc1, false)),
+            ),
         ),
     );
     for entry in refi.iter().unwrap() {
         let entry = entry.unwrap();
         let key = entry.to_key();
         let e = yget(&key).unwrap();
-        assert_eq!(e.to_seqno(), entry.to_seqno(), "for key {}", key,);
+
+        let (a, z) = (Bound::Unbounded, Bound::Included(seqno));
+        let e = e.filter_within(a, z).unwrap();
+        assert_eq!(entry.to_key(), e.to_key());
+        assert_eq!(entry.to_seqno(), e.to_seqno(), "for key {}", key,);
+        assert_eq!(entry.is_deleted(), e.is_deleted(), "for key {}", key);
+        assert_eq!(entry.to_native_value(), e.to_native_value(), "key {}", key);
     }
 }
 
 #[test]
-#[ignore]
 fn test_lsm_get2() {
     // test case using 2 robt version and 1 mvcc versions
     let seed: u128 = random();
@@ -108,7 +122,10 @@ fn test_lsm_get2() {
     };
 
     // println!("start verification mvcc seqno {}", seqno);
-    let yget = y_get(getter(&*mvcc), y_get(getter(&disk2), getter(&disk1)));
+    let yget = y_get(
+        getter(&*mvcc, false),
+        y_get(getter(&disk2, false), getter(&disk1, false)),
+    );
     let _start = std::time::SystemTime::now();
     for entry in refi.iter().unwrap() {
         let entry = entry.unwrap();
@@ -128,8 +145,73 @@ fn test_lsm_get2() {
 }
 
 #[test]
-fn test_lsm_get_versions() {
+#[ignore]
+fn test_lsm_get_versions1() {
     // test case using 5 mvcc versions
+    let seed: u128 = random();
+    // let seed: u128 = 204391140320403798395535363311690471999;
+    println!("seed {}", seed);
+    let mut refi = Llrb::new_lsm("test-llrb");
+
+    let (n_ops, key_max) = random_ops_keys(seed, 60, 20);
+    println!("mvcc1 n_ops: {} key_max: {}", n_ops, key_max);
+    let mut mvcc1: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc1");
+    random_mvcc(n_ops, key_max, seed, &mut mvcc1, &mut refi);
+
+    let (n_ops, key_max) = random_ops_keys(seed, 600, 200);
+    println!("mvcc2 n_ops: {} key_max: {}", n_ops, key_max);
+    let mut mvcc2: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc2");
+    mvcc2.set_seqno(mvcc1.to_seqno());
+    random_mvcc(n_ops, key_max, seed, &mut mvcc2, &mut refi);
+
+    let (n_ops, key_max) = random_ops_keys(seed, 6_000, 2_000);
+    println!("mvcc3 n_ops: {} key_max: {}", n_ops, key_max);
+    let mut mvcc3: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc3");
+    mvcc3.set_seqno(mvcc2.to_seqno());
+    random_mvcc(n_ops, key_max, seed, &mut mvcc3, &mut refi);
+
+    let (n_ops, key_max) = random_ops_keys(seed, 60_000, 20_000);
+    println!("mvcc4 n_ops: {} key_max: {}", n_ops, key_max);
+    let mut mvcc4: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc4");
+    mvcc4.set_seqno(mvcc3.to_seqno());
+    random_mvcc(n_ops, key_max, seed, &mut mvcc4, &mut refi);
+
+    let (n_ops, key_max) = random_ops_keys(seed, 600_000, 200_000);
+    println!("mvcc5 n_ops: {} key_max: {}", n_ops, key_max);
+    let mut mvcc5: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc5");
+    mvcc5.set_seqno(mvcc4.to_seqno());
+    random_mvcc(n_ops, key_max, seed, &mut mvcc5, &mut refi);
+
+    let seqno = mvcc5.to_seqno();
+
+    let yget = y_get_versions(
+        getter(&*mvcc5, true),
+        y_get_versions(
+            getter(&*mvcc4, true),
+            y_get_versions(
+                getter(&*mvcc3, true),
+                y_get_versions(getter(&*mvcc2, true), getter(&*mvcc1, true)),
+            ),
+        ),
+    );
+    for entry in refi.iter().unwrap() {
+        let entry = entry.unwrap();
+        let key = entry.to_key();
+        // println!("entry key {}", key);
+        let e = yget(&key).unwrap();
+
+        let (a, z) = (Bound::Unbounded, Bound::Included(seqno));
+        let e = e.filter_within(a, z).unwrap();
+        assert_eq!(entry.to_key(), e.to_key());
+        assert_eq!(entry.to_seqno(), e.to_seqno(), "for key {}", key,);
+        assert_eq!(entry.is_deleted(), e.is_deleted(), "for key {}", key);
+        assert_eq!(entry.to_native_value(), e.to_native_value(), "key {}", key);
+        assert_eq!(entry.as_deltas().len(), e.as_deltas().len());
+    }
+}
+
+#[test]
+fn test_lsm_get_versions2() {
     // test case using 1 mvcc version and 2 robt versions
 }
 
@@ -365,7 +447,7 @@ fn random_ops_keys(seed: u128, ops_limit: i64, key_limit: i64) -> (i64, i64) {
     } else {
         max_key_set[i]
     };
-    (n_ops, i64::abs(max_key))
+    (n_ops, i64::max(i64::abs(max_key), n_ops / 10) + 1)
 }
 
 fn log_entry(e: &Entry<i64, i64>) {

@@ -4,6 +4,9 @@
 Code Review checklist
 =====================
 
+* [ ] Check and confirm dead-code.
+* [ ] Check and confirm ignored test cases.
+* [ ] Check for un-necessary trait constraints like Debgg and Display.
 * [ ] Review and check for un-necessary copy, and allocations.
 * [ ] Review resize calls on `Vec`.
 * [ ] Review (as ...) type casting, to panic on data loss.

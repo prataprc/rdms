@@ -572,11 +572,15 @@ where
                 value: vlog::Value::Native { value },
                 seqno,
             } => match nentry.value.as_ref() {
-                Value::D { .. } => Delta::new_delete(*seqno),
+                Value::D { .. } => {
+                    let diff: <V as Diff>::D = From::from(value.clone());
+                    let dlt = vlog::Delta::new_native(diff);
+                    Delta::new_upsert(dlt, *seqno)
+                }
                 Value::U { value: nvalue, .. } => {
-                    let d = nvalue.to_native_value().unwrap().diff(value);
-                    let nd = vlog::Delta::new_native(d);
-                    Delta::new_upsert(nd, *seqno)
+                    let diff = nvalue.to_native_value().unwrap().diff(value);
+                    let dlt = vlog::Delta::new_native(diff);
+                    Delta::new_upsert(dlt, *seqno)
                 }
             },
             Value::U {
@@ -764,6 +768,7 @@ where
         // TODO remove this validation logic once bogn is fully stable.
         a.validate_flush_merge(&b);
         for ne in a.versions().collect::<Vec<Entry<K, V>>>().into_iter().rev() {
+            // println!("flush_merge {} {}", ne.to_seqno(), ne.is_deleted());
             b.prepend_version(ne, true /* lsm */);
         }
         b
@@ -780,6 +785,7 @@ where
             .into_iter()
             .zip(seqnos[1..].into_iter())
             .any(|(a, b)| a <= b);
+        // println!("validate_flush_merge1 {} {:?}", fail, seqnos);
         // validate self contains all native value and deltas.
         fail = fail || self.value.is_reference();
         fail = fail || self.deltas.iter().any(|d| d.is_reference());

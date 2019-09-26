@@ -51,6 +51,7 @@ where
     })
 }
 
+// ``x`` contains newer mutations than ``y``
 pub(crate) fn y_iter<'a, K, V>(
     mut x: IndexIter<'a, K, V>, // newer
     mut y: IndexIter<'a, K, V>, // older
@@ -107,30 +108,32 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         match (self.x_entry.take(), self.y_entry.take()) {
-            (Some(Ok(xe)), Some(Ok(ye))) => {
-                let mut c = xe.as_key().cmp(ye.as_key());
-                if c == cmp::Ordering::Equal {
-                    c = xe.to_seqno().cmp(&ye.to_seqno());
+            (Some(Ok(xe)), Some(Ok(ye))) => match xe.as_key().cmp(ye.as_key()) {
+                cmp::Ordering::Less => {
+                    self.x_entry = self.x.next();
+                    self.y_entry = Some(Ok(ye));
+                    Some(Ok(xe))
                 }
-                match c {
-                    cmp::Ordering::Less => {
-                        self.x_entry = self.x.next();
-                        self.y_entry = Some(Ok(ye));
-                        Some(Ok(xe))
-                    }
-                    cmp::Ordering::Greater => {
-                        self.y_entry = self.y.next();
-                        self.x_entry = Some(Ok(xe));
-                        Some(Ok(ye))
-                    }
-                    cmp::Ordering::Equal => unreachable!(),
+                cmp::Ordering::Greater => {
+                    self.y_entry = self.y.next();
+                    self.x_entry = Some(Ok(xe));
+                    Some(Ok(ye))
                 }
-            }
-            (Some(Ok(xe)), Some(Err(Error::KeyNotFound))) => {
+                cmp::Ordering::Equal => {
+                    self.x_entry = self.x.next();
+                    self.y_entry = self.y.next();
+                    match xe.to_seqno().cmp(&ye.to_seqno()) {
+                        cmp::Ordering::Less => Some(Ok(ye)),
+                        cmp::Ordering::Greater => Some(Ok(xe)),
+                        cmp::Ordering::Equal => Some(Ok(xe)),
+                    }
+                }
+            },
+            (Some(Ok(xe)), None) => {
                 self.x_entry = self.x.next();
                 Some(Ok(xe))
             }
-            (Some(Err(Error::KeyNotFound)), Some(Ok(ye))) => {
+            (None, Some(Ok(ye))) => {
                 self.y_entry = self.y.next();
                 Some(Ok(ye))
             }
@@ -164,10 +167,12 @@ where
             (Some(Ok(xe)), Some(Ok(ye))) => match xe.as_key().cmp(ye.as_key()) {
                 cmp::Ordering::Less => {
                     self.x_entry = self.x.next();
+                    self.y_entry = Some(Ok(ye));
                     Some(Ok(xe))
                 }
                 cmp::Ordering::Greater => {
                     self.y_entry = self.y.next();
+                    self.x_entry = Some(Ok(xe));
                     Some(Ok(ye))
                 }
                 cmp::Ordering::Equal => {
@@ -178,11 +183,11 @@ where
                     Some(Ok(xe.flush_merge(ye)))
                 }
             },
-            (Some(Ok(xe)), Some(Err(Error::KeyNotFound))) => {
+            (Some(Ok(xe)), None) => {
                 self.x_entry = self.x.next();
                 Some(Ok(xe))
             }
-            (Some(Err(Error::KeyNotFound)), Some(Ok(ye))) => {
+            (None, Some(Ok(ye))) => {
                 self.y_entry = self.y.next();
                 Some(Ok(ye))
             }

@@ -905,7 +905,6 @@ where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        println!("get-mvcc {}", self.name);
         let snapshot: Arc<Snapshot<K, V>> = OuterSnapshot::clone(&self.snapshot);
         let res = get(snapshot.as_root(), key);
         res
@@ -1324,6 +1323,20 @@ where
         n_count: usize,
         reclaim: Vec<Box<Node<K, V>>>,
     ) {
+        // :/ sometimes when a reader holds a snapshot for a long time
+        // it can lead to very long chain of snapshot due to incoming
+        // mutations. And when the "long-reader" releases the snapshot
+        // the entire chain of snapshots could be dropped by recusively,
+        // leading to stackoverflow :\.
+        loop {
+            if self.n_active.load(SeqCst) < 1000 {
+                // TODO: no magic number
+                break;
+            } else {
+                thread::yield_now();
+            }
+        }
+
         let _w = self.ulatch.acquire_write(true /*spin*/);
         let m = Arc::clone(&self.n_active);
 

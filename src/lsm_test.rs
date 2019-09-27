@@ -90,8 +90,8 @@ fn test_lsm_get2() {
     random_llrb(n_ops, key_max, seed, &mut llrb, &mut refi);
     let (name, delta_ok) = ("test_lsm_get2-1", false);
     let disk1 = {
-        let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
-        let iter = Box::new(SkipScan::new(&*llrb, within));
+        let w = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
+        let iter = Box::new(SkipScan::new(&*llrb, w));
         random_robt(name, seed, delta_ok, iter)
     };
     println!("disk1 n_ops: {} key_max: {}", n_ops, key_max);
@@ -101,8 +101,8 @@ fn test_lsm_get2() {
     random_llrb(n_ops, key_max, seed, &mut llrb, &mut refi);
     let (name, delta_ok) = ("test_lsm_get2-2", false);
     let disk2 = {
-        let within = (Bound::Excluded(disk1.to_seqno()), Bound::<u64>::Unbounded);
-        let iter = Box::new(SkipScan::new(&*llrb, within));
+        let w = (Bound::Excluded(disk1.to_seqno()), Bound::<u64>::Unbounded);
+        let iter = Box::new(SkipScan::new(&*llrb, w));
         random_robt(name, seed, delta_ok, iter)
     };
     println!("disk2 n_ops: {} key_max: {}", n_ops, key_max);
@@ -176,6 +176,7 @@ fn test_lsm_get_versions1() {
     random_mvcc(n_ops, key_max, seed, &mut mvcc4, &mut refi);
 
     let (n_ops, key_max) = random_ops_keys(seed, 600_000, 200_000);
+    let n_ops = n_ops + 1;
     println!("mvcc5 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc5: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc5");
     mvcc5.set_seqno(mvcc4.to_seqno());
@@ -342,19 +343,24 @@ fn test_lsm_iter1() {
 
     let seqno = mvcc5.to_seqno();
 
+    let revr = false;
     let yiter = y_iter(
         mvcc5.iter().unwrap(),
         y_iter(
             mvcc4.iter().unwrap(),
             y_iter(
                 mvcc3.iter().unwrap(),
-                y_iter(mvcc2.iter().unwrap(), mvcc1.iter().unwrap()),
+                y_iter(mvcc2.iter().unwrap(), mvcc1.iter().unwrap(), revr),
+                revr,
             ),
+            revr,
         ),
+        revr,
     );
     let entries1: Vec<Result<Entry<i64, i64>>> = refi.iter().unwrap().collect();
     let entries2: Vec<Result<Entry<i64, i64>>> = yiter.collect();
 
+    assert_eq!(entries1.len(), entries2.len());
     for (entry, e) in entries1.into_iter().zip(entries2.into_iter()) {
         let (entry, e) = (entry.unwrap(), e.unwrap());
         let key = entry.to_key();
@@ -420,25 +426,28 @@ fn test_lsm_iter2() {
 
     // println!("start verification mvcc seqno {}", seqno);
     let within = (Bound::Excluded(d2_seqno), Bound::Included(seqno));
+    let revr = false;
     let yiter = y_iter(
         Box::new(SkipScan::new(&*mvcc, within)),
-        y_iter(disk2.iter().unwrap(), disk1.iter().unwrap()),
+        y_iter(disk2.iter().unwrap(), disk1.iter().unwrap(), revr),
+        revr,
     );
     let entries1: Vec<Result<Entry<i64, i64>>> = refi.iter().unwrap().collect();
     let entries2: Vec<Result<Entry<i64, i64>>> = yiter.collect();
 
+    assert_eq!(entries1.len(), entries2.len());
     let _start = std::time::SystemTime::now();
     for (entry, e) in entries1.into_iter().zip(entries2.into_iter()) {
         let (entry, e) = (entry.unwrap(), e.unwrap());
         let key = entry.to_key();
 
-        let (a, z) = (Bound::Unbounded, Bound::Included(seqno));
-        let e = e.filter_within(a, z).unwrap();
+        // TODO
+        // let (a, z) = (Bound::Unbounded, Bound::Included(seqno));
+        // let e = e.filter_within(a, z).unwrap();
         assert_eq!(entry.to_key(), e.to_key());
         assert_eq!(entry.to_seqno(), e.to_seqno(), "for key {}", key,);
         assert_eq!(entry.is_deleted(), e.is_deleted(), "for key {}", key);
         assert_eq!(entry.to_native_value(), e.to_native_value(), "key {}", key);
-        assert_eq!(entry.as_deltas().len(), e.as_deltas().len());
     }
     // println!("get elapsed {:?}", _start.elapsed().unwrap().as_nanos());
     t_handle.join().unwrap();
@@ -476,6 +485,7 @@ fn test_lsm_iter_versions1() {
     random_mvcc(n_ops, key_max, seed, &mut mvcc4, &mut refi);
 
     let (n_ops, key_max) = random_ops_keys(seed, 600_000, 200_000);
+    let n_ops = n_ops + 1;
     println!("mvcc5 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc5: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc5");
     mvcc5.set_seqno(mvcc4.to_seqno());
@@ -483,6 +493,7 @@ fn test_lsm_iter_versions1() {
 
     let seqno = mvcc5.to_seqno();
 
+    let revr = false;
     let yiter = y_iter_versions(
         mvcc5.iter_with_versions().unwrap(),
         y_iter_versions(
@@ -492,13 +503,18 @@ fn test_lsm_iter_versions1() {
                 y_iter_versions(
                     mvcc2.iter_with_versions().unwrap(),
                     mvcc1.iter_with_versions().unwrap(),
+                    revr,
                 ),
+                revr,
             ),
+            revr,
         ),
+        revr,
     );
     let entries1: Vec<Result<Entry<i64, i64>>> = refi.iter().unwrap().collect();
     let entries2: Vec<Result<Entry<i64, i64>>> = yiter.collect();
 
+    let _start = std::time::SystemTime::now();
     for (entry, e) in entries1.into_iter().zip(entries2.into_iter()) {
         let (entry, e) = (entry.unwrap(), e.unwrap());
         let key = entry.to_key();
@@ -579,24 +595,29 @@ fn test_lsm_iter_versions2() {
 
     // println!("start verification mvcc seqno {}", seqno);
     let within = (Bound::Excluded(d2_seqno), Bound::Included(seqno));
+    let revr = false;
     let yiter = y_iter_versions(
         Box::new(SkipScan::new(&*mvcc, within)),
         y_iter_versions(
             disk2.iter_with_versions().unwrap(),
             disk1.iter_with_versions().unwrap(),
+            revr,
         ),
+        revr,
     );
     let entries1: Vec<Result<Entry<i64, i64>>> = refi.iter().unwrap().collect();
     let entries2: Vec<Result<Entry<i64, i64>>> = yiter.collect();
 
+    assert_eq!(entries1.len(), entries2.len());
     let _start = std::time::SystemTime::now();
     for (entry, e) in entries1.into_iter().zip(entries2.into_iter()) {
         let (entry, e) = (entry.unwrap(), e.unwrap());
         let key = entry.to_key();
         // println!("entry key {}", key);
 
-        let (a, z) = (Bound::Unbounded, Bound::Included(seqno));
-        let e = e.filter_within(a, z).unwrap();
+        // TODO
+        // let (a, z) = (Bound::Unbounded, Bound::Included(seqno));
+        // let e = e.filter_within(a, z).unwrap();
         assert_eq!(entry.to_key(), e.to_key());
         assert_eq!(entry.to_seqno(), e.to_seqno(), "for key {}", key,);
         assert_eq!(entry.is_deleted(), e.is_deleted(), "for key {}", key);
@@ -656,6 +677,7 @@ fn test_lsm_range1() {
 
     for _i in 0..1000 {
         let r = random_low_high(key_max);
+        let revr = false;
         let yiter = y_iter(
             mvcc5.range(r.clone()).unwrap(),
             y_iter(
@@ -665,14 +687,19 @@ fn test_lsm_range1() {
                     y_iter(
                         mvcc2.range(r.clone()).unwrap(),
                         mvcc1.range(r.clone()).unwrap(),
+                        revr,
                     ),
+                    revr,
                 ),
+                revr,
             ),
+            revr,
         );
         let iter = refi.range(r.clone()).unwrap();
         let entries1: Vec<Result<Entry<i64, i64>>> = iter.collect();
         let entries2: Vec<Result<Entry<i64, i64>>> = yiter.collect();
 
+        assert_eq!(entries1.len(), entries2.len());
         for (entry, e) in entries1.into_iter().zip(entries2.into_iter()) {
             let (entry, e) = (entry.unwrap(), e.unwrap());
             let key = entry.to_key();
@@ -750,13 +777,16 @@ fn test_lsm_range2() {
     // println!("start verification mvcc seqno {}", seqno);
     for _i in 0..1000 {
         let r = random_low_high(key_max);
-        println!("range bound {:?}", r);
-        let yiter = y_iter(
+        let revr = false;
+        // println!("range bound {:?}", r);
+        let yiter = y_iter_versions(
             mvcc.range(r.clone()).unwrap(),
             y_iter(
                 disk2.range(r.clone()).unwrap(),
                 disk1.range(r.clone()).unwrap(),
+                revr,
             ),
+            revr,
         );
         let iter = refi.range(r.clone()).unwrap();
         let entries1: Vec<Result<Entry<i64, i64>>> = iter.collect();
@@ -767,10 +797,12 @@ fn test_lsm_range2() {
             })
             .collect();
 
+        assert_eq!(entries1.len(), entries2.len());
         let _start = std::time::SystemTime::now();
         for (entry, e) in entries1.into_iter().zip(entries2.into_iter()) {
             let entry = entry.unwrap();
             let key = entry.to_key();
+            // println!("verify key {}", key);
 
             assert_eq!(entry.to_key(), e.to_key());
             assert_eq!(entry.to_seqno(), e.to_seqno(), "for key {}", key,);
@@ -788,6 +820,7 @@ fn test_lsm_range2() {
 fn test_lsm_range_versions1() {
     // test case using 5 mvcc versions
     let seed: u128 = random();
+    let seed: u128 = 165139395464580006058585702679737837028;
     println!("seed {}", seed);
     let mut refi = Llrb::new_lsm("test-llrb");
 
@@ -815,6 +848,7 @@ fn test_lsm_range_versions1() {
     random_mvcc(n_ops, key_max, seed, &mut mvcc4, &mut refi);
 
     let (n_ops, key_max) = random_ops_keys(seed, 600_000, 200_000);
+    let n_ops = n_ops + 1;
     println!("mvcc5 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc5: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc5");
     mvcc5.set_seqno(mvcc4.to_seqno());
@@ -825,44 +859,52 @@ fn test_lsm_range_versions1() {
     let key_max = refi.reverse(r).unwrap().next().unwrap().unwrap().to_key();
     let key_max = (key_max as usize) + 10;
 
-    let r = random_low_high(key_max);
-
-    let yiter = y_iter_versions(
-        mvcc5.range_with_versions(r.clone()).unwrap(),
-        y_iter_versions(
-            mvcc4.range_with_versions(r.clone()).unwrap(),
+    for _i in 0..1000 {
+        let r = random_low_high(key_max);
+        let revr = false;
+        let yiter = y_iter_versions(
+            mvcc5.range_with_versions(r.clone()).unwrap(),
             y_iter_versions(
-                mvcc3.range_with_versions(r.clone()).unwrap(),
+                mvcc4.range_with_versions(r.clone()).unwrap(),
                 y_iter_versions(
-                    mvcc2.range_with_versions(r.clone()).unwrap(),
-                    mvcc1.range_with_versions(r.clone()).unwrap(),
+                    mvcc3.range_with_versions(r.clone()).unwrap(),
+                    y_iter_versions(
+                        mvcc2.range_with_versions(r.clone()).unwrap(),
+                        mvcc1.range_with_versions(r.clone()).unwrap(),
+                        revr,
+                    ),
+                    revr,
                 ),
+                revr,
             ),
-        ),
-    );
-    let iter = refi.range(r.clone()).unwrap();
-    let entries1: Vec<Result<Entry<i64, i64>>> = iter.collect();
-    let entries2: Vec<Result<Entry<i64, i64>>> = yiter.collect();
+            revr,
+        );
+        let iter = refi.range(r.clone()).unwrap();
+        let entries1: Vec<Result<Entry<i64, i64>>> = iter.collect();
+        let entries2: Vec<Result<Entry<i64, i64>>> = yiter.collect();
 
-    for (entry, e) in entries1.into_iter().zip(entries2.into_iter()) {
-        let (entry, e) = (entry.unwrap(), e.unwrap());
-        let key = entry.to_key();
-        // println!("entry key {}", key);
+        assert_eq!(entries1.len(), entries2.len());
+        for (entry, e) in entries1.into_iter().zip(entries2.into_iter()) {
+            let (entry, e) = (entry.unwrap(), e.unwrap());
+            let key = entry.to_key();
+            // println!("entry key {}", key);
 
-        let (a, z) = (Bound::Unbounded, Bound::Included(seqno));
-        let e = e.filter_within(a, z).unwrap();
-        assert_eq!(entry.to_key(), e.to_key());
-        assert_eq!(entry.to_seqno(), e.to_seqno(), "for key {}", key,);
-        assert_eq!(entry.is_deleted(), e.is_deleted(), "for key {}", key);
-        assert_eq!(entry.to_native_value(), e.to_native_value(), "key {}", key);
-        assert_eq!(entry.as_deltas().len(), e.as_deltas().len());
-        let iter = entry.to_deltas().into_iter().zip(e.to_deltas().into_iter());
-        for (x, y) in iter {
-            // println!("x-seqno {} y-seqno {}", x.to_seqno(), y.to_seqno());
-            assert_eq!(x.to_seqno(), y.to_seqno());
-            assert_eq!(x.is_deleted(), y.is_deleted());
-            let (m, n) = (entry.to_native_value(), e.to_native_value());
-            assert_eq!(m, n, "key {}", key);
+            let (a, z) = (Bound::Unbounded, Bound::Included(seqno));
+            let e = e.filter_within(a, z).unwrap();
+            assert_eq!(entry.to_key(), e.to_key());
+            assert_eq!(entry.to_seqno(), e.to_seqno(), "for key {}", key,);
+            assert_eq!(entry.is_deleted(), e.is_deleted(), "for key {}", key);
+            let (v1, v2) = (entry.to_native_value(), e.to_native_value());
+            assert_eq!(v1, v2, "key {}", key);
+            assert_eq!(entry.as_deltas().len(), e.as_deltas().len());
+            let iter = entry.as_deltas().iter().zip(e.as_deltas().iter());
+            for (x, y) in iter {
+                // println!("x-seqno {} y-seqno {}", x.to_seqno(), y.to_seqno());
+                assert_eq!(x.to_seqno(), y.to_seqno());
+                assert_eq!(x.is_deleted(), y.is_deleted());
+                let (m, n) = (entry.to_native_value(), e.to_native_value());
+                assert_eq!(m, n, "key {}", key);
+            }
         }
     }
 }
@@ -926,41 +968,48 @@ fn test_lsm_range_versions2() {
     let key_max = refi.reverse(r).unwrap().next().unwrap().unwrap().to_key();
     let key_max = (key_max as usize) + 10;
 
-    let r = random_low_high(key_max);
-    // println!("start verification mvcc seqno {}", seqno);
-    let yiter = y_iter_versions(
-        mvcc.range_with_versions(r.clone()).unwrap(),
-        y_iter_versions(
-            disk2.range_with_versions(r.clone()).unwrap(),
-            disk1.range_with_versions(r.clone()).unwrap(),
-        ),
-    );
-    let iter = refi.range(r.clone()).unwrap();
-    let entries1: Vec<Result<Entry<i64, i64>>> = iter.collect();
-    let entries2: Vec<Entry<i64, i64>> = yiter
-        .filter_map(|e| {
-            let (a, z) = (Bound::Unbounded, Bound::Included(seqno));
-            e.unwrap().filter_within(a, z)
-        })
-        .collect();
+    for _i in 0..1000 {
+        let r = random_low_high(key_max);
+        let revr = false;
+        // println!("start verification mvcc seqno {}", seqno);
+        let yiter = y_iter_versions(
+            mvcc.range_with_versions(r.clone()).unwrap(),
+            y_iter_versions(
+                disk2.range_with_versions(r.clone()).unwrap(),
+                disk1.range_with_versions(r.clone()).unwrap(),
+                revr,
+            ),
+            revr,
+        );
+        let iter = refi.range(r.clone()).unwrap();
+        let entries1: Vec<Result<Entry<i64, i64>>> = iter.collect();
+        let entries2: Vec<Entry<i64, i64>> = yiter
+            .filter_map(|e| {
+                let (a, z) = (Bound::Unbounded, Bound::Included(seqno));
+                e.unwrap().filter_within(a, z)
+            })
+            .collect();
 
-    let _start = std::time::SystemTime::now();
-    for (entry, e) in entries1.into_iter().zip(entries2.into_iter()) {
-        let entry = entry.unwrap();
-        let key = entry.to_key();
-        // println!("entry key {}", key);
+        let _start = std::time::SystemTime::now();
+        assert_eq!(entries1.len(), entries2.len());
+        for (entry, e) in entries1.into_iter().zip(entries2.into_iter()) {
+            let entry = entry.unwrap();
+            let key = entry.to_key();
+            // println!("entry key {}", key);
 
-        assert_eq!(entry.to_key(), e.to_key());
-        assert_eq!(entry.to_seqno(), e.to_seqno(), "for key {}", key,);
-        assert_eq!(entry.is_deleted(), e.is_deleted(), "for key {}", key);
-        assert_eq!(entry.to_native_value(), e.to_native_value(), "key {}", key);
-        assert_eq!(entry.as_deltas().len(), e.as_deltas().len());
-        let iter = entry.to_deltas().into_iter().zip(e.to_deltas().into_iter());
-        for (x, y) in iter {
-            assert_eq!(x.to_seqno(), y.to_seqno());
-            assert_eq!(x.is_deleted(), y.is_deleted());
-            let (m, n) = (entry.to_native_value(), e.to_native_value());
-            assert_eq!(m, n, "key {}", key);
+            assert_eq!(entry.to_key(), e.to_key());
+            assert_eq!(entry.to_seqno(), e.to_seqno(), "for key {}", key,);
+            assert_eq!(entry.is_deleted(), e.is_deleted(), "for key {}", key);
+            let (v1, v2) = (entry.to_native_value(), e.to_native_value());
+            assert_eq!(v1, v2, "key {}", key);
+            assert_eq!(entry.as_deltas().len(), e.as_deltas().len());
+            let iter = entry.as_deltas().iter().zip(e.as_deltas().iter());
+            for (x, y) in iter {
+                assert_eq!(x.to_seqno(), y.to_seqno());
+                assert_eq!(x.is_deleted(), y.is_deleted());
+                let (m, n) = (entry.to_native_value(), e.to_native_value());
+                assert_eq!(m, n, "key {}", key);
+            }
         }
     }
     // println!("get elapsed {:?}", _start.elapsed().unwrap().as_nanos());
@@ -970,6 +1019,7 @@ fn test_lsm_range_versions2() {
 #[test]
 fn test_lsm_reverse1() {
     let seed: u128 = random();
+    let seed: u128 = 220743249322234861290250598912930125896;
     println!("seed {}", seed);
     let mut refi = Llrb::new_lsm("test-llrb");
 
@@ -1007,34 +1057,45 @@ fn test_lsm_reverse1() {
     let key_max = refi.reverse(r).unwrap().next().unwrap().unwrap().to_key();
     let key_max = (key_max as usize) + 10;
 
-    let r = random_low_high(key_max);
-    let yiter = y_iter(
-        mvcc5.reverse(r.clone()).unwrap(),
-        y_iter(
-            mvcc4.reverse(r.clone()).unwrap(),
+    for _i in 0..1000 {
+        let r = random_low_high(key_max);
+        let revr = true;
+        // println!("range bound: {:?}", r);
+        let yiter = y_iter(
+            mvcc5.reverse(r.clone()).unwrap(),
             y_iter(
-                mvcc3.reverse(r.clone()).unwrap(),
+                mvcc4.reverse(r.clone()).unwrap(),
                 y_iter(
-                    mvcc2.reverse(r.clone()).unwrap(),
-                    mvcc1.reverse(r.clone()).unwrap(),
+                    mvcc3.reverse(r.clone()).unwrap(),
+                    y_iter(
+                        mvcc2.reverse(r.clone()).unwrap(),
+                        mvcc1.reverse(r.clone()).unwrap(),
+                        revr,
+                    ),
+                    revr,
                 ),
+                revr,
             ),
-        ),
-    );
-    let iter = refi.reverse(r.clone()).unwrap();
-    let entries1: Vec<Result<Entry<i64, i64>>> = iter.collect();
-    let entries2: Vec<Result<Entry<i64, i64>>> = yiter.collect();
+            revr,
+        );
+        let iter = refi.reverse(r.clone()).unwrap();
+        let entries1: Vec<Result<Entry<i64, i64>>> = iter.collect();
+        let entries2: Vec<Result<Entry<i64, i64>>> = yiter.collect();
 
-    for (entry, e) in entries1.into_iter().zip(entries2.into_iter()) {
-        let (entry, e) = (entry.unwrap(), e.unwrap());
-        let key = entry.to_key();
+        assert_eq!(entries1.len(), entries2.len());
+        for (entry, e) in entries1.into_iter().zip(entries2.into_iter()) {
+            let (entry, e) = (entry.unwrap(), e.unwrap());
+            let key = entry.to_key();
+            // println!("verify key {}", key);
 
-        let (a, z) = (Bound::Unbounded, Bound::Included(seqno));
-        let e = e.filter_within(a, z).unwrap();
-        assert_eq!(entry.to_key(), e.to_key());
-        assert_eq!(entry.to_seqno(), e.to_seqno(), "for key {}", key,);
-        assert_eq!(entry.is_deleted(), e.is_deleted(), "for key {}", key);
-        assert_eq!(entry.to_native_value(), e.to_native_value(), "key {}", key);
+            let (a, z) = (Bound::Unbounded, Bound::Included(seqno));
+            let e = e.filter_within(a, z).unwrap();
+            assert_eq!(entry.to_key(), e.to_key());
+            assert_eq!(entry.to_seqno(), e.to_seqno(), "for key {}", key,);
+            assert_eq!(entry.is_deleted(), e.is_deleted(), "for key {}", key);
+            let (v1, v2) = (entry.to_native_value(), e.to_native_value());
+            assert_eq!(v1, v2, "key {}", key);
+        }
     }
 }
 
@@ -1096,33 +1157,40 @@ fn test_lsm_reverse2() {
     let key_max = refi.reverse(r).unwrap().next().unwrap().unwrap().to_key();
     let key_max = (key_max as usize) + 10;
 
-    let r = random_low_high(key_max);
-    // println!("start verification mvcc seqno {}", seqno);
-    let yiter = y_iter(
-        mvcc.reverse(r.clone()).unwrap(),
-        y_iter(
-            disk2.reverse(r.clone()).unwrap(),
-            disk1.reverse(r.clone()).unwrap(),
-        ),
-    );
-    let iter = refi.reverse(r.clone()).unwrap();
-    let entries1: Vec<Result<Entry<i64, i64>>> = iter.collect();
-    let entries2: Vec<Entry<i64, i64>> = yiter
-        .filter_map(|e| {
-            let (a, z) = (Bound::Unbounded, Bound::Included(seqno));
-            e.unwrap().filter_within(a, z)
-        })
-        .collect();
+    for _i in 0..1000 {
+        let r = random_low_high(key_max);
+        let revr = true;
+        // println!("start verification mvcc seqno {}", seqno);
+        let yiter = y_iter_versions(
+            mvcc.reverse(r.clone()).unwrap(),
+            y_iter(
+                disk2.reverse(r.clone()).unwrap(),
+                disk1.reverse(r.clone()).unwrap(),
+                revr,
+            ),
+            revr,
+        );
+        let iter = refi.reverse(r.clone()).unwrap();
+        let entries1: Vec<Result<Entry<i64, i64>>> = iter.collect();
+        let entries2: Vec<Entry<i64, i64>> = yiter
+            .filter_map(|e| {
+                let (a, z) = (Bound::Unbounded, Bound::Included(seqno));
+                e.unwrap().filter_within(a, z)
+            })
+            .collect();
 
-    let _start = std::time::SystemTime::now();
-    for (entry, e) in entries1.into_iter().zip(entries2.into_iter()) {
-        let entry = entry.unwrap();
-        let key = entry.to_key();
+        let _start = std::time::SystemTime::now();
+        assert_eq!(entries1.len(), entries2.len());
+        for (entry, e) in entries1.into_iter().zip(entries2.into_iter()) {
+            let entry = entry.unwrap();
+            let key = entry.to_key();
 
-        assert_eq!(entry.to_key(), e.to_key());
-        assert_eq!(entry.to_seqno(), e.to_seqno(), "for key {}", key,);
-        assert_eq!(entry.is_deleted(), e.is_deleted(), "for key {}", key);
-        assert_eq!(entry.to_native_value(), e.to_native_value(), "key {}", key);
+            assert_eq!(entry.to_key(), e.to_key());
+            assert_eq!(entry.to_seqno(), e.to_seqno(), "for key {}", key,);
+            assert_eq!(entry.is_deleted(), e.is_deleted(), "for key {}", key);
+            let (v1, v2) = (entry.to_native_value(), e.to_native_value());
+            assert_eq!(v1, v2, "key {}", key);
+        }
     }
     // println!("get elapsed {:?}", _start.elapsed().unwrap().as_nanos());
     t_handle.join().unwrap();
@@ -1160,6 +1228,7 @@ fn test_lsm_reverse_versions1() {
     random_mvcc(n_ops, key_max, seed, &mut mvcc4, &mut refi);
 
     let (n_ops, key_max) = random_ops_keys(seed, 600_000, 200_000);
+    let n_ops = n_ops + 1;
     println!("mvcc5 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc5: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc5");
     mvcc5.set_seqno(mvcc4.to_seqno());
@@ -1170,44 +1239,52 @@ fn test_lsm_reverse_versions1() {
     let key_max = refi.reverse(r).unwrap().next().unwrap().unwrap().to_key();
     let key_max = (key_max as usize) + 10;
 
-    let r = random_low_high(key_max);
-
-    let yiter = y_iter_versions(
-        mvcc5.reverse_with_versions(r.clone()).unwrap(),
-        y_iter_versions(
-            mvcc4.reverse_with_versions(r.clone()).unwrap(),
+    for _i in 0..1000 {
+        let r = random_low_high(key_max);
+        let revr = true;
+        let yiter = y_iter_versions(
+            mvcc5.reverse_with_versions(r.clone()).unwrap(),
             y_iter_versions(
-                mvcc3.reverse_with_versions(r.clone()).unwrap(),
+                mvcc4.reverse_with_versions(r.clone()).unwrap(),
                 y_iter_versions(
-                    mvcc2.reverse_with_versions(r.clone()).unwrap(),
-                    mvcc1.reverse_with_versions(r.clone()).unwrap(),
+                    mvcc3.reverse_with_versions(r.clone()).unwrap(),
+                    y_iter_versions(
+                        mvcc2.reverse_with_versions(r.clone()).unwrap(),
+                        mvcc1.reverse_with_versions(r.clone()).unwrap(),
+                        revr,
+                    ),
+                    revr,
                 ),
+                revr,
             ),
-        ),
-    );
-    let iter = refi.reverse(r.clone()).unwrap();
-    let entries1: Vec<Result<Entry<i64, i64>>> = iter.collect();
-    let entries2: Vec<Result<Entry<i64, i64>>> = yiter.collect();
+            revr,
+        );
+        let iter = refi.reverse_with_versions(r.clone()).unwrap();
+        let entries1: Vec<Result<Entry<i64, i64>>> = iter.collect();
+        let entries2: Vec<Result<Entry<i64, i64>>> = yiter.collect();
 
-    for (entry, e) in entries1.into_iter().zip(entries2.into_iter()) {
-        let (entry, e) = (entry.unwrap(), e.unwrap());
-        let key = entry.to_key();
-        // println!("entry key {}", key);
+        assert_eq!(entries1.len(), entries2.len());
+        for (entry, e) in entries1.into_iter().zip(entries2.into_iter()) {
+            let (entry, e) = (entry.unwrap(), e.unwrap());
+            let key = entry.to_key();
+            // println!("entry key {}", key);
 
-        let (a, z) = (Bound::Unbounded, Bound::Included(seqno));
-        let e = e.filter_within(a, z).unwrap();
-        assert_eq!(entry.to_key(), e.to_key());
-        assert_eq!(entry.to_seqno(), e.to_seqno(), "for key {}", key,);
-        assert_eq!(entry.is_deleted(), e.is_deleted(), "for key {}", key);
-        assert_eq!(entry.to_native_value(), e.to_native_value(), "key {}", key);
-        assert_eq!(entry.as_deltas().len(), e.as_deltas().len());
-        let iter = entry.to_deltas().into_iter().zip(e.to_deltas().into_iter());
-        for (x, y) in iter {
-            // println!("x-seqno {} y-seqno {}", x.to_seqno(), y.to_seqno());
-            assert_eq!(x.to_seqno(), y.to_seqno());
-            assert_eq!(x.is_deleted(), y.is_deleted());
-            let (m, n) = (entry.to_native_value(), e.to_native_value());
-            assert_eq!(m, n, "key {}", key);
+            let (a, z) = (Bound::Unbounded, Bound::Included(seqno));
+            let e = e.filter_within(a, z).unwrap();
+            assert_eq!(entry.to_key(), e.to_key());
+            assert_eq!(entry.to_seqno(), e.to_seqno(), "for key {}", key,);
+            assert_eq!(entry.is_deleted(), e.is_deleted(), "for key {}", key);
+            let (v1, v2) = (entry.to_native_value(), e.to_native_value());
+            assert_eq!(v1, v2, "key {}", key);
+            assert_eq!(entry.as_deltas().len(), e.as_deltas().len());
+            let iter = entry.as_deltas().iter().zip(e.as_deltas().iter());
+            for (x, y) in iter {
+                // println!("x-seqno {} y-seqno {}", x.to_seqno(), y.to_seqno());
+                assert_eq!(x.to_seqno(), y.to_seqno());
+                assert_eq!(x.is_deleted(), y.is_deleted());
+                let (m, n) = (entry.to_native_value(), e.to_native_value());
+                assert_eq!(m, n, "key {}", key);
+            }
         }
     }
 }
@@ -1217,7 +1294,7 @@ fn test_lsm_reverse_versions1() {
 fn test_lsm_reverse_versions2() {
     // test case using 2 robt version and 1 mvcc versions
     let seed: u128 = random();
-    // let seed: u128 = 44711375618941849236803707422399852259;
+    // let seed: u128 = 215456859976182285399953190877559503919;
     println!("seed {}", seed);
     let mut refi = Llrb::new_lsm("test-llrb");
 
@@ -1272,41 +1349,50 @@ fn test_lsm_reverse_versions2() {
     let key_max = refi.reverse(r).unwrap().next().unwrap().unwrap().to_key();
     let key_max = (key_max as usize) + 10;
 
-    let r = random_low_high(key_max);
-    // println!("start verification mvcc seqno {}", seqno);
-    let yiter = y_iter_versions(
-        mvcc.reverse_with_versions(r.clone()).unwrap(),
-        y_iter_versions(
-            disk2.reverse_with_versions(r.clone()).unwrap(),
-            disk1.reverse_with_versions(r.clone()).unwrap(),
-        ),
-    );
-    let iter = refi.reverse(r.clone()).unwrap();
-    let entries1: Vec<Result<Entry<i64, i64>>> = iter.collect();
-    let entries2: Vec<Entry<i64, i64>> = yiter
-        .filter_map(|e| {
-            let (a, z) = (Bound::Unbounded, Bound::Included(seqno));
-            e.unwrap().filter_within(a, z)
-        })
-        .collect();
+    println!("start verification mvcc seqno {}", seqno);
+    for _i in 0..1000 {
+        let r = random_low_high(key_max);
+        // let r = (Bound::Unbounded, Bound::Included(110));
+        // println!("range bound {:?}", r);
+        let revr = true;
+        let yiter = y_iter_versions(
+            mvcc.reverse_with_versions(r.clone()).unwrap(),
+            y_iter_versions(
+                disk2.reverse_with_versions(r.clone()).unwrap(),
+                disk1.reverse_with_versions(r.clone()).unwrap(),
+                revr,
+            ),
+            revr,
+        );
+        let mut iter = refi.reverse_with_versions(r.clone()).unwrap();
+        let entries1: Vec<Result<Entry<i64, i64>>> = iter.collect();
+        let entries2: Vec<Entry<i64, i64>> = yiter
+            .filter_map(|e| {
+                let (a, z) = (Bound::Unbounded, Bound::Included(seqno));
+                e.unwrap().filter_within(a, z)
+            })
+            .collect();
 
-    let _start = std::time::SystemTime::now();
-    for (entry, e) in entries1.into_iter().zip(entries2.into_iter()) {
-        let entry = entry.unwrap();
-        let key = entry.to_key();
-        // println!("entry key {}", key);
+        let _start = std::time::SystemTime::now();
+        assert_eq!(entries1.len(), entries2.len());
+        for (entry, e) in entries1.into_iter().zip(entries2.into_iter()) {
+            let entry = entry.unwrap();
+            let key = entry.to_key();
+            // println!("entry key {}", key);
 
-        assert_eq!(entry.to_key(), e.to_key());
-        assert_eq!(entry.to_seqno(), e.to_seqno(), "for key {}", key,);
-        assert_eq!(entry.is_deleted(), e.is_deleted(), "for key {}", key);
-        assert_eq!(entry.to_native_value(), e.to_native_value(), "key {}", key);
-        assert_eq!(entry.as_deltas().len(), e.as_deltas().len());
-        let iter = entry.to_deltas().into_iter().zip(e.to_deltas().into_iter());
-        for (x, y) in iter {
-            assert_eq!(x.to_seqno(), y.to_seqno());
-            assert_eq!(x.is_deleted(), y.is_deleted());
-            let (m, n) = (entry.to_native_value(), e.to_native_value());
-            assert_eq!(m, n, "key {}", key);
+            assert_eq!(entry.to_key(), e.to_key());
+            assert_eq!(entry.to_seqno(), e.to_seqno(), "for key {}", key,);
+            assert_eq!(entry.is_deleted(), e.is_deleted(), "for key {}", key);
+            let (v1, v2) = (entry.to_native_value(), e.to_native_value());
+            assert_eq!(v1, v2, "key {}", key);
+            assert_eq!(entry.as_deltas().len(), e.as_deltas().len());
+            let iter = entry.as_deltas().iter().zip(e.as_deltas().iter());
+            for (x, y) in iter {
+                assert_eq!(x.to_seqno(), y.to_seqno());
+                assert_eq!(x.is_deleted(), y.is_deleted());
+                let (m, n) = (entry.to_native_value(), e.to_native_value());
+                assert_eq!(m, n, "key {}", key);
+            }
         }
     }
     // println!("get elapsed {:?}", _start.elapsed().unwrap().as_nanos());
@@ -1456,7 +1542,10 @@ fn concurrent_write(
         match op {
             0 => {
                 let value: i64 = rng.gen();
-                w.set(key, value).unwrap();
+                match w.set(key, value) {
+                    Err(err) => panic!("set err: {:?}", err),
+                    _ => (),
+                }
             }
             1 => {
                 let value: i64 = rng.gen();
@@ -1465,7 +1554,10 @@ fn concurrent_write(
                     Err(_err) => unreachable!(),
                     Ok(e) => e.to_seqno(),
                 };
-                w.set_cas(key, value, cas).unwrap();
+                match w.set_cas(key, value, cas) {
+                    Err(err) => panic!("set_cas cas:{} err:{:?}", cas, err),
+                    _ => (),
+                }
             }
             2 => {
                 w.delete(&key).unwrap();

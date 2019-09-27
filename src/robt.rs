@@ -1295,7 +1295,7 @@ where
     V: Clone + Diff + Serialize + Footprint,
     <V as Diff>::D: Serialize,
 {
-    type W = RobtWriter;
+    type W = RobtWriter; // TODO: change this to Missing type
     type R = Snapshot<K, V>;
 
     /// Make a new empty index of this type, with same configuration.
@@ -1574,12 +1574,18 @@ where
                 false
             }
             Bound::Included(key) => {
-                self.build(&key, &mut mzs)?;
-                false
+                let entry = self.build(&key, &mut mzs)?;
+                match key.cmp(entry.as_key().borrow()) {
+                    cmp::Ordering::Less => true,
+                    _ => false,
+                }
             }
             Bound::Excluded(key) => {
                 let entry = self.build(&key, &mut mzs)?;
-                key.eq(entry.as_key().borrow())
+                match key.cmp(entry.as_key().borrow()) {
+                    cmp::Ordering::Less | cmp::Ordering::Equal => true,
+                    _ => false,
+                }
             }
         };
         let mut rr = Reverse::new(self, mzs, range, versions);

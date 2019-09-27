@@ -1,13 +1,15 @@
 //! Implement get() and iter() for LSM indexes.
 use std::borrow::Borrow;
 use std::cmp;
+use std::fmt::Debug;
 
 use crate::core::{Diff, Entry, Footprint, IndexIter, Reader, Result};
 use crate::error::Error;
 
 pub(crate) type LsmGet<'a, K, V, Q> = Box<dyn Fn(&Q) -> Result<Entry<K, V>> + 'a>;
 
-// ``x`` contains newer mutations than ``y``
+// ``x`` contains newer mutations than ``y``, get always fetches the latest
+// entry from the newest index.
 pub(crate) fn y_get<'a, 'b, K, V, Q>(
     x: LsmGet<'a, K, V, Q>,
     y: LsmGet<'a, K, V, Q>,
@@ -55,9 +57,10 @@ where
 pub(crate) fn y_iter<'a, K, V>(
     mut x: IndexIter<'a, K, V>, // newer
     mut y: IndexIter<'a, K, V>, // older
+    reverse: bool,
 ) -> IndexIter<'a, K, V>
 where
-    K: 'a + Clone + Ord,
+    K: 'a + Clone + Ord + Debug,
     V: 'a + Clone + Diff,
 {
     let x_entry = x.next();
@@ -67,15 +70,17 @@ where
         y,
         x_entry,
         y_entry,
+        reverse,
     })
 }
 
 pub(crate) fn y_iter_versions<'a, K, V>(
     mut x: IndexIter<'a, K, V>, // newer
     mut y: IndexIter<'a, K, V>, // older
+    reverse: bool,
 ) -> IndexIter<'a, K, V>
 where
-    K: 'a + Clone + Ord,
+    K: 'a + Clone + Ord + std::fmt::Debug,
     V: 'a + Clone + Diff + From<<V as Diff>::D> + Footprint,
 {
     let x_entry = x.next();
@@ -85,50 +90,61 @@ where
         y,
         x_entry,
         y_entry,
+        reverse,
     })
 }
 
 struct YIter<'a, K, V>
 where
-    K: 'a + Clone + Ord,
+    K: 'a + Clone + Ord + Debug,
     V: 'a + Clone + Diff,
 {
     x: IndexIter<'a, K, V>,
     y: IndexIter<'a, K, V>,
     x_entry: Option<Result<Entry<K, V>>>,
     y_entry: Option<Result<Entry<K, V>>>,
+    reverse: bool,
 }
 
 impl<'a, K, V> Iterator for YIter<'a, K, V>
 where
-    K: 'a + Clone + Ord,
+    K: 'a + Clone + Ord + Debug,
     V: 'a + Clone + Diff,
 {
     type Item = Result<Entry<K, V>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         match (self.x_entry.take(), self.y_entry.take()) {
-            (Some(Ok(xe)), Some(Ok(ye))) => match xe.as_key().cmp(ye.as_key()) {
-                cmp::Ordering::Less => {
-                    self.x_entry = self.x.next();
-                    self.y_entry = Some(Ok(ye));
-                    Some(Ok(xe))
-                }
-                cmp::Ordering::Greater => {
-                    self.y_entry = self.y.next();
-                    self.x_entry = Some(Ok(xe));
-                    Some(Ok(ye))
-                }
-                cmp::Ordering::Equal => {
-                    self.x_entry = self.x.next();
-                    self.y_entry = self.y.next();
-                    match xe.to_seqno().cmp(&ye.to_seqno()) {
-                        cmp::Ordering::Less => Some(Ok(ye)),
-                        cmp::Ordering::Greater => Some(Ok(xe)),
-                        cmp::Ordering::Equal => Some(Ok(xe)),
+            (Some(Ok(xe)), Some(Ok(ye))) => {
+                // println!("yiter next xe {:?} {}", xe.to_key(), xe.to_seqno());
+                // println!("yiter next ye {:?} {}", ye.to_key(), ye.to_seqno());
+                let cmp = if self.reverse {
+                    xe.as_key().cmp(ye.as_key()).reverse()
+                } else {
+                    xe.as_key().cmp(ye.as_key())
+                };
+                match cmp {
+                    cmp::Ordering::Less => {
+                        self.x_entry = self.x.next();
+                        self.y_entry = Some(Ok(ye));
+                        Some(Ok(xe))
+                    }
+                    cmp::Ordering::Greater => {
+                        self.y_entry = self.y.next();
+                        self.x_entry = Some(Ok(xe));
+                        Some(Ok(ye))
+                    }
+                    cmp::Ordering::Equal => {
+                        self.x_entry = self.x.next();
+                        self.y_entry = self.y.next();
+                        match xe.to_seqno().cmp(&ye.to_seqno()) {
+                            cmp::Ordering::Less => Some(Ok(ye)),
+                            cmp::Ordering::Greater => Some(Ok(xe)),
+                            cmp::Ordering::Equal => Some(Ok(xe)),
+                        }
                     }
                 }
-            },
+            }
             (Some(Ok(xe)), None) => {
                 self.x_entry = self.x.next();
                 Some(Ok(xe))
@@ -153,36 +169,46 @@ where
     y: IndexIter<'a, K, V>,
     x_entry: Option<Result<Entry<K, V>>>,
     y_entry: Option<Result<Entry<K, V>>>,
+    reverse: bool,
 }
 
 impl<'a, K, V> Iterator for YIterVersions<'a, K, V>
 where
-    K: 'a + Clone + Ord,
+    K: 'a + Clone + Ord + std::fmt::Debug,
     V: 'a + Clone + Diff + From<<V as Diff>::D> + Footprint,
 {
     type Item = Result<Entry<K, V>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         match (self.x_entry.take(), self.y_entry.take()) {
-            (Some(Ok(xe)), Some(Ok(ye))) => match xe.as_key().cmp(ye.as_key()) {
-                cmp::Ordering::Less => {
-                    self.x_entry = self.x.next();
-                    self.y_entry = Some(Ok(ye));
-                    Some(Ok(xe))
+            (Some(Ok(xe)), Some(Ok(ye))) => {
+                // println!("yiter next xe {:?} {}", xe.to_key(), xe.to_seqno());
+                // println!("yiter next ye {:?} {}", ye.to_key(), ye.to_seqno());
+                let cmp = if self.reverse {
+                    xe.as_key().cmp(ye.as_key()).reverse()
+                } else {
+                    xe.as_key().cmp(ye.as_key())
+                };
+                match cmp {
+                    cmp::Ordering::Less => {
+                        self.x_entry = self.x.next();
+                        self.y_entry = Some(Ok(ye));
+                        Some(Ok(xe))
+                    }
+                    cmp::Ordering::Greater => {
+                        self.y_entry = self.y.next();
+                        self.x_entry = Some(Ok(xe));
+                        Some(Ok(ye))
+                    }
+                    cmp::Ordering::Equal => {
+                        // TODO NOTE: flush_merge assumes that all mutations
+                        // held by each index are mutually exclusive.
+                        self.x_entry = self.x.next();
+                        self.y_entry = self.y.next();
+                        Some(Ok(xe.flush_merge(ye)))
+                    }
                 }
-                cmp::Ordering::Greater => {
-                    self.y_entry = self.y.next();
-                    self.x_entry = Some(Ok(xe));
-                    Some(Ok(ye))
-                }
-                cmp::Ordering::Equal => {
-                    // TODO NOTE: flush_merge assumes that all mutations
-                    // held by each index are mutually exclusive.
-                    self.x_entry = self.x.next();
-                    self.y_entry = self.y.next();
-                    Some(Ok(xe.flush_merge(ye)))
-                }
-            },
+            }
             (Some(Ok(xe)), None) => {
                 self.x_entry = self.x.next();
                 Some(Ok(xe))

@@ -74,6 +74,13 @@ fn test_lsm_get1() {
         assert_eq!(entry.is_deleted(), e.is_deleted(), "for key {}", key);
         assert_eq!(entry.to_native_value(), e.to_native_value(), "key {}", key);
     }
+
+    assert!(refi.validate().is_ok());
+    assert!(mvcc1.validate().is_ok());
+    assert!(mvcc2.validate().is_ok());
+    assert!(mvcc3.validate().is_ok());
+    assert!(mvcc4.validate().is_ok());
+    assert!(mvcc5.validate().is_ok());
 }
 
 #[test]
@@ -107,6 +114,7 @@ fn test_lsm_get2() {
     };
     println!("disk2 n_ops: {} key_max: {}", n_ops, key_max);
 
+    assert!(llrb.validate().is_ok());
     let (n_ops, key_max) = random_ops_keys(seed, 200_000, 60_000);
     let mut mvcc: Box<Mvcc<i64, i64>> = Mvcc::from_llrb(*llrb);
     random_mvcc(n_ops, key_max, seed, mvcc.as_mut(), &mut refi);
@@ -142,6 +150,8 @@ fn test_lsm_get2() {
     }
     // println!("get elapsed {:?}", _start.elapsed().unwrap().as_nanos());
     t_handle.join().unwrap();
+
+    assert!(refi.validate().is_ok());
 }
 
 #[test]
@@ -216,6 +226,13 @@ fn test_lsm_get_versions1() {
             assert_eq!(m, n, "key {}", key);
         }
     }
+
+    assert!(refi.validate().is_ok());
+    assert!(mvcc1.validate().is_ok());
+    assert!(mvcc2.validate().is_ok());
+    assert!(mvcc3.validate().is_ok());
+    assert!(mvcc4.validate().is_ok());
+    assert!(mvcc5.validate().is_ok());
 }
 
 #[test]
@@ -303,6 +320,10 @@ fn test_lsm_get_versions2() {
     }
     // println!("get elapsed {:?}", _start.elapsed().unwrap().as_nanos());
     t_handle.join().unwrap();
+
+    assert!(llrb.validate().is_ok());
+    assert!(mvcc.validate().is_ok());
+    assert!(refi.validate().is_ok());
 }
 
 #[test]
@@ -372,6 +393,13 @@ fn test_lsm_iter1() {
         assert_eq!(entry.is_deleted(), e.is_deleted(), "for key {}", key);
         assert_eq!(entry.to_native_value(), e.to_native_value(), "key {}", key);
     }
+
+    assert!(refi.validate().is_ok());
+    assert!(mvcc1.validate().is_ok());
+    assert!(mvcc2.validate().is_ok());
+    assert!(mvcc3.validate().is_ok());
+    assert!(mvcc4.validate().is_ok());
+    assert!(mvcc5.validate().is_ok());
 }
 
 #[test]
@@ -410,6 +438,7 @@ fn test_lsm_iter2() {
     println!("disk2 n_ops: {} key_max: {}", n_ops, key_max);
     let d2_seqno = disk2.to_seqno();
 
+    assert!(llrb.validate().is_ok());
     let (n_ops, key_max) = random_ops_keys(seed, 200_000, 60_000);
     let mut mvcc: Box<Mvcc<i64, i64>> = Mvcc::from_llrb(*llrb);
     random_mvcc(n_ops, key_max, seed, mvcc.as_mut(), &mut refi);
@@ -451,6 +480,8 @@ fn test_lsm_iter2() {
     }
     // println!("get elapsed {:?}", _start.elapsed().unwrap().as_nanos());
     t_handle.join().unwrap();
+
+    assert!(refi.validate().is_ok());
 }
 
 #[test]
@@ -536,6 +567,13 @@ fn test_lsm_iter_versions1() {
             assert_eq!(m, n, "key {}", key);
         }
     }
+
+    assert!(refi.validate().is_ok());
+    assert!(mvcc1.validate().is_ok());
+    assert!(mvcc2.validate().is_ok());
+    assert!(mvcc3.validate().is_ok());
+    assert!(mvcc4.validate().is_ok());
+    assert!(mvcc5.validate().is_ok());
 }
 
 #[test]
@@ -633,6 +671,10 @@ fn test_lsm_iter_versions2() {
     }
     // println!("get elapsed {:?}", _start.elapsed().unwrap().as_nanos());
     t_handle.join().unwrap();
+
+    assert!(llrb.validate().is_ok());
+    assert!(mvcc.validate().is_ok());
+    assert!(refi.validate().is_ok());
 }
 
 #[test]
@@ -714,6 +756,13 @@ fn test_lsm_range1() {
             assert_eq!(v1, v2, "key {}", key);
         }
     }
+
+    assert!(refi.validate().is_ok());
+    assert!(mvcc1.validate().is_ok());
+    assert!(mvcc2.validate().is_ok());
+    assert!(mvcc3.validate().is_ok());
+    assert!(mvcc4.validate().is_ok());
+    assert!(mvcc5.validate().is_ok());
 }
 
 #[test]
@@ -814,6 +863,10 @@ fn test_lsm_range2() {
     }
     // println!("get elapsed {:?}", _start.elapsed().unwrap().as_nanos());
     t_handle.join().unwrap();
+
+    assert!(llrb.validate().is_ok());
+    assert!(mvcc.validate().is_ok());
+    assert!(refi.validate().is_ok());
 }
 
 #[test]
@@ -908,6 +961,13 @@ fn test_lsm_range_versions1() {
             }
         }
     }
+
+    assert!(refi.validate().is_ok());
+    assert!(mvcc1.validate().is_ok());
+    assert!(mvcc2.validate().is_ok());
+    assert!(mvcc3.validate().is_ok());
+    assert!(mvcc4.validate().is_ok());
+    assert!(mvcc5.validate().is_ok());
 }
 
 #[test]
@@ -1015,6 +1075,10 @@ fn test_lsm_range_versions2() {
     }
     // println!("get elapsed {:?}", _start.elapsed().unwrap().as_nanos());
     t_handle.join().unwrap();
+
+    assert!(llrb.validate().is_ok());
+    assert!(mvcc.validate().is_ok());
+    assert!(refi.validate().is_ok());
 }
 
 #[test]
@@ -1099,6 +1163,13 @@ fn test_lsm_reverse1() {
             assert_eq!(v1, v2, "key {}", key);
         }
     }
+
+    assert!(refi.validate().is_ok());
+    assert!(mvcc1.validate().is_ok());
+    assert!(mvcc2.validate().is_ok());
+    assert!(mvcc3.validate().is_ok());
+    assert!(mvcc4.validate().is_ok());
+    assert!(mvcc5.validate().is_ok());
 }
 
 #[test]
@@ -1196,6 +1267,10 @@ fn test_lsm_reverse2() {
     }
     // println!("get elapsed {:?}", _start.elapsed().unwrap().as_nanos());
     t_handle.join().unwrap();
+
+    assert!(llrb.validate().is_ok());
+    assert!(mvcc.validate().is_ok());
+    assert!(refi.validate().is_ok());
 }
 
 #[test]
@@ -1289,6 +1364,13 @@ fn test_lsm_reverse_versions1() {
             }
         }
     }
+
+    assert!(refi.validate().is_ok());
+    assert!(mvcc1.validate().is_ok());
+    assert!(mvcc2.validate().is_ok());
+    assert!(mvcc3.validate().is_ok());
+    assert!(mvcc4.validate().is_ok());
+    assert!(mvcc5.validate().is_ok());
 }
 
 #[test]
@@ -1399,6 +1481,10 @@ fn test_lsm_reverse_versions2() {
     }
     // println!("get elapsed {:?}", _start.elapsed().unwrap().as_nanos());
     t_handle.join().unwrap();
+
+    assert!(refi.validate().is_ok());
+    assert!(llrb.validate().is_ok());
+    assert!(mvcc.validate().is_ok());
 }
 
 fn random_llrb(

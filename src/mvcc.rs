@@ -1123,18 +1123,28 @@ where
 {
     /// Validate LLRB tree with following rules:
     ///
-    /// * From root to any leaf, no consecutive reds allowed in its path.
-    /// * Number of blacks should be same on under left child and right child.
-    /// * Make sure that keys are in sorted order.
+    /// * Root node is always black in color.
+    /// * Make sure that the maximum depth do not exceed 100.
     ///
     /// Additionally return full statistics on the tree. Refer to [`Stats`]
     /// for more information.
     pub fn validate(&self) -> Result<Stats> {
         let arc_mvcc = OuterSnapshot::clone(&self.snapshot);
+
         let root = arc_mvcc.as_root();
         let (red, blacks, depth) = (is_red(root), 0, 0);
         let mut depths: LlrbDepth = Default::default();
+
+        if red {
+            panic!("LLRB violation: Root node is alway black: {}", self.name);
+        }
+
         let blacks = validate_tree(root, red, blacks, depth, &mut depths)?;
+
+        if depths.to_max() > 100 {
+            // TODO: avoid magic numbers
+            panic!("LLRB depth has exceeded limit: {}", depths.to_max());
+        }
 
         Ok(Stats::new_full(
             arc_mvcc.n_count,

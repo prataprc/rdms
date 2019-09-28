@@ -16,12 +16,14 @@ include!("./ref_test.rs");
 fn test_id() {
     let mvcc: Box<Mvcc<i32, Empty>> = Mvcc::new("test-mvcc");
     assert_eq!(mvcc.to_name(), "test-mvcc".to_string());
+    assert!(mvcc.validate().is_ok());
 }
 
 #[test]
 fn test_len() {
     let mvcc: Box<Mvcc<i32, Empty>> = Mvcc::new("test-mvcc");
     assert_eq!(mvcc.len(), 0);
+    assert!(mvcc.validate().is_ok());
 }
 
 #[test]
@@ -626,4 +628,6 @@ fn test_full_scan() {
         assert_eq!(vers.len(), 1);
         ref_key += 15;
     }
+
+    assert!(index.validate().is_ok());
 }

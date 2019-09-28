@@ -33,6 +33,12 @@ where
     }
 }
 
+// list of validation done by this function
+// * Verify the sort order between a node and its left/right child.
+// * No node which has RIGHT RED child and LEFT BLACK child (or NULL child).
+// * Make sure there are no dirty nodes.
+// * Make sure there are no consecutive reds.
+// * Make sure number of blacks are same on both left and right arm.
 fn validate_tree<K, V>(
     node: Option<&Node<K, V>>,
     fromred: bool,

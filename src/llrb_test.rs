@@ -18,12 +18,14 @@ include!("./ref_test.rs");
 fn test_id() {
     let llrb: Box<Llrb<i32, Empty>> = Llrb::new("test-llrb");
     assert_eq!(llrb.to_name(), "test-llrb".to_string());
+    assert!(llrb.validate().is_ok());
 }
 
 #[test]
 fn test_len() {
     let llrb: Box<Llrb<i32, Empty>> = Llrb::new("test-llrb");
     assert_eq!(llrb.len(), 0);
+    assert!(llrb.validate().is_ok());
 }
 
 #[test]
@@ -70,6 +72,7 @@ fn test_set() {
             break;
         }
     }
+    assert!(llrb.validate().is_ok());
 }
 
 #[test]
@@ -696,4 +699,6 @@ fn test_full_scan() {
         assert_eq!(vers.len(), 1);
         ref_key += 15;
     }
+
+    assert!(llrb.validate().is_ok());
 }

@@ -719,7 +719,7 @@ fn test_lsm_range1() {
 fn test_lsm_range2() {
     // test case using 2 robt version and 1 mvcc versions
     let seed: u128 = random();
-    let seed: u128 = 99443758465951354559679348532807295713;
+    //let seed: u128 = 99443758465951354559679348532807295713;
     println!("seed {}", seed);
     let mut refi = Llrb::new_lsm("test-llrb");
 
@@ -820,7 +820,7 @@ fn test_lsm_range2() {
 fn test_lsm_range_versions1() {
     // test case using 5 mvcc versions
     let seed: u128 = random();
-    let seed: u128 = 165139395464580006058585702679737837028;
+    //let seed: u128 = 165139395464580006058585702679737837028;
     println!("seed {}", seed);
     let mut refi = Llrb::new_lsm("test-llrb");
 
@@ -1019,7 +1019,7 @@ fn test_lsm_range_versions2() {
 #[test]
 fn test_lsm_reverse1() {
     let seed: u128 = random();
-    let seed: u128 = 220743249322234861290250598912930125896;
+    //let seed: u128 = 220743249322234861290250598912930125896;
     println!("seed {}", seed);
     let mut refi = Llrb::new_lsm("test-llrb");
 
@@ -1364,7 +1364,7 @@ fn test_lsm_reverse_versions2() {
             ),
             revr,
         );
-        let mut iter = refi.reverse_with_versions(r.clone()).unwrap();
+        let iter = refi.reverse_with_versions(r.clone()).unwrap();
         let entries1: Vec<Result<Entry<i64, i64>>> = iter.collect();
         let entries2: Vec<Entry<i64, i64>> = yiter
             .filter_map(|e| {

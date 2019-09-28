@@ -142,17 +142,26 @@ fn test_config() {
     assert_eq!(Config::compute_root_block(4095), 4096);
     assert_eq!(Config::compute_root_block(4096), 4096);
     assert_eq!(Config::compute_root_block(4097), 8192);
+
     let config: Config = Default::default();
     let dir_path = std::env::temp_dir();
     let dir: &ffi::OsStr = dir_path.as_ref();
-    let ref_file: &ffi::OsStr = "/tmp/robt-users.indx".as_ref();
+    let dir = dir.to_str().unwrap();
+    let ref_file = {
+        let mut rpath = path::PathBuf::new();
+        rpath.push(dir_path.clone());
+        rpath.push("robt-users.indx");
+        rpath.into_os_string()
+    };
+    assert_eq!(config.to_index_file(dir, "users"), ref_file.to_os_string());
+    let ref_file = {
+        let mut rpath = path::PathBuf::new();
+        rpath.push(dir_path.clone());
+        rpath.push("robt-users.vlog");
+        rpath.into_os_string()
+    };
     assert_eq!(
-        config.to_index_file(dir.to_str().unwrap(), "users"),
-        ref_file.to_os_string()
-    );
-    let ref_file: &ffi::OsStr = "/tmp/robt-users.vlog".as_ref();
-    assert_eq!(
-        config.to_value_log(dir.to_str().unwrap(), "users").unwrap(),
+        config.to_value_log(dir, "users").unwrap(),
         ref_file.to_os_string()
     );
 }

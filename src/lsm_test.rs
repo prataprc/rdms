@@ -665,6 +665,7 @@ fn test_lsm_range1() {
     random_mvcc(n_ops, key_max, seed, &mut mvcc4, &mut refi);
 
     let (n_ops, key_max) = random_ops_keys(seed, 600_000, 200_000);
+    let n_ops = n_ops + 1;
     println!("mvcc5 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc5: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc5");
     mvcc5.set_seqno(mvcc4.to_seqno());
@@ -1047,6 +1048,7 @@ fn test_lsm_reverse1() {
     random_mvcc(n_ops, key_max, seed, &mut mvcc4, &mut refi);
 
     let (n_ops, key_max) = random_ops_keys(seed, 600_000, 200_000);
+    let n_ops = n_ops + 1;
     println!("mvcc5 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc5: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc5");
     mvcc5.set_seqno(mvcc4.to_seqno());

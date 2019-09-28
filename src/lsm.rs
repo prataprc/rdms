@@ -1,7 +1,6 @@
 //! Implement get() and iter() for LSM indexes.
 use std::borrow::Borrow;
 use std::cmp;
-use std::fmt::Debug;
 
 use crate::core::{Diff, Entry, Footprint, IndexIter, Reader, Result};
 use crate::error::Error;
@@ -60,7 +59,7 @@ pub(crate) fn y_iter<'a, K, V>(
     reverse: bool,
 ) -> IndexIter<'a, K, V>
 where
-    K: 'a + Clone + Ord + Debug,
+    K: 'a + Clone + Ord,
     V: 'a + Clone + Diff,
 {
     let x_entry = x.next();
@@ -80,7 +79,7 @@ pub(crate) fn y_iter_versions<'a, K, V>(
     reverse: bool,
 ) -> IndexIter<'a, K, V>
 where
-    K: 'a + Clone + Ord + std::fmt::Debug,
+    K: 'a + Clone + Ord,
     V: 'a + Clone + Diff + From<<V as Diff>::D> + Footprint,
 {
     let x_entry = x.next();
@@ -96,7 +95,7 @@ where
 
 struct YIter<'a, K, V>
 where
-    K: 'a + Clone + Ord + Debug,
+    K: 'a + Clone + Ord,
     V: 'a + Clone + Diff,
 {
     x: IndexIter<'a, K, V>,
@@ -108,7 +107,7 @@ where
 
 impl<'a, K, V> Iterator for YIter<'a, K, V>
 where
-    K: 'a + Clone + Ord + Debug,
+    K: 'a + Clone + Ord,
     V: 'a + Clone + Diff,
 {
     type Item = Result<Entry<K, V>>;
@@ -174,7 +173,7 @@ where
 
 impl<'a, K, V> Iterator for YIterVersions<'a, K, V>
 where
-    K: 'a + Clone + Ord + std::fmt::Debug,
+    K: 'a + Clone + Ord,
     V: 'a + Clone + Diff + From<<V as Diff>::D> + Footprint,
 {
     type Item = Result<Entry<K, V>>;

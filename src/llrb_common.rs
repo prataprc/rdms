@@ -95,20 +95,6 @@ where
     }
 }
 
-// by default dropping a node does not drop its children.
-fn drop_tree<K, V>(mut node: Box<Node<K, V>>)
-where
-    K: Ord + Clone,
-    V: Clone + Diff,
-{
-    // println!("drop_tree - node {:p}", node);
-
-    // left child shall be dropped after drop_tree() returns.
-    node.left.take().map(|left| drop_tree(left));
-    // right child shall be dropped after drop_tree() returns.
-    node.right.take().map(|right| drop_tree(right));
-}
-
 /// Full table scan for [`Llrb`] and [Mvcc] index.
 ///
 /// [Llrb]: crate::llrb::Llrb

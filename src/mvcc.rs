@@ -50,7 +50,7 @@ where
     key_footprint: AtomicIsize,
     tree_footprint: AtomicIsize,
     gc: Option<JoinHandle<Result<()>>>, // garbage collection in separate thread.
-    n_nodes: Arc<AtomicUsize>,
+    n_nodes: Arc<AtomicIsize>,
 }
 
 impl<K, V> Drop for Mvcc<K, V>
@@ -74,15 +74,29 @@ where
                 unsafe { Box::from_raw(self.snapshot.inner.load(SeqCst)) };
             let snapshot = Arc::get_mut(&mut *curr_s).unwrap();
             // println!("drop mvcc {:p} {:p}", self, snapshot);
-            snapshot.root.take().map(|root| drop_tree(root));
+
+            // NOTE: gc_tx will be dropped here
+            let mut reclaim = vec![];
+            snapshot
+                .root
+                .take()
+                .map(|root| drop_tree(root, &mut reclaim));
+            self.snapshot.gc_tx.as_ref().unwrap().send(reclaim);
         }
 
+        // wait for `gc` thread to exit.
         mem::drop(self.snapshot.gc_tx.take().unwrap());
         self.gc.take().unwrap().join().ok(); // ignore gc thread's error here.
 
+        // validation check 1
         let n = self.snapshot.n_active.load(SeqCst);
         if n != 0 {
             panic!("active snapshots: {}", n);
+        }
+        // validataion check 2
+        let n = self.n_nodes.load(SeqCst);
+        if n != 0 {
+            panic!("leak or double free n_nodes:{}", n);
         }
     }
 }
@@ -110,7 +124,7 @@ where
             key_footprint: AtomicIsize::new(0),
             tree_footprint: AtomicIsize::new(0),
             gc: None,
-            n_nodes: Arc::new(AtomicUsize::new(0)),
+            n_nodes: Arc::new(AtomicIsize::new(0)),
         });
 
         let n_nodes = Arc::clone(&index.n_nodes);
@@ -135,7 +149,7 @@ where
             key_footprint: AtomicIsize::new(0),
             tree_footprint: AtomicIsize::new(0),
             gc: None,
-            n_nodes: Arc::new(AtomicUsize::new(0)),
+            n_nodes: Arc::new(AtomicIsize::new(0)),
         });
 
         let n_nodes = Arc::clone(&index.n_nodes);
@@ -157,7 +171,7 @@ where
             key_footprint: AtomicIsize::new(self.key_footprint.load(SeqCst)),
             tree_footprint: AtomicIsize::new(self.tree_footprint.load(SeqCst)),
             gc: None,
-            n_nodes: Arc::new(AtomicUsize::new(self.len())),
+            n_nodes: Arc::new(AtomicIsize::new(self.len() as isize)),
         });
 
         let n_nodes = Arc::clone(&cloned.n_nodes);
@@ -181,6 +195,10 @@ where
             Mvcc::new(llrb_index.to_name())
         };
         mvcc_index.set_spinlatch(llrb_index.to_spin());
+        mvcc_index
+            .n_nodes
+            .as_ref()
+            .store(llrb_index.len() as isize, SeqCst);
 
         let debris = llrb_index.squash();
         mvcc_index.key_footprint.store(debris.key_footprint, SeqCst);
@@ -224,7 +242,7 @@ where
             key_footprint: AtomicIsize::new(self.key_footprint.load(SeqCst)),
             tree_footprint: AtomicIsize::new(self.tree_footprint.load(SeqCst)),
             gc: None,
-            n_nodes: Arc::new(AtomicUsize::new(0)),
+            n_nodes: Arc::new(AtomicIsize::new(0)),
         });
 
         let n_nodes = Arc::clone(&index.n_nodes);
@@ -1205,7 +1223,7 @@ where
         let mut right = if old_right.dirty {
             old_right
         } else {
-            Box::leak(old_right).mvcc_clone(reclaim)
+            self.node_mvcc_clone(Box::leak(old_right), reclaim)
         };
 
         node.right = right.left.take();
@@ -1239,7 +1257,7 @@ where
         let mut left = if old_left.dirty {
             old_left
         } else {
-            Box::leak(old_left).mvcc_clone(reclaim)
+            self.node_mvcc_clone(Box::leak(old_left), reclaim)
         };
 
         node.left = left.right.take();
@@ -1265,12 +1283,12 @@ where
         let mut left = if old_left.dirty {
             old_left
         } else {
-            Box::leak(old_left).mvcc_clone(reclaim)
+            self.node_mvcc_clone(Box::leak(old_left), reclaim)
         };
         let mut right = if old_right.dirty {
             old_right
         } else {
-            Box::leak(old_right).mvcc_clone(reclaim)
+            self.node_mvcc_clone(Box::leak(old_right), reclaim)
         };
 
         left.toggle_link();
@@ -1513,8 +1531,8 @@ where
 
         self.root.take().map(Box::leak); // Leak root
 
-        // NOTE: `reclaim` nodes will be dropped, but due the Drop
-        // implementation of Node, child nodes won't be dropped.
+        // NOTE: `reclaim` nodes will be dropped, and the actual nodes
+        // are sent to `gc` thread. Note that child nodes won't be dropped.
 
         match (self.reclaim.take(), self.gc_tx.take()) {
             (Some(reclaim), Some(gc_tx)) => gc_tx.send(reclaim).ok(),
@@ -1838,7 +1856,7 @@ where
 
 fn gc<K, V>(
     rx: mpsc::Receiver<Vec<Box<Node<K, V>>>>, // list of nodes to be freed
-    n_nodes: Arc<AtomicUsize>,
+    n_nodes: Arc<AtomicIsize>,
 ) -> Result<()>
 where
     K: Clone + Ord,
@@ -1846,11 +1864,29 @@ where
 {
     for nodes in rx {
         for _node in nodes {
-            // drop the node here.
+            // println!("gc node");
             n_nodes.as_ref().fetch_sub(1, SeqCst);
+            // drop the node here.
         }
     }
     Ok(())
+}
+
+// drop_tree variant for mvcc.
+// by default dropping a node does not drop its children.
+fn drop_tree<K, V>(mut node: Box<Node<K, V>>, rclm: &mut Vec<Box<Node<K, V>>>)
+where
+    K: Ord + Clone,
+    V: Clone + Diff,
+{
+    // println!("drop_tree - node {:p}", node);
+
+    // left child shall be dropped after drop_tree() returns.
+    node.left.take().map(|left| drop_tree(left, rclm));
+    // right child shall be dropped after drop_tree() returns.
+    node.right.take().map(|right| drop_tree(right, rclm));
+
+    rclm.push(node)
 }
 
 #[allow(dead_code)]

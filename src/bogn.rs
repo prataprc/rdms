@@ -1,6 +1,3 @@
-// TODO: Is it possible to avoid Bogn type-parameters M and D, and hide
-// Index, Reader and Writer traits as crate-only traits.
-
 use std::borrow::Borrow;
 use std::marker;
 use std::ops::RangeBounds;

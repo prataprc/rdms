@@ -95,7 +95,10 @@ where
     }
 }
 
-/// Full table scan for [`Llrb`] and [Mvcc] index.
+/// Full table scan type for both [Llrb] and [Mvcc] index.
+///
+/// A full table scan using this type is optimal when used with concurrent
+/// read threads, but not with concurrent write threads.
 ///
 /// [Llrb]: crate::llrb::Llrb
 /// [Mvcc]: crate::mvcc::Mvcc
@@ -153,8 +156,10 @@ where
     }
 }
 
-/// IterFullScan scan from `lower-bound` for [`Llrb`] and [Mvcc] index,
-/// that includes entry versions whose modified seqno between start and end.
+/// Piece-wise full table scan type for both [Llrb] and [Mvcc] index.
+///
+/// Unlike [Iter] type, a full table scan using this type is optimal
+/// for both concurrent reads and writes.
 ///
 /// [Llrb]: crate::llrb::Llrb
 /// [Mvcc]: crate::mvcc::Mvcc
@@ -232,8 +237,8 @@ where
     }
 }
 
-/// Range scan between `lower-bound` and `higher-bound` for [`Llrb`] and
-/// [Mvcc] index.
+/// Range scan between a _`lower-bound`_ and _`higher-bound`_ for bot [`Llrb`]
+/// and [Mvcc] index.
 ///
 /// [Llrb]: crate::llrb::Llrb
 /// [Mvcc]: crate::mvcc::Mvcc
@@ -313,8 +318,8 @@ where
     }
 }
 
-/// Reverse range scan between `higher-bound` and `lower-bound` for [`Llrb`]
-/// and [Mvcc] index.
+/// Reverse range scan between a _`higher-bound`_ and _`lower-bound`_ for both
+/// [`Llrb`] and [Mvcc] index.
 ///
 /// [Llrb]: crate::llrb::Llrb
 /// [Mvcc]: crate::mvcc::Mvcc

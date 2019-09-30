@@ -1,8 +1,31 @@
-//! [LLRB][llrb] index for concurrent readers, single writer using
-//! [Multi-Version-Concurrency-Control][mvcc].
+//! Module ``mvcc`` implement [Multi-Version-Concurrency-Control][mvcc]
+//! variant of [Llrb].
 //!
-//! [mvcc]: https://en.wikipedia.org/wiki/Multiversion_concurrency_control
+//! [Mvcc] type allow concurrent read and write access at API level,
+//! while behind the scenes, all write-operations are serialized into
+//! single thread, but the key difference is that [Mvcc] index allow
+//! concurrent-reads without using locks. To serialize concurrent writes
+//! [Mvcc] uses a spin-lock implementation that can be configured to
+//! _yield_ or _spin_ while waiting for the lock.
+//!
+//! **[LSM mode]**: Mvcc index can support log-structured-merge while
+//! mutating the tree. In simple terms, this means that nothing shall be
+//! over-written in the tree and all the mutations for the same key shall
+//! be preserved until they are purged.
+//!
+//! **Possible ways to configure Mvcc**:
+//!
+//! *spinlatch*, relevant only in multi-threaded context. Calling
+//! _set_spinlatch()_ with _true_ will have the calling thread to spin
+//! while waiting to acquire the lock. Calling it with _false_ will have the
+//! calling thread to yield to OS scheduler while waiting to acquire the lock.
+//!
+//! *seqno*, application can set the beginning sequence number before
+//! ingesting data into the index.
+//!
 //! [llrb]: https://en.wikipedia.org/wiki/Left-leaning_red-black_tree
+//! [mvcc]: https://en.wikipedia.org/wiki/Multiversion_concurrency_control
+//! [LSM mode]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
 use std::{
     borrow::Borrow,
     cmp::{Ord, Ordering},
@@ -31,8 +54,8 @@ include!("llrb_common.rs");
 
 // TODO: Experiment with different atomic::Ordering to improve performance.
 
-/// [LLRB][llrb] index for concurrent readers, single writer using
-/// [Multi-Version-Concurrency-Control][mvcc].
+/// A [Mvcc][mvcc] variant of [LLRB][llrb] index for concurrent readers,
+/// serialized writers.
 ///
 /// [mvcc]: https://en.wikipedia.org/wiki/Multiversion_concurrency_control
 /// [llrb]: https://en.wikipedia.org/wiki/Left-leaning_red-black_tree
@@ -51,6 +74,8 @@ where
     tree_footprint: AtomicIsize,
     gc: Option<JoinHandle<Result<()>>>, // garbage collection in separate thread.
     n_nodes: Arc<AtomicIsize>,
+    readers: Arc<u32>,
+    writers: Arc<u32>,
 }
 
 impl<K, V> Drop for Mvcc<K, V>
@@ -59,6 +84,12 @@ where
     V: Clone + Diff,
 {
     fn drop(&mut self) {
+        // validation check 1
+        let n = self.multi_rw();
+        if n > Self::CONCUR_REF_COUNT {
+            panic!("Mvcc dropped before read/write handles {}", n);
+        }
+
         // NOTE: Means all references to mvcc are gone and ownership is
         // going out of scope. This also implies that there are only
         // TWO Arc<snapshots>. One is held by self.snapshot and another
@@ -88,7 +119,7 @@ where
         mem::drop(self.snapshot.gc_tx.take().unwrap());
         self.gc.take().unwrap().join().ok(); // ignore gc thread's error here.
 
-        // validation check 1
+        // validation check 2
         let n = self.snapshot.n_active.load(SeqCst);
         if n != 0 {
             panic!("active snapshots: {}", n);
@@ -125,6 +156,8 @@ where
             tree_footprint: AtomicIsize::new(0),
             gc: None,
             n_nodes: Arc::new(AtomicIsize::new(0)),
+            readers: Arc::new(0xC0FFEE),
+            writers: Arc::new(0xC0FFEE),
         });
 
         let n_nodes = Arc::clone(&index.n_nodes);
@@ -150,42 +183,14 @@ where
             tree_footprint: AtomicIsize::new(0),
             gc: None,
             n_nodes: Arc::new(AtomicIsize::new(0)),
+            readers: Arc::new(0xC0FFEE),
+            writers: Arc::new(0xC0FFEE),
         });
 
         let n_nodes = Arc::clone(&index.n_nodes);
         index.gc = Some(thread::spawn(move || gc::<K, V>(gc_rx, n_nodes)));
 
         index
-    }
-
-    pub fn clone(&self) -> Box<Mvcc<K, V>> {
-        // spawn gc thread.
-        let (gc_tx, gc_rx) = mpsc::channel();
-        let mut cloned = Box::new(Mvcc {
-            name: self.name.clone(),
-            lsm: self.lsm,
-            spin: self.spin,
-
-            snapshot: OuterSnapshot::new(gc_tx),
-            latch: RWSpinlock::new(),
-            key_footprint: AtomicIsize::new(self.key_footprint.load(SeqCst)),
-            tree_footprint: AtomicIsize::new(self.tree_footprint.load(SeqCst)),
-            gc: None,
-            n_nodes: Arc::new(AtomicIsize::new(self.len() as isize)),
-        });
-
-        let n_nodes = Arc::clone(&cloned.n_nodes);
-        cloned.gc = Some(thread::spawn(move || gc::<K, V>(gc_rx, n_nodes)));
-
-        let s: Arc<Snapshot<K, V>> = OuterSnapshot::clone(&self.snapshot);
-        let root_node = match s.as_root() {
-            None => None,
-            Some(n) => Some(Box::new(n.clone())),
-        };
-        cloned
-            .snapshot
-            .shift_snapshot(root_node, s.seqno, s.n_count, vec![]);
-        cloned
     }
 
     pub fn from_llrb(llrb_index: Llrb<K, V>) -> Box<Mvcc<K, V>> {
@@ -214,22 +219,74 @@ where
         mvcc_index
     }
 
+    /// Configure behaviour of spin-latch. If `spin` is true, calling
+    /// thread shall spin until a latch is acquired or released, if false
+    /// calling thread will yield to scheduler.
+    pub fn set_spinlatch(&mut self, spin: bool) {
+        let n = self.multi_rw();
+        if n > Self::CONCUR_REF_COUNT {
+            panic!("cannot configure Mvcc with active readers/writer {}", n);
+        }
+
+        self.spin = spin;
+    }
+
     /// application can set the start sequence number for this index.
     pub fn set_seqno(&mut self, seqno: u64) {
+        let n = self.multi_rw();
+        if n > Self::CONCUR_REF_COUNT {
+            panic!("cannot configure Mvcc with active readers/writer {}", n);
+        }
+
         let snapshot = OuterSnapshot::clone(&self.snapshot);
         let root = snapshot.root_duplicate();
         self.snapshot
             .shift_snapshot(root, seqno, snapshot.n_count, vec![]);
     }
 
-    /// Configure behaviour of spin-latch. If `spin` is true, calling
-    /// thread shall spin until a latch is acquired or released, if false
-    /// calling thread will yield to scheduler.
-    pub fn set_spinlatch(&mut self, spin: bool) {
-        self.spin = spin;
+    pub fn clone(&self) -> Box<Mvcc<K, V>> {
+        let n = self.multi_rw();
+        if n > Self::CONCUR_REF_COUNT {
+            panic!("cannot clone Mvcc with active readers/writer {}", n);
+        }
+
+        // spawn gc thread.
+        let (gc_tx, gc_rx) = mpsc::channel();
+        let mut cloned = Box::new(Mvcc {
+            name: self.name.clone(),
+            lsm: self.lsm,
+            spin: self.spin,
+
+            snapshot: OuterSnapshot::new(gc_tx),
+            latch: RWSpinlock::new(),
+            key_footprint: AtomicIsize::new(self.key_footprint.load(SeqCst)),
+            tree_footprint: AtomicIsize::new(self.tree_footprint.load(SeqCst)),
+            gc: None,
+            n_nodes: Arc::new(AtomicIsize::new(self.len() as isize)),
+            readers: Arc::new(0xC0FFEE),
+            writers: Arc::new(0xC0FFEE),
+        });
+
+        let n_nodes = Arc::clone(&cloned.n_nodes);
+        cloned.gc = Some(thread::spawn(move || gc::<K, V>(gc_rx, n_nodes)));
+
+        let s: Arc<Snapshot<K, V>> = OuterSnapshot::clone(&self.snapshot);
+        let root_node = match s.as_root() {
+            None => None,
+            Some(n) => Some(Box::new(n.clone())),
+        };
+        cloned
+            .snapshot
+            .shift_snapshot(root_node, s.seqno, s.n_count, vec![]);
+        cloned
     }
 
     fn shallow_clone(&self) -> Box<Mvcc<K, V>> {
+        let n = self.multi_rw();
+        if n > Self::CONCUR_REF_COUNT {
+            panic!("cannot shallow-clone with active readers/writer {}", n);
+        }
+
         // spawn gc thread.
         let (gc_tx, gc_rx) = mpsc::channel();
         let mut index = Box::new(Mvcc {
@@ -243,6 +300,8 @@ where
             tree_footprint: AtomicIsize::new(self.tree_footprint.load(SeqCst)),
             gc: None,
             n_nodes: Arc::new(AtomicIsize::new(0)),
+            readers: Arc::new(0xC0FFEE),
+            writers: Arc::new(0xC0FFEE),
         });
 
         let n_nodes = Arc::clone(&index.n_nodes);
@@ -258,6 +317,8 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
+    const CONCUR_REF_COUNT: usize = 2;
+
     /// Return whether this index support lsm mode.
     #[inline]
     pub fn is_lsm(&self) -> bool {
@@ -287,6 +348,10 @@ where
     /// with this statisics.
     pub fn stats(&self) -> Stats {
         Stats::new_partial(self.len(), mem::size_of::<Node<K, V>>())
+    }
+
+    fn multi_rw(&self) -> usize {
+        Arc::strong_count(&self.readers) + Arc::strong_count(&self.writers)
     }
 }
 
@@ -1566,7 +1631,7 @@ where
     }
 }
 
-/// Multi-threaded read-handle for Mvcc.
+/// Read handle into [Mvcc] index, that implements both [Send] and [Sync].
 pub struct MvccReader<K, V>
 where
     K: Clone + Ord,
@@ -1695,9 +1760,7 @@ where
     }
 }
 
-/// MvccWriter handle for [`Mvcc`] index.
-///
-/// [Mvcc]: crate::mvcc::Mvcc
+/// Write handle into [Mvcc] index, that implements both [Send] and [Sync].
 pub struct MvccWriter<K, V>
 where
     K: Clone + Ord,

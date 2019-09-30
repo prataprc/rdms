@@ -1,6 +1,29 @@
-//! Single threaded, in-memory index using [left-leaning-red-black][llrb] tree.
+//! Module ``llrb`` export an in-memory index type, implementing
+//! _Left Leaning Red Black_ tree.
+//!
+//! [Llrb] type allow concurrent read and write access at API level,
+//! while behind the scenes, all CRUD access are serialized into single
+//! threaded operation. To serialize concurrent access [Llrb] uses
+//! a spin-lock implementation that can be configured to _yield_ or
+//! _spin_ while waiting for the lock.
+//!
+//! **[LSM mode]**: Llrb index can support log-structured-merge while
+//! mutating the tree. In simple terms, this means that nothing shall be
+//! over-written in the tree and all the mutations for the same key shall
+//! be preserved until they are purged.
+//!
+//! **Possible ways to configure Llrb**:
+//!
+//! *spinlatch*, relevant only in multi-threaded context. Calling
+//! _set_spinlatch()_ with _true_ will have the calling thread to spin
+//! while waiting to acquire the lock. Calling it with _false_ will have the
+//! calling thread to yield to OS scheduler while waiting to acquire the lock.
+//!
+//! *seqno*, application can set the beginning sequence number before
+//! ingesting data into the index.
 //!
 //! [llrb]: https://en.wikipedia.org/wiki/Left-leaning_red-black_tree
+//! [LSM mode]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
 use std::borrow::Borrow;
 use std::cmp::{Ord, Ordering};
 use std::convert::TryInto;
@@ -21,15 +44,7 @@ include!("llrb_common.rs");
 
 /// Single threaded, in-memory index using [left-leaning-red-black][llrb] tree.
 ///
-/// **[LSM mode]**: Llrb index can support log-structured-merge while
-/// mutating the tree. In simple terms, this means that nothing shall be
-/// over-written in the tree and all the mutations for the same key shall
-/// be preserved until they are purged. Though, there is one exception to
-/// it, back-to-back deletes will collapse into a no-op and only the
-/// first delete shall be ingested.
-///
 /// [llrb]: https://en.wikipedia.org/wiki/Left-leaning_red-black_tree
-/// [LSM mode]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
 pub struct Llrb<K, V>
 where
     K: Clone + Ord,
@@ -56,6 +71,10 @@ where
 {
     fn drop(&mut self) {
         self.root.take().map(drop_tree);
+        let n = self.multi_rw();
+        if n > Self::CONCUR_REF_COUNT {
+            panic!("Llrb dropped before read/write handles {}", n);
+        }
     }
 }
 
@@ -91,6 +110,8 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
+    const CONCUR_REF_COUNT: usize = 2;
+
     /// Create an empty Llrb index, identified by `name`.
     /// Applications can choose unique names.
     pub fn new<S: AsRef<str>>(name: S) -> Box<Llrb<K, V>> {
@@ -137,28 +158,29 @@ where
     /// Configure behaviour of spin-latch. If `spin` is true, calling
     /// thread shall spin until a latch is acquired or released, if false
     /// calling thread will yield to scheduler.
-    pub fn set_spinlatch(&mut self, spin: bool) -> &mut Llrb<K, V> {
-        if self.multi_rw() {
-            panic!("configuration not allowed after spawning readers/writers")
+    pub fn set_spinlatch(&mut self, spin: bool) {
+        let n = self.multi_rw();
+        if n > Self::CONCUR_REF_COUNT {
+            panic!("cannot configure Llrb with active readers/writers {}", n)
         }
         self.spin = spin;
-        self
     }
 
     /// application can set the start sequence number for this index.
-    pub fn set_seqno(&mut self, seqno: u64) -> &mut Llrb<K, V> {
-        if self.multi_rw() {
-            panic!("configuration not allowed after spawning readers/writers")
+    pub fn set_seqno(&mut self, seqno: u64) {
+        let n = self.multi_rw();
+        if n > Self::CONCUR_REF_COUNT {
+            panic!("cannot configure Llrb with active readers/writers {}", n)
         }
         self.seqno = seqno;
-        self
     }
 
     /// Squash this index and return the root and its book-keeping.
     /// IMPORTANT: after calling this method, value must be dropped.
     pub(crate) fn squash(mut self) -> SquashDebris<K, V> {
-        if self.multi_rw() {
-            panic!("cannot squash with active readers/writer !!");
+        let n = self.multi_rw();
+        if n > Self::CONCUR_REF_COUNT {
+            panic!("cannot squash Llrb with active readers/writer {}", n);
         }
         SquashDebris {
             root: self.root.take(),
@@ -203,9 +225,8 @@ where
         })
     }
 
-    fn multi_rw(&self) -> bool {
-        let ok = Arc::strong_count(&self.readers) > 1;
-        ok || Arc::strong_count(&self.writers) > 1
+    fn multi_rw(&self) -> usize {
+        Arc::strong_count(&self.readers) + Arc::strong_count(&self.writers)
     }
 }
 
@@ -1136,7 +1157,7 @@ where
     }
 }
 
-/// Multi-threaded read-handle for Llrb.
+/// Read handle into [Llrb] index, that implements both [Send] and [Sync].
 pub struct LlrbReader<K, V>
 where
     K: Clone + Ord,
@@ -1267,7 +1288,7 @@ where
     }
 }
 
-/// Multi threaded write-handle for Llrb.
+/// Write handle into [Llrb] index, that implements both [Send] and [Sync].
 pub struct LlrbWriter<K, V>
 where
     K: Clone + Ord,

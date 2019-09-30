@@ -3,7 +3,7 @@ use std::{thread, time};
 
 use rand::prelude::random;
 
-use crate::RWSpinlock;
+use super::*;
 
 // TODO: yield_ok == true
 

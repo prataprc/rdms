@@ -839,6 +839,18 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
+    /// Return a reference to key.
+    #[inline]
+    pub fn as_key(&self) -> &K {
+        &self.key
+    }
+
+    /// Return owned key vlalue.
+    #[inline]
+    pub fn to_key(&self) -> K {
+        self.key.clone()
+    }
+
     #[inline]
     pub(crate) fn as_deltas(&self) -> &Vec<Delta<V>> {
         &self.deltas
@@ -858,19 +870,7 @@ where
         self.deltas.clone()
     }
 
-    /// Return ownership of key.
-    #[inline]
-    pub fn to_key(&self) -> K {
-        self.key.clone()
-    }
-
-    /// Return a reference to key.
-    #[inline]
-    pub fn as_key(&self) -> &K {
-        &self.key
-    }
-
-    /// Return value.
+    /// Return value. If entry is marked as deleted, return None.
     pub fn to_native_value(&self) -> Option<V> {
         self.value.to_native_value()
     }
@@ -884,8 +884,8 @@ where
         }
     }
 
-    /// Return the seqno and the state of modification. `true` means
-    /// latest value was a create/update, and `false` means latest value
+    /// Return the seqno and the state of modification. _`true`_ means
+    /// latest value was a create/update, and _`false`_ means latest value
     /// was deleted.
     #[inline]
     pub fn to_seqno_state(&self) -> (bool, u64) {
@@ -1000,12 +1000,15 @@ where
     }
 }
 
+// Wrapper type for entries iterated by piece-wise full-table scanner.
 pub enum ScanEntry<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff,
 {
+    // Entry found, continue with iteration.
     Found(Entry<K, V>),
+    // Refill.
     Retry(K),
 }
 

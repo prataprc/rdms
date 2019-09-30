@@ -481,7 +481,7 @@ impl Config {
 
 /// Enumerated meta types stored in [Robt] index.
 ///
-/// [Robt] index is a full-packed immutable [Btree] index. To interpret
+/// [Robt] index is a fully packed immutable [Btree] index. To interpret
 /// the index a list of meta items are appended to the tip
 /// of index-file.
 ///
@@ -554,7 +554,7 @@ pub(crate) fn write_meta_items(
 /// Read meta items from [Robt] index file.
 ///
 /// Meta-items is stored at the tip of the index file. If successful,
-/// a vector of meta items. To learn more about the meta items
+/// a vector of meta items is returned. To learn more about the meta items
 /// refer to [MetaItem] type.
 ///
 /// [Robt]: crate::robt::Robt
@@ -625,9 +625,9 @@ impl fmt::Display for MetaItem {
 
 /// Btree configuration and statistics persisted along with index file.
 ///
-/// Note that build-only configuration options like:
-/// * `tomb_purge`, configuration option.
-/// * `flush_queue_size`,  configuration option.
+/// Note that build-only [configuration][Config] options like:
+/// * _`tomb_purge`_, configuration option.
+/// * _`flush_queue_size`_,  configuration option.
 ///
 /// are not persisted as part of statistics.
 ///
@@ -636,18 +636,24 @@ impl fmt::Display for MetaItem {
 ///
 #[derive(Clone, Default, PartialEq)]
 pub struct Stats {
-    /// Leaf block size in btree index.
+    /// Part of _build-configuration_, specifies the leaf block size
+    /// in btree index.
     pub z_blocksize: usize,
-    /// Intemediate block size in btree index.
+    /// Part of _build-configuration_, specifies the intemediate block
+    /// size in btree index.
     pub m_blocksize: usize,
-    /// If deltas are indexed and/or value to be stored in separate log file.
+    /// Part of _build-configuration_, specifies block size of value
+    /// blocks flushed to _vlog-file_.
     pub v_blocksize: usize,
-    /// Whether delta was included as part of the entry.
+    /// Part of _build-configuration_, specifies whether delta was
+    /// included as part of the entry.
     pub delta_ok: bool,
-    /// Separate log file for deltas and value, if `value_in_vlog` is true.
-    /// Note that only file-name is relevat, directory-path shall be ignored.
+    /// Part of _build-configuration_, specifies the log file for deltas
+    /// and value, if `value_in_vlog` is true. Note that only file-name
+    /// is relevat, directory-path shall be ignored.
     pub vlog_file: Option<ffi::OsString>,
-    /// Whether value was persisted in value log file.
+    /// Part of _build-configuration_, specifies whether value was
+    /// persisted in value log file.
     pub value_in_vlog: bool,
 
     /// Number of entries indexed.
@@ -789,7 +795,10 @@ impl Display for Stats {
     }
 }
 
-/// Builder type for Read-Only-BTree.
+/// Builder type for constructing Read-Only-BTree index from an iterator.
+///
+/// Index can be built in _initial_ mode or _incremental_ mode. Refer
+/// to corresponding methods for more information.
 pub struct Builder<K, V>
 where
     K: Clone + Ord + Serialize,
@@ -811,8 +820,8 @@ where
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
 {
-    /// For initial builds, index file and value-log-file, if any,
-    /// are always created new.
+    /// For initial builds, index file and value-log-file, if configured,
+    /// shall be created new.
     pub fn initial(
         dir: &str, // directory path where index file(s) are stored
         name: &str,
@@ -839,7 +848,7 @@ where
     }
 
     /// For incremental build, index file is created new, while
-    /// value-log-file, if any, is appended to older version.
+    /// value-log-file, if configured, shall be appended to older version.
     pub fn incremental(
         dir: &str, // directory path where index files are stored
         name: &str,
@@ -867,7 +876,9 @@ where
         })
     }
 
-    /// Build a new index.
+    /// Build a new index from the supplied iterator. The iterator shall
+    /// return an index entry for each iteration, and the entries are
+    /// expected in sort order.
     pub fn build<I>(mut self, iter: I, app_meta: Vec<u8>) -> Result<()>
     where
         I: Iterator<Item = Result<Entry<K, V>>>,
@@ -1295,7 +1306,7 @@ where
     V: Clone + Diff + Serialize + Footprint,
     <V as Diff>::D: Serialize,
 {
-    type W = RobtWriter; // TODO: change this to Missing type
+    type W = Snapshot<K, V>; // TODO: change this to Missing type
     type R = Snapshot<K, V>;
 
     /// Make a new empty index of this type, with same configuration.
@@ -1332,6 +1343,29 @@ where
             None => 0,
         };
         footprint.try_into().unwrap()
+    }
+}
+
+// Write methods
+impl<K, V> Writer<K, V> for Snapshot<K, V>
+where
+    K: Clone + Ord + Serialize + Footprint,
+    V: Clone + Diff + Serialize + Footprint,
+{
+    fn set(&mut self, _key: K, _value: V) -> Result<Option<Entry<K, V>>> {
+        panic!("set operation not allwed on Read-Only-Btree snapshot !!");
+    }
+
+    fn set_cas(&mut self, _: K, _: V, _: u64) -> Result<Option<Entry<K, V>>> {
+        panic!("set operation not allwed on Read-Only-Btree snapshot !!");
+    }
+
+    fn delete<Q>(&mut self, _key: &Q) -> Result<Option<Entry<K, V>>>
+    where
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
+    {
+        panic!("set operation not allwed on Read-Only-Btree snapshot !!");
     }
 }
 
@@ -1842,7 +1876,7 @@ where
     }
 }
 
-/// Iterate over [Robt] index, from a lower bound to upper bound.
+/// Iterate over [Robt] index, from a _lower bound_ to _upper bound_.
 ///
 /// [Robt]: crate::robt::Robt
 pub struct Range<'a, K, V, R, Q>
@@ -1928,7 +1962,7 @@ where
     }
 }
 
-/// Iterate over [Robt] index, from an upper bound to lower bound.
+/// Reverse iterate over [Robt] index, from an _upper bound_ to _lower bound_.
 ///
 /// [Robt]: crate::robt::Robt
 pub struct Reverse<'a, K, V, R, Q>
@@ -2072,31 +2106,6 @@ where
             MZ::Z { .. } => None,
             MZ::M { .. } => unreachable!(),
         }
-    }
-}
-
-/// ...
-pub struct RobtWriter;
-
-impl<K, V> Writer<K, V> for RobtWriter
-where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
-{
-    fn set(&mut self, _key: K, _value: V) -> Result<Option<Entry<K, V>>> {
-        panic!("set operation not allwed on Read-Only-Btree snapshot !!");
-    }
-
-    fn set_cas(&mut self, _: K, _: V, _: u64) -> Result<Option<Entry<K, V>>> {
-        panic!("set operation not allwed on Read-Only-Btree snapshot !!");
-    }
-
-    fn delete<Q>(&mut self, _key: &Q) -> Result<Option<Entry<K, V>>>
-    where
-        K: Borrow<Q>,
-        Q: ToOwned<Owned = K> + Ord + ?Sized,
-    {
-        panic!("set operation not allwed on Read-Only-Btree snapshot !!");
     }
 }
 

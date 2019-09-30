@@ -50,7 +50,7 @@ use std::{fmt, thread};
 /// b. latch flag, bit 62.
 /// c. lock flag, bit 63.
 ///
-pub struct RWSpinlock {
+pub(crate) struct RWSpinlock {
     value: AtomicU64,
     reads: AtomicU64,
     writes: AtomicU64,
@@ -64,7 +64,7 @@ impl RWSpinlock {
     const READERS_FLAG: u64 = 0x3FFFFFFFFFFFFFFF;
 
     /// Create a new RWSpinlock
-    pub fn new() -> RWSpinlock {
+    pub(crate) fn new() -> RWSpinlock {
         RWSpinlock {
             value: AtomicU64::new(0),
             reads: AtomicU64::new(0),
@@ -75,7 +75,7 @@ impl RWSpinlock {
 
     /// Acquire latch for read permission. If ``spin`` is false, calling
     /// thread will yield to scheduler before re-trying the latch.
-    pub fn acquire_read(&self, spin: bool) -> Reader {
+    pub(crate) fn acquire_read(&self, spin: bool) -> Reader {
         loop {
             let c = self.value.load(SeqCst);
             if (c & Self::LATCH_LOCK_FLAG) == 0 {
@@ -95,7 +95,7 @@ impl RWSpinlock {
 
     /// Acquire latch for write permission. If ``spin`` is false, calling
     /// thread will yield to scheduler before re-trying the latch.
-    pub fn acquire_write(&self, spin: bool) -> Writer {
+    pub(crate) fn acquire_write(&self, spin: bool) -> Writer {
         // acquire latch
         loop {
             let c = self.value.load(SeqCst);
@@ -133,7 +133,7 @@ impl RWSpinlock {
     }
 }
 
-pub struct Reader<'a> {
+pub(crate) struct Reader<'a> {
     door: &'a RWSpinlock,
 }
 
@@ -143,7 +143,7 @@ impl<'a> Drop for Reader<'a> {
     }
 }
 
-pub struct Writer<'a> {
+pub(crate) struct Writer<'a> {
     door: &'a RWSpinlock,
 }
 

@@ -13,7 +13,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub type IndexIter<'a, K, V> = Box<dyn Iterator<Item = Result<Entry<K, V>>> + 'a>;
 
 /// Type alias to trait-objects iterating, piece-wise, over [`Index`].
-pub type ScanIter<'a, K, V> = Box<dyn Iterator<Item = Result<ScanEntry<K, V>>> + 'a>;
+pub(crate) type ScanIter<'a, K, V> = Box<dyn Iterator<Item = Result<ScanEntry<K, V>>> + 'a>;
 
 /// Trait for diffable values.
 ///
@@ -228,24 +228,6 @@ where
         Q: 'a + Ord + ?Sized;
 }
 
-/// Index full table scan.
-pub trait FullScan<K, V>
-where
-    K: Clone + Ord,
-    V: Clone + Diff + From<<V as Diff>::D>,
-{
-    /// Return an iterator over entries that meet following properties
-    /// * Only entries greater than range.start_bound().
-    /// * Only entries whose modified seqno is within seqno-range.
-    ///
-    /// This method is typically valid only for memory-only indexes. Also,
-    /// returned entry may not have all its previous versions, if it is
-    /// costly to fetch from disk.
-    fn full_scan<G>(&self, from: Bound<K>, within: G) -> Result<ScanIter<K, V>>
-    where
-        G: Clone + RangeBounds<u64>;
-}
-
 /// Index write operations.
 pub trait Writer<K, V>
 where
@@ -291,6 +273,24 @@ pub trait Serialize: Sized {
     /// Reverse process of encode, given the binary equivalent `buf`,
     /// construct ``self``.
     fn decode(&mut self, buf: &[u8]) -> Result<usize>;
+}
+
+/// Index full table scan.
+pub(crate) trait FullScan<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff + From<<V as Diff>::D>,
+{
+    /// Return an iterator over entries that meet following properties
+    /// * Only entries greater than range.start_bound().
+    /// * Only entries whose modified seqno is within seqno-range.
+    ///
+    /// This method is typically valid only for memory-only indexes. Also,
+    /// returned entry may not have all its previous versions, if it is
+    /// costly to fetch from disk.
+    fn full_scan<G>(&self, from: Bound<K>, within: G) -> Result<ScanIter<K, V>>
+    where
+        G: Clone + RangeBounds<u64>;
 }
 
 /// Delta maintains the older version of value, with necessary fields for

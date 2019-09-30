@@ -60,7 +60,6 @@ mod vlog;
 mod scans;
 
 pub use crate::bogn::Bogn;
-pub use crate::core::ScanIter;
 pub use crate::core::{Diff, Entry, Replay, Result, Serialize, VersionIter};
 pub use crate::core::{Footprint, Index, IndexIter, Reader, Writer};
 pub use crate::error::Error;

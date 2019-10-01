@@ -70,6 +70,8 @@ pub mod mvcc;
 
 mod lsm;
 
+mod disk_sink;
+
 pub mod robt;
 mod robt_entry;
 mod robt_index;

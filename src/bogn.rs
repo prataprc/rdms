@@ -5,9 +5,11 @@ use std::ops::RangeBounds;
 use crate::core::{Diff, Entry, Footprint, Result};
 use crate::core::{Index, IndexIter, Reader, Writer};
 
+// TODO: Clone implementation.
+
 /// Index keys and corresponding values. Check module documentation for
 /// the full set of features.
-pub struct Bogn<K, V, M>
+pub struct Bogn<K, V, M, D>
 where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
@@ -15,27 +17,36 @@ where
 {
     name: String,
     mem: M,
+    disk: D,
     seqno: u64,
+
+    // configuration
+    cache: bool,
+    backup: bool,
+
     _key: marker::PhantomData<K>,
     _value: marker::PhantomData<V>,
 }
 
-impl<K, V, M> Bogn<K, V, M>
+impl<K, V, M> Bogn<K, V, M, D>
 where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
     M: Index<K, V> + Reader<K, V> + Writer<K, V>,
+    D: Index<K, V> + Reader<K, V>,
 {
     /// Create bogn index in ``mem-only`` mode. Memory only indexes are
     /// ephimeral indexes. They don't persist data, hence don't have
     /// durability gaurantee.
-    pub fn mem_only<S>(name: S, mem: M) -> Result<Bogn<K, V, M>>
+    pub fn new<S>(name: S, mem: M, disk: D) -> Result<Bogn<K, V, M>>
     where
         S: AsRef<str>,
     {
+        let name = name.as_ref().to_string();
         Ok(Bogn {
-            name: name.as_ref().to_string(),
+            name,
             mem,
+            disk,
             seqno: 0,
             _key: marker::PhantomData,
             _value: marker::PhantomData,
@@ -56,10 +67,6 @@ where
     pub fn to_seqno(&self) -> u64 {
         self.seqno
     }
-
-    //pub fn stats(&self) -> Stats {
-    //    // TBD
-    //}
 }
 
 impl<K, V, M> Bogn<K, V, M>
@@ -130,11 +137,3 @@ where
         self.mem.delete(key)
     }
 }
-
-//impl<K,V> Bogn<K,V>
-//where
-//    K: Clone + Ord,
-//    V: Clone + Diff,
-//{
-//    validate
-//}

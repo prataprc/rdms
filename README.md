@@ -36,4 +36,6 @@ threads.
 Is it enough to use ``Relaxed`` [memory-ordering][memory-ordering] for
 AtomicPtr operations to manage MVCC Snapshots ?
 
+Add a feature for using jemalloc instead of using system allocator.
+
 [memory-ordering]: https://doc.rust-lang.org/std/sync/atomic/enum.Ordering.html

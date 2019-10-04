@@ -25,7 +25,10 @@ pub(crate) enum Value<V> {
     Reference { fpos: u64, length: u64, seqno: u64 },
 }
 
-impl<V> Value<V> {
+impl<V> Value<V>
+where
+    V: Clone,
+{
     const VALUE_FLAG: u64 = 0x1000000000000000;
 
     pub(crate) fn new_native(value: V) -> Value<V> {
@@ -51,6 +54,24 @@ where
             _ => None,
         }
     }
+
+    pub(crate) fn to_reference(&self) -> Option<(u64, u64, u64)> {
+        match self {
+            Value::Reference {
+                fpos,
+                length,
+                seqno,
+            } => Some((*fpos, *length, *seqno)),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn is_reference(&self) -> bool {
+        match self {
+            Value::Reference { .. } => true,
+            _ => false,
+        }
+    }
 }
 
 impl<V> Value<V>
@@ -67,7 +88,7 @@ where
 
 impl<V> Value<V>
 where
-    V: Serialize,
+    V: Clone + Serialize,
 {
     pub(crate) fn encode(&self, buf: &mut Vec<u8>) -> Result<usize>
     where
@@ -115,7 +136,7 @@ where
 
 pub(crate) fn fetch_value<V>(fpos: u64, n: u64, fd: &mut fs::File) -> Result<Value<V>>
 where
-    V: Serialize,
+    V: Clone + Serialize,
 {
     let block = util::read_buffer(fd, fpos, n, "reading value from vlog")?;
     let mut value: V = unsafe { mem::zeroed() };

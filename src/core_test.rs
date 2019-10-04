@@ -36,7 +36,8 @@ fn test_delta_new_delete() {
 
 #[test]
 fn test_value_new_upsert() {
-    let value: Value<i32> = Value::new_upsert(vlog::Value::new_native(100), 200);
+    let v = Box::new(vlog::Value::new_native(100));
+    let value: Value<i32> = Value::new_upsert(v, 200);
     assert_eq!(value.to_native_value(), Some(100));
     assert_eq!(value.is_deleted(), false);
 }
@@ -51,7 +52,7 @@ fn test_value_new_delete() {
 #[test]
 fn test_entry_new() {
     // testcase1 new
-    let value = Box::new(Value::new_upsert(vlog::Value::new_native(10), 1000));
+    let value = Value::new_upsert(Box::new(vlog::Value::new_native(10)), 1000);
     let mut entry1 = Entry::new(100, value);
     // verify latest entry
     assert_eq!(entry1.as_deltas().len(), 0);
@@ -63,7 +64,7 @@ fn test_entry_new() {
     assert!(vers.next().is_none());
 
     // testcase2 upsert
-    let value = Box::new(Value::new_upsert(vlog::Value::new_native(20), 1001));
+    let value = Value::new_upsert(Box::new(vlog::Value::new_native(20)), 1001);
     let entry2 = Entry::new(100, value);
     entry1.prepend_version(entry2, false /*lsm*/);
     // verify latest entry
@@ -94,7 +95,7 @@ fn test_entry_new() {
 #[test]
 fn test_entry_new_lsm() {
     // testcase1 new
-    let value = Box::new(Value::new_upsert(vlog::Value::new_native(10), 1000));
+    let value = Value::new_upsert(Box::new(vlog::Value::new_native(10)), 1000);
     let mut entry1 = Entry::new(100, value);
     // verify latest entry
     assert_eq!(entry1.as_deltas().len(), 0);
@@ -106,7 +107,7 @@ fn test_entry_new_lsm() {
     assert!(vers.next().is_none());
 
     // testcase2 upsert
-    let value = Box::new(Value::new_upsert(vlog::Value::new_native(20), 1001));
+    let value = Value::new_upsert(Box::new(vlog::Value::new_native(20)), 1001);
     let entry2 = Entry::new(100, value);
     entry1.prepend_version(entry2, true /*lsm*/);
     // verify latest entry
@@ -136,7 +137,7 @@ fn test_entry_new_lsm() {
     assert!(vers.next().is_none());
 
     // testcase4 upsert
-    let value = Box::new(Value::new_upsert(vlog::Value::new_native(30), 1003));
+    let value = Value::new_upsert(Box::new(vlog::Value::new_native(30)), 1003);
     let entry3 = Entry::new(100, value);
     entry1.prepend_version(entry3, true /*lsm*/);
     // verify latest entry
@@ -201,16 +202,16 @@ fn test_entry_new_lsm() {
 fn test_entry_filter_within() {
     // version1 - upsert
     let value = Value::new_upsert_value(1000_i32, 10);
-    let mut entry = Entry::new(100_i32, Box::new(value));
+    let mut entry = Entry::new(100_i32, value);
     // version2 - delete
     let value = Value::new_upsert_value(2000_i32, 20);
-    let entry2 = Entry::new(100_i32, Box::new(value));
+    let entry2 = Entry::new(100_i32, value);
     // version3 - upsert
     let value = Value::new_upsert_value(3000_i32, 30);
-    let entry3 = Entry::new(100_i32, Box::new(value));
+    let entry3 = Entry::new(100_i32, value);
     // version4 - delete
     let value = Value::new_upsert_value(4000_i32, 40);
-    let entry4 = Entry::new(100_i32, Box::new(value));
+    let entry4 = Entry::new(100_i32, value);
 
     entry.prepend_version(entry2, true /*lsm*/);
     entry.prepend_version(entry3, true /*lsm*/);

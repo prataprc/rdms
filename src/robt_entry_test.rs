@@ -183,7 +183,7 @@ fn test_zentry_key() {
 
 #[test]
 fn test_zentry_value() {
-    let value = Box::new(core::Value::new_upsert_value(10000, 10));
+    let value = core::Value::new_upsert_value(10000, 10);
     let entry = core::Entry::new(100, value);
     let mut buf = vec![];
     assert_eq!(
@@ -191,7 +191,7 @@ fn test_zentry_value() {
         (12, false, 10)
     );
 
-    let value = Box::new(core::Value::new_delete(11));
+    let value = core::Value::new_delete(11);
     let entry = core::Entry::new(100, value);
     let mut buf = vec![];
     assert_eq!(
@@ -202,15 +202,15 @@ fn test_zentry_value() {
 
 #[test]
 fn test_zentry_deltas() {
-    let value = Box::new(core::Value::new_upsert_value(10000, 10));
+    let value = core::Value::new_upsert_value(10000, 10);
     let mut entry = core::Entry::new(100, value);
 
-    let value = Box::new(core::Value::new_upsert_value(20000, 11));
+    let value = core::Value::new_upsert_value(20000, 11);
     entry.prepend_version(core::Entry::new(100, value), true);
 
     entry.delete(12);
 
-    let value = Box::new(core::Value::new_upsert_value(30000, 13));
+    let value = core::Value::new_upsert_value(30000, 13);
     entry.prepend_version(core::Entry::new(100, value), true);
 
     let (mut leaf, mut blob) = (vec![], vec![]);
@@ -248,15 +248,15 @@ fn test_zentry_deltas() {
 
 #[test]
 fn test_zentry_l() {
-    let value = Box::new(core::Value::new_upsert_value(10000, 10));
+    let value = core::Value::new_upsert_value(10000, 10);
     let mut entry = core::Entry::new(100, value);
 
-    let value = Box::new(core::Value::new_upsert_value(20000, 11));
+    let value = core::Value::new_upsert_value(20000, 11);
     entry.prepend_version(core::Entry::new(100, value), true);
 
     entry.delete(12);
 
-    let value = Box::new(core::Value::new_upsert_value(30000, 13));
+    let value = core::Value::new_upsert_value(30000, 13);
     entry.prepend_version(core::Entry::new(100, value), true);
 
     let mut leaf = vec![];
@@ -284,15 +284,15 @@ fn test_zentry_l() {
 
 #[test]
 fn test_zentry_ld() {
-    let value = Box::new(core::Value::new_upsert_value(10000, 10));
+    let value = core::Value::new_upsert_value(10000, 10);
     let mut entry = core::Entry::new(100, value);
 
-    let value = Box::new(core::Value::new_upsert_value(20000, 11));
+    let value = core::Value::new_upsert_value(20000, 11);
     entry.prepend_version(core::Entry::new(100, value), true);
 
     entry.delete(12);
 
-    let value = Box::new(core::Value::new_upsert_value(30000, 13));
+    let value = core::Value::new_upsert_value(30000, 13);
     entry.prepend_version(core::Entry::new(100, value), true);
 
     let (mut leaf, mut blob): (Vec<u8>, Vec<u8>) = (vec![], vec![]);
@@ -400,15 +400,15 @@ fn test_zentry_ld() {
 
 #[test]
 fn test_zentry_lv() {
-    let value = Box::new(core::Value::new_upsert_value(10000, 10));
+    let value = core::Value::new_upsert_value(10000, 10);
     let mut entry = core::Entry::new(100, value);
 
-    let value = Box::new(core::Value::new_upsert_value(20000, 11));
+    let value = core::Value::new_upsert_value(20000, 11);
     entry.prepend_version(core::Entry::new(100, value), true);
 
     entry.delete(12);
 
-    let value = Box::new(core::Value::new_upsert_value(30000, 13));
+    let value = core::Value::new_upsert_value(30000, 13);
     entry.prepend_version(core::Entry::new(100, value), true);
 
     let (mut leaf, mut blob): (Vec<u8>, Vec<u8>) = (vec![], vec![]);
@@ -444,17 +444,14 @@ fn test_zentry_lv() {
     assert_eq!(entry_out.to_key(), 100);
     match entry_out.as_value() {
         core::Value::U {
-            value:
-                vlog::Value::Reference {
-                    fpos,
-                    length,
-                    seqno,
-                },
+            value,
             seqno: seqno1,
-        } => {
-            assert_eq!(*fpos, 0);
-            assert_eq!(*length, 12);
-            assert_eq!(*seqno, 13);
+            ..
+        } if value.is_reference() => {
+            let (fpos, length, seqno) = value.to_reference().unwrap();
+            assert_eq!(fpos, 0);
+            assert_eq!(length, 12);
+            assert_eq!(seqno, 13);
             assert_eq!(*seqno1, 13);
         }
         _ => unreachable!(),
@@ -475,15 +472,15 @@ fn test_zentry_lv() {
 
 #[test]
 fn test_zentry_lvd() {
-    let value = Box::new(core::Value::new_upsert_value(10000, 10));
+    let value = core::Value::new_upsert_value(10000, 10);
     let mut entry = core::Entry::new(100, value);
 
-    let value = Box::new(core::Value::new_upsert_value(20000, 11));
+    let value = core::Value::new_upsert_value(20000, 11);
     entry.prepend_version(core::Entry::new(100, value), true);
 
     entry.delete(12);
 
-    let value = Box::new(core::Value::new_upsert_value(30000, 13));
+    let value = core::Value::new_upsert_value(30000, 13);
     entry.prepend_version(core::Entry::new(100, value), true);
 
     let (mut leaf, mut blob): (Vec<u8>, Vec<u8>) = (vec![], vec![]);
@@ -535,17 +532,14 @@ fn test_zentry_lvd() {
     assert_eq!(entry_out.to_key(), 100);
     match entry_out.as_value() {
         core::Value::U {
-            value:
-                vlog::Value::Reference {
-                    fpos,
-                    length,
-                    seqno,
-                },
+            value,
             seqno: seqno1,
-        } => {
-            assert_eq!(*fpos, 0);
-            assert_eq!(*length, 12);
-            assert_eq!(*seqno, 13);
+            ..
+        } if value.is_reference() => {
+            let (fpos, length, seqno) = value.to_reference().unwrap();
+            assert_eq!(fpos, 0);
+            assert_eq!(length, 12);
+            assert_eq!(seqno, 13);
             assert_eq!(*seqno1, 13);
         }
         _ => unreachable!(),

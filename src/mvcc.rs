@@ -329,9 +329,10 @@ where
         &self,
         node: &Node<K, V>, // source node
         reclaim: &mut Vec<Box<Node<K, V>>>,
+        copyval: bool,
     ) -> Box<Node<K, V>> {
         self.snapshot.n_nodes.fetch_add(1, SeqCst);
-        node.mvcc_clone(reclaim)
+        node.mvcc_clone(reclaim, copyval)
     }
 
     fn node_from_entry(&self, new_entry: Entry<K, V>) -> Box<Node<K, V>> {
@@ -408,10 +409,7 @@ where
             None => snapshot.seqno + 1,
         };
         let key_footprint = key.footprint();
-        let new_entry = {
-            let value = Box::new(Value::new_upsert_value(value, seqno));
-            Entry::new(key, value)
-        };
+        let new_entry = Entry::new(key, Value::new_upsert_value(value, seqno));
 
         let mut n_count = snapshot.n_count;
         let root = snapshot.root_duplicate();
@@ -456,8 +454,7 @@ where
         let lsm = self.lsm;
         let key_footprint = key.footprint();
 
-        let value = Box::new(Value::new_upsert_value(value, seqno));
-        let new_entry = Entry::new(key, value);
+        let new_entry = Entry::new(key, Value::new_upsert_value(value, seqno));
 
         let mut n_count = snapshot.n_count;
         let root = snapshot.root_duplicate();
@@ -692,22 +689,23 @@ where
         }
 
         let node = node.unwrap();
-        let mut new_node = self.node_mvcc_clone(&node, reclaim);
-
-        let cmp = new_node.as_key().cmp(new_entry.as_key());
+        let cmp = node.as_key().cmp(new_entry.as_key());
         let r = if cmp == Ordering::Greater {
+            let mut new_node = self.node_mvcc_clone(&node, reclaim, false);
             let left = new_node.left.take();
             let mut r = self.upsert(left, new_entry, lsm, reclaim);
             new_node.left = r.node;
             r.node = Some(self.walkuprot_23(new_node, reclaim));
             r
         } else if cmp == Ordering::Less {
+            let mut new_node = self.node_mvcc_clone(&node, reclaim, false);
             let right = new_node.right.take();
             let mut r = self.upsert(right, new_entry, lsm, reclaim);
             new_node.right = r.node;
             r.node = Some(self.walkuprot_23(new_node, reclaim));
             r
         } else {
+            let mut new_node = self.node_mvcc_clone(&node, reclaim, true);
             let entry = node.entry.clone();
             let size = new_node.prepend_version(new_entry, lsm);
             new_node.dirty = true;
@@ -754,22 +752,23 @@ where
         }
 
         let node = node.unwrap();
-        let mut newnd = self.node_mvcc_clone(&node, reclaim);
-
-        let cmp = newnd.as_key().cmp(nentry.as_key());
+        let cmp = node.as_key().cmp(nentry.as_key());
         let r = if cmp == Ordering::Greater {
+            let mut newnd = self.node_mvcc_clone(&node, reclaim, false);
             let left = newnd.left.take();
             let mut r = self.upsert_cas(left, nentry, cas, lsm, reclaim);
             newnd.left = r.node;
             r.node = Some(self.walkuprot_23(newnd, reclaim));
             r
         } else if cmp == Ordering::Less {
+            let mut newnd = self.node_mvcc_clone(&node, reclaim, false);
             let right = newnd.right.take();
             let mut r = self.upsert_cas(right, nentry, cas, lsm, reclaim);
             newnd.right = r.node;
             r.node = Some(self.walkuprot_23(newnd, reclaim));
             r
-        } else if newnd.is_deleted() && cas != 0 && cas != newnd.to_seqno() {
+        } else if node.is_deleted() && cas != 0 && cas != node.to_seqno() {
+            let newnd = self.node_mvcc_clone(&node, reclaim, true);
             UpsertCasResult {
                 node: Some(newnd),
                 new_node: None,
@@ -777,7 +776,8 @@ where
                 size: 0,
                 err: Some(Error::InvalidCAS),
             }
-        } else if !newnd.is_deleted() && cas != newnd.to_seqno() {
+        } else if !node.is_deleted() && cas != node.to_seqno() {
+            let newnd = self.node_mvcc_clone(&node, reclaim, true);
             UpsertCasResult {
                 node: Some(newnd),
                 new_node: None,
@@ -786,6 +786,7 @@ where
                 err: Some(Error::InvalidCAS),
             }
         } else {
+            let mut newnd = self.node_mvcc_clone(&node, reclaim, true);
             let entry = Some(node.entry.clone());
             let size = newnd.prepend_version(nentry, lsm);
             newnd.dirty = true;
@@ -828,27 +829,28 @@ where
         }
 
         let node = node.unwrap();
-        let mut new_node = self.node_mvcc_clone(&node, reclaim);
-
-        let (n, entry, size) = match new_node.as_key().borrow().cmp(&key) {
+        let (new_node, n, entry, size) = match node.as_key().borrow().cmp(&key) {
             Ordering::Greater => {
+                let mut new_node = self.node_mvcc_clone(&node, reclaim, false);
                 let left = new_node.left.take();
                 let r = self.delete_lsm(left, key, seqno, reclaim);
                 new_node.left = r.node;
-                (r.new_node, r.old_entry, r.size)
+                (new_node, r.new_node, r.old_entry, r.size)
             }
             Ordering::Less => {
+                let mut new_node = self.node_mvcc_clone(&node, reclaim, false);
                 let right = new_node.right.take();
                 let r = self.delete_lsm(right, key, seqno, reclaim);
                 new_node.right = r.node;
-                (r.new_node, r.old_entry, r.size)
+                (new_node, r.new_node, r.old_entry, r.size)
             }
             Ordering::Equal => {
+                let mut new_node = self.node_mvcc_clone(&node, reclaim, true);
                 let old_entry = node.entry.clone();
                 let size = new_node.delete(seqno);
                 new_node.dirty = true;
                 let n = new_node.duplicate();
-                (Some(n), Some(old_entry), size)
+                (new_node, Some(n), Some(old_entry), size)
             }
         };
 
@@ -882,7 +884,7 @@ where
         }
 
         let node = node.unwrap();
-        let mut newnd = self.node_mvcc_clone(&node, reclaim);
+        let mut newnd = self.node_mvcc_clone(&node, reclaim, true);
         Box::leak(node);
 
         if newnd.as_key().borrow().gt(key) {
@@ -967,7 +969,7 @@ where
         }
 
         let node = node.unwrap();
-        let mut new_node = self.node_mvcc_clone(&node, reclaim);
+        let mut new_node = self.node_mvcc_clone(&node, reclaim, true);
         Box::leak(node);
 
         if new_node.left.is_none() {
@@ -1248,7 +1250,7 @@ where
         let mut right = if old_right.dirty {
             old_right
         } else {
-            self.node_mvcc_clone(Box::leak(old_right), reclaim)
+            self.node_mvcc_clone(Box::leak(old_right), reclaim, true)
         };
 
         node.right = right.left.take();
@@ -1282,7 +1284,7 @@ where
         let mut left = if old_left.dirty {
             old_left
         } else {
-            self.node_mvcc_clone(Box::leak(old_left), reclaim)
+            self.node_mvcc_clone(Box::leak(old_left), reclaim, true)
         };
 
         node.left = left.right.take();
@@ -1308,12 +1310,12 @@ where
         let mut left = if old_left.dirty {
             old_left
         } else {
-            self.node_mvcc_clone(Box::leak(old_left), reclaim)
+            self.node_mvcc_clone(Box::leak(old_left), reclaim, true)
         };
         let mut right = if old_right.dirty {
             old_right
         } else {
-            self.node_mvcc_clone(Box::leak(old_right), reclaim)
+            self.node_mvcc_clone(Box::leak(old_right), reclaim, true)
         };
 
         left.toggle_link();

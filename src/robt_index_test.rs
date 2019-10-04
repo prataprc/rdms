@@ -487,18 +487,11 @@ fn test_zblock3() {
         assert_eq!(e.to_delta_count(), 0);
         match e.as_value() {
             core::Value::D { seqno } => assert_eq!(*seqno, entry.to_seqno()),
-            core::Value::U {
-                value:
-                    vlog::Value::Reference {
-                        fpos,
-                        length,
-                        seqno,
-                    },
-                ..
-            } => {
-                assert_eq!(*seqno, entry.to_seqno());
-                assert_eq!(*fpos, vpos + voff as u64);
-                assert_eq!(*length, 12);
+            core::Value::U { value, .. } if value.is_reference() => {
+                let (fpos, length, seqno) = value.to_reference().unwrap();
+                assert_eq!(seqno, entry.to_seqno());
+                assert_eq!(fpos, vpos + voff as u64);
+                assert_eq!(length, 12);
 
                 let value = entry.to_native_value().unwrap();
                 let s: [u8; 4] = blob[voff + 8..voff + 12].try_into().unwrap();
@@ -598,18 +591,11 @@ fn test_zblock4() {
         assert_eq!(e.to_delta_count(), entry.to_delta_count());
         match e.as_value() {
             core::Value::D { seqno } => assert_eq!(*seqno, entry.to_seqno()),
-            core::Value::U {
-                value:
-                    vlog::Value::Reference {
-                        fpos,
-                        length,
-                        seqno,
-                    },
-                ..
-            } => {
-                assert_eq!(*seqno, entry.to_seqno());
-                assert_eq!(*fpos, vpos + voff as u64);
-                assert_eq!(*length, 12);
+            core::Value::U { value, .. } if value.is_reference() => {
+                let (fpos, length, seqno) = value.to_reference().unwrap();
+                assert_eq!(seqno, entry.to_seqno());
+                assert_eq!(fpos, vpos + voff as u64);
+                assert_eq!(length, 12);
 
                 let value = entry.to_native_value().unwrap();
                 let s: [u8; 4] = blob[voff + 8..voff + 12].try_into().unwrap();
@@ -664,7 +650,7 @@ fn gen_entries(n: usize, mut seqno: u64) -> Vec<core::Entry<i32, i32>> {
     let mut entries = vec![];
     for i in 0..n {
         let (key, val): (i32, i32) = ((i as i32) + 1, random());
-        let value = Box::new(core::Value::new_upsert_value(val, seqno));
+        let value = core::Value::new_upsert_value(val, seqno);
         entries.push(core::Entry::new(key, value));
         seqno += 1;
     }
@@ -676,12 +662,12 @@ fn gen_entries(n: usize, mut seqno: u64) -> Vec<core::Entry<i32, i32>> {
         match random::<u8>() % 3 {
             0 => {
                 let v: i32 = random();
-                let value = Box::new(core::Value::new_upsert_value(v, seqno));
+                let value = core::Value::new_upsert_value(v, seqno);
                 entry.prepend_version(core::Entry::new(key, value), false);
             }
             1 => {
                 let v: i32 = random();
-                let value = Box::new(core::Value::new_upsert_value(v, seqno));
+                let value = core::Value::new_upsert_value(v, seqno);
                 entry.prepend_version(core::Entry::new(key, value), true);
             }
             2 => {

@@ -449,7 +449,7 @@ where
         buf: &mut Vec<u8>,         // output
     ) -> Result<(usize, bool, u64)> {
         match entry.as_value() {
-            core::Value::U { value, seqno } => {
+            core::Value::U { value, seqno, .. } => {
                 let vlen = value.encode_local(buf)?;
                 Ok((vlen, false, *seqno))
             }
@@ -462,7 +462,7 @@ where
         buf: &mut Vec<u8>,         // output
     ) -> Result<(usize, bool, u64)> {
         match entry.as_value() {
-            core::Value::U { value, seqno } => {
+            core::Value::U { value, seqno, .. } => {
                 let vlen = value.encode(buf)?;
                 Ok((vlen, false, *seqno))
             }
@@ -562,18 +562,18 @@ where
 
         let n = 24 + klen;
         let (mut n, value) = match (is_deleted, is_vlog) {
-            (true, _) => (n, Box::new(core::Value::new_delete(seqno))),
+            (true, _) => (n, core::Value::new_delete(seqno)),
             (false, true) => {
                 let fpos = u64::from_be_bytes(e[n..n + 8].try_into().unwrap());
-                let value = vlog::Value::new_reference(fpos, vlen, seqno);
-                (n + 8, Box::new(core::Value::new_upsert(value, seqno)))
+                let v = Box::new(vlog::Value::new_reference(fpos, vlen, seqno));
+                (n + 8, core::Value::new_upsert(v, seqno))
             }
             (false, false) => {
                 let mut value: V = unsafe { mem::zeroed() };
                 let vlen: usize = vlen.try_into().unwrap();
                 value.decode(&e[n..n + vlen])?;
-                let value = vlog::Value::Native { value };
-                (n + vlen, Box::new(core::Value::new_upsert(value, seqno)))
+                let value = Box::new(vlog::Value::Native { value });
+                (n + vlen, core::Value::new_upsert(value, seqno))
             }
         };
 

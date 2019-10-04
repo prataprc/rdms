@@ -346,7 +346,7 @@ where
 
         let key_footprint = key.footprint();
         let new_entry = {
-            let value = Box::new(Value::new_upsert_value(value, seqno));
+            let value = Value::new_upsert_value(value, seqno);
             Entry::new(key, value)
         };
         // !("set_index, root {}", self.root.is_some());
@@ -394,7 +394,7 @@ where
 
         let key_footprint = key.footprint();
         let new_entry = {
-            let value = Box::new(Value::new_upsert_value(value, seqno));
+            let value = Value::new_upsert_value(value, seqno);
             Entry::new(key, value)
         };
         match Llrb::upsert_cas(self.root.take(), new_entry, cas, self.lsm) {

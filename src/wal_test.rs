@@ -888,7 +888,7 @@ impl Replay<i32, i32> for ReplayHandle {
         });
         Ok(core::Entry::new(
             key,
-            Box::new(core::Value::new_upsert_value(value, index)),
+            core::Value::new_upsert_value(value, index),
         ))
     }
 
@@ -905,7 +905,7 @@ impl Replay<i32, i32> for ReplayHandle {
         });
         Ok(core::Entry::new(
             key,
-            Box::new(core::Value::new_upsert_value(value, index)),
+            core::Value::new_upsert_value(value, index),
         ))
     }
 
@@ -918,9 +918,6 @@ impl Replay<i32, i32> for ReplayHandle {
             index,
             op: Op::Delete { key: key },
         });
-        Ok(core::Entry::new(
-            key,
-            Box::new(core::Value::new_delete(index)),
-        ))
+        Ok(core::Entry::new(key, core::Value::new_delete(index)))
     }
 }

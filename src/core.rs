@@ -1,7 +1,12 @@
 use std::borrow::Borrow;
 use std::convert::TryInto;
 use std::ops::{Bound, RangeBounds};
-use std::{fs, mem};
+use std::{
+    fs,
+    mem::{self, ManuallyDrop},
+    sync::atomic::AtomicBool,
+    sync::atomic::Ordering::SeqCst,
+};
 
 use crate::error::Error;
 use crate::vlog;
@@ -427,30 +432,103 @@ where
     }
 }
 
-#[derive(Clone)]
 pub(crate) enum Value<V>
 where
     V: Clone + Diff,
 {
-    U { value: vlog::Value<V>, seqno: u64 },
-    D { seqno: u64 },
+    U {
+        value: ManuallyDrop<Box<vlog::Value<V>>>,
+        is_reclaim: AtomicBool,
+        seqno: u64,
+    },
+    D {
+        seqno: u64,
+    },
+}
+
+impl<V> Clone for Value<V>
+where
+    V: Clone + Diff,
+{
+    fn clone(&self) -> Value<V> {
+        match self {
+            Value::U {
+                value,
+                is_reclaim,
+                seqno,
+            } => Value::U {
+                value: value.clone(),
+                is_reclaim: AtomicBool::new(is_reclaim.load(SeqCst)),
+                seqno: *seqno,
+            },
+            Value::D { seqno } => Value::D { seqno: *seqno },
+        }
+    }
+}
+
+impl<V> Drop for Value<V>
+where
+    V: Clone + Diff,
+{
+    fn drop(&mut self) {
+        // if is_reclaim is false, then it is a mvcc-clone. so don't touch
+        // the value.
+        match self {
+            Value::U {
+                value, is_reclaim, ..
+            } => {
+                if is_reclaim.load(SeqCst) {
+                    unsafe { ManuallyDrop::drop(value) };
+                }
+            }
+            _ => (),
+        }
+    }
 }
 
 impl<V> Value<V>
 where
     V: Clone + Diff,
 {
-    pub(crate) fn new_upsert(value: vlog::Value<V>, seqno: u64) -> Value<V> {
-        Value::U { value, seqno }
+    pub(crate) fn new_upsert(v: Box<vlog::Value<V>>, seqno: u64) -> Value<V> {
+        Value::U {
+            value: ManuallyDrop::new(v),
+            is_reclaim: AtomicBool::new(true),
+            seqno,
+        }
     }
 
     pub(crate) fn new_upsert_value(value: V, seqno: u64) -> Value<V> {
-        let value = vlog::Value::new_native(value);
-        Value::U { value, seqno }
+        let value = Box::new(vlog::Value::new_native(value));
+        Value::U {
+            value: ManuallyDrop::new(value),
+            is_reclaim: AtomicBool::new(true),
+            seqno,
+        }
     }
 
     pub(crate) fn new_delete(seqno: u64) -> Value<V> {
         Value::D { seqno }
+    }
+
+    pub(crate) fn mvcc_clone(&self, copyval: bool) -> Value<V> {
+        match self {
+            Value::U {
+                value,
+                seqno,
+                is_reclaim,
+            } if !copyval => {
+                is_reclaim.store(false, SeqCst);
+                let v = value.as_ref() as *const vlog::Value<V>;
+                let value = unsafe { Box::from_raw(v as *mut vlog::Value<V>) };
+                Value::U {
+                    value: ManuallyDrop::new(value),
+                    is_reclaim: AtomicBool::new(true),
+                    seqno: *seqno,
+                }
+            }
+            val => val.clone(),
+        }
     }
 
     pub(crate) fn to_native_value(&self) -> Option<V> {
@@ -476,10 +554,7 @@ where
 
     pub(crate) fn is_reference(&self) -> bool {
         match self {
-            Value::U {
-                value: vlog::Value::Reference { .. },
-                ..
-            } => true,
+            Value::U { value, .. } => value.is_reference(),
             _ => false,
         }
     }
@@ -490,12 +565,12 @@ where
     V: Clone + Diff + Footprint,
 {
     pub(crate) fn footprint(&self) -> isize {
-        let mut footprint: isize = mem::size_of::<Value<V>>().try_into().unwrap();
-        footprint += match self {
+        let mut fp: isize = mem::size_of::<Value<V>>().try_into().unwrap();
+        fp += match self {
             Value::U { value, .. } => value.value_footprint(),
             Value::D { .. } => 0,
         };
-        footprint
+        fp
     }
 }
 
@@ -511,7 +586,7 @@ where
     V: Clone + Diff,
 {
     key: K,
-    value: Box<Value<V>>,
+    value: Value<V>,
     deltas: Vec<Delta<V>>,
 }
 
@@ -525,11 +600,19 @@ where
     pub const DIFF_SIZE_LIMIT: usize = 1024 * 1024 * 1024 * 1024; // 1TB
     pub const VALUE_SIZE_LIMIT: usize = 1024 * 1024 * 1024 * 1024; // 1TB
 
-    pub(crate) fn new(key: K, value: Box<Value<V>>) -> Entry<K, V> {
+    pub(crate) fn new(key: K, value: Value<V>) -> Entry<K, V> {
         Entry {
             key,
             value,
             deltas: vec![],
+        }
+    }
+
+    pub(crate) fn mvcc_clone(&self, copyval: bool) -> Entry<K, V> {
+        Entry {
+            key: self.key.clone(),
+            value: self.value.mvcc_clone(copyval),
+            deltas: self.deltas.clone(),
         }
     }
 
@@ -549,6 +632,8 @@ where
     // previous value.
     //
     // `nentry` is new_entry to be CREATE/UPDATE into index.
+    //
+    // TODO: may be we can just pass the Value, instead of `nentry` ?
     pub(crate) fn prepend_version(&mut self, nentry: Self, lsm: bool) -> isize {
         if lsm {
             self.prepend_version_lsm(nentry)
@@ -566,27 +651,26 @@ where
 
     // `nentry` is new_entry to be CREATE/UPDATE into index.
     fn prepend_version_lsm(&mut self, nentry: Self) -> isize {
-        let delta = match self.value.as_ref() {
+        let delta = match &self.value {
             Value::D { seqno } => Delta::new_delete(*seqno),
-            Value::U {
-                value: vlog::Value::Native { value },
-                seqno,
-            } => match nentry.value.as_ref() {
-                Value::D { .. } => {
-                    let diff: <V as Diff>::D = From::from(value.clone());
-                    let dlt = vlog::Delta::new_native(diff);
-                    Delta::new_upsert(dlt, *seqno)
+            Value::U { value, seqno, .. } if !value.is_reference() => {
+                // compute delta
+                match &nentry.value {
+                    Value::D { .. } => {
+                        let value = value.to_native_value().unwrap();
+                        let diff: <V as Diff>::D = From::from(value);
+                        let dlt = vlog::Delta::new_native(diff);
+                        Delta::new_upsert(dlt, *seqno)
+                    }
+                    Value::U { value: nvalue, .. } => {
+                        let value = value.to_native_value().unwrap();
+                        let dff = nvalue.to_native_value().unwrap().diff(&value);
+                        let dlt = vlog::Delta::new_native(dff);
+                        Delta::new_upsert(dlt, *seqno)
+                    }
                 }
-                Value::U { value: nvalue, .. } => {
-                    let diff = nvalue.to_native_value().unwrap().diff(value);
-                    let dlt = vlog::Delta::new_native(diff);
-                    Delta::new_upsert(dlt, *seqno)
-                }
-            },
-            Value::U {
-                value: vlog::Value::Reference { .. },
-                ..
-            } => unreachable!(),
+            }
+            Value::U { .. } => unreachable!(),
         };
 
         let size = {
@@ -601,30 +685,25 @@ where
 
     // DELETE operation, only in lsm-mode.
     pub(crate) fn delete(&mut self, seqno: u64) -> isize {
-        let delta_size = match self.value.as_ref() {
+        let delta_size = match &self.value {
             Value::D { seqno } => {
                 self.deltas.insert(0, Delta::new_delete(*seqno));
                 0
             }
-            Value::U {
-                value: vlog::Value::Native { value },
-                seqno,
-            } => {
+            Value::U { value, seqno, .. } if !value.is_reference() => {
                 let delta = {
-                    let d: <V as Diff>::D = From::from(value.clone());
+                    let value = value.to_native_value().unwrap();
+                    let d: <V as Diff>::D = From::from(value);
                     vlog::Delta::new_native(d)
                 };
                 let size = delta.diff_footprint();
                 self.deltas.insert(0, Delta::new_upsert(delta, *seqno));
                 size
             }
-            Value::U {
-                value: vlog::Value::Reference { .. },
-                ..
-            } => unreachable!(),
+            Value::U { .. } => unreachable!(),
         };
         let size = self.value.footprint();
-        *self.value = Value::new_delete(seqno);
+        self.value = Value::new_delete(seqno);
         (size + delta_size - self.value.footprint())
             .try_into()
             .unwrap()
@@ -649,7 +728,7 @@ where
         // Otherwise, purge only those versions that are before cutoff
         self.deltas = self
             .deltas
-            .into_iter()
+            .drain(..)
             .take_while(|d| {
                 let seqno = d.to_seqno();
                 match cutoff {
@@ -708,11 +787,11 @@ where
         // println!("skip_till {} {} {:?}", o, n, nb);
         // partial skip.
         let mut entry = self.clone();
-        let mut iter = entry.deltas.into_iter();
+        let mut iter = entry.deltas.drain(..);
         while let Some(delta) = iter.next() {
             let value = entry.value.to_native_value();
             let (value, _) = next_value(value, delta.data);
-            entry.value = Box::new(value);
+            entry.value = value;
             let seqno = entry.value.to_seqno();
             let done = match nb {
                 Bound::Included(n_seqno) if seqno <= n_seqno => true,
@@ -803,15 +882,15 @@ where
     <V as Diff>::D: Serialize,
 {
     pub(crate) fn fetch_value(&mut self, fd: &mut fs::File) -> Result<()> {
-        match self.value.as_ref() {
-            Value::U {
-                value: vlog::Value::Reference { fpos, length, .. },
-                seqno,
-            } => {
-                let value = vlog::fetch_value(*fpos, *length, fd)?;
-                self.value = Box::new(Value::new_upsert(value, *seqno));
-                Ok(())
-            }
+        match &self.value {
+            Value::U { value, seqno, .. } => match value.to_reference() {
+                Some((fpos, len, _seqno)) => {
+                    let value = Box::new(vlog::fetch_value(fpos, len, fd)?);
+                    self.value = Value::new_upsert(value, *seqno);
+                    Ok(())
+                }
+                _ => Ok(()),
+            },
             _ => Ok(()),
         }
     }
@@ -878,9 +957,9 @@ where
     /// Return the latest seqno that created/updated/deleted this entry.
     #[inline]
     pub fn to_seqno(&self) -> u64 {
-        match self.value.as_ref() {
-            Value::U { seqno, .. } => *seqno,
-            Value::D { seqno, .. } => *seqno,
+        match self.value {
+            Value::U { seqno, .. } => seqno,
+            Value::D { seqno, .. } => seqno,
         }
     }
 
@@ -889,9 +968,9 @@ where
     /// was deleted.
     #[inline]
     pub fn to_seqno_state(&self) -> (bool, u64) {
-        match &self.value.as_ref() {
-            Value::U { seqno, .. } => (true, *seqno),
-            Value::D { seqno, .. } => (false, *seqno),
+        match self.value {
+            Value::U { seqno, .. } => (true, seqno),
+            Value::D { seqno, .. } => (false, seqno),
         }
     }
 
@@ -966,7 +1045,7 @@ where
         };
         let (value, curval) = next_value(self.curval.take(), delta.data);
         self.curval = curval;
-        Some(Entry::new(self.key.clone(), Box::new(value)))
+        Some(Entry::new(self.key.clone(), value))
     }
 }
 
@@ -986,14 +1065,14 @@ where
         (None, InnerDelta::U { delta, seqno }) => {
             // previous entry was a delete.
             let nv: V = From::from(delta.into_native_delta().unwrap());
-            let v = vlog::Value::new_native(nv.clone());
+            let v = Box::new(vlog::Value::new_native(nv.clone()));
             let value = Value::new_upsert(v, seqno);
             (value, Some(nv))
         }
         (Some(curval), InnerDelta::U { delta, seqno }) => {
             // this and previous entry are create/update.
             let nv = curval.merge(&delta.into_native_delta().unwrap());
-            let v = vlog::Value::new_native(nv.clone());
+            let v = Box::new(vlog::Value::new_native(nv.clone()));
             let value = Value::new_upsert(v, seqno);
             (value, Some(nv))
         }

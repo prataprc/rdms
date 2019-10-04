@@ -28,7 +28,7 @@ where
     // lsm delete.
     pub(crate) fn new_deleted(key: K, deleted: u64) -> Box<Node<K, V>> {
         let node = Box::new(Node {
-            entry: Entry::new(key, Box::new(Value::new_delete(deleted))),
+            entry: Entry::new(key, Value::new_delete(deleted)),
             black: false,
             dirty: true,
             left: None,
@@ -42,9 +42,10 @@ where
     pub(crate) fn mvcc_clone(
         &self,
         reclaim: &mut Vec<Box<Node<K, V>>>, /* reclaim */
+        copyval: bool,
     ) -> Box<Node<K, V>> {
         let new_node = Box::new(Node {
-            entry: self.entry.clone(),
+            entry: self.entry.mvcc_clone(copyval),
             black: self.black,
             dirty: self.dirty,
             left: self.left.as_ref().map(|n| n.duplicate()),
@@ -236,7 +237,7 @@ impl Stats {
     /// use bogn::llrb::Llrb;
     /// let mut llrb: Box<Llrb<i64,i64>> = Llrb::new("myinstance");
     ///
-    /// assert_eq!(llrb.stats().to_node_size(), 64);
+    /// assert_eq!(llrb.stats().to_node_size(), 80);
     /// ```
     pub fn to_node_size(&self) -> usize {
         match self {

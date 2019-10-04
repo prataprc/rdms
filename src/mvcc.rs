@@ -37,7 +37,7 @@ use std::{
         atomic::{AtomicIsize, AtomicPtr, AtomicUsize, Ordering::SeqCst},
         mpsc, Arc,
     },
-    thread::{self, JoinHandle},
+    thread,
 };
 
 use crate::core::{Diff, Entry, Footprint, Result, ScanEntry, Value};
@@ -72,8 +72,6 @@ where
     latch: RWSpinlock,
     key_footprint: AtomicIsize,
     tree_footprint: AtomicIsize,
-    gc: Option<JoinHandle<Result<()>>>, // garbage collection in separate thread.
-    n_nodes: Arc<AtomicIsize>,
     readers: Arc<u32>,
     writers: Arc<u32>,
 }
@@ -106,18 +104,14 @@ where
             let snapshot = Arc::get_mut(&mut *curr_s).unwrap();
             // println!("drop mvcc {:p} {:p}", self, snapshot);
 
-            // NOTE: gc_tx will be dropped here
-            let mut reclaim = vec![];
-            snapshot
-                .root
-                .take()
-                .map(|root| drop_tree(root, &mut reclaim));
-            self.snapshot.gc_tx.as_ref().unwrap().send(reclaim);
+            let n = match snapshot.root.take() {
+                Some(root) => drop_tree(root),
+                None => 0,
+            };
+            self.snapshot
+                .n_nodes
+                .fetch_sub(n.try_into().unwrap(), SeqCst);
         }
-
-        // wait for `gc` thread to exit.
-        mem::drop(self.snapshot.gc_tx.take().unwrap());
-        self.gc.take().unwrap().join().ok(); // ignore gc thread's error here.
 
         // validation check 2
         let n = self.snapshot.n_active.load(SeqCst);
@@ -125,7 +119,7 @@ where
             panic!("active snapshots: {}", n);
         }
         // validataion check 2
-        let n = self.n_nodes.load(SeqCst);
+        let n = self.snapshot.n_nodes.load(SeqCst);
         if n != 0 {
             panic!("leak or double free n_nodes:{}", n);
         }
@@ -143,54 +137,36 @@ where
     where
         S: AsRef<str>,
     {
-        // spawn gc thread.
-        let (gc_tx, gc_rx) = mpsc::channel();
-        let mut index = Box::new(Mvcc {
+        Box::new(Mvcc {
             name: name.as_ref().to_string(),
             lsm: false,
             spin: true,
 
-            snapshot: OuterSnapshot::new(gc_tx),
+            snapshot: OuterSnapshot::new(),
             latch: RWSpinlock::new(),
             key_footprint: AtomicIsize::new(0),
             tree_footprint: AtomicIsize::new(0),
-            gc: None,
-            n_nodes: Arc::new(AtomicIsize::new(0)),
             readers: Arc::new(0xC0FFEE),
             writers: Arc::new(0xC0FFEE),
-        });
-
-        let n_nodes = Arc::clone(&index.n_nodes);
-        index.gc = Some(thread::spawn(move || gc::<K, V>(gc_rx, n_nodes)));
-
-        index
+        })
     }
 
     pub fn new_lsm<S>(name: S) -> Box<Mvcc<K, V>>
     where
         S: AsRef<str>,
     {
-        // spawn gc thread.
-        let (gc_tx, gc_rx) = mpsc::channel();
-        let mut index = Box::new(Mvcc {
+        Box::new(Mvcc {
             name: name.as_ref().to_string(),
             lsm: true,
             spin: true,
 
-            snapshot: OuterSnapshot::new(gc_tx),
+            snapshot: OuterSnapshot::new(),
             latch: RWSpinlock::new(),
             key_footprint: AtomicIsize::new(0),
             tree_footprint: AtomicIsize::new(0),
-            gc: None,
-            n_nodes: Arc::new(AtomicIsize::new(0)),
             readers: Arc::new(0xC0FFEE),
             writers: Arc::new(0xC0FFEE),
-        });
-
-        let n_nodes = Arc::clone(&index.n_nodes);
-        index.gc = Some(thread::spawn(move || gc::<K, V>(gc_rx, n_nodes)));
-
-        index
+        })
     }
 
     pub fn from_llrb(llrb_index: Llrb<K, V>) -> Box<Mvcc<K, V>> {
@@ -201,8 +177,8 @@ where
         };
         mvcc_index.set_spinlatch(llrb_index.to_spin());
         mvcc_index
+            .snapshot
             .n_nodes
-            .as_ref()
             .store(llrb_index.len() as isize, SeqCst);
 
         let debris = llrb_index.squash();
@@ -250,25 +226,18 @@ where
             panic!("cannot clone Mvcc with active readers/writer {}", n);
         }
 
-        // spawn gc thread.
-        let (gc_tx, gc_rx) = mpsc::channel();
-        let mut cloned = Box::new(Mvcc {
+        let cloned = Box::new(Mvcc {
             name: self.name.clone(),
             lsm: self.lsm,
             spin: self.spin,
 
-            snapshot: OuterSnapshot::new(gc_tx),
+            snapshot: OuterSnapshot::new(),
             latch: RWSpinlock::new(),
             key_footprint: AtomicIsize::new(self.key_footprint.load(SeqCst)),
             tree_footprint: AtomicIsize::new(self.tree_footprint.load(SeqCst)),
-            gc: None,
-            n_nodes: Arc::new(AtomicIsize::new(self.len() as isize)),
             readers: Arc::new(0xC0FFEE),
             writers: Arc::new(0xC0FFEE),
         });
-
-        let n_nodes = Arc::clone(&cloned.n_nodes);
-        cloned.gc = Some(thread::spawn(move || gc::<K, V>(gc_rx, n_nodes)));
 
         let s: Arc<Snapshot<K, V>> = OuterSnapshot::clone(&self.snapshot);
         let root_node = match s.as_root() {
@@ -287,27 +256,18 @@ where
             panic!("cannot shallow-clone with active readers/writer {}", n);
         }
 
-        // spawn gc thread.
-        let (gc_tx, gc_rx) = mpsc::channel();
-        let mut index = Box::new(Mvcc {
+        Box::new(Mvcc {
             name: self.name.clone(),
             lsm: self.lsm,
             spin: self.spin,
 
-            snapshot: OuterSnapshot::new(gc_tx),
+            snapshot: OuterSnapshot::new(),
             latch: RWSpinlock::new(),
             key_footprint: AtomicIsize::new(self.key_footprint.load(SeqCst)),
             tree_footprint: AtomicIsize::new(self.tree_footprint.load(SeqCst)),
-            gc: None,
-            n_nodes: Arc::new(AtomicIsize::new(0)),
             readers: Arc::new(0xC0FFEE),
             writers: Arc::new(0xC0FFEE),
-        });
-
-        let n_nodes = Arc::clone(&index.n_nodes);
-        index.gc = Some(thread::spawn(move || gc::<K, V>(gc_rx, n_nodes)));
-
-        index
+        })
     }
 }
 
@@ -361,7 +321,7 @@ where
     V: Clone + Diff,
 {
     fn node_new_deleted(&self, key: K, seqno: u64) -> Box<Node<K, V>> {
-        self.n_nodes.as_ref().fetch_add(1, SeqCst);
+        self.snapshot.n_nodes.fetch_add(1, SeqCst);
         Node::new_deleted(key, seqno)
     }
 
@@ -370,18 +330,18 @@ where
         node: &Node<K, V>, // source node
         reclaim: &mut Vec<Box<Node<K, V>>>,
     ) -> Box<Node<K, V>> {
-        self.n_nodes.as_ref().fetch_add(1, SeqCst);
+        self.snapshot.n_nodes.fetch_add(1, SeqCst);
         node.mvcc_clone(reclaim)
     }
 
     fn node_from_entry(&self, new_entry: Entry<K, V>) -> Box<Node<K, V>> {
-        self.n_nodes.as_ref().fetch_add(1, SeqCst);
+        self.snapshot.n_nodes.fetch_add(1, SeqCst);
         Box::new(From::from(new_entry))
     }
 
     fn node_mvcc_detach(&self, node: &mut Box<Node<K, V>>) {
         node.mvcc_detach();
-        self.n_nodes.as_ref().fetch_sub(1, SeqCst);
+        self.snapshot.n_nodes.as_ref().fetch_sub(1, SeqCst);
     }
 }
 
@@ -1418,7 +1378,7 @@ where
 {
     ulatch: RWSpinlock,
     inner: AtomicPtr<Arc<Snapshot<K, V>>>,
-    gc_tx: Option<mpsc::Sender<Vec<Box<Node<K, V>>>>>,
+    n_nodes: Arc<AtomicIsize>,
     n_active: Arc<AtomicUsize>,
 }
 
@@ -1438,21 +1398,22 @@ where
     V: Clone + Diff,
 {
     // create the first snapshot and a placeholder `next` snapshot for Mvcc.
-    fn new(gc_tx: mpsc::Sender<Vec<Box<Node<K, V>>>>) -> OuterSnapshot<K, V> {
+    fn new() -> OuterSnapshot<K, V> {
         let n_active = Arc::new(AtomicUsize::new(2));
         let m = Arc::clone(&n_active);
         let n = Arc::clone(&n_active);
+        let n_nodes = Arc::new(AtomicIsize::new(0));
 
         let next_snapshot: Option<Arc<Snapshot<K,V>>> = // dummy next snapshot
-            Some(Arc::new(*Snapshot::new(None, gc_tx.clone(), m)));
+            Some(Arc::new(*Snapshot::new(None, Arc::clone(&n_nodes), m)));
         let curr_snapshot: Box<Snapshot<K, V>> = // current snapshot
-            Snapshot::new(next_snapshot, gc_tx.clone(), n);
+            Snapshot::new(next_snapshot, Arc::clone(&n_nodes), n);
 
         let arc: Box<Arc<Snapshot<K, V>>> = Box::new(Arc::new(*curr_snapshot));
         OuterSnapshot {
             ulatch: RWSpinlock::new(),
             inner: AtomicPtr::new(Box::leak(arc)),
-            gc_tx: Some(gc_tx),
+            n_nodes,
             n_active,
         }
     }
@@ -1510,8 +1471,8 @@ where
         next_m.reclaim = Some(reclaim);
         next_m.seqno = seqno;
         next_m.n_count = n_count;
-        let gc_tx = self.gc_tx.as_ref().unwrap().clone();
-        next_m.next = Some(Arc::new(*Snapshot::new(None, gc_tx, m)));
+        let n_nodes = Arc::clone(&self.n_nodes);
+        next_m.next = Some(Arc::new(*Snapshot::new(None, n_nodes, m)));
 
         let next_s: Box<Arc<Snapshot<K, V>>> = Box::new(Arc::clone(
             // clone a Arc reference of next snapshot and make it current
@@ -1542,9 +1503,9 @@ where
     reclaim: Option<Vec<Box<Node<K, V>>>>,
     seqno: u64,     // starts from 0 and incr for every mutation.
     n_count: usize, // number of entries in the tree.
-    next: Option<Arc<Snapshot<K, V>>>,
-    gc_tx: Option<mpsc::Sender<Vec<Box<Node<K, V>>>>>,
+    n_nodes: Arc<AtomicIsize>,
     n_active: Arc<AtomicUsize>,
+    next: Option<Arc<Snapshot<K, V>>>,
 }
 
 impl<K, V> Snapshot<K, V>
@@ -1556,7 +1517,7 @@ where
     // for every new snapshot that gets created and shifted into the chain.
     fn new(
         next: Option<Arc<Snapshot<K, V>>>,
-        gc_tx: mpsc::Sender<Vec<Box<Node<K, V>>>>,
+        n_nodes: Arc<AtomicIsize>,
         n_active: Arc<AtomicUsize>,
     ) -> Box<Snapshot<K, V>> {
         // println!("new mvcc-root {:p}", snapshot);
@@ -1566,7 +1527,7 @@ where
             seqno: Default::default(),
             n_count: Default::default(),
             next,
-            gc_tx: Some(gc_tx),
+            n_nodes,
             n_active,
         })
     }
@@ -1596,15 +1557,35 @@ where
 
         self.root.take().map(Box::leak); // Leak root
 
-        // NOTE: `reclaim` nodes will be dropped, and the actual nodes
-        // are sent to `gc` thread. Note that child nodes won't be dropped.
-
-        match (self.reclaim.take(), self.gc_tx.take()) {
-            (Some(reclaim), Some(gc_tx)) => gc_tx.send(reclaim).ok(),
-            (Some(_reclaim), None) => unreachable!(),
-            _ => None,
+        // NOTE: `reclaim` nodes will be dropped.
+        // Note that child nodes won't be dropped.
+        match self.reclaim.take() {
+            Some(reclaim) => {
+                self.n_nodes
+                    .as_ref()
+                    .fetch_sub(reclaim.len().try_into().unwrap(), SeqCst);
+            }
+            _ => (),
         };
         let _n = self.n_active.fetch_sub(1, SeqCst);
+
+        // IMPORTANT NOTE: if free is slower than allow, and whether there
+        // is heavy background mutation, we might end up with stackoverflow
+        // due to recursive drops of snapshot chain, convert that recursion
+        // into a loop.
+        let mut child = self.next.take();
+        while let Some(snap) = child.take() {
+            match Arc::try_unwrap(snap) {
+                Ok(mut snap) => {
+                    // we are the only reference to this snapshot, and drop
+                    // is going to be called at exit, convert the recursive
+                    // drop to loop.
+                    child = snap.next.take();
+                    mem::drop(snap)
+                }
+                Err(_snap) => break, // decrement the reference
+            }
+        }
 
         //if n > 10 {
         //    println!("active snapshots {}", _n);
@@ -1625,7 +1606,7 @@ where
             seqno: Default::default(),
             n_count: Default::default(),
             next: Default::default(),
-            gc_tx: Default::default(),
+            n_nodes: Default::default(),
             n_active: Default::default(),
         }
     }
@@ -1917,27 +1898,25 @@ where
     }
 }
 
-fn gc<K, V>(
-    rx: mpsc::Receiver<Vec<Box<Node<K, V>>>>, // list of nodes to be freed
-    n_nodes: Arc<AtomicIsize>,
-) -> Result<()>
+// TODO: by freeing nodes in a separate thread we can save some cycles
+// on the write thread. But right now we don't have a mallocer that
+// can perform well with concurrent threads.
+#[allow(dead_code)]
+fn gc<K, V>(rx: mpsc::Receiver<usize>, n_nodes: Arc<AtomicIsize>) -> Result<()>
 where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    for nodes in rx {
-        for _node in nodes {
-            // println!("gc node");
-            n_nodes.as_ref().fetch_sub(1, SeqCst);
-            // drop the node here.
-        }
+    for n in rx {
+        // println!("gc node");
+        n_nodes.as_ref().fetch_sub(n.try_into().unwrap(), SeqCst);
     }
     Ok(())
 }
 
 // drop_tree variant for mvcc.
 // by default dropping a node does not drop its children.
-fn drop_tree<K, V>(mut node: Box<Node<K, V>>, rclm: &mut Vec<Box<Node<K, V>>>)
+fn drop_tree<K, V>(mut node: Box<Node<K, V>>) -> usize
 where
     K: Ord + Clone,
     V: Clone + Diff,
@@ -1945,11 +1924,16 @@ where
     // println!("drop_tree - node {:p}", node);
 
     // left child shall be dropped after drop_tree() returns.
-    node.left.take().map(|left| drop_tree(left, rclm));
+    let mut n = match node.left.take() {
+        Some(left) => drop_tree(left),
+        None => 0,
+    };
     // right child shall be dropped after drop_tree() returns.
-    node.right.take().map(|right| drop_tree(right, rclm));
-
-    rclm.push(node)
+    n += match node.right.take() {
+        Some(right) => drop_tree(right),
+        None => 0,
+    };
+    n + 1
 }
 
 #[allow(dead_code)]

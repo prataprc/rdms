@@ -265,7 +265,11 @@ where
     /// Return quickly with basic statisics, only entries() method is valid
     /// with this statisics.
     pub fn stats(&self) -> Stats {
-        Stats::new_partial(self.len(), mem::size_of::<Node<K, V>>())
+        Stats::new_partial(
+            self.len(),
+            mem::size_of::<Node<K, V>>(),
+            self.latch.to_conflicts(),
+        )
     }
 
     pub(crate) fn to_spin(&self) -> bool {
@@ -1028,6 +1032,7 @@ where
         Ok(Stats::new_full(
             self.n_count,
             std::mem::size_of::<Node<K, V>>(),
+            self.latch.to_conflicts(),
             blacks,
             depths,
         ))

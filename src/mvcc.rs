@@ -307,7 +307,8 @@ where
     /// Return quickly with basic statisics, only entries() method is valid
     /// with this statisics.
     pub fn stats(&self) -> Stats {
-        Stats::new_partial(self.len(), mem::size_of::<Node<K, V>>())
+        let n = self.latch.to_conflicts() + self.snapshot.ulatch.to_conflicts();
+        Stats::new_partial(self.len(), mem::size_of::<Node<K, V>>(), n)
     }
 
     fn multi_rw(&self) -> usize {
@@ -1191,9 +1192,11 @@ where
             panic!("LLRB depth has exceeded limit: {}", depths.to_max());
         }
 
+        let n = self.latch.to_conflicts() + self.snapshot.ulatch.to_conflicts();
         Ok(Stats::new_full(
             arc_mvcc.n_count,
             std::mem::size_of::<Node<K, V>>(),
+            n,
             blacks,
             depths,
         ))

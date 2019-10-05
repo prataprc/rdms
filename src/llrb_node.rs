@@ -193,27 +193,38 @@ pub enum Stats {
     Full {
         entries: usize,
         node_size: usize,
+        lock_conflicts: u64,
         blacks: usize,
         depths: LlrbDepth,
     },
     /// partial but quick statistics via [`Llrb::stats`] method.
-    Partial { entries: usize, node_size: usize },
+    Partial {
+        entries: usize,
+        node_size: usize,
+        lock_conflicts: u64,
+    },
 }
 
 impl Stats {
-    pub(crate) fn new_partial(entries: usize, node_size: usize) -> Stats {
-        Stats::Partial { entries, node_size }
+    pub(crate) fn new_partial(entries: usize, node_size: usize, lock_conflicts: u64) -> Stats {
+        Stats::Partial {
+            entries,
+            node_size,
+            lock_conflicts,
+        }
     }
 
     pub(crate) fn new_full(
         entries: usize,
         node_size: usize,
+        lock_conflicts: u64,
         blacks: usize,
         depths: LlrbDepth,
     ) -> Stats {
         Stats::Full {
             entries,
             node_size,
+            lock_conflicts,
             blacks,
             depths,
         }
@@ -243,6 +254,15 @@ impl Stats {
         match self {
             Stats::Partial { node_size, .. } => *node_size,
             Stats::Full { node_size, .. } => *node_size,
+        }
+    }
+
+    #[inline]
+    /// Return number of lock-conflicts between [`Llrb`] / [`Mvcc`] ops.
+    pub fn to_conflicts(&self) -> u64 {
+        match self {
+            Stats::Partial { lock_conflicts, .. } => *lock_conflicts,
+            Stats::Full { lock_conflicts, .. } => *lock_conflicts,
         }
     }
 

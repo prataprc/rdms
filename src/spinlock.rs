@@ -131,6 +131,10 @@ impl RWSpinlock {
             }
         }
     }
+
+    pub(crate) fn to_conflicts(&self) -> u64 {
+        self.conflicts.load(SeqCst)
+    }
 }
 
 pub(crate) struct Reader<'a> {

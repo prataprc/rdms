@@ -52,28 +52,28 @@ extern crate llrb_index;
 mod bogn;
 mod core;
 mod error;
+mod lsm;
+mod scans;
 mod spinlock;
 mod sync_writer;
 mod util;
 mod vlog;
-
-mod scans;
-
 pub use crate::bogn::Bogn;
 pub use crate::core::{Diff, Entry, Replay, Result, Serialize, VersionIter};
 pub use crate::core::{Footprint, Index, IndexIter, Reader, Writer};
 pub use crate::error::Error;
 
+mod types;
+pub use crate::types::Empty;
+
 pub mod llrb;
 mod llrb_node;
 pub mod mvcc;
 
-mod lsm;
-
+pub mod nodisk;
 pub mod robt;
 mod robt_entry;
 mod robt_index;
+pub use crate::nodisk::NoDisk;
 
-mod types;
-pub use crate::types::Empty;
 pub mod wal;

@@ -9,7 +9,7 @@ repository = "https://github.com/bnclabs/rdms"
 keywords = ["storage", "mvcc", "llrb", "btree", "lsm"]
 categories = ["data-structures", "database"]
 license = "AGPL-3.0"
-exclude = ["template/**"]
+exclude = ["template/**", "docs/**"]
 readme = "README.md"
 edition = "2018"
 

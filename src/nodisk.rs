@@ -1,124 +1,175 @@
-use std::borrow::Borrow;
-use std::ops::RangeBounds;
+use std::{borrow::Borrow, marker, ops::RangeBounds};
 
 use crate::core::{Diff, Footprint, Index, IndexIter, Reader, Writer};
 use crate::core::{Entry, Result};
+use crate::error::Error;
 
 /// NoDisk type denotes empty Disk type. Applications can use this
 /// type while instantiating bogn index in mem-only mode.
-pub struct NoDisk;
+pub struct NoDisk<K, V> {
+    phantom_key: marker::PhantomData<K>,
+    phantom_val: marker::PhantomData<V>,
+}
 
-impl Footprint for NoDisk {
+impl<K, V> NoDisk<K, V> {
+    fn new() -> NoDisk<K, V> {
+        NoDisk {
+            phantom_key: marker::PhantomData,
+            phantom_val: marker::PhantomData,
+        }
+    }
+}
+
+impl<K, V> Footprint for NoDisk<K, V> {
     fn footprint(&self) -> isize {
         0
     }
 }
 
-impl<K, V> Index<K, V> for NoDisk
+impl<K, V> Index<K, V> for NoDisk<K, V>
 where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
 {
-    type W = NoDisk;
-    type R = NoDisk;
+    type W = NoDisk<K, V>;
+    type R = NoDisk<K, V>;
 
     fn make_new(&self) -> Result<Box<Self>> {
-        panic!("index type is just a place holder");
+        Ok(Box::new(NoDisk::new()))
     }
 
     fn to_reader(&mut self) -> Result<Self::R> {
-        panic!("index type is just a place holder");
+        Ok(NoDisk::new())
     }
 
     fn to_writer(&mut self) -> Result<Self::W> {
-        panic!("index type is just a place holder");
+        panic!("write operations are not allowed");
     }
 }
 
-impl<K, V> Reader<K, V> for NoDisk
+impl<K, V> Reader<K, V> for NoDisk<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    fn get<Q>(&self, key: &Q) -> Result<Entry<K, V>>
+    fn get<Q>(&self, _key: &Q) -> Result<Entry<K, V>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        panic!("index type is just a place holder");
+        Err(Error::KeyNotFound)
     }
 
     fn iter(&self) -> Result<IndexIter<K, V>> {
-        panic!("index type is just a place holder");
+        Ok(Box::new(NoDiskIter {
+            _phantom_key: &self.phantom_key,
+            _phantom_val: &self.phantom_val,
+        }))
     }
 
-    fn range<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
+    fn range<'a, R, Q>(&'a self, _range: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
         R: 'a + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        panic!("index type is just a place holder");
+        Ok(Box::new(NoDiskIter {
+            _phantom_key: &self.phantom_key,
+            _phantom_val: &self.phantom_val,
+        }))
     }
 
-    fn reverse<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
+    fn reverse<'a, R, Q>(&'a self, _range: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
         R: 'a + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        panic!("index type is just a place holder");
+        Ok(Box::new(NoDiskIter {
+            _phantom_key: &self.phantom_key,
+            _phantom_val: &self.phantom_val,
+        }))
     }
 
-    fn get_with_versions<Q>(&self, key: &Q) -> Result<Entry<K, V>>
+    fn get_with_versions<Q>(&self, _key: &Q) -> Result<Entry<K, V>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        panic!("index type is just a place holder");
+        Err(Error::KeyNotFound)
     }
 
     fn iter_with_versions(&self) -> Result<IndexIter<K, V>> {
-        panic!("index type is just a place holder");
+        Ok(Box::new(NoDiskIter {
+            _phantom_key: &self.phantom_key,
+            _phantom_val: &self.phantom_val,
+        }))
     }
 
-    fn range_with_versions<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
+    fn range_with_versions<'a, R, Q>(&self, _range: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
         R: 'a + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        panic!("index type is just a place holder");
+        Ok(Box::new(NoDiskIter {
+            _phantom_key: &self.phantom_key,
+            _phantom_val: &self.phantom_val,
+        }))
     }
 
-    fn reverse_with_versions<'a, R, Q>(&'a self, rng: R) -> Result<IndexIter<K, V>>
+    fn reverse_with_versions<'a, R, Q>(&self, _rng: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
         R: 'a + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        panic!("index type is just a place holder");
+        Ok(Box::new(NoDiskIter {
+            _phantom_key: &self.phantom_key,
+            _phantom_val: &self.phantom_val,
+        }))
     }
 }
 
-impl<K, V> Writer<K, V> for NoDisk
+impl<K, V> Writer<K, V> for NoDisk<K, V>
 where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
 {
-    fn set(&mut self, k: K, v: V) -> Result<Option<Entry<K, V>>> {
-        panic!("index type is just a place holder");
+    fn set(&mut self, _key: K, _value: V) -> Result<Option<Entry<K, V>>> {
+        panic!("operation not allowed");
     }
 
-    fn set_cas(&mut self, k: K, v: V, cas: u64) -> Result<Option<Entry<K, V>>> {
-        panic!("index type is just a place holder");
+    fn set_cas(&mut self, _k: K, _v: V, _: u64) -> Result<Option<Entry<K, V>>> {
+        panic!("operation not allowed");
     }
 
-    fn delete<Q>(&mut self, key: &Q) -> Result<Option<Entry<K, V>>>
+    fn delete<Q>(&mut self, _key: &Q) -> Result<Option<Entry<K, V>>>
     where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
     {
-        panic!("index type is just a place holder");
+        panic!("operation not allowed");
+    }
+}
+
+struct NoDiskIter<'a, K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    _phantom_key: &'a marker::PhantomData<K>,
+    _phantom_val: &'a marker::PhantomData<V>,
+}
+
+impl<'a, K, V> Iterator for NoDiskIter<'a, K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    type Item = Result<Entry<K, V>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        None
     }
 }

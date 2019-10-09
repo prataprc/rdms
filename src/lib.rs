@@ -47,7 +47,6 @@
 #![feature(drain_filter)]
 
 extern crate jsondata;
-extern crate llrb_index;
 
 mod core;
 mod error;

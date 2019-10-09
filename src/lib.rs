@@ -1,5 +1,5 @@
-//! Package **Bogn** provide a collection of algorithms for indexing
-//! data either _in memory_ or _in disk_ or _both_. Bogn indexes are
+//! Package **Rdms** provide a collection of algorithms for indexing
+//! data either _in memory_ or _in disk_ or _both_. Rdms indexes are
 //! optimized for document databases and bigdata.
 //!
 //! Features:
@@ -22,7 +22,7 @@
 //!
 //! **Log-Structured-Merge [LSM]**, is a common technique used in managing
 //! heterogenous data-structures that are transparent to the index. In
-//! case of Bogn, in-memory structures are different from on-disk
+//! case of Rdms, in-memory structures are different from on-disk
 //! structures, and LSM technique is used to maintain consistency between
 //! them.
 //!
@@ -49,19 +49,19 @@
 extern crate jsondata;
 extern crate llrb_index;
 
-mod bogn;
 mod core;
 mod error;
 mod lsm;
+mod rdms;
 mod scans;
 mod spinlock;
 mod sync_writer;
 mod util;
 mod vlog;
-pub use crate::bogn::Bogn;
 pub use crate::core::{Diff, Entry, Replay, Result, Serialize, VersionIter};
 pub use crate::core::{Footprint, Index, IndexIter, Reader, Writer};
 pub use crate::error::Error;
+pub use crate::rdms::Rdms;
 
 mod types;
 pub use crate::types::Empty;

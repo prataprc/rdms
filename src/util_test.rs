@@ -24,7 +24,7 @@ fn test_open_file_rw() {
 
     // case 3: with valid file, reuse: false
     let mut dir = std::env::temp_dir();
-    dir.push("rust.bogn.util.open_file_rw.txt");
+    dir.push("rust.rdms.util.open_file_rw.txt");
     let file = dir.as_path();
 
     fs::remove_file(file).ok();
@@ -40,7 +40,7 @@ fn test_open_file_rw() {
 
     // case 4: with valid file, reuse: false, recreate
     let mut dir = std::env::temp_dir();
-    dir.push("rust.bogn.util.open_file_rw.txt");
+    dir.push("rust.rdms.util.open_file_rw.txt");
     let file = dir.as_path();
 
     let file = file.as_os_str().to_os_string();
@@ -54,7 +54,7 @@ fn test_open_file_rw() {
 
     // case 5: with valid file, reuse: true, reuse file.
     let mut dir = std::env::temp_dir();
-    dir.push("rust.bogn.util.open_file_rw.txt");
+    dir.push("rust.rdms.util.open_file_rw.txt");
     let file = dir.as_path();
 
     let file = file.as_os_str().to_os_string();

@@ -1,4 +1,4 @@
-//! Write-Ahead-Logging for Bogn index.
+//! Write-Ahead-Logging for Rdms index.
 //!
 //! Takes care of batching write operations, serializing, appending
 //! them to disk, and finally commiting the appended batch(es). A
@@ -96,14 +96,14 @@ const NIL_TERM: u64 = 0;
 // default block size while loading the WAl/Journal batches.
 const WAL_BLOCK_SIZE: usize = 10 * 1024 * 1024;
 
-/// Write ahead logging for [Bogn] index.
+/// Write ahead logging for [Rdms] index.
 ///
 /// Wal type is generic enough to be used outside this package. To know
 /// more about write-ahead-logging and its use-cases refer to the [wal]
 /// module documentation.
 ///
 /// [wal]: crate::wal
-/// [Bogn]: crate::Bogn
+/// [Rdms]: crate::Rdms
 pub struct Wal<K, V>
 where
     K: Send + Serialize,

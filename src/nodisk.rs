@@ -5,7 +5,7 @@ use crate::core::{Entry, Result};
 use crate::error::Error;
 
 /// NoDisk type denotes empty Disk type. Applications can use this
-/// type while instantiating bogn index in mem-only mode.
+/// type while instantiating `rdms-index` in mem-only mode.
 pub struct NoDisk<K, V> {
     phantom_key: marker::PhantomData<K>,
     phantom_val: marker::PhantomData<V>,

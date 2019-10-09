@@ -1,11 +1,11 @@
 [package]
-name = "bogn"
+name = "rdms"
 version = "0.1.0"
 authors = ["prataprc <prataprc@gmail.com>"]
-description = "Key value data store"
-documentation = "https://docs.rs/bogn"
-homepage = "https://github.com/bnclabs/bogn"
-repository = "https://github.com/bnclabs/bogn"
+description = "Composable storage for key,value index"
+documentation = "https://docs.rs/rdms"
+homepage = "https://github.com/bnclabs/rdms"
+repository = "https://github.com/bnclabs/rdms"
 keywords = ["storage", "mvcc", "llrb", "btree", "lsm"]
 categories = ["data-structures", "database"]
 license = "AGPL-3.0"
@@ -14,13 +14,12 @@ readme = "README.md"
 edition = "2018"
 
 [lib]
-
-name = "bogn"
+name = "rdms"
 path = "src/lib.rs"
 
 [badges]
 maintenance = { status = "actively-developed" }
-travis-ci = { repository = "bnclabs/bogn" }
+travis-ci = { repository = "bnclabs/rdms" }
 
 [dependencies]
 structopt = { version = "0.2", default-features = false }

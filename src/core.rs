@@ -10,7 +10,7 @@ use std::{
 
 use crate::{error::Error, vlog};
 
-/// Result returned by bogn functions and methods.
+/// Result returned by rdms functions and methods.
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Type alias to trait-objects iterating over [`Index`].
@@ -21,7 +21,7 @@ pub(crate) type ScanIter<'a, K, V> = Box<dyn Iterator<Item = Result<ScanEntry<K,
 
 /// Trait for diffable values.
 ///
-/// All values indexed in [Bogn] must support this trait, since [Bogn]
+/// All values indexed in [Rdms] must support this trait, since [Rdms]
 /// can manage successive modifications to the same entry.
 ///
 /// If,
@@ -35,7 +35,7 @@ pub(crate) type ScanIter<'a, K, V> = Box<dyn Iterator<Item = Result<ScanEntry<K,
 /// P = C - D (merge operation, to get old value)
 /// ```
 ///
-/// [Bogn]: crate::Bogn
+/// [Rdms]: crate::Rdms
 ///
 pub trait Diff: Sized {
     type D: Clone + From<Self> + Into<Self> + Footprint;
@@ -141,10 +141,10 @@ where
     fn delete_index(&mut self, key: K, index: u64) -> Result<Entry<K, V>>;
 }
 
-/// Index trait implemented by [Bogn]'s underlying data-structures that
+/// Index trait implemented by [Rdms]'s underlying data-structures that
 /// can ingest key, value pairs.
 ///
-/// [Bogn]: crate::Bogn
+/// [Rdms]: crate::Rdms
 ///
 pub trait Index<K, V>: Sized + Footprint
 where
@@ -406,7 +406,7 @@ where
         footprint
     }
 
-    #[allow(dead_code)] // TODO: remove this once bogn is weaved-up.
+    #[allow(dead_code)] // TODO: remove this once rdms is weaved-up.
     pub(crate) fn into_upserted(self) -> Option<(vlog::Delta<V>, u64)> {
         match self.data {
             InnerDelta::U { delta, seqno } => Some((delta, seqno)),
@@ -414,7 +414,7 @@ where
         }
     }
 
-    #[allow(dead_code)] // TODO: remove this once bogn is weaved-up.
+    #[allow(dead_code)] // TODO: remove this once rdms is weaved-up.
     pub(crate) fn into_deleted(self) -> Option<u64> {
         match self.data {
             InnerDelta::D { seqno } => Some(seqno),
@@ -584,10 +584,10 @@ where
 }
 
 /// Entry is the covering structure for a {Key, value} pair
-/// indexed by bogn data structures.
+/// indexed by rdms data structures.
 ///
 /// It is a user facing structure, also used in stitching together
-/// different components of Bogn.
+/// different components of [Rdms].
 #[derive(Clone)]
 pub struct Entry<K, V>
 where
@@ -757,7 +757,7 @@ where
     V: Clone + Diff + From<<V as Diff>::D>,
 {
     // Pick all versions whose seqno is within the specified range.
-    // Note that, by bogn-design only memory-indexes ingesting new
+    // Note that, by rdms-design only memory-indexes ingesting new
     // mutations are subjected to this filter function.
     pub(crate) fn filter_within(
         &self,
@@ -853,7 +853,7 @@ where
             unreachable!()
         };
 
-        // TODO remove this validation logic once bogn is fully stable.
+        // TODO remove this validation logic once rdms is fully stable.
         a.validate_flush_merge(&b);
         for ne in a.versions().collect::<Vec<Entry<K, V>>>().into_iter().rev() {
             // println!("flush_merge {} {}", ne.to_seqno(), ne.is_deleted());

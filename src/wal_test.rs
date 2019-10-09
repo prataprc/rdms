@@ -8,7 +8,7 @@ fn test_wal_cycles() {
     let dir = {
         let mut dir_path = path::PathBuf::new();
         dir_path.push(std::env::temp_dir().into_os_string());
-        dir_path.push("test_bogn_wal_cycles");
+        dir_path.push("test_rdms_wal_cycles");
         let dir: &OsStr = dir_path.as_ref();
         dir.clone().to_os_string()
     };
@@ -175,7 +175,7 @@ fn test_wal_panic() {
     let dir = {
         let mut dir_path = path::PathBuf::new();
         dir_path.push(std::env::temp_dir().into_os_string());
-        dir_path.push("test_bogn_wal_panic");
+        dir_path.push("test_rdms_wal_panic");
         let dir: &OsStr = dir_path.as_ref();
         dir.clone().to_os_string()
     };

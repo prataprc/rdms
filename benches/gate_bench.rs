@@ -3,7 +3,7 @@ extern crate test;
 
 use test::Bencher;
 
-use bogn::RWSpinlock;
+use rdms::RWSpinlock;
 
 #[bench]
 fn bench_acquire_read(b: &mut Bencher) {

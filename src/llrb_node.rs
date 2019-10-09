@@ -245,7 +245,7 @@ impl Stats {
     /// on key and value types. EG:
     ///
     /// ```
-    /// use bogn::llrb::Llrb;
+    /// use rdms::llrb::Llrb;
     /// let mut llrb: Box<Llrb<i64,i64>> = Llrb::new("myinstance");
     ///
     /// assert_eq!(llrb.stats().to_node_size(), 80);

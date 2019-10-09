@@ -1,6 +1,6 @@
 Symbols used to describe rest of this writeup.
 
-M  : Memory index, whose life time equal the life time of bogn-index.
+M  : Memory index, whose life time equal the life time of rdms-index.
      Applicable only in "memory" and "backup" configuration.
 Mw : Transient memory index, to handles all write operation. It is a
      ephimeral index that will become "Mf" index when it reaches a

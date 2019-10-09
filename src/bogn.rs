@@ -41,7 +41,7 @@ impl Config {
 
 /// Index keys and corresponding values. Check module documentation for
 /// the full set of features.
-pub struct Bogn<K, V, M, D>
+pub struct Rdms<K, V, M, D>
 where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
@@ -58,7 +58,7 @@ where
     _value: marker::PhantomData<V>,
 }
 
-impl<K, V, M, D> Bogn<K, V, M, D>
+impl<K, V, M, D> Rdms<K, V, M, D>
 where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
@@ -70,11 +70,11 @@ where
         mem: M,  // memory instance that has Index::make_new() trait.
         disk: D, // disk instance that has Index::make_new() trait.
         config: Config,
-    ) -> Result<Bogn<K, V, M, D>>
+    ) -> Result<Rdms<K, V, M, D>>
     where
         S: AsRef<str>,
     {
-        Ok(Bogn {
+        Ok(Rdms {
             name: name.as_ref().to_string(),
             config,
 
@@ -87,7 +87,7 @@ where
     }
 }
 
-impl<K, V, M, D> Bogn<K, V, M, D>
+impl<K, V, M, D> Rdms<K, V, M, D>
 where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
@@ -105,7 +105,7 @@ where
     // TODO: implement to_stats()
 }
 
-impl<K, V, M, D> Bogn<K, V, M, D>
+impl<K, V, M, D> Rdms<K, V, M, D>
 where
     K: 'static + Clone + Ord + Footprint,
     V: 'static + Clone + Diff + Footprint,
@@ -161,7 +161,7 @@ where
     }
 }
 
-impl<K, V, M, D> Bogn<K, V, M, D>
+impl<K, V, M, D> Rdms<K, V, M, D>
 where
     K: 'static + Clone + Ord + Footprint,
     V: 'static + Clone + Diff + From<<V as Diff>::D> + Footprint,
@@ -222,7 +222,7 @@ where
     }
 }
 
-impl<K, V, M, D> Bogn<K, V, M, D>
+impl<K, V, M, D> Rdms<K, V, M, D>
 where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
@@ -256,7 +256,7 @@ where
     }
 }
 
-impl<K, V, M, D> Bogn<K, V, M, D>
+impl<K, V, M, D> Rdms<K, V, M, D>
 where
     K: Clone + Ord + Debug + Footprint,
     V: Clone + Diff + Footprint,

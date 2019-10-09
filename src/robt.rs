@@ -493,9 +493,9 @@ pub enum MetaItem {
     /// Contains index-statistics along with configuration values.
     Stats(String),
     /// Application supplied metadata, typically serialized and opaque
-    /// to [Bogn].
+    /// to [Rdms].
     ///
-    /// [Bogn]: crate::Bogn
+    /// [Rdms]: crate::Rdms
     AppMetadata(Vec<u8>),
     /// File-position where the root block for the Btree starts.
     Root(u64),

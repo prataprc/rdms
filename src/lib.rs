@@ -69,10 +69,10 @@ pub mod llrb;
 mod llrb_node;
 pub mod mvcc;
 
-pub mod nodisk;
+pub mod no_disk;
 pub mod robt;
 mod robt_entry;
 mod robt_index;
-pub use crate::nodisk::NoDisk;
+pub use crate::no_disk::NoDisk;
 
 pub mod wal;

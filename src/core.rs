@@ -8,8 +8,7 @@ use std::{
     sync::atomic::Ordering::SeqCst,
 };
 
-use crate::error::Error;
-use crate::vlog;
+use crate::{error::Error, vlog};
 
 /// Result returned by bogn functions and methods.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -218,7 +217,7 @@ where
 
     /// Iterate from lower bound to upper bound. Returned entry shall
     /// have all its previous versions, can be a costly call.
-    fn range_with_versions<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
+    fn range_with_versions<'a, R, Q>(&'a self, r: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
         R: 'a + RangeBounds<Q>,
@@ -226,7 +225,7 @@ where
 
     /// Iterate from upper bound to lower bound. Returned entry shall
     /// have all its previous versions, can be a costly call.
-    fn reverse_with_versions<'a, R, Q>(&'a self, rng: R) -> Result<IndexIter<K, V>>
+    fn reverse_with_versions<'a, R, Q>(&'a self, r: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
         R: 'a + RangeBounds<Q>,
@@ -267,6 +266,15 @@ where
     where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized;
+}
+
+/// Durability methods, commit and compact.
+pub trait Durable {
+    /// Flush to disk all new entries that are not yet persisted on to disk.
+    fn commit(&mut self);
+
+    /// Compact disk snapshots if there are any.
+    fn compact(&mut self);
 }
 
 /// Serialize values to binary sequence of bytes.
@@ -350,6 +358,7 @@ where
     V: Clone + Diff,
 {
     /// Return the underlying `difference` value for this delta.
+    #[allow(dead_code)] // TODO: remove if not required.
     pub(crate) fn to_diff(&self) -> Option<<V as Diff>::D> {
         match &self.data {
             InnerDelta::D { .. } => None,

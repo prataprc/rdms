@@ -306,7 +306,7 @@ where
 
     /// Return quickly with basic statisics, only entries() method is valid
     /// with this statisics.
-    pub fn stats(&self) -> Stats {
+    pub fn to_stats(&self) -> Stats {
         let n = self.latch.to_conflicts() + self.snapshot.ulatch.to_conflicts();
         Stats::new_partial(self.len(), mem::size_of::<Node<K, V>>(), n)
     }

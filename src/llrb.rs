@@ -264,7 +264,7 @@ where
 
     /// Return quickly with basic statisics, only entries() method is valid
     /// with this statisics.
-    pub fn stats(&self) -> Stats {
+    pub fn to_stats(&self) -> Stats {
         Stats::new_partial(
             self.len(),
             mem::size_of::<Node<K, V>>(),

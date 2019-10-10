@@ -49,7 +49,7 @@ use std::{
     ops::{Bound, RangeBounds},
     path, result,
     str::FromStr,
-    sync::{self, mpsc},
+    sync::{self, mpsc, Arc},
     thread, time,
 };
 
@@ -64,73 +64,55 @@ use crate::robt_index::{MBlock, ZBlock};
 
 include!("robt_marker.rs");
 
-struct Snapshots {
+struct Snapshots<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+{
     levels: Vec<Arc<Level>>,
-    snapshots: Vec<Snapshot>,
+    snapshots: Vec<Snapshot<K, V>>,
 }
 
 struct Level {
     dir: ffi::OsString,
     name: String,
     level: usize,
-    i_file_no: usize,
+    file_no: usize,
 }
 
 impl Drop for Level {
     fn drop(&mut self) {
-        let (index_file, vlog_file) = self.to_filenames();
-        let f = Config::stitch_index_file(&self.dir, &index_file);
-        fs::remove_file(f).unwrap();
-        vlog_file.map(|f| {
-            let f = Config::stitch_index_file(&self.dir, &f);
-            fs::remove_file(f).unwrap();
-        });
+        match self.to_filenames().ok() {
+            Some((index_file, vlog_file)) => {
+                let f = Config::stitch_index_file(&self.dir, &index_file);
+                fs::remove_file(f).unwrap();
+                vlog_file.as_ref().map(|f| {
+                    let f = Config::stitch_index_file(&self.dir, &f);
+                    fs::remove_file(f).unwrap();
+                });
+            }
+            None => (),
+        }
     }
 }
 
 impl Level {
-    fn new_level(
-        dir: &ffi::OsStr, // directory path where index files are stored
-        name: &str,       // name of index, must be utf8 string
-        level: usize,
-        i_file_no: usize,
-    ) -> Level {
-        Level {
+    fn open_level(dir: &ffi::OsStr, file: &str) -> Option<Level> {
+        let (name, level, file_no) = Self::to_file_parts(file)?;
+        Some(Level {
             dir: dir.to_os_string(),
             name: name.to_string(),
             level,
-            i_file_no,
-        }
+            file_no,
+        })
     }
 
-    fn open_level(
-        dir: &ffi::OsStr, // directory path where index files are stored
-        file: &str,
-    ) -> Result<Option<Level>> {
-        let parts: Vec<&str> = file.split('-').collect();
-        let mut parts = parts.into_iter();
-        if let Some("robt") = parts.next() {
-            let name = parts.next()?;
-            let level: usize = parts.next()?.parse().ok()?;
-            let file_no: usize = parts.next()?.parse().ok()?;
-            let level = Level {
-                dir: dir.to_os_string(),
-                name: name.to_string(),
-                level,
-                i_file_no,
-                v_file_no: Default::default(),
-            };
-            let items = read_meta_items(dir, &level.to_name())?;
-            let stats: Stats = items[0].parse();
-            match stats.vlog_file {
-                Some(vlog_file) => match path::Path::new(&vlog_file).file_name() {
-                    Some(vf) => {}
-                    None => Default::default(),
-                },
-                None => Default::default(),
-            }
-        } else {
-            None
+    fn new_level(dir: &ffi::OsStr, name: &str, l: usize, n: usize) -> Level {
+        Level {
+            dir: dir.to_os_string(),
+            name: name.to_string(),
+            level: l,
+            file_no: n,
         }
     }
 
@@ -141,28 +123,52 @@ impl Level {
             let name = parts.next()?;
             let level: usize = parts.next()?.parse().ok()?;
             let file_no: usize = parts.next()?.parse().ok()?;
-            Some((name, level, file_no))
+            Some((name.to_string(), level, file_no))
         } else {
             None
         }
     }
 
     fn to_index_name(&self) -> String {
-        format!("{}-{}-{}", self.name, self.level, self.i_file_no)
+        format!("{}-{}-{}", self.name, self.level, self.file_no)
     }
 
-    fn to_vlog_name(&self) -> String {
-        format!("{}-{}-{}", self.name, self.level, self.v_file_no)
+    fn to_vlog_name(&self, v_file_no: usize) -> String {
+        format!("{}-{}-{}", self.name, self.level, v_file_no)
     }
 
-    fn to_filenames(&self) -> (String, Option<String>) {
-        let indexf = Config::make_index_file(&self.to_name());
-        let vlogf = Config::make_vlog_file(&self.to_name());
-        let vlogpath = Config::stitch_vlog_file(&self.dir, &self.to_name());
-        if path::Path::new(&vlogpath).exists() {
-            (indexf, Some(vlogf))
-        } else {
-            (indexf, None)
+    fn to_filenames(&self) -> Result<(String, Option<String>)> {
+        let indexfile = Config::make_index_file(&self.to_index_name());
+
+        let items = read_meta_items(&self.dir, &self.to_index_name())?;
+        let stats: Stats = match &items[3] {
+            MetaItem::Stats(stats) => stats.parse()?,
+            _ => unreachable!(),
+        };
+        match stats.vlog_file {
+            Some(vlog_file) => {
+                let file = match path::Path::new(&vlog_file).file_name() {
+                    Some(file) => file.to_str().unwrap(),
+                    None => return Ok((indexfile, None)),
+                };
+                let vlogfile = match Self::to_file_parts(file) {
+                    None => return Ok((indexfile, None)),
+                    Some((_name, _level, v_file_no)) => {
+                        let vlogfile = self.to_vlog_name(v_file_no);
+                        Config::make_vlog_file(&vlogfile)
+                    }
+                };
+
+                let mut vpath = path::PathBuf::new();
+                vpath.push(&self.dir);
+                vpath.push(&vlogfile);
+                if path::Path::new(&vpath).exists() {
+                    Ok((indexfile, Some(vlogfile)))
+                } else {
+                    Ok((indexfile, None))
+                }
+            }
+            None => Ok((indexfile, None)),
         }
     }
 }
@@ -1182,11 +1188,14 @@ where
     }
 
     pub fn to_vlog_file(&self) -> Option<String> {
-        let stats: Stats = self.meta[3].parse().unwrap();
+        let stats: Stats = match &self.meta[3] {
+            MetaItem::Stats(stats) => stats.parse().ok()?,
+            _ => unreachable!(),
+        };
         match stats.vlog_file {
             Some(vlog_file) => {
-                let vf = path::Path::new(&stats.vlog_file).file_name();
-                Some(vf.to_str().to_string())
+                let vf = path::Path::new(&vlog_file).file_name()?;
+                Some(vf.to_str()?.to_string())
             }
             None => None,
         }

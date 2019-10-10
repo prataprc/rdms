@@ -64,38 +64,108 @@ use crate::robt_index::{MBlock, ZBlock};
 
 include!("robt_marker.rs");
 
-//struct Level {
-//    dir: String,
-//    name: String,
-//    level: usize,
-//    file_no: usize,
-//}
-//
-//impl Level {
-//    fn new_level(dir: &str, name: &str, level: usize, file_no: usize) -> Level {
-//        Level {
-//            dir,
-//            name,
-//            level,
-//            file_no,
-//        }
-//    }
-//
-//    fn open_level(dir: ffi::OsString, file: &ffi::OsString) -> Option<Level> {
-//        match file.into_string() {
-//            Ok(file) => {
-//                let parts: Vec<&str> = file.split('-').collect();
-//                let prefix, name, level,
-//                if parts.len() != 4 {
-//                    None
-//                } else {
-//
-//                }
-//            }
-//            Err(_) => None,
-//        }
-//    }
-//}
+struct Snapshots {
+    levels: Vec<Arc<Level>>,
+    snapshots: Vec<Snapshot>,
+}
+
+struct Level {
+    dir: ffi::OsString,
+    name: String,
+    level: usize,
+    i_file_no: usize,
+}
+
+impl Drop for Level {
+    fn drop(&mut self) {
+        let (index_file, vlog_file) = self.to_filenames();
+        let f = Config::stitch_index_file(&self.dir, &index_file);
+        fs::remove_file(f).unwrap();
+        vlog_file.map(|f| {
+            let f = Config::stitch_index_file(&self.dir, &f);
+            fs::remove_file(f).unwrap();
+        });
+    }
+}
+
+impl Level {
+    fn new_level(
+        dir: &ffi::OsStr, // directory path where index files are stored
+        name: &str,       // name of index, must be utf8 string
+        level: usize,
+        i_file_no: usize,
+    ) -> Level {
+        Level {
+            dir: dir.to_os_string(),
+            name: name.to_string(),
+            level,
+            i_file_no,
+        }
+    }
+
+    fn open_level(
+        dir: &ffi::OsStr, // directory path where index files are stored
+        file: &str,
+    ) -> Result<Option<Level>> {
+        let parts: Vec<&str> = file.split('-').collect();
+        let mut parts = parts.into_iter();
+        if let Some("robt") = parts.next() {
+            let name = parts.next()?;
+            let level: usize = parts.next()?.parse().ok()?;
+            let file_no: usize = parts.next()?.parse().ok()?;
+            let level = Level {
+                dir: dir.to_os_string(),
+                name: name.to_string(),
+                level,
+                i_file_no,
+                v_file_no: Default::default(),
+            };
+            let items = read_meta_items(dir, &level.to_name())?;
+            let stats: Stats = items[0].parse();
+            match stats.vlog_file {
+                Some(vlog_file) => match path::Path::new(&vlog_file).file_name() {
+                    Some(vf) => {}
+                    None => Default::default(),
+                },
+                None => Default::default(),
+            }
+        } else {
+            None
+        }
+    }
+
+    fn to_file_parts(file: &str) -> Option<(String, usize, usize)> {
+        let parts: Vec<&str> = file.split('-').collect();
+        let mut parts = parts.into_iter();
+        if let Some("robt") = parts.next() {
+            let name = parts.next()?;
+            let level: usize = parts.next()?.parse().ok()?;
+            let file_no: usize = parts.next()?.parse().ok()?;
+            Some((name, level, file_no))
+        } else {
+            None
+        }
+    }
+
+    fn to_index_name(&self) -> String {
+        format!("{}-{}-{}", self.name, self.level, self.i_file_no)
+    }
+
+    fn to_vlog_name(&self) -> String {
+        format!("{}-{}-{}", self.name, self.level, self.v_file_no)
+    }
+
+    fn to_filenames(&self) -> (String, Option<String>) {
+        let indexf = Config::make_index_file(&self.to_name());
+        let vlogf = Config::make_vlog_file(&self.to_name());
+        let vlogpath = Config::stitch_vlog_file(&self.dir, &self.to_name());
+        if path::Path::new(&vlogpath).exists() {
+            (indexf, Some(vlogf))
+        } else {
+            (indexf, None)
+        }
+    }
+}
 
 /// Configuration options for Read Only BTree.
 #[derive(Clone)]
@@ -232,12 +302,20 @@ impl Config {
 }
 
 impl Config {
+    pub(crate) fn make_index_file(name: &str) -> String {
+        format!("robt-{}.indx", name)
+    }
+
+    pub(crate) fn make_vlog_file(name: &str) -> String {
+        format!("robt-{}.vlog", name)
+    }
+
     pub(crate) fn stitch_index_file(
         dir: &ffi::OsStr, // directory can be os-native string
         name: &str,       // but name must be a valid utf8 string
     ) -> ffi::OsString {
         let mut index_file = path::PathBuf::from(dir);
-        index_file.push(format!("robt-{}.indx", name));
+        index_file.push(Self::make_index_file(name));
         let index_file: &ffi::OsStr = index_file.as_ref();
         index_file.to_os_string()
     }
@@ -247,7 +325,7 @@ impl Config {
         name: &str,       // but name must be a valid utf8 string
     ) -> ffi::OsString {
         let mut vlog_file = path::PathBuf::from(dir);
-        vlog_file.push(format!("robt-{}.vlog", name));
+        vlog_file.push(Self::make_vlog_file(name));
         let vlog_file: &ffi::OsStr = vlog_file.as_ref();
         vlog_file.to_os_string()
     }
@@ -453,7 +531,7 @@ pub struct Stats {
     pub delta_ok: bool,
     /// Part of _build-configuration_, specifies the log file for deltas
     /// and value, if `value_in_vlog` is true. Note that only file-name
-    /// is relevat, directory-path shall be ignored.
+    /// is relevant, directory-path shall be ignored.
     pub vlog_file: Option<ffi::OsString>,
     /// Part of _build-configuration_, specifies whether value was
     /// persisted in value log file.
@@ -1100,6 +1178,17 @@ where
             Ok(root)
         } else {
             Err(Error::InvalidSnapshot("snapshot root missing".to_string()))
+        }
+    }
+
+    pub fn to_vlog_file(&self) -> Option<String> {
+        let stats: Stats = self.meta[3].parse().unwrap();
+        match stats.vlog_file {
+            Some(vlog_file) => {
+                let vf = path::Path::new(&stats.vlog_file).file_name();
+                Some(vf.to_str().to_string())
+            }
+            None => None,
         }
     }
 }
@@ -1766,7 +1855,8 @@ where
     }
 }
 
-/// Reverse iterate over [Robt] index, from an _upper bound_ to _lower bound_.
+/// Reverse iterate over [Robt] index, from an _upper bound_
+/// to _lower bound_.
 ///
 /// [Robt]: crate::robt::Robt
 pub struct Reverse<'a, K, V, R, Q>

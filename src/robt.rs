@@ -64,6 +64,12 @@ use crate::robt_index::{MBlock, ZBlock};
 
 include!("robt_marker.rs");
 
+//struct Robt {
+//    name: String,
+//}
+//
+//impl<K,V> Index<K,V>
+
 struct Snapshots<K, V>
 where
     K: Clone + Ord + Serialize,
@@ -75,44 +81,47 @@ where
 
 struct Level {
     dir: ffi::OsString,
-    name: String,
-    level: usize,
-    file_no: usize,
+    index_file: String,
+    vlog_file: Option<Arc<String>>,
 }
 
 impl Drop for Level {
     fn drop(&mut self) {
-        match self.to_filenames().ok() {
-            Some((index_file, vlog_file)) => {
-                let f = Config::stitch_index_file(&self.dir, &index_file);
+        let f = Config::stitch_index_file(&self.dir, &self.index_file);
+        fs::remove_file(f).unwrap();
+
+        match &self.vlog_file {
+            Some(vlog_file) if Arc::strong_count(&vlog_file) == 1 => {
+                let f = Config::stitch_index_file(&self.dir, &vlog_file);
                 fs::remove_file(f).unwrap();
-                vlog_file.as_ref().map(|f| {
-                    let f = Config::stitch_index_file(&self.dir, &f);
-                    fs::remove_file(f).unwrap();
-                });
             }
-            None => (),
+            Some(_) | None => (),
         }
     }
 }
 
 impl Level {
-    fn open_level(dir: &ffi::OsStr, file: &str) -> Option<Level> {
-        let (name, level, file_no) = Self::to_file_parts(file)?;
-        Some(Level {
-            dir: dir.to_os_string(),
-            name: name.to_string(),
-            level,
-            file_no,
-        })
-    }
-
-    fn new_level(dir: &ffi::OsStr, name: &str, l: usize, n: usize) -> Level {
+    fn open_level(
+        dir: &ffi::OsStr, // path to index/vlog files
+        index_file: String,
+        vlog_file: Option<Arc<String>>,
+    ) -> Level {
         Level {
             dir: dir.to_os_string(),
-            name: name.to_string(),
-            level: l,
-            file_no: n,
+            index_file,
+            vlog_file,
+        }
+    }
+
+    fn new_level(
+        dir: &ffi::OsStr, // path to index/vlog files
+        index_file: String,
+        vlog_file: Option<Arc<String>>,
+    ) -> Level {
+        Level {
+            dir: dir.to_os_string(),
+            index_file,
+            vlog_file,
         }
     }
 
@@ -130,47 +139,47 @@ impl Level {
     }
 
     fn to_index_name(&self) -> String {
-        format!("{}-{}-{}", self.name, self.level, self.file_no)
+        self.index_file.clone()
     }
 
-    fn to_vlog_name(&self, v_file_no: usize) -> String {
-        format!("{}-{}-{}", self.name, self.level, v_file_no)
+    fn to_vlog_name(&self) -> Option<String> {
+        self.vlog_file.as_ref().map(|f| f.to_string())
     }
 
-    fn to_filenames(&self) -> Result<(String, Option<String>)> {
-        let indexfile = Config::make_index_file(&self.to_index_name());
+    //fn to_filenames(&self) -> Result<(String, Option<String>)> {
+    //    let indexfile = Config::make_index_file(&self.to_index_name());
 
-        let items = read_meta_items(&self.dir, &self.to_index_name())?;
-        let stats: Stats = match &items[3] {
-            MetaItem::Stats(stats) => stats.parse()?,
-            _ => unreachable!(),
-        };
-        match stats.vlog_file {
-            Some(vlog_file) => {
-                let file = match path::Path::new(&vlog_file).file_name() {
-                    Some(file) => file.to_str().unwrap(),
-                    None => return Ok((indexfile, None)),
-                };
-                let vlogfile = match Self::to_file_parts(file) {
-                    None => return Ok((indexfile, None)),
-                    Some((_name, _level, v_file_no)) => {
-                        let vlogfile = self.to_vlog_name(v_file_no);
-                        Config::make_vlog_file(&vlogfile)
-                    }
-                };
+    //    let items = read_meta_items(&self.dir, &self.to_index_name())?;
+    //    let stats: Stats = match &items[3] {
+    //        MetaItem::Stats(stats) => stats.parse()?,
+    //        _ => unreachable!(),
+    //    };
+    //    match stats.vlog_file {
+    //        Some(vlog_file) => {
+    //            let file = match path::Path::new(&vlog_file).file_name() {
+    //                Some(file) => file.to_str().unwrap(),
+    //                None => return Ok((indexfile, None)),
+    //            };
+    //            let vlogfile = match Self::to_file_parts(file) {
+    //                None => return Ok((indexfile, None)),
+    //                Some((_name, _level, v_file_no)) => {
+    //                    let vlogfile = self.to_vlog_name(v_file_no);
+    //                    Config::make_vlog_file(&vlogfile)
+    //                }
+    //            };
 
-                let mut vpath = path::PathBuf::new();
-                vpath.push(&self.dir);
-                vpath.push(&vlogfile);
-                if path::Path::new(&vpath).exists() {
-                    Ok((indexfile, Some(vlogfile)))
-                } else {
-                    Ok((indexfile, None))
-                }
-            }
-            None => Ok((indexfile, None)),
-        }
-    }
+    //            let mut vpath = path::PathBuf::new();
+    //            vpath.push(&self.dir);
+    //            vpath.push(&vlogfile);
+    //            if path::Path::new(&vpath).exists() {
+    //                Ok((indexfile, Some(vlogfile)))
+    //            } else {
+    //                Ok((indexfile, None))
+    //            }
+    //        }
+    //        None => Ok((indexfile, None)),
+    //    }
+    //}
 }
 
 /// Configuration options for Read Only BTree.

@@ -587,7 +587,7 @@ where
 /// indexed by rdms data structures.
 ///
 /// It is a user facing structure, also used in stitching together
-/// different components of [Rdms].
+/// different components of `Rdms`.
 #[derive(Clone)]
 pub struct Entry<K, V>
 where

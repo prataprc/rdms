@@ -320,28 +320,33 @@ where
 #[derive(Clone)]
 pub struct Config {
     /// Leaf block size in btree index.
+    /// Default: Config::ZBLOCKSIZE
     pub z_blocksize: usize,
     /// Intemediate block size in btree index.
+    /// Default: Config::MBLOCKSIZE
     pub m_blocksize: usize,
     /// If deltas are indexed and/or value to be stored in separate log file.
+    /// Default: Config::VBLOCKSIZE
     pub v_blocksize: usize,
     /// Tombstone purge. For LSM based index older entries can quickly bloat
     /// system. To avoid this, it is a good idea to purge older versions of
     /// an entry that are seen by all participating entities. When configured
     /// with `Some(seqno)`, all iterated entry/version whose seqno is ``<=``
     /// purge seqno shall be removed totally from the index.
+    /// Default: None
     pub tomb_purge: Option<u64>,
     /// Include delta as part of entry. Note that delta values are always
     /// stored in separate value-log file.
+    /// Default: true
     pub delta_ok: bool,
     /// Optional name for value log file. If not supplied, but `delta_ok` or
     /// `value_in_vlog` is true, then value log file name will be computed
-    /// based on configuration`name` and `dir`.
+    /// based on configuration`name` and `dir`. Default: None
     pub vlog_file: Option<ffi::OsString>,
     /// If true, then value shall be persisted in value log file. Otherwise
-    /// value shall be saved in the index' leaf node.
+    /// value shall be saved in the index' leaf node. Default: false
     pub value_in_vlog: bool,
-    /// Flush queue size.
+    /// Flush queue size. Default: Config::FLUSH_QUEUE_SIZE
     pub flush_queue_size: usize,
 }
 
@@ -383,9 +388,12 @@ impl From<Stats> for Config {
 }
 
 impl Config {
+    /// Default value for z-block-size, 4 * 1024 bytes.
     pub const ZBLOCKSIZE: usize = 4 * 1024; // 4KB leaf node
-    pub const VBLOCKSIZE: usize = 4 * 1024; // ~ 4KB of blobs.
+    /// Default value for m-block-size, 4 * 1024 bytes.
     pub const MBLOCKSIZE: usize = 4 * 1024; // 4KB intermediate node
+    /// Default value for v-block-size, 4 * 1024 bytes.
+    pub const VBLOCKSIZE: usize = 4 * 1024; // 4KB of blobs.
     const MARKER_BLOCK_SIZE: usize = 1024 * 4;
     const FLUSH_QUEUE_SIZE: usize = 64;
 

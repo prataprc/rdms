@@ -17,16 +17,18 @@ pub struct Config {
     pub interval_compact: usize,
 }
 
-impl Config {
-    const INTERVAL_COMMIT: usize = 0;
-    const INTERVAL_COMPACT: usize = 0;
-
-    pub fn default() -> Config {
+impl Default for Config {
+    fn default() -> Config {
         Config {
             interval_commit: Self::INTERVAL_COMMIT,
             interval_compact: Self::INTERVAL_COMPACT,
         }
     }
+}
+
+impl Config {
+    const INTERVAL_COMMIT: usize = 0;
+    const INTERVAL_COMPACT: usize = 0;
 
     pub fn set_auto_commit(&mut self, interval: usize) -> &mut Config {
         self.interval_commit = interval;

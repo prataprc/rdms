@@ -1602,7 +1602,7 @@ fn random_robt(
     let dir = {
         let mut dir = std::env::temp_dir();
         dir.push(name);
-        dir.to_str().unwrap().to_string()
+        dir.into_os_string()
     };
     let mut config: robt::Config = Default::default();
     config.delta_ok = delta_ok;
@@ -1692,6 +1692,7 @@ fn random_ops_keys(seed: u128, ops_limit: i64, key_limit: i64) -> (i64, i64) {
     (n_ops, i64::max(i64::abs(max_key), n_ops / 10) + 1)
 }
 
+#[allow(dead_code)] // TODO: clean this up latter.
 fn log_entry(e: &Entry<i64, i64>) {
     println!(
         "key: {} value: {:?}, seqno: {}, deleted: {}",

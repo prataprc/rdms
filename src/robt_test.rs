@@ -60,7 +60,7 @@ fn test_stats() {
 fn test_meta_items() {
     use std::time::SystemTime;
 
-    let dir = std::env::temp_dir().to_str().unwrap().to_string();
+    let dir = std::env::temp_dir().into_os_string();
     fs::remove_file(dir.clone()).ok();
     let name = "users".to_string();
     let file = Config::stitch_index_file(&dir, &name);
@@ -145,15 +145,14 @@ fn test_config() {
 
     let config: Config = Default::default();
     let dir_path = std::env::temp_dir();
-    let dir: &ffi::OsStr = dir_path.as_ref();
-    let dir = dir.to_str().unwrap();
+    let dir = dir_path.clone().into_os_string();
     let ref_file = {
         let mut rpath = path::PathBuf::new();
         rpath.push(dir_path.clone());
         rpath.push("robt-users.indx");
         rpath.into_os_string()
     };
-    assert_eq!(config.to_index_file(dir, "users"), ref_file.to_os_string());
+    assert_eq!(config.to_index_file(&dir, "users"), ref_file.to_os_string());
     let ref_file = {
         let mut rpath = path::PathBuf::new();
         rpath.push(dir_path.clone());
@@ -161,7 +160,7 @@ fn test_config() {
         rpath.into_os_string()
     };
     assert_eq!(
-        config.to_value_log(dir, "users").unwrap(),
+        config.to_value_log(&dir, "users").unwrap(),
         ref_file.to_os_string()
     );
 }
@@ -261,7 +260,7 @@ fn run_robt_llrb(mut n_ops: u64, key_max: i64, repeat: usize, seed: u128) {
         let dir = {
             let mut dir = std::env::temp_dir();
             dir.push("test-robt-build");
-            dir.to_str().unwrap().to_string()
+            dir.into_os_string()
         };
         let name = "test-build";
         let b = Builder::initial(&dir, name, config.clone()).unwrap();

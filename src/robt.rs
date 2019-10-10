@@ -49,14 +49,7 @@ use std::{
     ops::{Bound, RangeBounds},
     path, result,
     str::FromStr,
-    sync::{
-        self,
-        atomic::{
-            AtomicPtr,
-            Ordering::{Acquire, Release},
-        },
-        mpsc, Arc,
-    },
+    sync::{self, mpsc},
     thread, time,
 };
 
@@ -69,252 +62,40 @@ use crate::util;
 use crate::robt_entry::MEntry;
 use crate::robt_index::{MBlock, ZBlock};
 
-// TODO: make dir, file, path into OsString and OsStr.
-// TODO: test cases building Robt with an empty iterator.
-// TODO: test cases building Robt with one element iterator.
-
 include!("robt_marker.rs");
 
-struct Levels<K, V>(AtomicPtr<Arc<Vec<Snapshot<K, V>>>>)
-where
-    K: Clone + Ord + Serialize,
-    V: Clone + Diff + Serialize,
-    <V as Diff>::D: Serialize;
-
-impl<K, V> Levels<K, V>
-where
-    K: Clone + Ord + Serialize,
-    V: Clone + Diff + Serialize,
-    <V as Diff>::D: Serialize,
-{
-    fn new() -> Levels<K, V> {
-        Levels(AtomicPtr::new(Box::leak(Box::new(Arc::new(vec![])))))
-    }
-
-    fn get_snapshots(&self) -> Arc<Vec<Snapshot<K, V>>> {
-        unsafe { Arc::clone(self.0.load(Acquire).as_ref().unwrap()) }
-    }
-
-    fn compare_swap_snapshots(&self, new_snapshots: Vec<Snapshot<K, V>>) {
-        let _olds = unsafe { Box::from_raw(self.0.load(Acquire)) };
-        let new_snapshots = Box::leak(Box::new(Arc::new(new_snapshots)));
-        self.0.store(new_snapshots, Release);
-    }
-}
-
-pub(crate) struct Robt<K, V, M>
-where
-    K: 'static + Sync + Send + Clone + Ord + Serialize + Footprint,
-    V: 'static + Sync + Send + Clone + Diff + Serialize + Footprint,
-    <V as Diff>::D: Serialize,
-    M: 'static + Sync + Send + Index<K, V>,
-{
-    config: Config,
-    mem_ratio: f64,
-    disk_ratio: f64,
-    levels: Levels<K, V>,
-    todisk: MemToDisk<K, V, M>,      // encapsulates a thread
-    tocompact: DiskCompact<K, V, M>, // encapsulates a thread
-}
-
-// new instance of multi-level Robt indexes.
-impl<K, V, M> Robt<K, V, M>
-where
-    K: 'static + Sync + Send + Clone + Ord + Serialize + Footprint,
-    V: 'static + Sync + Send + Clone + Diff + Serialize + Footprint,
-    <V as Diff>::D: Serialize,
-    M: 'static + Sync + Send + Index<K, V>,
-{
-    const MEM_RATIO: f64 = 0.2;
-    const DISK_RATIO: f64 = 0.5;
-
-    pub(crate) fn new(config: Config) -> Robt<K, V, M> {
-        Robt {
-            config: config.clone(),
-            mem_ratio: Self::MEM_RATIO,
-            disk_ratio: Self::DISK_RATIO,
-            levels: Levels::new(),
-            todisk: MemToDisk::new(config.clone()),
-            tocompact: DiskCompact::new(config.clone()),
-        }
-    }
-
-    pub(crate) fn set_mem_ratio(mut self, ratio: f64) -> Robt<K, V, M> {
-        self.mem_ratio = ratio;
-        self
-    }
-
-    pub(crate) fn set_disk_ratio(mut self, ratio: f64) -> Robt<K, V, M> {
-        self.disk_ratio = ratio;
-        self
-    }
-}
-
-// add new levels.
-impl<K, V, M> Robt<K, V, M>
-where
-    K: 'static + Sync + Send + Clone + Ord + Serialize + Footprint,
-    V: 'static + Sync + Send + Clone + Diff + Serialize + Footprint,
-    <V as Diff>::D: Serialize,
-    M: 'static + Sync + Send + Index<K, V>,
-{
-    pub(crate) fn flush_to_disk(
-        &mut self,
-        index: Arc<M>, // full table scan over mem-index
-        app_meta: Vec<u8>,
-    ) -> Result<()> {
-        let _resp = self.todisk.send(Request::MemFlush {
-            index,
-            app_meta,
-            phantom_key: marker::PhantomData,
-            phantom_val: marker::PhantomData,
-        })?;
-        Ok(())
-    }
-}
-
-enum Request<K, V, M>
-where
-    K: 'static + Sync + Send + Clone + Ord + Serialize + Footprint,
-    V: 'static + Sync + Send + Clone + Diff + Serialize + Footprint,
-    <V as Diff>::D: Serialize,
-    M: 'static + Sync + Send + Index<K, V>,
-{
-    MemFlush {
-        index: Arc<M>,
-        app_meta: Vec<u8>,
-        phantom_key: marker::PhantomData<K>,
-        phantom_val: marker::PhantomData<V>,
-    },
-}
-
-enum Response {
-    Ok,
-}
-
-struct MemToDisk<K, V, M>
-where
-    K: 'static + Sync + Send + Clone + Ord + Serialize + Footprint,
-    V: 'static + Sync + Send + Clone + Diff + Serialize + Footprint,
-    <V as Diff>::D: Serialize,
-    M: 'static + Sync + Send + Index<K, V>,
-{
-    config: Config,
-    t_handle: thread::JoinHandle<Result<()>>,
-    tx: mpsc::SyncSender<(Request<K, V, M>, mpsc::SyncSender<Response>)>,
-}
-
-impl<K, V, M> MemToDisk<K, V, M>
-where
-    K: 'static + Sync + Send + Clone + Ord + Serialize + Footprint,
-    V: 'static + Sync + Send + Clone + Diff + Serialize + Footprint,
-    <V as Diff>::D: Serialize,
-    M: 'static + Sync + Send + Index<K, V>,
-{
-    fn new(config: Config) -> MemToDisk<K, V, M> {
-        let (tx, rx) = mpsc::sync_channel(1);
-        let conf = config.clone();
-        let t_handle = thread::spawn(move || thread_mem_to_disk(conf, rx));
-        MemToDisk {
-            config,
-            t_handle,
-            tx,
-        }
-    }
-
-    fn send(&mut self, req: Request<K, V, M>) -> Result<Response> {
-        let (tx, rx) = mpsc::sync_channel(0);
-        self.tx.send((req, tx))?;
-        Ok(rx.recv()?)
-    }
-
-    fn close_wait(self) -> Result<()> {
-        mem::drop(self.tx);
-        match self.t_handle.join() {
-            Ok(res) => res,
-            Err(err) => match err.downcast_ref::<String>() {
-                Some(msg) => Err(Error::ThreadFail(msg.to_string())),
-                None => Err(Error::ThreadFail("unknown error".to_string())),
-            },
-        }
-    }
-}
-
-fn thread_mem_to_disk<K, V, M>(
-    _config: Config,
-    _rx: mpsc::Receiver<(Request<K, V, M>, mpsc::SyncSender<Response>)>,
-) -> Result<()>
-where
-    K: 'static + Sync + Send + Clone + Ord + Serialize + Footprint,
-    V: 'static + Sync + Send + Clone + Diff + Serialize + Footprint,
-    <V as Diff>::D: Serialize,
-    M: 'static + Sync + Send + Index<K, V>,
-{
-    // TBD
-    Ok(())
-}
-
-struct DiskCompact<K, V, M>
-where
-    K: 'static + Sync + Send + Clone + Ord + Serialize + Footprint,
-    V: 'static + Sync + Send + Clone + Diff + Serialize + Footprint,
-    <V as Diff>::D: Serialize,
-    M: 'static + Sync + Send + Index<K, V>,
-{
-    config: Config,
-    t_handle: thread::JoinHandle<Result<()>>,
-    tx: mpsc::SyncSender<(Request<K, V, M>, mpsc::SyncSender<Response>)>,
-}
-
-impl<K, V, M> DiskCompact<K, V, M>
-where
-    K: 'static + Sync + Send + Clone + Ord + Serialize + Footprint,
-    V: 'static + Sync + Send + Clone + Diff + Serialize + Footprint,
-    <V as Diff>::D: Serialize,
-    M: 'static + Sync + Send + Index<K, V>,
-{
-    fn new(config: Config) -> DiskCompact<K, V, M> {
-        let (tx, rx) = mpsc::sync_channel(1);
-        let conf = config.clone();
-        let t_handle = thread::spawn(move || thread_disk_compact(conf, rx));
-        DiskCompact {
-            config,
-            t_handle,
-            tx,
-        }
-    }
-
-    fn send(&mut self, req: Request<K, V, M>) -> Result<Response> {
-        let (tx, rx) = mpsc::sync_channel(0);
-        self.tx.send((req, tx))?;
-        Ok(rx.recv()?)
-    }
-
-    fn close_wait(self) -> Result<()> {
-        mem::drop(self.tx);
-        match self.t_handle.join() {
-            Ok(res) => res,
-            Err(err) => match err.downcast_ref::<String>() {
-                Some(msg) => Err(Error::ThreadFail(msg.to_string())),
-                None => Err(Error::ThreadFail("unknown error".to_string())),
-            },
-        }
-    }
-}
-
-fn thread_disk_compact<K, V, M>(
-    _config: Config,
-    _rx: mpsc::Receiver<(Request<K, V, M>, mpsc::SyncSender<Response>)>,
-) -> Result<()>
-where
-    K: 'static + Sync + Send + Clone + Ord + Serialize + Footprint,
-    V: 'static + Sync + Send + Clone + Diff + Serialize + Footprint,
-    <V as Diff>::D: Serialize,
-    M: 'static + Sync + Send + Index<K, V>,
-{
-    // TBD
-    Ok(())
-}
+//struct Level {
+//    dir: String,
+//    name: String,
+//    level: usize,
+//    file_no: usize,
+//}
+//
+//impl Level {
+//    fn new_level(dir: &str, name: &str, level: usize, file_no: usize) -> Level {
+//        Level {
+//            dir,
+//            name,
+//            level,
+//            file_no,
+//        }
+//    }
+//
+//    fn open_level(dir: ffi::OsString, file: &ffi::OsString) -> Option<Level> {
+//        match file.into_string() {
+//            Ok(file) => {
+//                let parts: Vec<&str> = file.split('-').collect();
+//                let prefix, name, level,
+//                if parts.len() != 4 {
+//                    None
+//                } else {
+//
+//                }
+//            }
+//            Err(_) => None,
+//        }
+//    }
+//}
 
 /// Configuration options for Read Only BTree.
 #[derive(Clone)]
@@ -451,14 +232,20 @@ impl Config {
 }
 
 impl Config {
-    pub(crate) fn stitch_index_file(dir: &str, name: &str) -> ffi::OsString {
+    pub(crate) fn stitch_index_file(
+        dir: &ffi::OsStr, // directory can be os-native string
+        name: &str,       // but name must be a valid utf8 string
+    ) -> ffi::OsString {
         let mut index_file = path::PathBuf::from(dir);
         index_file.push(format!("robt-{}.indx", name));
         let index_file: &ffi::OsStr = index_file.as_ref();
         index_file.to_os_string()
     }
 
-    pub(crate) fn stitch_vlog_file(dir: &str, name: &str) -> ffi::OsString {
+    pub(crate) fn stitch_vlog_file(
+        dir: &ffi::OsStr, // directory can be os-native string
+        name: &str,       // but name must be a valid utf8 string
+    ) -> ffi::OsString {
         let mut vlog_file = path::PathBuf::from(dir);
         vlog_file.push(format!("robt-{}.vlog", name));
         let vlog_file: &ffi::OsStr = vlog_file.as_ref();
@@ -474,12 +261,20 @@ impl Config {
     }
 
     /// Return the index file under configured directory.
-    pub fn to_index_file(&self, dir: &str, name: &str) -> ffi::OsString {
+    pub fn to_index_file(
+        &self,
+        dir: &ffi::OsStr, // directory can be os-native string
+        name: &str,       // but name must be a valid utf8 string
+    ) -> ffi::OsString {
         Self::stitch_index_file(&dir, &name)
     }
 
     /// Return the value-log file, if enabled, under configured directory.
-    pub fn to_value_log(&self, dir: &str, name: &str) -> Option<ffi::OsString> {
+    pub fn to_value_log(
+        &self,
+        dir: &ffi::OsStr, // directory can be os-native string
+        name: &str,       // but name must be a valid utf8 string
+    ) -> Option<ffi::OsString> {
         match &self.vlog_file {
             Some(file) => Some(file.clone()),
             None => Some(Self::stitch_vlog_file(&dir, &name)),
@@ -567,8 +362,8 @@ pub(crate) fn write_meta_items(
 ///
 /// [Robt]: crate::robt::Robt
 pub fn read_meta_items(
-    dir: &str,  // directory of index
-    name: &str, // name of index
+    dir: &ffi::OsStr, // directory of index, can be os-native string
+    name: &str,       // name of index, must be utf8 string
 ) -> Result<Vec<MetaItem>> {
     let index_file = Config::stitch_index_file(dir, name);
     let m = fs::metadata(&index_file)?.len();
@@ -831,7 +626,7 @@ where
     /// For initial builds, index file and value-log-file, if configured,
     /// shall be created new.
     pub fn initial(
-        dir: &str, // directory path where index file(s) are stored
+        dir: &ffi::OsStr, // directory path where index file(s) are stored
         name: &str,
         config: Config,
     ) -> Result<Builder<K, V>> {
@@ -858,7 +653,7 @@ where
     /// For incremental build, index file is created new, while
     /// value-log-file, if configured, shall be appended to older version.
     pub fn incremental(
-        dir: &str, // directory path where index files are stored
+        dir: &ffi::OsStr, // directory path where index files are stored
         name: &str,
         config: Config,
     ) -> Result<Builder<K, V>> {
@@ -1203,13 +998,14 @@ where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
 {
-    dir: String,
+    dir: ffi::OsString,
     name: String,
     meta: Vec<MetaItem>,
     // working fields
     config: Config,
     index_fd: fs::File,
     vlog_fd: Option<fs::File>,
+    // TODO: Do we need a sync::Mutex for Snapshot
     mutex: sync::Mutex<i32>,
 
     phantom_key: marker::PhantomData<K>,
@@ -1224,10 +1020,10 @@ where
 {
     /// Open BTree snapshot from file that can be constructed from ``dir``
     /// and ``name``.
-    pub fn open(dir: &str, name: &str) -> Result<Snapshot<K, V>> {
+    pub fn open(dir: &ffi::OsStr, name: &str) -> Result<Snapshot<K, V>> {
         let meta_items = read_meta_items(dir, name)?;
         let mut snap = Snapshot {
-            dir: dir.to_string(),
+            dir: dir.to_os_string(),
             name: name.to_string(),
             meta: meta_items,
             config: Default::default(),
@@ -1320,8 +1116,8 @@ where
     /// Make a new empty index of this type, with same configuration.
     fn make_new(&self) -> Result<Box<Self>> {
         Ok(Box::new(Snapshot::open(
-            self.name.as_str(),
-            self.dir.as_str(),
+            self.dir.as_ref(),
+            self.name.as_ref(),
         )?))
     }
 
@@ -1342,7 +1138,7 @@ where
     V: Clone + Diff + Serialize,
 {
     fn footprint(&self) -> isize {
-        let (dir, name) = (self.dir.as_str(), self.name.as_str());
+        let (dir, name) = (self.dir.as_os_str(), self.name.as_str());
         let mut footprint = fs::metadata(self.config.to_index_file(dir, name))
             .unwrap()
             .len();

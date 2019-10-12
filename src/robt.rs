@@ -49,7 +49,11 @@ use std::{
     ops::{Bound, RangeBounds},
     path, result,
     str::FromStr,
-    sync::{self, atomic::AtomicBool, mpsc, Arc},
+    sync::{
+        self,
+        atomic::{AtomicBool, Ordering::SeqCst},
+        mpsc, Arc,
+    },
     thread, time,
 };
 
@@ -67,6 +71,93 @@ include!("robt_marker.rs");
 
 const NLEVELS: usize = 16;
 
+struct Levels<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Serialize,
+{
+    levels: [State<K, V>; NLEVELS],
+    reloads: Vec<Arc<AtomicBool>>,
+}
+
+impl<K, V> Levels<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Serialize,
+{
+    fn new() -> Levels<K, V> {
+        Levels {
+            levels: Self::new_initial_states(),
+            reloads: vec![],
+        }
+    }
+
+    fn new_initial_states() -> [State<K, V>; NLEVELS]
+    where
+        K: Clone + Ord + Serialize,
+        V: Clone + Diff + Serialize,
+        <V as Diff>::D: Serialize,
+    {
+        [
+            State::None,
+            State::None,
+            State::None,
+            State::None,
+            State::None,
+            State::None,
+            State::None,
+            State::None,
+            State::None,
+            State::None,
+            State::None,
+            State::None,
+            State::None,
+            State::None,
+            State::None,
+            State::None,
+        ]
+    }
+
+    fn put(&mut self, levels: [State<K, V>; NLEVELS]) {
+        self.levels = levels;
+        for reload in self.reloads.iter() {
+            reload.store(true, SeqCst)
+        }
+    }
+
+    fn get(&self) -> [State<K, V>; NLEVELS] {
+        self.levels.clone()
+    }
+
+    fn new_reader(&mut self) -> ([State<K, V>; NLEVELS], Arc<AtomicBool>) {
+        let levels = self.levels.clone();
+        let reload = Arc::new(AtomicBool::new(false));
+        self.reloads.push(Arc::clone(&reload));
+        (levels, reload)
+    }
+}
+
+impl<K, V> Footprint for Levels<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Serialize,
+{
+    fn footprint(&self) -> isize {
+        self.levels
+            .iter()
+            .map(|level| match level {
+                State::Active(level) => level.footprint(),
+                State::Compact(level) => level.footprint(),
+                State::Flush(level) => level.footprint(),
+                State::None => 0,
+            })
+            .sum()
+    }
+}
+
 struct Robt<K, V>
 where
     K: Clone + Ord + Serialize,
@@ -75,10 +166,7 @@ where
 {
     dir: ffi::OsString,
     name: String,
-
-    mutex: sync::Mutex<i32>,
-    levels: [State<K, V>; NLEVELS],
-    reloads: Vec<Arc<AtomicBool>>,
+    mu: sync::Mutex<Levels<K, V>>,
 }
 
 impl<K, V> Robt<K, V>
@@ -88,37 +176,27 @@ where
     <V as Diff>::D: Serialize,
 {
     fn new(dir: &ffi::OsStr, name: &str) -> Result<Robt<K, V>> {
-        let levels = new_initial_states();
-
         Ok(Robt {
             dir: dir.to_os_string(),
             name: name.to_string(),
-
-            mutex: sync::Mutex::new(0xC0FFEE),
-            levels,
-            reloads: vec![],
+            mu: sync::Mutex::new(Levels::new()),
         })
     }
 
     fn open(dir: &ffi::OsStr, name: &str) -> Result<Robt<K, V>> {
-        let levels = new_initial_states();
-
-        for item in fs::read_dir(&dir)? {
-            let file_name = item?.file_name().to_str().unwrap();
-            let name = match Config::to_name(file_name) {
-                None => continue
-                Some(name) => name
-            };
-            let snapshot = Snapshot::open(dir, &name)?;
-        }
+        //for item in fs::read_dir(&dir)? {
+        //    let file_name = item?.file_name().to_str().unwrap();
+        //    let name = match Config::to_name(file_name) {
+        //        None => continue
+        //        Some(name) => name
+        //    };
+        //    let snapshot = Snapshot::open(dir, &name)?;
+        //}
 
         Ok(Robt {
             dir: dir.to_os_string(),
             name: name.to_string(),
-
-            mutex: sync::Mutex::new(0xC0FFEE),
-            levels,
-            reloads: vec![],
+            mu: sync::Mutex::new(Levels::new()),
         })
     }
 }
@@ -130,26 +208,8 @@ where
     <V as Diff>::D: Serialize,
 {
     fn footprint(&self) -> isize {
-        let mut footprint = 0;
-        for level in self.levels.iter() {
-            let level = match level {
-                State::Active(level) => level,
-                State::Compact(level) => level,
-                State::Flush(level) => level,
-                State::None => continue,
-            };
-
-            let file: &str = level.index_file.as_ref();
-            footprint += fs::metadata(file).unwrap().len();
-            footprint += match &level.vlog_file {
-                Some(vlog_file) => {
-                    let file: &str = vlog_file.as_ref();
-                    fs::metadata(file).unwrap().len()
-                }
-                None => 0,
-            };
-        }
-        footprint.try_into().unwrap()
+        let levels = self.mu.lock().unwrap(); // on poison panic.
+        levels.footprint()
     }
 }
 
@@ -167,11 +227,9 @@ where
     }
 
     fn to_reader(&mut self) -> Result<Self::R> {
-        let _lock = self.mutex.lock();
-
-        let reload = Arc::new(AtomicBool::new(true));
-        self.reloads.push(Arc::clone(&reload));
-        Ok(Snapshots::new(reload, self.levels.clone()))
+        let mut levels = self.mu.lock().unwrap();
+        let (ls, reload) = levels.new_reader();
+        Ok(Snapshots::new(ls, reload))
     }
 
     fn to_writer(&mut self) -> Result<Self::W> {
@@ -196,8 +254,8 @@ where
     <V as Diff>::D: Serialize,
 {
     fn new(
-        reload: Arc<AtomicBool>,
         levels: [State<K, V>; NLEVELS], // reference levels
+        reload: Arc<AtomicBool>,
     ) -> Snapshots<K, V> {
         Snapshots { reload, levels }
     }
@@ -294,32 +352,6 @@ where
     }
 }
 
-fn new_initial_states<K, V>() -> [State<K, V>; NLEVELS]
-where
-    K: Clone + Ord + Serialize,
-    V: Clone + Diff + Serialize,
-    <V as Diff>::D: Serialize,
-{
-    [
-        State::None,
-        State::None,
-        State::None,
-        State::None,
-        State::None,
-        State::None,
-        State::None,
-        State::None,
-        State::None,
-        State::None,
-        State::None,
-        State::None,
-        State::None,
-        State::None,
-        State::None,
-        State::None,
-    ]
-}
-
 #[derive(Default)]
 struct Level<K, V>
 where
@@ -330,56 +362,6 @@ where
     index_file: Arc<String>,
     vlog_file: Option<Arc<String>>,
     snapshot: Option<mem::ManuallyDrop<Snapshot<K, V>>>,
-}
-
-impl<K, V> Clone for Level<K, V>
-where
-    K: Clone + Ord + Serialize,
-    V: Clone + Diff + Serialize,
-{
-    fn clone(&self) -> Level<K, V> {
-        if self.snapshot.is_some() {
-            panic!("cannot clone a level that has a disk snapshot");
-        }
-
-        Level {
-            dir: self.dir.clone(),
-            index_file: Arc::clone(&self.index_file),
-            vlog_file: self.vlog_file.as_ref().map(|x| Arc::clone(x)),
-            snapshot: None,
-        }
-    }
-}
-
-impl<K, V> Drop for Level<K, V>
-where
-    K: Clone + Ord + Serialize,
-    V: Clone + Diff + Serialize,
-{
-    fn drop(&mut self) {
-        // manuall drop snapshot object here.
-        match self.snapshot.take() {
-            Some(mut snapshot) => unsafe {
-                // order of drop is important with respect to file-cleanup.
-                mem::ManuallyDrop::drop(&mut snapshot)
-            },
-            None => (),
-        }
-
-        // and cleanup the older snapshots if there are not more references.
-        if Arc::strong_count(&self.index_file) == 1 {
-            let f = Config::stitch_index_file(&self.dir, &self.index_file);
-            fs::remove_file(f).unwrap();
-        }
-
-        match &self.vlog_file {
-            Some(vlog_file) if Arc::strong_count(&vlog_file) == 1 => {
-                let f = Config::stitch_index_file(&self.dir, &vlog_file);
-                fs::remove_file(f).unwrap();
-            }
-            Some(_) | None => (),
-        }
-    }
 }
 
 impl<K, V> Level<K, V>
@@ -432,6 +414,75 @@ where
 
     fn to_vlog_name(&self) -> Option<String> {
         self.vlog_file.as_ref().map(|f| f.to_string())
+    }
+}
+
+impl<K, V> Footprint for Level<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+{
+    fn footprint(&self) -> isize {
+        let file: &str = self.index_file.as_ref();
+        let mut footprint = fs::metadata(file).unwrap().len();
+        footprint += match &self.vlog_file {
+            Some(vlog_file) => {
+                let file: &str = vlog_file.as_ref();
+                fs::metadata(file).unwrap().len()
+            }
+            None => 0,
+        };
+        footprint.try_into().unwrap()
+    }
+}
+
+impl<K, V> Clone for Level<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+{
+    fn clone(&self) -> Level<K, V> {
+        if self.snapshot.is_some() {
+            panic!("cannot clone a level that has an open snapshot");
+        }
+
+        Level {
+            dir: self.dir.clone(),
+            index_file: Arc::clone(&self.index_file),
+            vlog_file: self.vlog_file.as_ref().map(|x| Arc::clone(x)),
+            snapshot: None,
+        }
+    }
+}
+
+impl<K, V> Drop for Level<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+{
+    fn drop(&mut self) {
+        // manuall drop snapshot object here.
+        match self.snapshot.take() {
+            Some(mut snapshot) => unsafe {
+                // order of drop is important with respect to file-cleanup.
+                mem::ManuallyDrop::drop(&mut snapshot)
+            },
+            None => (),
+        }
+
+        // and cleanup the older snapshots if there are not more references.
+        if Arc::strong_count(&self.index_file) == 1 {
+            let f = Config::stitch_index_file(&self.dir, &self.index_file);
+            fs::remove_file(f).unwrap();
+        }
+
+        match &self.vlog_file {
+            Some(vlog_file) if Arc::strong_count(&vlog_file) == 1 => {
+                let f = Config::stitch_index_file(&self.dir, &vlog_file);
+                fs::remove_file(f).unwrap();
+            }
+            Some(_) | None => (),
+        }
     }
 }
 

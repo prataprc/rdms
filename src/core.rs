@@ -13,7 +13,7 @@ use crate::{error::Error, vlog};
 /// Result returned by rdms functions and methods.
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Type alias to trait-objects iterating over [`Index`].
+/// Type alias to trait-objects iterating over an index.
 pub type IndexIter<'a, K, V> = Box<dyn Iterator<Item = Result<Entry<K, V>>> + 'a>;
 
 /// Type alias to trait-objects iterating, piece-wise, over [`Index`].
@@ -141,9 +141,10 @@ where
     fn delete_index(&mut self, key: K, index: u64) -> Result<Entry<K, V>>;
 }
 
-/// Ephemeral trait implemented by in-memory index that can ingest
-/// key, value pairs, support read, but does not persist data on disk.
+/// Ephemeral trait implemented by in-memory index.
 ///
+/// To ingest key, value pairs, support read, but does not persist
+/// data on disk.
 pub trait Ephemeral<K, V>: Sized + Footprint
 where
     K: Send + Sync + Clone + Ord + Footprint,
@@ -170,9 +171,9 @@ where
     fn to_writer(&mut self) -> Result<Self::W>;
 }
 
-/// Durable trait implemented by disk index that can commit data
-/// onto disk, support read operations and other lsm-methods.
+/// Durable trait implemented by disk index.
 ///
+/// To commit data onto disk, support read operations and other lsm-methods.
 pub trait Durable<K, V>: Sized
 where
     K: Send + Sync + Clone + Ord,

@@ -8,8 +8,10 @@ use crate::core::{Diff, Durable, Footprint, IndexIter, Reader};
 use crate::core::{Entry, Result, ScanIter};
 use crate::error::Error;
 
-/// NoDisk type denotes empty Disk type. Applications can use this
-/// type while instantiating `rdms-index` in mem-only mode.
+/// NoDisk type denotes empty Disk type.
+///
+/// Applications can use this type while instantiating `rdms-index` in
+/// mem-only mode.
 pub struct NoDisk<K, V> {
     phantom_key: marker::PhantomData<K>,
     phantom_val: marker::PhantomData<V>,

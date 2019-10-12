@@ -41,7 +41,7 @@ use std::{
 };
 
 use crate::core::{Diff, Entry, Footprint, Result, ScanEntry, Value};
-use crate::core::{Ephemeral, FullScan, IndexIter, ScanIter};
+use crate::core::{EphemeralIndex, FullScan, IndexIter, ScanIter};
 use crate::core::{Reader, WalWriter, Writer};
 use crate::error::Error;
 use crate::llrb::Llrb;
@@ -333,7 +333,7 @@ where
     }
 }
 
-impl<K, V> Ephemeral<K, V> for Mvcc<K, V>
+impl<K, V> EphemeralIndex<K, V> for Mvcc<K, V>
 where
     K: Send + Sync + Clone + Ord + Footprint,
     V: Send + Sync + Clone + Diff + Footprint,

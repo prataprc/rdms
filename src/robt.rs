@@ -58,7 +58,7 @@ use std::{
 };
 
 use crate::core::{Diff, Entry, Footprint, Result, Serialize};
-use crate::core::{Durable, IndexIter, Reader, ScanIter};
+use crate::core::{DurableIndex, IndexIter, Reader, ScanIter};
 use crate::error::Error;
 use crate::jsondata::{Json, Property};
 use crate::util;
@@ -212,7 +212,7 @@ where
     }
 }
 
-impl<K, V> Durable<K, V> for Robt<K, V>
+impl<K, V> DurableIndex<K, V> for Robt<K, V>
 where
     K: Send + Sync + Clone + Ord + Footprint + Serialize,
     V: Send + Sync + Clone + Diff + Footprint + Serialize,
@@ -1019,20 +1019,23 @@ where
     pub fn initial(
         dir: &ffi::OsStr, // directory path where index file(s) are stored
         name: &str,
-        config: Config,
+        mut config: Config, //  TODO: Bit of ugliness here
     ) -> Result<Builder<K, V>> {
         let create = true;
         let iflusher = {
             let file = Config::stitch_index_file(dir, name);
             Flusher::new(file, config.clone(), create)?
         };
+        let is_vlog = config.delta_ok || config.value_in_vlog;
+        config.vlog_file = match &config.vlog_file {
+            Some(vlog_file) if is_vlog => Some(vlog_file.clone()),
+            None if is_vlog => Some(Config::stitch_vlog_file(dir, name)),
+            _ => None,
+        };
         let vflusher = config
             .vlog_file
             .as_ref()
-            .map(|_| {
-                let file = Config::stitch_vlog_file(dir, name);
-                Flusher::new(file, config.clone(), create)
-            })
+            .map(|file| Flusher::new(file.clone(), config.clone(), create))
             .transpose()?;
 
         Ok(Builder {
@@ -1050,19 +1053,23 @@ where
     pub fn incremental(
         dir: &ffi::OsStr, // directory path where index files are stored
         name: &str,
-        config: Config,
+        mut config: Config, //  TODO: Bit of ugliness here
     ) -> Result<Builder<K, V>> {
         let iflusher = {
             let file = Config::stitch_index_file(dir, name);
             Flusher::new(file, config.clone(), true /*create*/)?
         };
+        let is_vlog = config.delta_ok || config.value_in_vlog;
+        config.vlog_file = match &config.vlog_file {
+            Some(vlog_file) if is_vlog => Some(vlog_file.clone()),
+            None if is_vlog => Some(Config::stitch_vlog_file(dir, name)),
+            _ => None,
+        };
+        let create = false;
         let vflusher = config
             .vlog_file
             .as_ref()
-            .map(|_| {
-                let file = Config::stitch_vlog_file(dir, name);
-                Flusher::new(file, config.clone(), false /*create*/)
-            })
+            .map(|file| Flusher::new(file.clone(), config.clone(), create))
             .transpose()?;
 
         let mut stats: Stats = From::from(config.clone());
@@ -1517,7 +1524,7 @@ where
     }
 }
 
-impl<K, V> Durable<K, V> for Snapshot<K, V>
+impl<K, V> DurableIndex<K, V> for Snapshot<K, V>
 where
     K: Send + Sync + Clone + Ord + Serialize + Footprint,
     V: Send + Sync + Clone + Diff + Serialize + Footprint,

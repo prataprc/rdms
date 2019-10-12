@@ -1,7 +1,7 @@
 use std::{borrow::Borrow, fmt::Debug, marker, ops::RangeBounds};
 
 use crate::{
-    core::{Diff, Durable, Entry, Ephemeral, Footprint},
+    core::{Diff, DurableIndex, Entry, EphemeralIndex, Footprint},
     core::{IndexIter, Reader, Result, Writer},
     lsm,
 };
@@ -48,8 +48,8 @@ pub struct Rdms<K, V, M, D>
 where
     K: Send + Sync + Clone + Ord + Footprint,
     V: Send + Sync + Clone + Diff + Footprint,
-    M: Ephemeral<K, V>,
-    D: Durable<K, V>,
+    M: EphemeralIndex<K, V>,
+    D: DurableIndex<K, V>,
 {
     name: String,
     config: Config,
@@ -65,12 +65,12 @@ impl<K, V, M, D> Rdms<K, V, M, D>
 where
     K: Send + Sync + Clone + Ord + Footprint,
     V: Send + Sync + Clone + Diff + Footprint,
-    M: Ephemeral<K, V>,
-    D: Durable<K, V>,
+    M: EphemeralIndex<K, V>,
+    D: DurableIndex<K, V>,
 {
     pub fn new<S>(
         name: S,
-        mem: M, // memory instance that has Ephemeral::new() trait.
+        mem: M, // memory instance that has EphemeralIndex::new() trait.
         disk: D,
         config: Config,
     ) -> Result<Rdms<K, V, M, D>>
@@ -94,8 +94,8 @@ impl<K, V, M, D> Rdms<K, V, M, D>
 where
     K: Send + Sync + Clone + Ord + Footprint,
     V: Send + Sync + Clone + Diff + Footprint,
-    M: Ephemeral<K, V>,
-    D: Durable<K, V>,
+    M: EphemeralIndex<K, V>,
+    D: DurableIndex<K, V>,
 {
     pub fn to_name(&self) -> String {
         self.name.clone()
@@ -112,8 +112,8 @@ impl<K, V, M, D> Rdms<K, V, M, D>
 where
     K: 'static + Send + Sync + Clone + Ord + Footprint,
     V: 'static + Send + Sync + Clone + Diff + Footprint,
-    M: Ephemeral<K, V> + Reader<K, V>,
-    D: Durable<K, V> + Reader<K, V>,
+    M: EphemeralIndex<K, V> + Reader<K, V>,
+    D: DurableIndex<K, V> + Reader<K, V>,
 {
     /// Get ``key`` from index.
     pub fn get<Q>(&self, key: &Q) -> Result<Entry<K, V>>
@@ -168,8 +168,8 @@ impl<K, V, M, D> Rdms<K, V, M, D>
 where
     K: 'static + Send + Sync + Clone + Ord + Footprint,
     V: 'static + Send + Sync + Clone + Diff + From<<V as Diff>::D> + Footprint,
-    M: Ephemeral<K, V> + Reader<K, V>,
-    D: Durable<K, V> + Reader<K, V>,
+    M: EphemeralIndex<K, V> + Reader<K, V>,
+    D: DurableIndex<K, V> + Reader<K, V>,
 {
     pub fn get_with_versions<Q>(&self, key: &Q) -> Result<Entry<K, V>>
     where
@@ -229,8 +229,8 @@ impl<K, V, M, D> Rdms<K, V, M, D>
 where
     K: Send + Sync + Clone + Ord + Footprint,
     V: Send + Sync + Clone + Diff + Footprint,
-    M: Ephemeral<K, V> + Writer<K, V>,
-    D: Durable<K, V>,
+    M: EphemeralIndex<K, V> + Writer<K, V>,
+    D: DurableIndex<K, V>,
 {
     /// Set {key, value} in index. Return older entry if present.
     pub fn set(&mut self, key: K, value: V) -> Result<Option<Entry<K, V>>> {
@@ -263,8 +263,8 @@ impl<K, V, M, D> Rdms<K, V, M, D>
 where
     K: Send + Sync + Clone + Ord + Debug + Footprint,
     V: Send + Sync + Clone + Diff + Footprint,
-    M: Ephemeral<K, V>,
-    D: Durable<K, V>,
+    M: EphemeralIndex<K, V>,
+    D: DurableIndex<K, V>,
 {
     pub fn validate(&self) -> Result<()> {
         // return Stats

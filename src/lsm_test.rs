@@ -7,7 +7,7 @@ use rand::{rngs::SmallRng, Rng, SeedableRng};
 
 use super::*;
 
-use crate::core::{Index, IndexIter, Reader, Writer};
+use crate::core::{EphemeralIndex, IndexIter, Reader, Writer};
 use crate::error::Error;
 use crate::llrb::Llrb;
 use crate::mvcc::{Mvcc, MvccReader, MvccWriter};

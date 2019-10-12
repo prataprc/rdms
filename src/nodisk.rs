@@ -4,7 +4,7 @@ use std::{
     ops::{Bound, RangeBounds},
 };
 
-use crate::core::{Diff, Durable, Footprint, IndexIter, Reader};
+use crate::core::{Diff, DurableIndex, Footprint, IndexIter, Reader};
 use crate::core::{Entry, Result, ScanIter};
 use crate::error::Error;
 
@@ -32,7 +32,7 @@ impl<K, V> Footprint for NoDisk<K, V> {
     }
 }
 
-impl<K, V> Durable<K, V> for NoDisk<K, V>
+impl<K, V> DurableIndex<K, V> for NoDisk<K, V>
 where
     K: Send + Sync + Clone + Ord + Footprint,
     V: Send + Sync + Clone + Diff + Footprint,

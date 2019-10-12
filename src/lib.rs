@@ -58,7 +58,7 @@ mod sync_writer;
 mod util;
 mod vlog;
 pub use crate::core::{Diff, Entry, Replay, Result, Serialize, VersionIter};
-pub use crate::core::{Durable, Ephemeral, Footprint, IndexIter, Reader, Writer};
+pub use crate::core::{DurableIndex, EphemeralIndex, Footprint, IndexIter, Reader, Writer};
 pub use crate::error::Error;
 pub use crate::rdms::Rdms;
 

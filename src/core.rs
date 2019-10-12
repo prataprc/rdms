@@ -141,11 +141,11 @@ where
     fn delete_index(&mut self, key: K, index: u64) -> Result<Entry<K, V>>;
 }
 
-/// Ephemeral trait implemented by in-memory index.
+/// EphemeralIndex trait implemented by in-memory index.
 ///
 /// To ingest key, value pairs, support read, but does not persist
 /// data on disk.
-pub trait Ephemeral<K, V>: Sized + Footprint
+pub trait EphemeralIndex<K, V>: Sized + Footprint
 where
     K: Send + Sync + Clone + Ord + Footprint,
     V: Send + Sync + Clone + Diff + Footprint,
@@ -171,10 +171,10 @@ where
     fn to_writer(&mut self) -> Result<Self::W>;
 }
 
-/// Durable trait implemented by disk index.
+/// DurableIndex trait implemented by disk index.
 ///
 /// To commit data onto disk, support read operations and other lsm-methods.
-pub trait Durable<K, V>: Sized
+pub trait DurableIndex<K, V>: Sized
 where
     K: Send + Sync + Clone + Ord,
     V: Send + Sync + Clone + Diff,

@@ -1,7 +1,7 @@
 use rand::prelude::random;
 
 use super::*;
-use crate::core::Reader;
+use crate::core::{Delta, Reader, Writer};
 use crate::llrb::Llrb;
 use crate::robt;
 use crate::scans::SkipScan;
@@ -152,7 +152,10 @@ fn test_config() {
         rpath.push("robt-users.indx");
         rpath.into_os_string()
     };
-    assert_eq!(config.to_index_file(&dir, "users"), ref_file.to_os_string());
+    assert_eq!(
+        Config::stitch_index_file(&dir, "users"),
+        ref_file.to_os_string()
+    );
     let ref_file = {
         let mut rpath = path::PathBuf::new();
         rpath.push(dir_path.clone());
@@ -160,37 +163,37 @@ fn test_config() {
         rpath.into_os_string()
     };
     assert_eq!(
-        config.to_value_log(&dir, "users").unwrap(),
+        Config::stitch_vlog_file(&dir, "users"),
         ref_file.to_os_string()
     );
 }
 
 #[test]
 fn test_robt_llrb1() {
-    let seed: u128 = 279765853267557126686238657580803488536;
-    run_robt_llrb(60_000, 20_000_i64, 2, seed);
     let seed: u128 = random();
+    let seed: u128 = 279765853267557126686238657580803488536;
+    run_robt_llrb("test-robt-llrb1-1", 60_000, 20_000_i64, 2, seed);
     println!("test_robt_llrb1 first run ...");
-    run_robt_llrb(6_000, 2_000_i64, 10, seed);
-    println!("test_robt_llrb1 second run ...");
-    run_robt_llrb(60_000, 20_000_i64, 2, seed);
+    run_robt_llrb("test-robt-llrb1-2", 6_000, 2_000_i64, 10, seed);
+    println!("test_robt-llrb1 second run ...");
+    run_robt_llrb("test-robt-llrb1-3", 60_000, 20_000_i64, 2, seed);
 }
 
 #[test]
 #[ignore] // TODO: long running test case
 fn test_robt_llrb2() {
     let seed: u128 = random();
-    run_robt_llrb(600_000, 200_000_i64, 1, seed);
+    run_robt_llrb("test-robt-llrb2", 600_000, 200_000_i64, 1, seed);
 }
 
 #[test]
 #[ignore] // TODO: long running test case
 fn test_robt_llrb3() {
     let seed: u128 = random();
-    run_robt_llrb(6_000_000, 2_000_000_i64, 1, seed);
+    run_robt_llrb("test-robt-llrb3", 6_000_000, 2_000_000_i64, 1, seed);
 }
 
-fn run_robt_llrb(mut n_ops: u64, key_max: i64, repeat: usize, seed: u128) {
+fn run_robt_llrb(name: &str, mut n_ops: u64, key_max: i64, repeat: usize, seed: u128) {
     for i in 0..repeat {
         let seed = seed + (i as u128);
         let mut rng = SmallRng::from_seed(seed.to_le_bytes());
@@ -204,9 +207,9 @@ fn run_robt_llrb(mut n_ops: u64, key_max: i64, repeat: usize, seed: u128) {
         for _i in 0..n_ops {
             let key = (rng.gen::<i64>() % key_max).abs();
             let op = rng.gen::<usize>() % 3;
-            // println!("run_robt_llrb key: {} op:{}", key, op);
             match op {
                 0 => {
+                    // println!("run_robt_llrb key: {} op:{}", key, op);
                     let value: i64 = rng.gen();
                     llrb.set(key, value).unwrap();
                 }
@@ -217,9 +220,11 @@ fn run_robt_llrb(mut n_ops: u64, key_max: i64, repeat: usize, seed: u128) {
                         Err(_err) => unreachable!(),
                         Ok(e) => e.to_seqno(),
                     };
+                    // println!("run_robt_llrb key: {} op:{} cas:{}", key, op, cas);
                     llrb.set_cas(key, value, cas).unwrap();
                 }
                 2 => {
+                    // println!("run_robt_llrb key: {} op:{}", key, op);
                     llrb.delete(&key).unwrap();
                 }
                 _ => unreachable!(),
@@ -232,7 +237,7 @@ fn run_robt_llrb(mut n_ops: u64, key_max: i64, repeat: usize, seed: u128) {
 
         // build ROBT
         let mut config: robt::Config = Default::default();
-        config.delta_ok = rng.gen();
+        config.delta_ok = lsm;
         config.value_in_vlog = rng.gen();
         let tomb_purge = match rng.gen::<u64>() % 100 {
             0..=60 => None,
@@ -262,7 +267,6 @@ fn run_robt_llrb(mut n_ops: u64, key_max: i64, repeat: usize, seed: u128) {
             dir.push("test-robt-build");
             dir.into_os_string()
         };
-        let name = "test-build";
         let b = Builder::initial(&dir, name, config.clone()).unwrap();
         let app_meta = "heloo world".to_string();
         match b.build(iter, app_meta.as_bytes().to_vec()) {
@@ -339,6 +343,7 @@ fn run_robt_llrb(mut n_ops: u64, key_max: i64, repeat: usize, seed: u128) {
             // println!("reverse bounds {:?} {}", range, refs.len());
             let xs = snap.reverse(range).unwrap();
             let xs: Vec<Entry<i64, i64>> = xs.map(|e| e.unwrap()).collect();
+            assert_eq!(xs.len(), refs.len());
             for (x, y) in xs.iter().zip(refs.iter()) {
                 check_entry1(&x, &y);
             }
@@ -348,6 +353,7 @@ fn run_robt_llrb(mut n_ops: u64, key_max: i64, repeat: usize, seed: u128) {
             // println!("reverse..versions bounds {:?} {}", range, refs.len());
             let xs = snap.reverse_with_versions(range).unwrap();
             let xs: Vec<Entry<i64, i64>> = xs.map(|e| e.unwrap()).collect();
+            assert_eq!(xs.len(), refs.len());
             for (x, y) in xs.iter().zip(refs.iter()) {
                 check_entry1(&x, &y);
                 check_entry2(&x, &y);
@@ -449,10 +455,14 @@ fn check_entry1(e1: &Entry<i64, i64>, e2: &Entry<i64, i64>) {
 }
 
 fn check_entry2(e1: &Entry<i64, i64>, e2: &Entry<i64, i64>) {
-    for (m, n) in e1.to_deltas().iter().zip(e2.to_deltas().iter()) {
-        assert_eq!(m.to_seqno(), n.to_seqno());
-        assert_eq!(m.is_deleted(), n.is_deleted());
-        // println!("d {} {}", m.is_deleted(), e1.as_deltas().len());
-        assert_eq!(m.to_diff(), n.to_diff());
+    let key = e1.to_key();
+    let xs: Vec<Delta<i64>> = e1.to_deltas();
+    let ys: Vec<Delta<i64>> = e2.to_deltas();
+    assert_eq!(xs.len(), ys.len(), "for key {}", key);
+    for (m, n) in xs.iter().zip(ys.iter()) {
+        assert_eq!(m.to_seqno(), n.to_seqno(), "for key {}", key);
+        assert_eq!(m.is_deleted(), n.is_deleted(), "for key {}", key);
+        // println!("d {} {}", m.is_deleted(), n.is_deleted());
+        assert_eq!(m.to_diff(), n.to_diff(), "for key {}", key);
     }
 }

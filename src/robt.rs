@@ -49,7 +49,7 @@ use std::{
     ops::{Bound, RangeBounds},
     path, result,
     str::FromStr,
-    sync::{self, mpsc, Arc},
+    sync::{self, atomic::AtomicBool, mpsc, Arc},
     thread, time,
 };
 
@@ -57,6 +57,7 @@ use crate::core::{Diff, Entry, Footprint, Result, Serialize};
 use crate::core::{Index, IndexIter, Reader, Writer};
 use crate::error::Error;
 use crate::jsondata::{Json, Property};
+use crate::panic::Panic;
 use crate::util;
 
 use crate::robt_entry::MEntry;
@@ -64,31 +65,182 @@ use crate::robt_index::{MBlock, ZBlock};
 
 include!("robt_marker.rs");
 
-//struct Robt {
-//    name: String,
-//}
-//
-//impl<K,V> Index<K,V>
+struct Robt<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Serialize,
+{
+    name: String,
+
+    mutex: sync::Mutex<i32>,
+    levels: Vec<Level>,
+    reload: Vec<Arc<AtomicBool>>,
+
+    phantom_key: marker::PhantomData<K>,
+    phantom_val: marker::PhantomData<V>,
+}
+
+impl<K, V> Robt<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Serialize,
+{
+    fn new(name: &str) -> Result<Robt<K, V>> {
+        Ok(Robt {
+            name: name.to_string(),
+
+            mutex: sync::Mutex::new(0xC0FFEE),
+            levels: vec![],
+            reload: vec![],
+
+            phantom_key: marker::PhantomData,
+            phantom_val: marker::PhantomData,
+        })
+    }
+}
+
+impl<K, V> Index<K, V> for Robt<K, V>
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+{
+    type W = Panic;
+    type R = Snapshots<K, V>;
+
+    fn make_new(&self) -> Result<Box<Self>> {
+        panic!("make_new() not supported for Robt type")
+    }
+
+    fn to_reader(&mut self) -> Result<Self::R> {
+        let _lock = self.mutex.lock();
+
+        let reload = Arc::new(AtomicBool::new(true));
+        let levels = self.levels.clone();
+        Ok(Snapshots::new(reload, levels))
+    }
+
+    fn to_writer(&mut self) -> Result<Self::W> {
+        panic!("to_writer() not supported for Robt type")
+    }
+}
 
 struct Snapshots<K, V>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
+    <V as Diff>::D: Serialize,
 {
-    levels: Vec<Arc<Level>>,
+    reload: Arc<AtomicBool>,
+    levels: Vec<Level>,
     snapshots: Vec<Snapshot<K, V>>,
+}
+
+impl<K, V> Snapshot<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Serialize,
+{
+    fn new(reload: Arc<AtomicBool>, levels: Vec<Level>) -> Snapshots<K, V> {
+        let snapshots = vec![];
+        Snapshots {
+            reload,
+            levels,
+            snapshots,
+        }
+    }
+}
+
+impl<K, V> Reader<K, V> for Snapshots<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    fn get<Q>(&self, key: &Q) -> Result<Entry<K, V>>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        panic!("to be implemented")
+    }
+
+    fn iter(&self) -> Result<IndexIter<K, V>> {
+        panic!("to be implemented")
+    }
+
+    fn range<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
+    where
+        K: Borrow<Q>,
+        R: 'a + RangeBounds<Q>,
+        Q: 'a + Ord + ?Sized,
+    {
+        panic!("to be implemented")
+    }
+
+    fn reverse<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
+    where
+        K: Borrow<Q>,
+        R: 'a + RangeBounds<Q>,
+        Q: 'a + Ord + ?Sized,
+    {
+        panic!("to be implemented")
+    }
+
+    fn get_with_versions<Q>(&self, key: &Q) -> Result<Entry<K, V>>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        panic!("to be implemented")
+    }
+
+    fn iter_with_versions(&self) -> Result<IndexIter<K, V>> {
+        panic!("to be implemented")
+    }
+
+    fn range_with_versions<'a, R, Q>(&'a self, r: R) -> Result<IndexIter<K, V>>
+    where
+        K: Borrow<Q>,
+        R: 'a + RangeBounds<Q>,
+        Q: 'a + Ord + ?Sized,
+    {
+        panic!("to be implemented")
+    }
+
+    fn reverse_with_versions<'a, R, Q>(&'a self, r: R) -> Result<IndexIter<K, V>>
+    where
+        K: Borrow<Q>,
+        R: 'a + RangeBounds<Q>,
+        Q: 'a + Ord + ?Sized,
+    {
+        panic!("to be implemented")
+    }
 }
 
 struct Level {
     dir: ffi::OsString,
-    index_file: String,
+    index_file: Arc<String>,
     vlog_file: Option<Arc<String>>,
+}
+
+impl Clone for Level {
+    fn clone(&self) -> Level {
+        Level {
+            dir: self.clone(),
+            index_file: Arc::clone(&self.index_file),
+            vlog_file: Arc::clone(&self.vlog_file),
+        }
+    }
 }
 
 impl Drop for Level {
     fn drop(&mut self) {
-        let f = Config::stitch_index_file(&self.dir, &self.index_file);
-        fs::remove_file(f).unwrap();
+        if Arc::strong_count(&self.index_file) == 1 {
+            let f = Config::stitch_index_file(&self.dir, &self.index_file);
+            fs::remove_file(f).unwrap();
+        }
 
         match &self.vlog_file {
             Some(vlog_file) if Arc::strong_count(&vlog_file) == 1 => {
@@ -103,7 +255,7 @@ impl Drop for Level {
 impl Level {
     fn open_level(
         dir: &ffi::OsStr, // path to index/vlog files
-        index_file: String,
+        index_file: Arc<String>,
         vlog_file: Option<Arc<String>>,
     ) -> Level {
         Level {
@@ -115,7 +267,7 @@ impl Level {
 
     fn new_level(
         dir: &ffi::OsStr, // path to index/vlog files
-        index_file: String,
+        index_file: Arc<String>,
         vlog_file: Option<Arc<String>>,
     ) -> Level {
         Level {
@@ -139,47 +291,12 @@ impl Level {
     }
 
     fn to_index_name(&self) -> String {
-        self.index_file.clone()
+        self.index_file.as_ref().clone()
     }
 
     fn to_vlog_name(&self) -> Option<String> {
         self.vlog_file.as_ref().map(|f| f.to_string())
     }
-
-    //fn to_filenames(&self) -> Result<(String, Option<String>)> {
-    //    let indexfile = Config::make_index_file(&self.to_index_name());
-
-    //    let items = read_meta_items(&self.dir, &self.to_index_name())?;
-    //    let stats: Stats = match &items[3] {
-    //        MetaItem::Stats(stats) => stats.parse()?,
-    //        _ => unreachable!(),
-    //    };
-    //    match stats.vlog_file {
-    //        Some(vlog_file) => {
-    //            let file = match path::Path::new(&vlog_file).file_name() {
-    //                Some(file) => file.to_str().unwrap(),
-    //                None => return Ok((indexfile, None)),
-    //            };
-    //            let vlogfile = match Self::to_file_parts(file) {
-    //                None => return Ok((indexfile, None)),
-    //                Some((_name, _level, v_file_no)) => {
-    //                    let vlogfile = self.to_vlog_name(v_file_no);
-    //                    Config::make_vlog_file(&vlogfile)
-    //                }
-    //            };
-
-    //            let mut vpath = path::PathBuf::new();
-    //            vpath.push(&self.dir);
-    //            vpath.push(&vlogfile);
-    //            if path::Path::new(&vpath).exists() {
-    //                Ok((indexfile, Some(vlogfile)))
-    //            } else {
-    //                Ok((indexfile, None))
-    //            }
-    //        }
-    //        None => Ok((indexfile, None)),
-    //    }
-    //}
 }
 
 /// Configuration options for Read Only BTree.
@@ -1264,11 +1381,11 @@ where
     V: Clone + Diff + Serialize + Footprint,
 {
     fn set(&mut self, _key: K, _value: V) -> Result<Option<Entry<K, V>>> {
-        panic!("set operation not allwed on Read-Only-Btree snapshot !!");
+        panic!("set operation not allowed on Read-Only-Btree snapshot !!");
     }
 
     fn set_cas(&mut self, _: K, _: V, _: u64) -> Result<Option<Entry<K, V>>> {
-        panic!("set operation not allwed on Read-Only-Btree snapshot !!");
+        panic!("set operation not allowed on Read-Only-Btree snapshot !!");
     }
 
     fn delete<Q>(&mut self, _key: &Q) -> Result<Option<Entry<K, V>>>
@@ -1276,7 +1393,7 @@ where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
     {
-        panic!("set operation not allwed on Read-Only-Btree snapshot !!");
+        panic!("set operation not allowed on Read-Only-Btree snapshot !!");
     }
 }
 

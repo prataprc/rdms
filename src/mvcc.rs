@@ -129,9 +129,8 @@ where
 /// Construct new instance of Mvcc.
 impl<K, V> Mvcc<K, V>
 where
-    K: 'static + Send + Clone + Ord + Footprint,
-    V: 'static + Send + Clone + Diff + Footprint,
-    <V as Diff>::D: Send,
+    K: Clone + Ord,
+    V: Clone + Diff,
 {
     pub fn new<S>(name: S) -> Box<Mvcc<K, V>>
     where
@@ -349,9 +348,8 @@ where
 
 impl<K, V> Index<K, V> for Mvcc<K, V>
 where
-    K: 'static + Send + Clone + Ord + Footprint,
-    V: 'static + Send + Clone + Diff + Footprint,
-    <V as Diff>::D: Send,
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
 {
     type W = MvccWriter<K, V>;
     type R = MvccReader<K, V>;

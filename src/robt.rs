@@ -88,7 +88,7 @@ where
     <V as Diff>::D: Serialize,
 {
     fn new(dir: &ffi::OsStr, name: &str) -> Result<Robt<K, V>> {
-        let mut levels = new_initial_states();
+        let levels = new_initial_states();
 
         Ok(Robt {
             dir: dir.to_os_string(),
@@ -101,15 +101,16 @@ where
     }
 
     fn open(dir: &ffi::OsStr, name: &str) -> Result<Robt<K, V>> {
-        let mut levels = new_initial_states();
+        let levels = new_initial_states();
 
-        //for item in fs::read_dir(&dir)? {
-        //    let file_name = item?.file_name().to_str().unwrap();
-        //    let name = match Config::to_name(file_name) {
-        //        None => continue
-        //        Some(name) => name
-        //    };
-        //}
+        for item in fs::read_dir(&dir)? {
+            let file_name = item?.file_name().to_str().unwrap();
+            let name = match Config::to_name(file_name) {
+                None => continue
+                Some(name) => name
+            };
+            let snapshot = Snapshot::open(dir, &name)?;
+        }
 
         Ok(Robt {
             dir: dir.to_os_string(),
@@ -621,27 +622,6 @@ impl Config {
             ((n / Config::MARKER_BLOCK_SIZE) + 1) * Config::MARKER_BLOCK_SIZE
         }
     }
-
-    /// Return the index file under configured directory.
-    pub fn to_index_file(
-        &self,
-        dir: &ffi::OsStr, // directory can be os-native string
-        name: &str,       // but name must be a valid utf8 string
-    ) -> ffi::OsString {
-        Self::stitch_index_file(&dir, &name)
-    }
-
-    /// Return the value-log file, if enabled, under configured directory.
-    pub fn to_value_log(
-        &self,
-        dir: &ffi::OsStr, // directory can be os-native string
-        name: &str,       // but name must be a valid utf8 string
-    ) -> Option<ffi::OsString> {
-        match &self.vlog_file {
-            Some(file) => Some(file.clone()),
-            None => Some(Self::stitch_vlog_file(&dir, &name)),
-        }
-    }
 }
 
 /// Enumerated meta types stored in [Robt] index.
@@ -994,12 +974,16 @@ where
     ) -> Result<Builder<K, V>> {
         let create = true;
         let iflusher = {
-            let file = config.to_index_file(dir, name);
+            let file = Config::stitch_index_file(dir, name);
             Flusher::new(file, config.clone(), create)?
         };
         let vflusher = config
-            .to_value_log(dir, name)
-            .map(|file| Flusher::new(file, config.clone(), create))
+            .vlog_file
+            .as_ref()
+            .map(|_| {
+                let file = Config::stitch_vlog_file(dir, name);
+                Flusher::new(file, config.clone(), create)
+            })
             .transpose()?;
 
         Ok(Builder {
@@ -1020,12 +1004,16 @@ where
         config: Config,
     ) -> Result<Builder<K, V>> {
         let iflusher = {
-            let file = config.to_index_file(dir, name);
+            let file = Config::stitch_index_file(dir, name);
             Flusher::new(file, config.clone(), true /*create*/)?
         };
         let vflusher = config
-            .to_value_log(dir, name)
-            .map(|file| Flusher::new(file, config.clone(), false /*create*/))
+            .vlog_file
+            .as_ref()
+            .map(|_| {
+                let file = Config::stitch_vlog_file(dir, name);
+                Flusher::new(file, config.clone(), false /*create*/)
+            })
             .transpose()?;
 
         let mut stats: Stats = From::from(config.clone());
@@ -1411,7 +1399,7 @@ where
         });
         snap.vlog_fd = snap
             .config
-            .to_value_log(dir, name)
+            .vlog_file
             .as_ref()
             .map(|s| util::open_file_r(s.as_ref()))
             .transpose()?;
@@ -1465,7 +1453,7 @@ where
         }
     }
 
-    pub fn to_vlog_file(&self) -> Option<String> {
+    pub fn to_vlog_path_file(&self) -> Option<String> {
         let stats: Stats = match &self.meta[3] {
             MetaItem::Stats(stats) => stats.parse().ok()?,
             _ => unreachable!(),
@@ -1515,10 +1503,14 @@ where
 {
     fn footprint(&self) -> isize {
         let (dir, name) = (self.dir.as_os_str(), self.name.as_str());
-        let mut footprint = fs::metadata(self.config.to_index_file(dir, name))
+        let mut footprint = fs::metadata(Config::stitch_index_file(dir, name))
             .unwrap()
             .len();
-        footprint += match self.config.to_value_log(dir, name) {
+        let vlog_file = self
+            .vlog_fd
+            .as_ref()
+            .map(|_| Config::stitch_vlog_file(dir, name));
+        footprint += match vlog_file {
             Some(vlog_file) => fs::metadata(vlog_file).unwrap().len(),
             None => 0,
         };

@@ -65,20 +65,20 @@ use crate::robt_index::{MBlock, ZBlock};
 
 include!("robt_marker.rs");
 
+const NLEVELS: usize = 16;
+
 struct Robt<K, V>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
 {
+    dir: ffi::OsString,
     name: String,
 
     mutex: sync::Mutex<i32>,
-    levels: Vec<Level>,
-    reload: Vec<Arc<AtomicBool>>,
-
-    phantom_key: marker::PhantomData<K>,
-    phantom_val: marker::PhantomData<V>,
+    levels: [State<K, V>; NLEVELS],
+    reloads: Vec<Arc<AtomicBool>>,
 }
 
 impl<K, V> Robt<K, V>
@@ -87,24 +87,76 @@ where
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
 {
-    fn new(name: &str) -> Result<Robt<K, V>> {
+    fn new(dir: &ffi::OsStr, name: &str) -> Result<Robt<K, V>> {
+        let mut levels = new_initial_states();
+
         Ok(Robt {
+            dir: dir.to_os_string(),
             name: name.to_string(),
 
             mutex: sync::Mutex::new(0xC0FFEE),
-            levels: vec![],
-            reload: vec![],
-
-            phantom_key: marker::PhantomData,
-            phantom_val: marker::PhantomData,
+            levels,
+            reloads: vec![],
         })
+    }
+
+    fn open(dir: &ffi::OsStr, name: &str) -> Result<Robt<K, V>> {
+        let mut levels = new_initial_states();
+
+        //for item in fs::read_dir(&dir)? {
+        //    let file_name = item?.file_name().to_str().unwrap();
+        //    let name = match Config::to_name(file_name) {
+        //        None => continue
+        //        Some(name) => name
+        //    };
+        //}
+
+        Ok(Robt {
+            dir: dir.to_os_string(),
+            name: name.to_string(),
+
+            mutex: sync::Mutex::new(0xC0FFEE),
+            levels,
+            reloads: vec![],
+        })
+    }
+}
+
+impl<K, V> Footprint for Robt<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Serialize,
+{
+    fn footprint(&self) -> isize {
+        let mut footprint = 0;
+        for level in self.levels.iter() {
+            let level = match level {
+                State::Active(level) => level,
+                State::Compact(level) => level,
+                State::Flush(level) => level,
+                State::None => continue,
+            };
+
+            let file: &str = level.index_file.as_ref();
+            footprint += fs::metadata(file).unwrap().len();
+            footprint += match &level.vlog_file {
+                Some(vlog_file) => {
+                    let file: &str = vlog_file.as_ref();
+                    fs::metadata(file).unwrap().len()
+                }
+                None => 0,
+            };
+        }
+        footprint.try_into().unwrap()
     }
 }
 
 impl<K, V> Index<K, V> for Robt<K, V>
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
+    K: Clone + Ord + Footprint + Serialize,
+    V: Clone + Diff + Footprint + Serialize,
+    <V as Diff>::D: Serialize,
 {
     type W = Panic;
     type R = Snapshots<K, V>;
@@ -117,8 +169,8 @@ where
         let _lock = self.mutex.lock();
 
         let reload = Arc::new(AtomicBool::new(true));
-        let levels = self.levels.clone();
-        Ok(Snapshots::new(reload, levels))
+        self.reloads.push(Arc::clone(&reload));
+        Ok(Snapshots::new(reload, self.levels.clone()))
     }
 
     fn to_writer(&mut self) -> Result<Self::W> {
@@ -133,30 +185,28 @@ where
     <V as Diff>::D: Serialize,
 {
     reload: Arc<AtomicBool>,
-    levels: Vec<Level>,
-    snapshots: Vec<Snapshot<K, V>>,
+    levels: [State<K, V>; NLEVELS],
 }
 
-impl<K, V> Snapshot<K, V>
+impl<K, V> Snapshots<K, V>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
 {
-    fn new(reload: Arc<AtomicBool>, levels: Vec<Level>) -> Snapshots<K, V> {
-        let snapshots = vec![];
-        Snapshots {
-            reload,
-            levels,
-            snapshots,
-        }
+    fn new(
+        reload: Arc<AtomicBool>,
+        levels: [State<K, V>; NLEVELS], // reference levels
+    ) -> Snapshots<K, V> {
+        Snapshots { reload, levels }
     }
 }
 
 impl<K, V> Reader<K, V> for Snapshots<K, V>
 where
-    K: Clone + Ord,
-    V: Clone + Diff,
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Serialize,
 {
     fn get<Q>(&self, key: &Q) -> Result<Entry<K, V>>
     where
@@ -219,24 +269,103 @@ where
     }
 }
 
-struct Level {
+#[derive(Clone)]
+enum State<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Serialize,
+{
+    Flush(Level<K, V>),
+    Compact(Level<K, V>),
+    Active(Level<K, V>),
+    None,
+}
+
+impl<K, V> Default for State<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Serialize,
+{
+    fn default() -> State<K, V> {
+        State::None
+    }
+}
+
+fn new_initial_states<K, V>() -> [State<K, V>; NLEVELS]
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Serialize,
+{
+    [
+        State::None,
+        State::None,
+        State::None,
+        State::None,
+        State::None,
+        State::None,
+        State::None,
+        State::None,
+        State::None,
+        State::None,
+        State::None,
+        State::None,
+        State::None,
+        State::None,
+        State::None,
+        State::None,
+    ]
+}
+
+#[derive(Default)]
+struct Level<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+{
     dir: ffi::OsString,
     index_file: Arc<String>,
     vlog_file: Option<Arc<String>>,
+    snapshot: Option<mem::ManuallyDrop<Snapshot<K, V>>>,
 }
 
-impl Clone for Level {
-    fn clone(&self) -> Level {
+impl<K, V> Clone for Level<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+{
+    fn clone(&self) -> Level<K, V> {
+        if self.snapshot.is_some() {
+            panic!("cannot clone a level that has a disk snapshot");
+        }
+
         Level {
-            dir: self.clone(),
+            dir: self.dir.clone(),
             index_file: Arc::clone(&self.index_file),
-            vlog_file: Arc::clone(&self.vlog_file),
+            vlog_file: self.vlog_file.as_ref().map(|x| Arc::clone(x)),
+            snapshot: None,
         }
     }
 }
 
-impl Drop for Level {
+impl<K, V> Drop for Level<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+{
     fn drop(&mut self) {
+        // manuall drop snapshot object here.
+        match self.snapshot.take() {
+            Some(mut snapshot) => unsafe {
+                // order of drop is important with respect to file-cleanup.
+                mem::ManuallyDrop::drop(&mut snapshot)
+            },
+            None => (),
+        }
+
+        // and cleanup the older snapshots if there are not more references.
         if Arc::strong_count(&self.index_file) == 1 {
             let f = Config::stitch_index_file(&self.dir, &self.index_file);
             fs::remove_file(f).unwrap();
@@ -252,42 +381,48 @@ impl Drop for Level {
     }
 }
 
-impl Level {
-    fn open_level(
+impl<K, V> Level<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+{
+    fn new(
         dir: &ffi::OsStr, // path to index/vlog files
         index_file: Arc<String>,
         vlog_file: Option<Arc<String>>,
-    ) -> Level {
+    ) -> Level<K, V> {
         Level {
             dir: dir.to_os_string(),
             index_file,
             vlog_file,
+            snapshot: Default::default(),
         }
     }
 
-    fn new_level(
-        dir: &ffi::OsStr, // path to index/vlog files
-        index_file: Arc<String>,
-        vlog_file: Option<Arc<String>>,
-    ) -> Level {
-        Level {
-            dir: dir.to_os_string(),
-            index_file,
-            vlog_file,
+    fn load_snapshot(&mut self) -> Result<()> {
+        if self.snapshot.is_some() {
+            panic!("snapshot already loaded")
         }
+        let file_name = path::Path::new(self.index_file.as_ref())
+            .file_name()
+            .unwrap();
+        let name = Config::to_name(file_name.to_str().unwrap()).unwrap();
+        self.snapshot = Some(
+            // snapshot shall be manually dropped, because the arder of drop
+            // is very important, between snapshot and file-cleanup.
+            mem::ManuallyDrop::new(Snapshot::open(&self.dir, &name)?),
+        );
+        Ok(())
     }
 
-    fn to_file_parts(file: &str) -> Option<(String, usize, usize)> {
-        let parts: Vec<&str> = file.split('-').collect();
+    fn to_file_parts(file_name: &str) -> Option<(String, usize, usize)> {
+        let name = Config::to_name(file_name)?;
+        let parts: Vec<&str> = name.split('-').collect();
         let mut parts = parts.into_iter();
-        if let Some("robt") = parts.next() {
-            let name = parts.next()?;
-            let level: usize = parts.next()?.parse().ok()?;
-            let file_no: usize = parts.next()?.parse().ok()?;
-            Some((name.to_string(), level, file_no))
-        } else {
-            None
-        }
+        let name = parts.next()?;
+        let level: usize = parts.next()?.parse().ok()?;
+        let file_no: usize = parts.next()?.parse().ok()?;
+        Some((name.to_string(), level, file_no))
     }
 
     fn to_index_name(&self) -> String {
@@ -440,6 +575,23 @@ impl Config {
 
     pub(crate) fn make_vlog_file(name: &str) -> String {
         format!("robt-{}.vlog", name)
+    }
+
+    pub(crate) fn to_name(file_name: &str) -> Option<String> {
+        let stem = match path::Path::new(file_name).extension() {
+            Some(ext) if ext.to_str() == Some("indx") => {
+                // ignore the dir-path and the extension, just the fil-stem
+                path::Path::new(file_name).file_stem()
+            }
+            Some(_) | None => None,
+        }?;
+
+        let stem = stem.to_str().unwrap();
+        if &stem[..5] == "robt-" {
+            Some(stem[5..].to_string())
+        } else {
+            None
+        }
     }
 
     pub(crate) fn stitch_index_file(

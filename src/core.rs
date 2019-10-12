@@ -141,26 +141,25 @@ where
     fn delete_index(&mut self, key: K, index: u64) -> Result<Entry<K, V>>;
 }
 
-/// Index trait implemented by [Rdms]'s underlying data-structures that
-/// can ingest key, value pairs.
+/// Ephemeral trait implemented by in-memory index that can ingest
+/// key, value pairs, support read, but does not persist data on disk.
 ///
-/// [Rdms]: crate::Rdms
-///
-pub trait Index<K, V>: Sized + Footprint
+pub trait Ephemeral<K, V>: Sized + Footprint
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
+    K: Send + Sync + Clone + Ord + Footprint,
+    V: Send + Sync + Clone + Diff + Footprint,
 {
-    /// A writer type, that can ingest key-value pairs, associated with
-    /// this index.
-    type W: Writer<K, V>;
+    /// A writer associated type, that can ingest key-value pairs.
+    type W: Writer<K, V> + Send + Sync;
 
-    /// A writer type, that can ingest key-value pairs, associated with
-    /// this index.
-    type R: Reader<K, V>;
+    /// A reader assciated type, that are thread safe.
+    type R: Reader<K, V> + Send + Sync;
 
     /// Make a new empty index of this type, with same configuration.
-    fn make_new(&self) -> Result<Box<Self>>;
+    fn new(&self) -> Result<Box<Self>>;
+
+    /// Application can set the start sequence number for this index.
+    fn set_seqno(&mut self, seqno: u64);
 
     /// Create a new read handle, for multi-threading. Note that not all
     /// indexes allow concurrent readers. Refer to index API for more details.
@@ -169,6 +168,29 @@ where
     /// Create a new write handle, for multi-threading. Note that not all
     /// indexes allow concurrent writers. Refer to index API for more details.
     fn to_writer(&mut self) -> Result<Self::W>;
+}
+
+/// Durable trait implemented by disk index that can commit data
+/// onto disk, support read operations and other lsm-methods.
+///
+pub trait Durable<K, V>: Sized
+where
+    K: Send + Sync + Clone + Ord,
+    V: Send + Sync + Clone + Diff,
+{
+    /// A reader assciated type, that are thread safe.
+    type R: Reader<K, V> + Send + Sync;
+
+    /// Flush to disk all new entries that are not yet persisted
+    /// on to disk. Return number of entries commited to disk.
+    fn commit(&mut self, iter: ScanIter<K, V>) -> Result<usize>;
+
+    /// Compact disk snapshots if there are any.
+    fn compact(&mut self, tombstone_purge: Bound<u64>) -> Result<()>;
+
+    /// Create a new read handle, for multi-threading. Note that not all
+    /// indexes allow concurrent readers. Refer to index API for more details.
+    fn to_reader(&mut self) -> Result<Self::R>;
 }
 
 /// Index read operations.
@@ -266,15 +288,6 @@ where
     where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized;
-}
-
-/// Durability methods, commit and compact.
-pub trait Durable {
-    /// Flush to disk all new entries that are not yet persisted on to disk.
-    fn commit(&mut self);
-
-    /// Compact disk snapshots if there are any.
-    fn compact(&mut self);
 }
 
 /// Serialize values to binary sequence of bytes.

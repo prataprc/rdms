@@ -41,7 +41,7 @@ use std::{
 };
 
 use crate::core::{Diff, Entry, Footprint, Result, ScanEntry, Value};
-use crate::core::{FullScan, Index, IndexIter, ScanIter};
+use crate::core::{Ephemeral, FullScan, IndexIter, ScanIter};
 use crate::core::{Reader, WalWriter, Writer};
 use crate::error::Error;
 use crate::llrb::Llrb;
@@ -206,19 +206,6 @@ where
         self.spin = spin;
     }
 
-    /// application can set the start sequence number for this index.
-    pub fn set_seqno(&mut self, seqno: u64) {
-        let n = self.multi_rw();
-        if n > Self::CONCUR_REF_COUNT {
-            panic!("cannot configure Mvcc with active readers/writer {}", n);
-        }
-
-        let snapshot = OuterSnapshot::clone(&self.snapshot);
-        let root = snapshot.root_duplicate();
-        self.snapshot
-            .shift_snapshot(root, seqno, snapshot.n_count, vec![]);
-    }
-
     pub fn clone(&self) -> Box<Mvcc<K, V>> {
         let n = self.multi_rw();
         if n > Self::CONCUR_REF_COUNT {
@@ -346,17 +333,30 @@ where
     }
 }
 
-impl<K, V> Index<K, V> for Mvcc<K, V>
+impl<K, V> Ephemeral<K, V> for Mvcc<K, V>
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
+    K: Send + Sync + Clone + Ord + Footprint,
+    V: Send + Sync + Clone + Diff + Footprint,
 {
     type W = MvccWriter<K, V>;
     type R = MvccReader<K, V>;
 
     /// Make a new empty index of this type, with same configuration.
-    fn make_new(&self) -> Result<Box<Self>> {
+    fn new(&self) -> Result<Box<Self>> {
         Ok(self.shallow_clone())
+    }
+
+    /// Application can set the start sequence number for this index.
+    fn set_seqno(&mut self, seqno: u64) {
+        let n = self.multi_rw();
+        if n > Self::CONCUR_REF_COUNT {
+            panic!("cannot configure Mvcc with active readers/writer {}", n);
+        }
+
+        let snapshot = OuterSnapshot::clone(&self.snapshot);
+        let root = snapshot.root_duplicate();
+        self.snapshot
+            .shift_snapshot(root, seqno, snapshot.n_count, vec![]);
     }
 
     /// Lockless concurrent readers are supported

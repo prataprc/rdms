@@ -33,7 +33,7 @@ use std::sync::Arc;
 use std::{marker, mem};
 
 use crate::core::{Diff, Entry, Footprint, Result, ScanEntry, Value};
-use crate::core::{FullScan, Index, IndexIter, ScanIter};
+use crate::core::{Ephemeral, FullScan, IndexIter, ScanIter};
 use crate::core::{Reader, WalWriter, Writer};
 use crate::error::Error;
 use crate::llrb_node::{LlrbDepth, Node, Stats};
@@ -166,15 +166,6 @@ where
         self.spin = spin;
     }
 
-    /// application can set the start sequence number for this index.
-    pub fn set_seqno(&mut self, seqno: u64) {
-        let n = self.multi_rw();
-        if n > Self::CONCUR_REF_COUNT {
-            panic!("cannot configure Llrb with active readers/writers {}", n)
-        }
-        self.seqno = seqno;
-    }
-
     /// Squash this index and return the root and its book-keeping.
     /// IMPORTANT: after calling this method, value must be dropped.
     pub(crate) fn squash(mut self) -> SquashDebris<K, V> {
@@ -277,17 +268,26 @@ where
     }
 }
 
-impl<K, V> Index<K, V> for Llrb<K, V>
+impl<K, V> Ephemeral<K, V> for Llrb<K, V>
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
+    K: Send + Sync + Clone + Ord + Footprint,
+    V: Send + Sync + Clone + Diff + Footprint,
 {
     type W = LlrbWriter<K, V>;
     type R = LlrbReader<K, V>;
 
     /// Make a new empty index of this type, with same configuration.
-    fn make_new(&self) -> Result<Box<Self>> {
+    fn new(&self) -> Result<Box<Self>> {
         Ok(self.shallow_clone())
+    }
+
+    /// Application can set the start sequence number for this index.
+    fn set_seqno(&mut self, seqno: u64) {
+        let n = self.multi_rw();
+        if n > Self::CONCUR_REF_COUNT {
+            panic!("cannot configure Llrb with active readers/writers {}", n)
+        }
+        self.seqno = seqno;
     }
 
     /// Create a new reader handle, for multi-threading.

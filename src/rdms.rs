@@ -1,7 +1,8 @@
 use std::{borrow::Borrow, fmt::Debug, marker, ops::RangeBounds};
 
 use crate::{
-    core::{Diff, Entry, Footprint, Index, IndexIter, Reader, Result, Writer},
+    core::{Diff, Durable, Entry, Ephemeral, Footprint},
+    core::{IndexIter, Reader, Result, Writer},
     lsm,
 };
 
@@ -45,10 +46,10 @@ impl Config {
 /// the full set of features.
 pub struct Rdms<K, V, M, D>
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
-    M: Index<K, V>,
-    D: Index<K, V>,
+    K: Send + Sync + Clone + Ord + Footprint,
+    V: Send + Sync + Clone + Diff + Footprint,
+    M: Ephemeral<K, V>,
+    D: Durable<K, V>,
 {
     name: String,
     config: Config,
@@ -62,15 +63,15 @@ where
 
 impl<K, V, M, D> Rdms<K, V, M, D>
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
-    M: Index<K, V>,
-    D: Index<K, V>,
+    K: Send + Sync + Clone + Ord + Footprint,
+    V: Send + Sync + Clone + Diff + Footprint,
+    M: Ephemeral<K, V>,
+    D: Durable<K, V>,
 {
     pub fn new<S>(
         name: S,
-        mem: M,  // memory instance that has Index::make_new() trait.
-        disk: D, // disk instance that has Index::make_new() trait.
+        mem: M, // memory instance that has Ephemeral::new() trait.
+        disk: D,
         config: Config,
     ) -> Result<Rdms<K, V, M, D>>
     where
@@ -91,10 +92,10 @@ where
 
 impl<K, V, M, D> Rdms<K, V, M, D>
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
-    M: Index<K, V>,
-    D: Index<K, V>,
+    K: Send + Sync + Clone + Ord + Footprint,
+    V: Send + Sync + Clone + Diff + Footprint,
+    M: Ephemeral<K, V>,
+    D: Durable<K, V>,
 {
     pub fn to_name(&self) -> String {
         self.name.clone()
@@ -109,10 +110,10 @@ where
 
 impl<K, V, M, D> Rdms<K, V, M, D>
 where
-    K: 'static + Clone + Ord + Footprint,
-    V: 'static + Clone + Diff + Footprint,
-    M: Index<K, V> + Reader<K, V>,
-    D: Index<K, V> + Reader<K, V>,
+    K: 'static + Send + Sync + Clone + Ord + Footprint,
+    V: 'static + Send + Sync + Clone + Diff + Footprint,
+    M: Ephemeral<K, V> + Reader<K, V>,
+    D: Durable<K, V> + Reader<K, V>,
 {
     /// Get ``key`` from index.
     pub fn get<Q>(&self, key: &Q) -> Result<Entry<K, V>>
@@ -165,10 +166,10 @@ where
 
 impl<K, V, M, D> Rdms<K, V, M, D>
 where
-    K: 'static + Clone + Ord + Footprint,
-    V: 'static + Clone + Diff + From<<V as Diff>::D> + Footprint,
-    M: Index<K, V> + Reader<K, V>,
-    D: Index<K, V> + Reader<K, V>,
+    K: 'static + Send + Sync + Clone + Ord + Footprint,
+    V: 'static + Send + Sync + Clone + Diff + From<<V as Diff>::D> + Footprint,
+    M: Ephemeral<K, V> + Reader<K, V>,
+    D: Durable<K, V> + Reader<K, V>,
 {
     pub fn get_with_versions<Q>(&self, key: &Q) -> Result<Entry<K, V>>
     where
@@ -226,10 +227,10 @@ where
 
 impl<K, V, M, D> Rdms<K, V, M, D>
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
-    M: Index<K, V> + Writer<K, V>,
-    D: Index<K, V>,
+    K: Send + Sync + Clone + Ord + Footprint,
+    V: Send + Sync + Clone + Diff + Footprint,
+    M: Ephemeral<K, V> + Writer<K, V>,
+    D: Durable<K, V>,
 {
     /// Set {key, value} in index. Return older entry if present.
     pub fn set(&mut self, key: K, value: V) -> Result<Option<Entry<K, V>>> {
@@ -260,10 +261,10 @@ where
 
 impl<K, V, M, D> Rdms<K, V, M, D>
 where
-    K: Clone + Ord + Debug + Footprint,
-    V: Clone + Diff + Footprint,
-    M: Index<K, V>,
-    D: Index<K, V>,
+    K: Send + Sync + Clone + Ord + Debug + Footprint,
+    V: Send + Sync + Clone + Diff + Footprint,
+    M: Ephemeral<K, V>,
+    D: Durable<K, V>,
 {
     pub fn validate(&self) -> Result<()> {
         // return Stats

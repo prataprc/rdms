@@ -58,10 +58,9 @@ use std::{
 };
 
 use crate::core::{Diff, Entry, Footprint, Result, Serialize};
-use crate::core::{Index, IndexIter, Reader, Writer};
+use crate::core::{Durable, IndexIter, Reader, ScanIter};
 use crate::error::Error;
 use crate::jsondata::{Json, Property};
-use crate::panic::Panic;
 use crate::util;
 
 use crate::robt_entry::MEntry;
@@ -213,27 +212,26 @@ where
     }
 }
 
-impl<K, V> Index<K, V> for Robt<K, V>
+impl<K, V> Durable<K, V> for Robt<K, V>
 where
-    K: Clone + Ord + Footprint + Serialize,
-    V: Clone + Diff + Footprint + Serialize,
+    K: Send + Sync + Clone + Ord + Footprint + Serialize,
+    V: Send + Sync + Clone + Diff + Footprint + Serialize,
     <V as Diff>::D: Serialize,
 {
-    type W = Panic;
     type R = Snapshots<K, V>;
 
-    fn make_new(&self) -> Result<Box<Self>> {
-        panic!("make_new() not supported for Robt type")
+    fn commit(&mut self, iter: ScanIter<K, V>) -> Result<usize> {
+        Ok(0)
+    }
+
+    fn compact(&mut self, tombstone_purge: Bound<u64>) -> Result<()> {
+        Ok(())
     }
 
     fn to_reader(&mut self) -> Result<Self::R> {
         let mut levels = self.mu.lock().unwrap();
         let (ls, reload) = levels.new_reader();
         Ok(Snapshots::new(ls, reload))
-    }
-
-    fn to_writer(&mut self) -> Result<Self::W> {
-        panic!("to_writer() not supported for Robt type")
     }
 }
 
@@ -1519,31 +1517,24 @@ where
     }
 }
 
-impl<K, V> Index<K, V> for Snapshot<K, V>
+impl<K, V> Durable<K, V> for Snapshot<K, V>
 where
-    K: Clone + Ord + Serialize + Footprint,
-    V: Clone + Diff + Serialize + Footprint,
+    K: Send + Sync + Clone + Ord + Serialize + Footprint,
+    V: Send + Sync + Clone + Diff + Serialize + Footprint,
     <V as Diff>::D: Serialize,
 {
-    type W = Snapshot<K, V>; // TODO: change this to Missing type
     type R = Snapshot<K, V>;
 
-    /// Make a new empty index of this type, with same configuration.
-    fn make_new(&self) -> Result<Box<Self>> {
-        Ok(Box::new(Snapshot::open(
-            self.dir.as_ref(),
-            self.name.as_ref(),
-        )?))
+    fn commit(&mut self, iter: ScanIter<K, V>) -> Result<usize> {
+        Ok(0)
     }
 
-    /// Create a new read handle, for multi-threading.
+    fn compact(&mut self, tombstone_purge: Bound<u64>) -> Result<()> {
+        Ok(())
+    }
+
     fn to_reader(&mut self) -> Result<Self::R> {
         Snapshot::open(&self.dir, &self.name)
-    }
-
-    /// writes not allowed !!
-    fn to_writer(&mut self) -> Result<Self::W> {
-        panic!("write ops are not allowed in Read-Only-Btree snapshots!!");
     }
 }
 
@@ -1566,29 +1557,6 @@ where
             None => 0,
         };
         footprint.try_into().unwrap()
-    }
-}
-
-// Write methods
-impl<K, V> Writer<K, V> for Snapshot<K, V>
-where
-    K: Clone + Ord + Serialize + Footprint,
-    V: Clone + Diff + Serialize + Footprint,
-{
-    fn set(&mut self, _key: K, _value: V) -> Result<Option<Entry<K, V>>> {
-        panic!("set operation not allowed on Read-Only-Btree snapshot !!");
-    }
-
-    fn set_cas(&mut self, _: K, _: V, _: u64) -> Result<Option<Entry<K, V>>> {
-        panic!("set operation not allowed on Read-Only-Btree snapshot !!");
-    }
-
-    fn delete<Q>(&mut self, _key: &Q) -> Result<Option<Entry<K, V>>>
-    where
-        K: Borrow<Q>,
-        Q: ToOwned<Owned = K> + Ord + ?Sized,
-    {
-        panic!("set operation not allowed on Read-Only-Btree snapshot !!");
     }
 }
 

@@ -1,7 +1,11 @@
-use std::{borrow::Borrow, marker, ops::RangeBounds};
+use std::{
+    borrow::Borrow,
+    marker,
+    ops::{Bound, RangeBounds},
+};
 
-use crate::core::{Diff, Footprint, Index, IndexIter, Reader, Writer};
-use crate::core::{Entry, Result};
+use crate::core::{Diff, Durable, Footprint, IndexIter, Reader};
+use crate::core::{Entry, Result, ScanIter};
 use crate::error::Error;
 
 /// NoDisk type denotes empty Disk type. Applications can use this
@@ -26,24 +30,23 @@ impl<K, V> Footprint for NoDisk<K, V> {
     }
 }
 
-impl<K, V> Index<K, V> for NoDisk<K, V>
+impl<K, V> Durable<K, V> for NoDisk<K, V>
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
+    K: Send + Sync + Clone + Ord + Footprint,
+    V: Send + Sync + Clone + Diff + Footprint,
 {
-    type W = NoDisk<K, V>;
     type R = NoDisk<K, V>;
 
-    fn make_new(&self) -> Result<Box<Self>> {
-        Ok(Box::new(NoDisk::new()))
+    fn commit(&mut self, iter: ScanIter<K, V>) -> Result<usize> {
+        Ok(0)
+    }
+
+    fn compact(&mut self, tombstone_purge: Bound<u64>) -> Result<()> {
+        Ok(())
     }
 
     fn to_reader(&mut self) -> Result<Self::R> {
         Ok(NoDisk::new())
-    }
-
-    fn to_writer(&mut self) -> Result<Self::W> {
-        panic!("write operations are not allowed");
     }
 }
 
@@ -128,28 +131,6 @@ where
             _phantom_key: &self.phantom_key,
             _phantom_val: &self.phantom_val,
         }))
-    }
-}
-
-impl<K, V> Writer<K, V> for NoDisk<K, V>
-where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
-{
-    fn set(&mut self, _key: K, _value: V) -> Result<Option<Entry<K, V>>> {
-        panic!("operation not allowed");
-    }
-
-    fn set_cas(&mut self, _k: K, _v: V, _: u64) -> Result<Option<Entry<K, V>>> {
-        panic!("operation not allowed");
-    }
-
-    fn delete<Q>(&mut self, _key: &Q) -> Result<Option<Entry<K, V>>>
-    where
-        K: Borrow<Q>,
-        Q: ToOwned<Owned = K> + Ord + ?Sized,
-    {
-        panic!("operation not allowed");
     }
 }
 

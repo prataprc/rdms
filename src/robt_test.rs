@@ -246,8 +246,8 @@ fn run_robt_llrb(name: &str, mut n_ops: u64, key_max: i64, repeat: usize, seed: 
             _ => unreachable!(),
         };
         println!(
-            "seed:{} n_ops:{} lsm:{} delta:{} vlog:{}",
-            seed, n_ops, lsm, config.delta_ok, config.value_in_vlog,
+            "seed:{} n_ops:{} lsm:{} delta:{} vlog:{} within:{:?}",
+            seed, n_ops, lsm, config.delta_ok, config.value_in_vlog, within
         );
         let (llrb, refs) = llrb_to_refs1(llrb, within.clone(), &config);
         let n_deleted: usize = refs
@@ -255,7 +255,7 @@ fn run_robt_llrb(name: &str, mut n_ops: u64, key_max: i64, repeat: usize, seed: 
             .map(|e| if e.is_deleted() { 1 } else { 0 })
             .sum();
         // println!("refs len: {}", refs.len());
-        let iter = SkipScan::new(&*llrb, ..);
+        let iter = SkipScan::new(&*llrb, within);
         let dir = {
             let mut dir = std::env::temp_dir();
             dir.push("test-robt-build");

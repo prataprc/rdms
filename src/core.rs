@@ -141,6 +141,14 @@ where
     fn delete_index(&mut self, key: K, index: u64) -> Result<Entry<K, V>>;
 }
 
+/// Factory trait to create new index snapshot with pre-defined configuration.
+pub trait IndexFactory<K, V> {
+    type I;
+
+    /// new index instance with predefined configuration.
+    fn new<S: AsRef<str>>(&self, name: S) -> Self::I;
+}
+
 /// EphemeralIndex trait implemented by in-memory index.
 ///
 /// To ingest key, value pairs, support read, but does not persist
@@ -155,9 +163,6 @@ where
 
     /// A reader assciated type, that are thread safe.
     type R: Reader<K, V> + Send + Sync;
-
-    /// Make a new empty index of this type, with same configuration.
-    fn new(&self) -> Result<Box<Self>>;
 
     /// Application can set the start sequence number for this index.
     fn set_seqno(&mut self, seqno: u64);

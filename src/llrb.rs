@@ -33,7 +33,7 @@ use std::sync::Arc;
 use std::{marker, mem};
 
 use crate::core::{Diff, Entry, Footprint, Result, ScanEntry, Value};
-use crate::core::{EphemeralIndex, FullScan, IndexIter, ScanIter};
+use crate::core::{EphemeralIndex, FullScan, IndexFactory, IndexIter, ScanIter};
 use crate::core::{Reader, WalWriter, Writer};
 use crate::error::Error;
 use crate::llrb_node::{LlrbDepth, Node, Stats};
@@ -41,6 +41,37 @@ use crate::mvcc::Snapshot;
 use crate::spinlock::{self, RWSpinlock};
 
 include!("llrb_common.rs");
+
+pub struct LlrbFactory {
+    lsm: bool,
+    spin: bool,
+}
+
+pub fn llrb_factory(lsm: bool) -> LlrbFactory {
+    LlrbFactory { lsm, spin: true }
+}
+
+impl LlrbFactory {
+    pub fn set_spinlatch(&mut self, spin: bool) {
+        self.spin = spin;
+    }
+}
+
+impl<K, V> IndexFactory<K, V> for LlrbFactory
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    type I = Box<Llrb<K, V>>;
+
+    fn new<S: AsRef<str>>(&self, name: S) -> Self::I {
+        if self.lsm {
+            Llrb::new_lsm(name)
+        } else {
+            Llrb::new(name)
+        }
+    }
+}
 
 /// Single threaded, in-memory index using [left-leaning-red-black][llrb] tree.
 ///
@@ -275,11 +306,6 @@ where
 {
     type W = LlrbWriter<K, V>;
     type R = LlrbReader<K, V>;
-
-    /// Make a new empty index of this type, with same configuration.
-    fn new(&self) -> Result<Box<Self>> {
-        Ok(self.shallow_clone())
-    }
 
     /// Application can set the start sequence number for this index.
     fn set_seqno(&mut self, seqno: u64) {
@@ -1452,12 +1478,6 @@ where
         index.delete_index(key, Some(seqno))
     }
 }
-
-//fn llrb_factory() -> LlrbFactory {
-//    LlrbFactory {
-//
-//    }
-//}
 
 #[cfg(test)]
 #[path = "llrb_test.rs"]

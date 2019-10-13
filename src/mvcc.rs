@@ -41,18 +41,49 @@ use std::{
 };
 
 use crate::core::{Diff, Entry, Footprint, Result, ScanEntry, Value};
-use crate::core::{EphemeralIndex, FullScan, IndexIter, ScanIter};
+use crate::core::{EphemeralIndex, FullScan, IndexFactory, IndexIter, ScanIter};
 use crate::core::{Reader, WalWriter, Writer};
 use crate::error::Error;
 use crate::llrb::Llrb;
 use crate::llrb_node::{LlrbDepth, Node, Stats};
 use crate::spinlock::{self, RWSpinlock};
 
+// TODO: Experiment with different atomic::Ordering to improve performance.
+
 const RECLAIM_CAP: usize = 128;
 
 include!("llrb_common.rs");
 
-// TODO: Experiment with different atomic::Ordering to improve performance.
+pub struct MvccFactory {
+    lsm: bool,
+    spin: bool,
+}
+
+pub fn mvcc_factory(lsm: bool) -> MvccFactory {
+    MvccFactory { lsm, spin: true }
+}
+
+impl MvccFactory {
+    pub fn set_spinlatch(&mut self, spin: bool) {
+        self.spin = spin;
+    }
+}
+
+impl<K, V> IndexFactory<K, V> for MvccFactory
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    type I = Box<Mvcc<K, V>>;
+
+    fn new<S: AsRef<str>>(&self, name: S) -> Self::I {
+        if self.lsm {
+            Mvcc::new_lsm(name)
+        } else {
+            Mvcc::new(name)
+        }
+    }
+}
 
 /// A [Mvcc][mvcc] variant of [LLRB][llrb] index for concurrent readers,
 /// serialized writers.
@@ -340,11 +371,6 @@ where
 {
     type W = MvccWriter<K, V>;
     type R = MvccReader<K, V>;
-
-    /// Make a new empty index of this type, with same configuration.
-    fn new(&self) -> Result<Box<Self>> {
-        Ok(self.shallow_clone())
-    }
 
     /// Application can set the start sequence number for this index.
     fn set_seqno(&mut self, seqno: u64) {

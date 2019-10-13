@@ -5,7 +5,7 @@
 use std::ops::{Bound, RangeBounds};
 use std::vec;
 
-use crate::core::{Diff, Entry, FullScan, Result, ScanEntry};
+use crate::core::{Diff, Entry, FullScan, IndexIter, Result, ScanEntry};
 
 /// SkipScan can be used to stitch piece-wise scanning of LSM
 /// data-structure, only selecting mutations (and versions)
@@ -147,6 +147,63 @@ where
                     };
                     self.iter = entries.into_iter()
                 }
+            }
+        }
+    }
+}
+
+pub struct FilterScan<'a, K, V>
+where
+    K: 'a + Clone + Ord,
+    V: 'a + Clone + Diff + From<<V as Diff>::D>,
+{
+    iter: IndexIter<'a, K, V>,
+    start: Bound<u64>,
+    end: Bound<u64>,
+}
+
+impl<'a, K, V> FilterScan<'a, K, V>
+where
+    K: 'a + Clone + Ord,
+    V: 'a + Clone + Diff + From<<V as Diff>::D>,
+{
+    pub fn new<R>(iter: IndexIter<'a, K, V>, within: R) -> FilterScan<'a, K, V>
+    where
+        R: RangeBounds<u64>,
+    {
+        let start = match within.start_bound() {
+            Bound::Included(start) => Bound::Included(*start),
+            Bound::Excluded(start) => Bound::Excluded(*start),
+            Bound::Unbounded => Bound::Unbounded,
+        };
+        let end = match within.end_bound() {
+            Bound::Included(end) => Bound::Included(*end),
+            Bound::Excluded(end) => Bound::Excluded(*end),
+            Bound::Unbounded => Bound::Unbounded,
+        };
+        FilterScan { iter, start, end }
+    }
+}
+
+impl<'a, K, V> Iterator for FilterScan<'a, K, V>
+where
+    K: 'a + Clone + Ord,
+    V: 'a + Clone + Diff + From<<V as Diff>::D>,
+{
+    type Item = Result<Entry<K, V>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            match self.iter.next() {
+                Some(Ok(entry)) => {
+                    let (start, end) = (self.start.clone(), self.end.clone());
+                    match entry.filter_within(start, end) {
+                        Some(entry) => break Some(Ok(entry)),
+                        None => (),
+                    }
+                }
+                Some(Err(err)) => break Some(Err(err)),
+                None => break None,
             }
         }
     }

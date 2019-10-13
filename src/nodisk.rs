@@ -1,11 +1,7 @@
-use std::{
-    borrow::Borrow,
-    marker,
-    ops::{Bound, RangeBounds},
-};
+use std::{borrow::Borrow, marker, ops::RangeBounds};
 
 use crate::core::{Diff, DurableIndex, Footprint, IndexIter, Reader};
-use crate::core::{Entry, Result, ScanIter};
+use crate::core::{Entry, Result};
 use crate::error::Error;
 
 /// NoDisk type denotes empty Disk type.
@@ -39,11 +35,11 @@ where
 {
     type R = NoDisk<K, V>;
 
-    fn commit(&mut self, iter: ScanIter<K, V>) -> Result<usize> {
+    fn commit(&mut self, _iter: IndexIter<K, V>) -> Result<usize> {
         Ok(0)
     }
 
-    fn compact(&mut self, tombstone_purge: Bound<u64>) -> Result<()> {
+    fn compact(&mut self) -> Result<()> {
         Ok(())
     }
 

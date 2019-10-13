@@ -169,7 +169,7 @@ where
         Ok(0)
     }
 
-    fn compact(&mut self, tombstone_purge: Bound<u64>) -> Result<()> {
+    fn compact(&mut self) -> Result<()> {
         Ok(())
     }
 

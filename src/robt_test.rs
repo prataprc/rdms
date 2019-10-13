@@ -4,7 +4,7 @@ use super::*;
 use crate::core::{Delta, Reader, Writer};
 use crate::llrb::Llrb;
 use crate::robt;
-use crate::scans::SkipScan;
+use crate::scans::{FilterScan, SkipScan};
 
 use rand::{rngs::SmallRng, Rng, SeedableRng};
 
@@ -47,7 +47,6 @@ fn test_stats() {
         delta_ok: true,
         vlog_file: Some(vlog_file.to_os_string()),
         value_in_vlog: true,
-        tomb_purge: None,
         flush_queue_size: 1024,
     };
     let stats1: Stats = cnf.into();
@@ -108,7 +107,6 @@ fn test_config() {
         z_blocksize: 1024 * 4,
         v_blocksize: 1024 * 16,
         m_blocksize: 1024 * 32,
-        tomb_purge: Some(543),
         delta_ok: true,
         vlog_file: Some(vlog_file.to_os_string()),
         value_in_vlog: true,
@@ -123,11 +121,9 @@ fn test_config() {
     assert_eq!(config2.delta_ok, config1.delta_ok);
     assert_eq!(config2.vlog_file, config1.vlog_file);
     assert_eq!(config2.value_in_vlog, config1.value_in_vlog);
-    assert_eq!(config2.tomb_purge, None);
     assert_eq!(config2.flush_queue_size, Config::FLUSH_QUEUE_SIZE);
 
     config1.set_blocksize(1024 * 8, 1024 * 32, 1024 * 64);
-    config1.set_tombstone_purge(782);
     config1.set_delta(None);
     config1.set_value_log(None);
     config1.set_flush_queue_size(1023);
@@ -136,7 +132,6 @@ fn test_config() {
     assert_eq!(config1.m_blocksize, 1024 * 64);
     assert_eq!(config1.delta_ok, false);
     assert_eq!(config1.value_in_vlog, false);
-    assert_eq!(config1.tomb_purge, Some(782));
     assert_eq!(config1.flush_queue_size, 1023);
 
     assert_eq!(Config::compute_root_block(4095), 4096);
@@ -239,23 +234,22 @@ fn run_robt_llrb(name: &str, mut n_ops: u64, key_max: i64, repeat: usize, seed: 
         let mut config: robt::Config = Default::default();
         config.delta_ok = lsm;
         config.value_in_vlog = rng.gen();
-        let tomb_purge = match rng.gen::<u64>() % 100 {
-            0..=60 => None,
-            61..=70 => Some(0),
-            71..=80 => Some(1),
+        let within = match rng.gen::<u64>() % 100 {
+            0..=60 => (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded),
+            61..=70 => (Bound::<u64>::Excluded(1), Bound::<u64>::Unbounded),
+            71..=80 => (Bound::<u64>::Included(1), Bound::<u64>::Unbounded),
             81..=90 => {
                 let x = rng.gen::<u64>() % n_ops;
-                Some(x)
+                (Bound::<u64>::Excluded(x), Bound::<u64>::Unbounded)
             }
-            91..=100 => Some(n_ops),
+            91..=100 => (Bound::<u64>::Excluded(n_ops), Bound::<u64>::Unbounded),
             _ => unreachable!(),
         };
-        config.tomb_purge = tomb_purge;
         println!(
-            "seed:{} n_ops:{} lsm:{} delta:{} vlog:{} tombstone:{:?}",
-            seed, n_ops, lsm, config.delta_ok, config.value_in_vlog, tomb_purge
+            "seed:{} n_ops:{} lsm:{} delta:{} vlog:{}",
+            seed, n_ops, lsm, config.delta_ok, config.value_in_vlog,
         );
-        let (llrb, refs) = llrb_to_refs1(llrb, &config);
+        let (llrb, refs) = llrb_to_refs1(llrb, within.clone(), &config);
         let n_deleted: usize = refs
             .iter()
             .map(|e| if e.is_deleted() { 1 } else { 0 })
@@ -318,7 +312,7 @@ fn run_robt_llrb(name: &str, mut n_ops: u64, key_max: i64, repeat: usize, seed: 
         for j in 0..100 {
             // test range
             let range = random_low_high(key_max, seed + j);
-            let refs = llrb_to_refs2(&llrb, range, &config);
+            let refs = llrb_to_refs2(&llrb, range, within.clone(), &config);
             // println!("range bounds {:?} {}", range, refs.len());
             let xs = snap.range(range).unwrap();
             let xs: Vec<Entry<i64, i64>> = xs.map(|e| e.unwrap()).collect();
@@ -328,7 +322,7 @@ fn run_robt_llrb(name: &str, mut n_ops: u64, key_max: i64, repeat: usize, seed: 
             }
             // test range_with_versions
             let range = random_low_high(key_max, seed + j);
-            let refs = llrb_to_refs2(&llrb, range, &config);
+            let refs = llrb_to_refs2(&llrb, range, within.clone(), &config);
             // println!("range..versions bounds {:?} {}", range, refs.len());
             let xs = snap.range_with_versions(range).unwrap();
             let xs: Vec<Entry<i64, i64>> = xs.map(|e| e.unwrap()).collect();
@@ -339,7 +333,7 @@ fn run_robt_llrb(name: &str, mut n_ops: u64, key_max: i64, repeat: usize, seed: 
             }
             // test reverse
             let range = random_low_high(key_max, seed + j);
-            let refs = llrb_to_refs3(&llrb, range, &config);
+            let refs = llrb_to_refs3(&llrb, range, within.clone(), &config);
             // println!("reverse bounds {:?} {}", range, refs.len());
             let xs = snap.reverse(range).unwrap();
             let xs: Vec<Entry<i64, i64>> = xs.map(|e| e.unwrap()).collect();
@@ -349,7 +343,7 @@ fn run_robt_llrb(name: &str, mut n_ops: u64, key_max: i64, repeat: usize, seed: 
             }
             // test reverse_with_versions
             let range = random_low_high(key_max, seed + j);
-            let refs = llrb_to_refs3(&llrb, range, &config);
+            let refs = llrb_to_refs3(&llrb, range, within.clone(), &config);
             // println!("reverse..versions bounds {:?} {}", range, refs.len());
             let xs = snap.reverse_with_versions(range).unwrap();
             let xs: Vec<Entry<i64, i64>> = xs.map(|e| e.unwrap()).collect();
@@ -364,9 +358,10 @@ fn run_robt_llrb(name: &str, mut n_ops: u64, key_max: i64, repeat: usize, seed: 
 
 fn llrb_to_refs1(
     llrb: Box<Llrb<i64, i64>>, // reference
+    within: (Bound<u64>, Bound<u64>),
     config: &Config,
 ) -> (Box<Llrb<i64, i64>>, Vec<Entry<i64, i64>>) {
-    let iter = SkipScan::new(&*llrb, ..);
+    let iter = SkipScan::new(&*llrb, within);
     let refs = iter
         .filter_map(|e| {
             let mut e = e.unwrap();
@@ -374,10 +369,7 @@ fn llrb_to_refs1(
             if !config.delta_ok {
                 e.set_deltas(vec![]);
             }
-            match &config.tomb_purge {
-                None => Some(e),
-                Some(cutoff) => e.purge(Bound::Excluded(*cutoff)),
-            }
+            Some(e)
         })
         .collect();
     (llrb, refs)
@@ -386,21 +378,19 @@ fn llrb_to_refs1(
 fn llrb_to_refs2<R>(
     llrb: &Llrb<i64, i64>, // reference
     range: R,
+    within: (Bound<u64>, Bound<u64>),
     config: &Config,
 ) -> Vec<Entry<i64, i64>>
 where
     R: RangeBounds<i64>,
 {
-    let iter = llrb.range(range).unwrap();
+    let iter = FilterScan::new(llrb.range(range).unwrap(), within);
     iter.filter_map(|e| {
         let mut e = e.unwrap();
         if !config.delta_ok {
             e.set_deltas(vec![]);
         }
-        match &config.tomb_purge {
-            None => Some(e),
-            Some(cutoff) => e.purge(Bound::Excluded(*cutoff)),
-        }
+        Some(e)
     })
     .collect()
 }
@@ -408,21 +398,19 @@ where
 fn llrb_to_refs3<R>(
     llrb: &Llrb<i64, i64>, // reference
     range: R,
+    within: (Bound<u64>, Bound<u64>),
     config: &Config,
 ) -> Vec<Entry<i64, i64>>
 where
     R: RangeBounds<i64>,
 {
-    let iter = llrb.reverse(range).unwrap();
+    let iter = FilterScan::new(llrb.reverse(range).unwrap(), within);
     iter.filter_map(|e| {
         let mut e = e.unwrap();
         if !config.delta_ok {
             e.set_deltas(vec![]);
         }
-        match &config.tomb_purge {
-            None => Some(e),
-            Some(cutoff) => e.purge(Bound::Excluded(*cutoff)),
-        }
+        Some(e)
     })
     .collect()
 }

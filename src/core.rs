@@ -189,10 +189,10 @@ where
 
     /// Flush to disk all new entries that are not yet persisted
     /// on to disk. Return number of entries commited to disk.
-    fn commit(&mut self, iter: ScanIter<K, V>) -> Result<usize>;
+    fn commit(&mut self, iter: IndexIter<K, V>) -> Result<usize>;
 
     /// Compact disk snapshots if there are any.
-    fn compact(&mut self, tombstone_purge: Bound<u64>) -> Result<()>;
+    fn compact(&mut self) -> Result<()>;
 
     /// Create a new read handle, for multi-threading. Note that not all
     /// indexes allow concurrent readers. Refer to index API for more details.

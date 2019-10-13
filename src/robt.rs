@@ -54,7 +54,7 @@ use std::{
 };
 
 use crate::core::{Diff, Entry, Footprint, Result, Serialize};
-use crate::core::{DurableIndex, IndexIter, Reader, ScanIter};
+use crate::core::{DurableIndex, IndexIter, Reader};
 use crate::error::Error;
 use crate::jsondata::{Json, Property};
 use crate::util;
@@ -76,13 +76,6 @@ pub struct Config {
     /// If deltas are indexed and/or value to be stored in separate log file.
     /// Default: Config::VBLOCKSIZE
     pub v_blocksize: usize,
-    /// Tombstone purge. For LSM based index older entries can quickly bloat
-    /// system. To avoid this, it is a good idea to purge older versions of
-    /// an entry that are seen by all participating entities. When configured
-    /// with `Some(seqno)`, all iterated entry/version whose seqno is ``<=``
-    /// purge seqno shall be removed totally from the index.
-    /// Default: None
-    pub tomb_purge: Option<u64>,
     /// Include delta as part of entry. Note that delta values are always
     /// stored in separate value-log file.
     /// Default: true
@@ -111,7 +104,6 @@ impl Default for Config {
             z_blocksize: Self::ZBLOCKSIZE,
             v_blocksize: Self::VBLOCKSIZE,
             m_blocksize: Self::MBLOCKSIZE,
-            tomb_purge: Default::default(),
             delta_ok: true,
             vlog_file: Default::default(),
             value_in_vlog: false,
@@ -126,7 +118,6 @@ impl From<Stats> for Config {
             z_blocksize: stats.z_blocksize,
             m_blocksize: stats.m_blocksize,
             v_blocksize: stats.v_blocksize,
-            tomb_purge: Default::default(),
             delta_ok: stats.delta_ok,
             vlog_file: stats.vlog_file,
             value_in_vlog: stats.value_in_vlog,
@@ -150,13 +141,6 @@ impl Config {
         self.z_blocksize = z;
         self.v_blocksize = v;
         self.m_blocksize = m;
-        self
-    }
-
-    /// Enable tombstone purge. Deltas and values with sequence number less
-    /// than `before` shall be purged.
-    pub fn set_tombstone_purge(&mut self, before: u64) -> &mut Self {
-        self.tomb_purge = Some(before);
         self
     }
 
@@ -400,7 +384,6 @@ impl fmt::Display for MetaItem {
 /// Btree configuration and statistics persisted along with index file.
 ///
 /// Note that build-only [configuration][Config] options like:
-/// * _`tomb_purge`_, configuration option.
 /// * _`flush_queue_size`_,  configuration option.
 ///
 /// are not persisted as part of statistics.
@@ -880,19 +863,8 @@ where
     }
 
     fn preprocess(&mut self, entry: Entry<K, V>) -> Option<Entry<K, V>> {
-        // if tombstone purge is configured, then purge all versions
-        // on or before the purge-seqno.
-        let entry = match self.config.tomb_purge {
-            Some(before) => entry.purge(Bound::Excluded(before)),
-            _ => Some(entry),
-        };
-        match entry {
-            Some(entry) => {
-                self.stats.seqno = cmp::max(self.stats.seqno, entry.to_seqno());
-                Some(entry)
-            }
-            None => None,
-        }
+        self.stats.seqno = cmp::max(self.stats.seqno, entry.to_seqno());
+        Some(entry)
     }
 
     fn postprocess(&mut self, entry: &mut Entry<K, V>) {
@@ -1112,11 +1084,11 @@ where
 {
     type R = Snapshot<K, V>;
 
-    fn commit(&mut self, iter: ScanIter<K, V>) -> Result<usize> {
+    fn commit(&mut self, _iter: IndexIter<K, V>) -> Result<usize> {
         Ok(0)
     }
 
-    fn compact(&mut self, tombstone_purge: Bound<u64>) -> Result<()> {
+    fn compact(&mut self) -> Result<()> {
         Ok(())
     }
 

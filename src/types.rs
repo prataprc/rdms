@@ -1,6 +1,6 @@
 use std::convert::TryInto;
 
-use crate::core::{Diff, Footprint, Serialize};
+use crate::core::{Diff, Footprint, Result, Serialize};
 use crate::error::Error;
 
 /// Empty value, can be used for indexing entries that have a
@@ -27,14 +27,14 @@ impl Serialize for Empty {
         0
     }
 
-    fn decode(&mut self, _buf: &[u8]) -> Result<usize, Error> {
+    fn decode(&mut self, _buf: &[u8]) -> Result<usize> {
         Ok(0)
     }
 }
 
 impl Footprint for Empty {
-    fn footprint(&self) -> isize {
-        0
+    fn footprint(&self) -> Result<isize> {
+        Ok(0)
     }
 }
 
@@ -69,7 +69,7 @@ impl Serialize for Vec<u8> {
         scratch.len() + self.len()
     }
 
-    fn decode(&mut self, buf: &[u8]) -> Result<usize, Error> {
+    fn decode(&mut self, buf: &[u8]) -> Result<usize> {
         if buf.len() < 4 {
             let msg = format!("bytes decode header {} < 4", buf.len());
             return Err(Error::DecodeFail(msg));
@@ -88,8 +88,8 @@ impl Serialize for Vec<u8> {
 }
 
 impl Footprint for Vec<u8> {
-    fn footprint(&self) -> isize {
-        self.capacity().try_into().unwrap()
+    fn footprint(&self) -> Result<isize> {
+        Ok(self.capacity().try_into().unwrap())
     }
 }
 
@@ -117,7 +117,7 @@ impl Serialize for i32 {
         4
     }
 
-    fn decode(&mut self, buf: &[u8]) -> Result<usize, Error> {
+    fn decode(&mut self, buf: &[u8]) -> Result<usize> {
         if buf.len() >= 4 {
             let mut scratch = [0_u8; 4];
             scratch.copy_from_slice(&buf[..4]);
@@ -130,8 +130,8 @@ impl Serialize for i32 {
 }
 
 impl Footprint for i32 {
-    fn footprint(&self) -> isize {
-        0
+    fn footprint(&self) -> Result<isize> {
+        Ok(0)
     }
 }
 
@@ -159,7 +159,7 @@ impl Serialize for i64 {
         8
     }
 
-    fn decode(&mut self, buf: &[u8]) -> Result<usize, Error> {
+    fn decode(&mut self, buf: &[u8]) -> Result<usize> {
         if buf.len() >= 8 {
             let mut scratch = [0_u8; 8];
             scratch.copy_from_slice(&buf[..8]);
@@ -172,8 +172,8 @@ impl Serialize for i64 {
 }
 
 impl Footprint for i64 {
-    fn footprint(&self) -> isize {
-        0
+    fn footprint(&self) -> Result<isize> {
+        Ok(0)
     }
 }
 

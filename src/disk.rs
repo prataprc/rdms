@@ -3,6 +3,7 @@ use std::{
     ffi, fs, mem,
     ops::{Bound, RangeBounds},
     path,
+    marker,
     sync::{
         self,
         atomic::{AtomicBool, Ordering::SeqCst},
@@ -12,27 +13,55 @@ use std::{
 
 use crate::core::{Diff, DurableIndex, Entry, Footprint};
 use crate::core::{IndexIter, Reader, Result, ScanIter, Serialize};
+use crate::error::Error;
+use crate::robt::Config;
 
 const NLEVELS: usize = 16;
 
-struct Levels<K, V>
+#[derive(Clone)]
+enum RState<K, V, D>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    D: DurableIndex,
+{
+    Flush(RLevel<K, V, D>),
+    Compact(RLevel<K, V, D>),
+    Active(RLevel<K, V, D>),
+    None,
+}
+
+impl<K, V> Default for RState<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+{
+    fn default() -> RState<K, V> {
+        RState::None
+    }
+}
+
+struct Backup<K, V, F>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
+    F: IndexFactory<K, V>,
+    F::I: DurableIndex,
 {
+    disk_factory: F,
     levels: [State<K, V>; NLEVELS],
     reloads: Vec<Arc<AtomicBool>>,
 }
 
-impl<K, V> Levels<K, V>
+impl<K, V> Backup<K, V>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
 {
-    fn new() -> Levels<K, V> {
-        Levels {
+    fn new() -> Backup<K, V> {
+        Backup {
             levels: Self::new_initial_states(),
             reloads: vec![],
         }
@@ -83,7 +112,7 @@ where
     }
 }
 
-impl<K, V> Footprint for Levels<K, V>
+impl<K, V> Footprint for Backup<K, V>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
@@ -110,7 +139,7 @@ where
 {
     dir: ffi::OsString,
     name: String,
-    mu: sync::Mutex<Levels<K, V>>,
+    mu: sync::Mutex<Backup<K, V>>,
 }
 
 impl<K, V> Robt<K, V>
@@ -123,7 +152,7 @@ where
         Ok(Robt {
             dir: dir.to_os_string(),
             name: name.to_string(),
-            mu: sync::Mutex::new(Levels::new()),
+            mu: sync::Mutex::new(Backup::new()),
         })
     }
 
@@ -140,7 +169,7 @@ where
         Ok(Robt {
             dir: dir.to_os_string(),
             name: name.to_string(),
-            mu: sync::Mutex::new(Levels::new()),
+            mu: sync::Mutex::new(Backup::new()),
         })
     }
 }
@@ -157,13 +186,8 @@ where
     }
 }
 
-impl<K, V> DurableIndex<K, V> for Robt<K, V>
-where
-    K: Send + Sync + Clone + Ord + Footprint + Serialize,
-    V: Send + Sync + Clone + Diff + Footprint + Serialize,
-    <V as Diff>::D: Serialize,
-{
-    type R = Snapshots<K, V>;
+impl<K, V> DurableIndex<K, V> for Dgm<K, V> {
+    type R = DgmReader<K, V>;
 
     fn commit(&mut self, iter: ScanIter<K, V>) -> Result<usize> {
         Ok(0)
@@ -176,50 +200,106 @@ where
     fn to_reader(&mut self) -> Result<Self::R> {
         let mut levels = self.mu.lock().unwrap();
         let (ls, reload) = levels.new_reader();
-        Ok(Snapshots::new(ls, reload))
+        Ok(DgmReader::new(ls, reload))
     }
 }
 
-struct Snapshots<K, V>
+struct DgmReader<K, V, D>
 where
-    K: Clone + Ord + Serialize,
-    V: Clone + Diff + Serialize,
-    <V as Diff>::D: Serialize,
+    K: Clone + Ord,
+    V: Clone + Diff,
 {
-    reload: Arc<AtomicBool>,
-    levels: [State<K, V>; NLEVELS],
+    id: usize,
+    _refn: Arc<u32>;
+    dgm: Box<ffi::c_void>, // Box<Llrb<K, V>>
+    phantom_disk: marker::PhantomData<D>,
 }
 
-impl<K, V> Snapshots<K, V>
+impl<K,V,D> Drop for DgmReader<K,V,D>
 where
-    K: Clone + Ord + Serialize,
-    V: Clone + Diff + Serialize,
-    <V as Diff>::D: Serialize,
+    K: Clone + Ord,
+    V: Clone + Diff,
 {
-    fn new(
-        levels: [State<K, V>; NLEVELS], // reference levels
-        reload: Arc<AtomicBool>,
-    ) -> Snapshots<K, V> {
-        Snapshots { reload, levels }
+    fn drop(&mut self) {
+        Box::leak(self.dgm);
     }
 }
 
-impl<K, V> Reader<K, V> for Snapshots<K, V>
+impl<K,V,D> AsRef<Dgm<K,V,D>> for DgmReader<K,V,D>
 where
-    K: Clone + Ord + Serialize,
-    V: Clone + Diff + Serialize,
-    <V as Diff>::D: Serialize,
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    fn as_ref(&self) -> &Dgm<K,V,D> {
+        // transmute void pointer to mutable reference into index.
+        let index_ptr = self.dgm.as_ref();
+        let index_ptr = index_ptr as *const ffi::c_void;
+        (index_ptr as *const Dgm<K, V, D>).as_ref().unwrap()
+    }
+}
+
+impl<K, V> DgmReader<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    fn new(id: usize, dgm: Box<ffi::c_void>, _refn: Arc<u32>) -> DgmReader<K, V> {
+        DgmReader { id, dgm, _refn, phantom_disk: marker::PhantomData }
+    }
+}
+
+impl<K, V> Reader<K, V> for DgmReader<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
 {
     fn get<Q>(&self, key: &Q) -> Result<Entry<K, V>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        panic!("to be implemented")
+        let rlevels = self.get_snapshots();
+
+        for rlevel in self.rlevels.iter() {
+            let rlevel = match rlevel {
+                RState::Flush(rlevel) => rlevel,
+                RState::Compact(rlevel) => rlevel,
+                RState::Active(rlevel) => rlevel,
+                RState::None => continue,
+            };
+            match rlevel.reader.get(key) {
+                Ok(entry) => return Ok(entry),
+                Err(Error::KeyNotFound) => continue
+                Err(err) => return Err(err),
+            }
+        }
     }
 
     fn iter(&self) -> Result<IndexIter<K, V>> {
-        panic!("to be implemented")
+        let iters: Vec<IndexIter<K,V>> = vec![];
+        for rlevel in self.rlevels.iter() {
+            let rlevel = match rlevel {
+                RState::Flush(rlevel) => rlevel,
+                RState::Compact(rlevel) => rlevel,
+                RState::Active(rlevel) => rlevel,
+                RState::None => continue,
+            };
+            iters.push(rlevel.reader.iter()?);
+        }
+        match iters.len() {
+            0 => {
+                let entries: Vec<Result<Entry<K,V>>> = vec![];
+                Box::new(entries.into_iter())
+            }
+            1 => iters[0],
+            _ => {
+                let (mut iter, reverse) = (iters[0], true);
+                for older = iters[1..].into_iter() {
+                    iter = y_iter(iter, older, reverse);
+                }
+                Ok(iter)
+            }
+        }
     }
 
     fn range<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
@@ -228,7 +308,30 @@ where
         R: 'a + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        panic!("to be implemented")
+        let iters: Vec<IndexIter<K,V>> = vec![];
+        for rlevel in self.rlevels.iter() {
+            let rlevel = match rlevel {
+                RState::Flush(rlevel) => rlevel,
+                RState::Compact(rlevel) => rlevel,
+                RState::Active(rlevel) => rlevel,
+                RState::None => continue,
+            };
+            iters.push(rlevel.reader.range(range)?);
+        }
+        match iters.len() {
+            0 => {
+                let entries: Vec<Result<Entry<K,V>>> = vec![];
+                Box::new(entries.into_iter())
+            }
+            1 => iters[0],
+            _ => {
+                let (mut iter, reverse) = (iters[0], true);
+                for older = iters[1..].into_iter() {
+                    iter = y_iter(iter, older, reverse);
+                }
+                Ok(iter)
+            }
+        }
     }
 
     fn reverse<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
@@ -237,7 +340,30 @@ where
         R: 'a + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        panic!("to be implemented")
+        let iters: Vec<IndexIter<K,V>> = vec![];
+        for rlevel in self.rlevels.iter() {
+            let rlevel = match rlevel {
+                RState::Flush(rlevel) => rlevel,
+                RState::Compact(rlevel) => rlevel,
+                RState::Active(rlevel) => rlevel,
+                RState::None => continue,
+            };
+            iters.push(rlevel.reader.reverse(range)?);
+        }
+        match iters.len() {
+            0 => {
+                let entries: Vec<Result<Entry<K,V>>> = vec![];
+                Box::new(entries.into_iter())
+            }
+            1 => iters[0],
+            _ => {
+                let (mut iter, reverse) = (iters[0], true);
+                for older = iters[1..].into_iter() {
+                    iter = y_iter(iter, older, reverse);
+                }
+                Ok(iter)
+            }
+        }
     }
 
     fn get_with_versions<Q>(&self, key: &Q) -> Result<Entry<K, V>>
@@ -245,11 +371,58 @@ where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        panic!("to be implemented")
+        let mut entries: Vec<Entry<K,V>> = vec![]
+        for rlevel in self.rlevels.iter() {
+            let rlevel = match rlevel {
+                RState::Flush(rlevel) => rlevel,
+                RState::Compact(rlevel) => rlevel,
+                RState::Active(rlevel) => rlevel,
+                RState::None => continue,
+            };
+            match rlevel.reader.get_versions(key) {
+                Ok(entry) => entries.push(entry),
+                Err(Error::KeyNotFound) => continue,
+                Err(err) => return Err(err),
+            }
+        }
+        match entries.len() {
+            0 => Err(Error::KeyNotFound),
+            1 => Ok(entries[0]),
+            _ => {
+                let entry = entries[0];
+                for older in entries[1..].into_iter() {
+                    entry.flush_merge(older)
+                }
+                Ok(entry)
+            }
+        }
     }
 
     fn iter_with_versions(&self) -> Result<IndexIter<K, V>> {
-        panic!("to be implemented")
+        let iters: Vec<IndexIter<K,V>> = vec![];
+        for rlevel in self.rlevels.iter() {
+            let rlevel = match rlevel {
+                RState::Flush(rlevel) => rlevel,
+                RState::Compact(rlevel) => rlevel,
+                RState::Active(rlevel) => rlevel,
+                RState::None => continue,
+            };
+            iters.push(rlevel.reader.iter_with_versions()?);
+        }
+        match iters.len() {
+            0 => {
+                let entries: Vec<Result<Entry<K,V>>> = vec![];
+                Box::new(entries.into_iter())
+            }
+            1 => iters[0],
+            _ => {
+                let (mut iter, reverse) = (iters[0], true);
+                for older = iters[1..].into_iter() {
+                    iter = y_iter_versions(iter, older, reverse);
+                }
+                Ok(iter)
+            }
+        }
     }
 
     fn range_with_versions<'a, R, Q>(&'a self, r: R) -> Result<IndexIter<K, V>>
@@ -258,7 +431,30 @@ where
         R: 'a + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        panic!("to be implemented")
+        let iters: Vec<IndexIter<K,V>> = vec![];
+        for rlevel in self.rlevels.iter() {
+            let rlevel = match rlevel {
+                RState::Flush(rlevel) => rlevel,
+                RState::Compact(rlevel) => rlevel,
+                RState::Active(rlevel) => rlevel,
+                RState::None => continue,
+            };
+            iters.push(rlevel.reader.range_with_versions(range)?);
+        }
+        match iters.len() {
+            0 => {
+                let entries: Vec<Result<Entry<K,V>>> = vec![];
+                Box::new(entries.into_iter())
+            }
+            1 => iters[0],
+            _ => {
+                let (mut iter, reverse) = (iters[0], true);
+                for older = iters[1..].into_iter() {
+                    iter = y_iter_versions(iter, older, reverse);
+                }
+                Ok(iter)
+            }
+        }
     }
 
     fn reverse_with_versions<'a, R, Q>(&'a self, r: R) -> Result<IndexIter<K, V>>
@@ -267,84 +463,95 @@ where
         R: 'a + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        panic!("to be implemented")
+        let iters: Vec<IndexIter<K,V>> = vec![];
+        for rlevel in self.rlevels.iter() {
+            let rlevel = match rlevel {
+                RState::Flush(rlevel) => rlevel,
+                RState::Compact(rlevel) => rlevel,
+                RState::Active(rlevel) => rlevel,
+                RState::None => continue,
+            };
+            iters.push(rlevel.reader.reverse_with_versions(range)?);
+        }
+        match iters.len() {
+            0 => {
+                let entries: Vec<Result<Entry<K,V>>> = vec![];
+                Box::new(entries.into_iter())
+            }
+            1 => iters[0],
+            _ => {
+                let (mut iter, reverse) = (iters[0], true);
+                for older = iters[1..].into_iter() {
+                    iter = y_iter_versions(iter, older, reverse);
+                }
+                Ok(iter)
+            }
+        }
     }
 }
 
-#[derive(Clone)]
-enum State<K, V>
-where
-    K: Clone + Ord + Serialize,
-    V: Clone + Diff + Serialize,
-    <V as Diff>::D: Serialize,
-{
-    Flush(Level<K, V>),
-    Compact(Level<K, V>),
-    Active(Level<K, V>),
-    None,
-}
-
-impl<K, V> Default for State<K, V>
-where
-    K: Clone + Ord + Serialize,
-    V: Clone + Diff + Serialize,
-    <V as Diff>::D: Serialize,
-{
-    fn default() -> State<K, V> {
-        State::None
-    }
-}
-
+// Holds a single snapshot for a disk type D.
 #[derive(Default)]
-struct Level<K, V>
+struct RLevel<K, V, D>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
+    D: DurableIndex<K, V>,
 {
     dir: ffi::OsString,
-    index_file: Arc<String>,
-    vlog_file: Option<Arc<String>>,
-    snapshot: Option<mem::ManuallyDrop<Snapshot<K, V>>>,
+    index_file: Arc<String>,        // full path/file_name
+    vlog_file: Option<Arc<String>>, // full path/file_name
+    reader: mem::ManuallyDrop<D::R>,
 }
 
-impl<K, V> Level<K, V>
+impl<K, V, D> RLevel<K, V, D>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
+    D: DurableIndex<K,V>,
 {
     fn new(
         dir: &ffi::OsStr, // path to index/vlog files
         index_file: Arc<String>,
         vlog_file: Option<Arc<String>>,
-    ) -> Level<K, V> {
-        Level {
+        reader: D::R,
+    ) -> RLevel<K, V> {
+        RLevel {
             dir: dir.to_os_string(),
             index_file,
             vlog_file,
-            snapshot: Default::default(),
+            reader: ManuallyDrop::new(reader),
         }
     }
 
+    // TODO: cleanup afterwards.
     fn load_snapshot(&mut self) -> Result<()> {
-        if self.snapshot.is_some() {
-            panic!("snapshot already loaded")
-        }
         let file_name = path::Path::new(self.index_file.as_ref())
             .file_name()
-            .unwrap();
-        let name = Config::to_name(file_name.to_str().unwrap()).unwrap();
-        self.snapshot = Some(
-            // snapshot shall be manually dropped, because the arder of drop
-            // is very important, between snapshot and file-cleanup.
-            mem::ManuallyDrop::new(Snapshot::open(&self.dir, &name)?),
-        );
+            .ok_or(Err(Error::InvalidFile("no file name".to_string())));
+        let name = match file_name.to_str() {
+            Some(file_name) => match Config::to_name(file_name) {
+                Some(name) => Ok(name),
+                None => {
+                    let msg = "robt not an index file".to_string();
+                    Err(Error::InvalidFile(msg))
+                }
+            },
+            None => {
+                let msg = format!("robt invalid index file {:?}", file_name);
+                Err(Error::InvalidFile(msg))
+            }
+        }?;
+        mem::ManuallyDrop::new(Snapshot::open(&self.dir, &name)?);
         Ok(())
     }
 
     fn to_file_parts(file_name: &str) -> Option<(String, usize, usize)> {
-        let name = Config::to_name(file_name)?;
-        let parts: Vec<&str> = name.split('-').collect();
-        let mut parts = parts.into_iter();
+        let parts = {
+            let name = Config::to_name(file_name)?;
+            let parts: Vec<&str> = name.split('-').collect();
+            parts.into_iter()
+        };
         let name = parts.next()?;
         let level: usize = parts.next()?.parse().ok()?;
         let file_no: usize = parts.next()?.parse().ok()?;
@@ -360,69 +567,49 @@ where
     }
 }
 
-impl<K, V> Footprint for Level<K, V>
+impl<K, V, D> Footprint for RLevel<K, V, D>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
+    D: DurableIndex<K, V>,
 {
-    fn footprint(&self) -> isize {
-        let file: &str = self.index_file.as_ref();
-        let mut footprint = fs::metadata(file).unwrap().len();
+    fn footprint(&self) -> Result<isize> {
+        let mut footprint = {
+            let file: &str = self.index_file.as_ref();
+            fs::metadata(file)?.len()
+        };
         footprint += match &self.vlog_file {
             Some(vlog_file) => {
                 let file: &str = vlog_file.as_ref();
-                fs::metadata(file).unwrap().len()
+                fs::metadata(file)?.len()
             }
             None => 0,
         };
-        footprint.try_into().unwrap()
+        Ok(footprint.try_into()?)
     }
 }
 
-impl<K, V> Clone for Level<K, V>
+impl<K, V, D> Drop for RLevel<K, V, D>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
-{
-    fn clone(&self) -> Level<K, V> {
-        if self.snapshot.is_some() {
-            panic!("cannot clone a level that has an open snapshot");
-        }
-
-        Level {
-            dir: self.dir.clone(),
-            index_file: Arc::clone(&self.index_file),
-            vlog_file: self.vlog_file.as_ref().map(|x| Arc::clone(x)),
-            snapshot: None,
-        }
-    }
-}
-
-impl<K, V> Drop for Level<K, V>
-where
-    K: Clone + Ord + Serialize,
-    V: Clone + Diff + Serialize,
+    D: DurableIndex<K, V>,
 {
     fn drop(&mut self) {
-        // manuall drop snapshot object here.
-        match self.snapshot.take() {
-            Some(mut snapshot) => unsafe {
-                // order of drop is important with respect to file-cleanup.
-                mem::ManuallyDrop::drop(&mut snapshot)
-            },
-            None => (),
-        }
+        // manually drop reader object here.
+        // order of drop is important with respect to file-cleanup.
+        unsafe { mem::ManuallyDrop::drop(&mut self.reader) }
 
-        // and cleanup the older snapshots if there are not more references.
+        // and cleanup the older snapshots if there are no more references.
         if Arc::strong_count(&self.index_file) == 1 {
             let f = Config::stitch_index_file(&self.dir, &self.index_file);
-            fs::remove_file(f).unwrap();
+            fs::remove_file(f).ok();
         }
 
         match &self.vlog_file {
             Some(vlog_file) if Arc::strong_count(&vlog_file) == 1 => {
                 let f = Config::stitch_index_file(&self.dir, &vlog_file);
-                fs::remove_file(f).unwrap();
+                fs::remove_file(f).ok();
             }
             Some(_) | None => (),
         }

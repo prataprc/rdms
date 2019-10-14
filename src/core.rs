@@ -57,7 +57,7 @@ pub trait Diff: Sized {
 /// **Note: This can be an approximate measure.**
 ///
 pub trait Footprint {
-    fn footprint(&self) -> isize;
+    fn footprint(&self) -> Result<isize>;
 }
 
 /// Index write operations.
@@ -362,6 +362,20 @@ where
     }
 }
 
+impl<V> Footprint for Delta<V>
+where
+    V: Clone + Diff,
+{
+    fn footprint(&self) -> Result<isize> {
+        let mut footprint: isize = mem::size_of::<Delta<V>>().try_into().unwrap();
+        footprint += match &self.data {
+            InnerDelta::U { delta, .. } => delta.diff_footprint()?,
+            InnerDelta::D { .. } => 0,
+        };
+        Ok(footprint)
+    }
+}
+
 impl<V> AsRef<InnerDelta<V>> for Delta<V>
 where
     V: Clone + Diff,
@@ -414,15 +428,6 @@ where
             InnerDelta::U { seqno, .. } => (true, *seqno),
             InnerDelta::D { seqno } => (false, *seqno),
         }
-    }
-
-    pub(crate) fn footprint(&self) -> isize {
-        let mut footprint: isize = mem::size_of::<Delta<V>>().try_into().unwrap();
-        footprint += match &self.data {
-            InnerDelta::U { delta, .. } => delta.diff_footprint(),
-            InnerDelta::D { .. } => 0,
-        };
-        footprint
     }
 
     #[allow(dead_code)] // TODO: remove this once rdms is weaved-up.
@@ -588,17 +593,17 @@ where
     }
 }
 
-impl<V> Value<V>
+impl<V> Footprint for Value<V>
 where
     V: Clone + Diff + Footprint,
 {
-    pub(crate) fn footprint(&self) -> isize {
+    fn footprint(&self) -> Result<isize> {
         let mut fp: isize = mem::size_of::<Value<V>>().try_into().unwrap();
         fp += match self {
-            Value::U { value, .. } => value.value_footprint(),
+            Value::U { value, .. } => value.value_footprint()?,
             Value::D { .. } => 0,
         };
-        fp
+        Ok(fp)
     }
 }
 
@@ -662,7 +667,7 @@ where
     // `nentry` is new_entry to be CREATE/UPDATE into index.
     //
     // TODO: may be we can just pass the Value, instead of `nentry` ?
-    pub(crate) fn prepend_version(&mut self, nentry: Self, lsm: bool) -> isize {
+    pub(crate) fn prepend_version(&mut self, nentry: Self, lsm: bool) -> Result<isize> {
         if lsm {
             self.prepend_version_lsm(nentry)
         } else {
@@ -671,14 +676,14 @@ where
     }
 
     // `nentry` is new_entry to be CREATE/UPDATE into index.
-    fn prepend_version_nolsm(&mut self, nentry: Self) -> isize {
-        let size = self.value.footprint();
+    fn prepend_version_nolsm(&mut self, nentry: Self) -> Result<isize> {
+        let size = self.value.footprint()?;
         self.value = nentry.value.clone();
-        (self.value.footprint() - size).try_into().unwrap()
+        Ok((self.value.footprint()? - size).try_into().unwrap())
     }
 
     // `nentry` is new_entry to be CREATE/UPDATE into index.
-    fn prepend_version_lsm(&mut self, nentry: Self) -> isize {
+    fn prepend_version_lsm(&mut self, nentry: Self) -> Result<isize> {
         let delta = match &self.value {
             Value::D { seqno } => Delta::new_delete(*seqno),
             Value::U { value, seqno, .. } if !value.is_reference() => {
@@ -702,17 +707,17 @@ where
         };
 
         let size = {
-            let size = nentry.value.footprint() + delta.footprint();
-            size - self.value.footprint()
+            let size = nentry.value.footprint()? + delta.footprint()?;
+            size - self.value.footprint()?
         };
 
         self.deltas.insert(0, delta);
         self.prepend_version_nolsm(nentry);
-        size.try_into().unwrap()
+        Ok(size.try_into().unwrap())
     }
 
     // DELETE operation, only in lsm-mode.
-    pub(crate) fn delete(&mut self, seqno: u64) -> isize {
+    pub(crate) fn delete(&mut self, seqno: u64) -> Result<isize> {
         let delta_size = match &self.value {
             Value::D { seqno } => {
                 self.deltas.insert(0, Delta::new_delete(*seqno));
@@ -724,17 +729,17 @@ where
                     let d: <V as Diff>::D = From::from(value);
                     vlog::Delta::new_native(d)
                 };
-                let size = delta.diff_footprint();
+                let size = delta.diff_footprint()?;
                 self.deltas.insert(0, Delta::new_upsert(delta, *seqno));
                 size
             }
             Value::U { .. } => unreachable!(),
         };
-        let size = self.value.footprint();
+        let size = self.value.footprint()?;
         self.value = Value::new_delete(seqno);
-        (size + delta_size - self.value.footprint())
+        Ok((size + delta_size - self.value.footprint()?)
             .try_into()
-            .unwrap()
+            .unwrap())
     }
 }
 
@@ -1009,19 +1014,19 @@ where
     }
 }
 
-impl<K, V> Entry<K, V>
+impl<K, V> Footprint for Entry<K, V>
 where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
 {
     /// Return the previous versions of this entry as Deltas.
-    pub fn footprint(&self) -> isize {
+    fn footprint(&self) -> Result<isize> {
         let mut fp: isize = mem::size_of::<Entry<K, V>>().try_into().unwrap();
-        fp += self.value.footprint();
+        fp += self.value.footprint()?;
         for delta in self.deltas.iter() {
-            fp += delta.footprint();
+            fp += delta.footprint()?;
         }
-        fp
+        Ok(fp)
     }
 }
 

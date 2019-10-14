@@ -410,8 +410,8 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    fn footprint(&self) -> isize {
-        self.tree_footprint.load(SeqCst)
+    fn footprint(&self) -> Result<isize> {
+        Ok(self.tree_footprint.load(SeqCst))
     }
 }
 
@@ -433,7 +433,7 @@ where
             Some(seqno) => seqno,
             None => snapshot.seqno + 1,
         };
-        let key_footprint = key.footprint();
+        let key_footprint = key.footprint().unwrap();
         let new_entry = Entry::new(key, Value::new_upsert_value(value, seqno));
 
         let mut n_count = snapshot.n_count;
@@ -477,7 +477,7 @@ where
             None => snapshot.seqno + 1,
         };
         let lsm = self.lsm;
-        let key_footprint = key.footprint();
+        let key_footprint = key.footprint().unwrap();
 
         let new_entry = Entry::new(key, Value::new_upsert_value(value, seqno));
 
@@ -542,7 +542,7 @@ where
             Some(seqno) => seqno,
             None => snapshot.seqno + 1,
         };
-        let key_footprint = key.to_owned().footprint();
+        let key_footprint = key.to_owned().footprint().unwrap();
 
         let mut n_count = snapshot.n_count;
         let root = snapshot.root_duplicate();
@@ -704,7 +704,7 @@ where
         if node.is_none() {
             let node: Box<Node<K, V>> = self.node_from_entry(new_entry);
             let n = node.duplicate();
-            let size: isize = node.footprint().try_into().unwrap();
+            let size: isize = node.footprint().unwrap().try_into().unwrap();
             return UpsertResult {
                 node: Some(node),
                 new_node: Some(n),
@@ -732,7 +732,7 @@ where
         } else {
             let mut new_node = self.node_mvcc_clone(&node, reclaim, true);
             let entry = node.entry.clone();
-            let size = new_node.prepend_version(new_entry, lsm);
+            let size = new_node.prepend_version(new_entry, lsm).unwrap();
             new_node.dirty = true;
             let n = new_node.duplicate();
             UpsertResult {
@@ -766,7 +766,7 @@ where
         } else if node.is_none() {
             let node: Box<Node<K, V>> = self.node_from_entry(nentry);
             let n = node.duplicate();
-            let size: isize = node.footprint().try_into().unwrap();
+            let size: isize = node.footprint().unwrap().try_into().unwrap();
             return UpsertCasResult {
                 node: Some(node),
                 new_node: Some(n),
@@ -813,7 +813,7 @@ where
         } else {
             let mut newnd = self.node_mvcc_clone(&node, reclaim, true);
             let entry = Some(node.entry.clone());
-            let size = newnd.prepend_version(nentry, lsm);
+            let size = newnd.prepend_version(nentry, lsm).unwrap();
             newnd.dirty = true;
             let n = newnd.duplicate();
             UpsertCasResult {
@@ -844,7 +844,7 @@ where
             let mut node = self.node_new_deleted(key.to_owned(), seqno);
             node.dirty = false;
             let n = node.duplicate();
-            let size: isize = node.footprint().try_into().unwrap();
+            let size: isize = node.footprint().unwrap().try_into().unwrap();
             return DeleteResult {
                 node: Some(node),
                 new_node: Some(n),
@@ -872,7 +872,7 @@ where
             Ordering::Equal => {
                 let mut new_node = self.node_mvcc_clone(&node, reclaim, true);
                 let old_entry = node.entry.clone();
-                let size = new_node.delete(seqno);
+                let size = new_node.delete(seqno).unwrap();
                 new_node.dirty = true;
                 let n = new_node.duplicate();
                 (new_node, Some(n), Some(old_entry), size)
@@ -939,7 +939,7 @@ where
             // if key equals node and no right children
             if !newnd.as_key().borrow().lt(key) && newnd.right.is_none() {
                 self.node_mvcc_detach(&mut newnd);
-                let size: isize = newnd.footprint().try_into().unwrap();
+                let size: isize = newnd.footprint().unwrap().try_into().unwrap();
                 return DeleteResult {
                     node: None,
                     new_node: None,
@@ -967,7 +967,7 @@ where
                 newnode.right = newnd.right.take();
                 newnode.black = newnd.black;
                 let entry = newnd.entry.clone();
-                let size: isize = newnd.footprint().try_into().unwrap();
+                let size: isize = newnd.footprint().unwrap().try_into().unwrap();
                 DeleteResult {
                     node: Some(self.fixup(newnode, reclaim)),
                     new_node: None,

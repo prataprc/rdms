@@ -1,7 +1,6 @@
-use std::mem;
-use std::ops::Deref;
+use std::{convert::TryInto, ops::Deref};
 
-use crate::core::{Diff, Entry, Footprint, Value};
+use crate::core::{Diff, Entry, Footprint, Result, Value};
 #[allow(unused_imports)]
 use crate::llrb::Llrb;
 
@@ -17,6 +16,20 @@ where
     pub(crate) dirty: bool,                    // new node in mvcc path
     pub(crate) left: Option<Box<Node<K, V>>>,  // store: left child
     pub(crate) right: Option<Box<Node<K, V>>>, // store: right child
+}
+
+impl<K, V> Footprint for Node<K, V>
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+{
+    fn footprint(&self) -> Result<isize> {
+        use std::mem::size_of;
+
+        let size = size_of::<Node<K, V>>() - size_of::<Entry<K, V>>();
+        let overhead: isize = size.try_into().unwrap();
+        Ok(overhead + self.entry.footprint()?)
+    }
 }
 
 // construct node values.
@@ -91,13 +104,13 @@ where
         &mut self,
         entry: Entry<K, V>,
         lsm: bool, /* will preseve old mutations*/
-    ) -> isize {
+    ) -> Result<isize> {
         self.entry.prepend_version(entry, lsm)
     }
 
     // DELETE operation, back to back delete shall collapse
     #[inline]
-    pub(crate) fn delete(&mut self, seqno: u64) -> isize {
+    pub(crate) fn delete(&mut self, seqno: u64) -> Result<isize> {
         self.entry.delete(seqno)
     }
 
@@ -114,14 +127,6 @@ where
     #[inline]
     pub(crate) fn toggle_link(&mut self) {
         self.black = !self.black
-    }
-
-    pub(crate) fn overhead() -> usize {
-        mem::size_of::<Node<K, V>>() - mem::size_of::<Entry<K, V>>()
-    }
-
-    pub(crate) fn footprint(&self) -> isize {
-        (Node::<K, V>::overhead() as isize) + self.entry.footprint()
     }
 }
 

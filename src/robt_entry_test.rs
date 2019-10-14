@@ -206,12 +206,16 @@ fn test_zentry_deltas() {
     let mut entry = core::Entry::new(100, value);
 
     let value = core::Value::new_upsert_value(20000, 11);
-    entry.prepend_version(core::Entry::new(100, value), true);
+    entry
+        .prepend_version(core::Entry::new(100, value), true)
+        .ok();
 
     entry.delete(12);
 
     let value = core::Value::new_upsert_value(30000, 13);
-    entry.prepend_version(core::Entry::new(100, value), true);
+    entry
+        .prepend_version(core::Entry::new(100, value), true)
+        .ok();
 
     let (mut leaf, mut blob) = (vec![], vec![]);
     ZEntry::encode_deltas(&entry, &mut leaf, &mut blob).unwrap();
@@ -252,12 +256,16 @@ fn test_zentry_l() {
     let mut entry = core::Entry::new(100, value);
 
     let value = core::Value::new_upsert_value(20000, 11);
-    entry.prepend_version(core::Entry::new(100, value), true);
+    entry
+        .prepend_version(core::Entry::new(100, value), true)
+        .ok();
 
     entry.delete(12);
 
     let value = core::Value::new_upsert_value(30000, 13);
-    entry.prepend_version(core::Entry::new(100, value), true);
+    entry
+        .prepend_version(core::Entry::new(100, value), true)
+        .ok();
 
     let mut leaf = vec![];
     let ze = ZEntry::<i32, i32>::encode_l(&entry, &mut leaf).unwrap();
@@ -288,12 +296,16 @@ fn test_zentry_ld() {
     let mut entry = core::Entry::new(100, value);
 
     let value = core::Value::new_upsert_value(20000, 11);
-    entry.prepend_version(core::Entry::new(100, value), true);
+    entry
+        .prepend_version(core::Entry::new(100, value), true)
+        .ok();
 
     entry.delete(12);
 
     let value = core::Value::new_upsert_value(30000, 13);
-    entry.prepend_version(core::Entry::new(100, value), true);
+    entry
+        .prepend_version(core::Entry::new(100, value), true)
+        .ok();
 
     let (mut leaf, mut blob): (Vec<u8>, Vec<u8>) = (vec![], vec![]);
     let ze = ZEntry::<i32, i32>::encode_ld(
@@ -404,12 +416,16 @@ fn test_zentry_lv() {
     let mut entry = core::Entry::new(100, value);
 
     let value = core::Value::new_upsert_value(20000, 11);
-    entry.prepend_version(core::Entry::new(100, value), true);
+    entry
+        .prepend_version(core::Entry::new(100, value), true)
+        .ok();
 
     entry.delete(12);
 
     let value = core::Value::new_upsert_value(30000, 13);
-    entry.prepend_version(core::Entry::new(100, value), true);
+    entry
+        .prepend_version(core::Entry::new(100, value), true)
+        .ok();
 
     let (mut leaf, mut blob): (Vec<u8>, Vec<u8>) = (vec![], vec![]);
     let ze = ZEntry::<i32, i32>::encode_lv(
@@ -476,12 +492,16 @@ fn test_zentry_lvd() {
     let mut entry = core::Entry::new(100, value);
 
     let value = core::Value::new_upsert_value(20000, 11);
-    entry.prepend_version(core::Entry::new(100, value), true);
+    entry
+        .prepend_version(core::Entry::new(100, value), true)
+        .ok();
 
     entry.delete(12);
 
     let value = core::Value::new_upsert_value(30000, 13);
-    entry.prepend_version(core::Entry::new(100, value), true);
+    entry
+        .prepend_version(core::Entry::new(100, value), true)
+        .ok();
 
     let (mut leaf, mut blob): (Vec<u8>, Vec<u8>) = (vec![], vec![]);
     let ze = ZEntry::<i32, i32>::encode_lvd(

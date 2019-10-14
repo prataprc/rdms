@@ -1102,20 +1102,22 @@ where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
 {
-    fn footprint(&self) -> isize {
+    fn footprint(&self) -> Result<isize> {
         let (dir, name) = (self.dir.as_os_str(), self.name.as_str());
-        let mut footprint = fs::metadata(Config::stitch_index_file(dir, name))
-            .unwrap()
-            .len();
+
+        let mut footprint = {
+            let filen = Config::stitch_index_file(dir, name);
+            fs::metadata(filen)?.len()
+        };
         let vlog_file = self
             .vlog_fd
             .as_ref()
             .map(|_| Config::stitch_vlog_file(dir, name));
         footprint += match vlog_file {
-            Some(vlog_file) => fs::metadata(vlog_file).unwrap().len(),
+            Some(vlog_file) => fs::metadata(vlog_file)?.len(),
             None => 0,
         };
-        footprint.try_into().unwrap()
+        Ok(footprint.try_into().unwrap())
     }
 }
 

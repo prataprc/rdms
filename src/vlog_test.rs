@@ -3,7 +3,7 @@ use crate::vlog;
 #[test]
 fn test_value() {
     let value = vlog::Value::new_native(10);
-    assert_eq!(value.value_footprint(), 0);
+    assert_eq!(value.value_footprint().unwrap(), 0);
     // encode
     let mut out = vec![];
     assert_eq!(value.encode(&mut out).unwrap(), 12);
@@ -12,11 +12,11 @@ fn test_value() {
     assert_eq!(value.to_native_value(), Some(10));
 
     let value = vlog::Value::<i32>::new_reference(10, 100, 20);
-    assert_eq!(value.value_footprint(), 0);
+    assert_eq!(value.value_footprint().unwrap(), 0);
     assert_eq!(value.to_native_value(), None);
 
     let value = vlog::Value::new_native(vec![10_u8, 20, 30]);
-    assert_eq!(value.value_footprint(), 3);
+    assert_eq!(value.value_footprint().unwrap(), 3);
     // encode
     let mut out = vec![];
     assert_eq!(value.encode(&mut out).unwrap(), 15);
@@ -42,7 +42,7 @@ fn test_fetch_value() {
 #[test]
 fn test_delta() {
     let delta = vlog::Delta::<i32>::new_native(10);
-    assert_eq!(delta.diff_footprint(), 0);
+    assert_eq!(delta.diff_footprint().unwrap(), 0);
     // encode
     let mut out = vec![];
     assert_eq!(delta.encode(&mut out).unwrap(), 12);
@@ -51,11 +51,11 @@ fn test_delta() {
     assert_eq!(delta.into_native_delta(), Some(10));
 
     let delta = vlog::Delta::<i32>::new_reference(10, 100, 20);
-    assert_eq!(delta.diff_footprint(), 0);
+    assert_eq!(delta.diff_footprint().unwrap(), 0);
     assert_eq!(delta.into_native_delta(), None);
 
     let delta = vlog::Delta::<Vec<u8>>::new_native(vec![10_u8, 20, 30]);
-    assert_eq!(delta.diff_footprint(), 3);
+    assert_eq!(delta.diff_footprint().unwrap(), 3);
     // encode
     let mut out = vec![];
     assert_eq!(delta.encode(&mut out).unwrap(), 15);

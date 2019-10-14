@@ -66,7 +66,7 @@ fn test_entry_new() {
     // testcase2 upsert
     let value = Value::new_upsert(Box::new(vlog::Value::new_native(20)), 1001);
     let entry2 = Entry::new(100, value);
-    entry1.prepend_version(entry2, false /*lsm*/);
+    entry1.prepend_version(entry2, false /*lsm*/).ok();
     // verify latest entry
     assert_eq!(entry1.as_deltas().len(), 0);
     verify_latest(&entry1, 100, Some(20), 1001, false);
@@ -109,7 +109,7 @@ fn test_entry_new_lsm() {
     // testcase2 upsert
     let value = Value::new_upsert(Box::new(vlog::Value::new_native(20)), 1001);
     let entry2 = Entry::new(100, value);
-    entry1.prepend_version(entry2, true /*lsm*/);
+    entry1.prepend_version(entry2, true /*lsm*/).ok();
     // verify latest entry
     assert_eq!(entry1.as_deltas().len(), 1);
     verify_latest(&entry1, 100, Some(20), 1001, false);
@@ -139,7 +139,7 @@ fn test_entry_new_lsm() {
     // testcase4 upsert
     let value = Value::new_upsert(Box::new(vlog::Value::new_native(30)), 1003);
     let entry3 = Entry::new(100, value);
-    entry1.prepend_version(entry3, true /*lsm*/);
+    entry1.prepend_version(entry3, true /*lsm*/).ok();
     // verify latest entry
     assert_eq!(entry1.as_deltas().len(), 3);
     verify_latest(&entry1, 100, Some(30), 1003, false);
@@ -213,9 +213,9 @@ fn test_entry_filter_within() {
     let value = Value::new_upsert_value(4000_i32, 40);
     let entry4 = Entry::new(100_i32, value);
 
-    entry.prepend_version(entry2, true /*lsm*/);
-    entry.prepend_version(entry3, true /*lsm*/);
-    entry.prepend_version(entry4, true /*lsm*/);
+    entry.prepend_version(entry2, true /*lsm*/).ok();
+    entry.prepend_version(entry3, true /*lsm*/).ok();
+    entry.prepend_version(entry4, true /*lsm*/).ok();
 
     let vers: Vec<Entry<i32, i32>> = entry.versions().collect();
     assert_eq!(vers.len(), 4);

@@ -30,7 +30,7 @@ use std::convert::TryInto;
 use std::fmt::Debug;
 use std::ops::{Bound, Deref, DerefMut, RangeBounds};
 use std::sync::Arc;
-use std::{marker, mem};
+use std::{ffi, marker, mem};
 
 use crate::core::{Diff, Entry, Footprint, Result, ScanEntry, Value};
 use crate::core::{EphemeralIndex, FullScan, IndexFactory, IndexIter, ScanIter};
@@ -321,7 +321,7 @@ where
     fn to_reader(&mut self) -> Result<Self::R> {
         let index = unsafe {
             // transmute self as void pointer.
-            Box::from_raw(self as *mut Llrb<K, V> as *mut std::ffi::c_void)
+            Box::from_raw(self as *mut Llrb<K, V> as *mut ffi::c_void)
         };
         let reader = Arc::clone(&self.readers);
         Ok(LlrbReader::<K, V>::new(index, reader))
@@ -332,7 +332,7 @@ where
     fn to_writer(&mut self) -> Result<Self::W> {
         let index = unsafe {
             // transmute self as void pointer.
-            Box::from_raw(self as *mut Llrb<K, V> as *mut std::ffi::c_void)
+            Box::from_raw(self as *mut Llrb<K, V> as *mut ffi::c_void)
         };
         let writer = Arc::clone(&self.writers);
         Ok(LlrbWriter::<K, V>::new(index, writer))
@@ -344,9 +344,9 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    fn footprint(&self) -> isize {
+    fn footprint(&self) -> Result<isize> {
         let _latch = self.latch.acquire_read(self.spin);
-        self.tree_footprint
+        Ok(self.tree_footprint)
     }
 }
 
@@ -374,7 +374,7 @@ where
             None => self.seqno + 1,
         };
 
-        let key_footprint = key.footprint();
+        let key_footprint = key.footprint().unwrap();
         let new_entry = {
             let value = Value::new_upsert_value(value, seqno);
             Entry::new(key, value)
@@ -422,7 +422,7 @@ where
             None => self.seqno + 1,
         };
 
-        let key_footprint = key.footprint();
+        let key_footprint = key.footprint().unwrap();
         let new_entry = {
             let value = Value::new_upsert_value(value, seqno);
             Entry::new(key, value)
@@ -474,7 +474,7 @@ where
             None => self.seqno + 1,
         };
 
-        let key_footprint = key.to_owned().footprint();
+        let key_footprint = key.to_owned().footprint().unwrap();
 
         if self.lsm {
             let res = Llrb::delete_lsm(self.root.take(), key, seqno);
@@ -608,7 +608,7 @@ where
             None => {
                 let mut node: Box<Node<K, V>> = Box::new(From::from(nentry));
                 node.dirty = false;
-                let size: isize = node.footprint().try_into().unwrap();
+                let size: isize = node.footprint().unwrap().try_into().unwrap();
                 return UpsertResult {
                     node: Some(node),
                     old_entry: None,
@@ -632,7 +632,7 @@ where
                     }
                     Ordering::Equal => {
                         let old_entry = Some(node.entry.clone());
-                        let size = node.prepend_version(nentry, lsm);
+                        let size = node.prepend_version(nentry, lsm).unwrap();
                         UpsertResult {
                             node: Some(Llrb::walkuprot_23(node)),
                             old_entry,
@@ -662,7 +662,7 @@ where
             None => {
                 let mut node: Box<Node<K, V>> = Box::new(From::from(nentry));
                 node.dirty = false;
-                let size: isize = node.footprint().try_into().unwrap();
+                let size: isize = node.footprint().unwrap().try_into().unwrap();
                 return UpsertCasResult {
                     node: Some(node),
                     old_entry: None,
@@ -701,7 +701,7 @@ where
                     }
                 } else {
                     let old_entry = Some(node.entry.clone());
-                    let size = node.prepend_version(nentry, lsm);
+                    let size = node.prepend_version(nentry, lsm).unwrap();
                     UpsertCasResult {
                         node: Some(Llrb::walkuprot_23(node)),
                         old_entry,
@@ -727,7 +727,7 @@ where
                 // insert and mark as delete
                 let mut node = Node::new_deleted(key.to_owned(), seqno);
                 node.dirty = false;
-                let size: isize = node.footprint().try_into().unwrap();
+                let size: isize = node.footprint().unwrap().try_into().unwrap();
                 DeleteResult {
                     node: Some(node),
                     old_entry: None,
@@ -753,7 +753,7 @@ where
                     }
                     Ordering::Equal => {
                         let entry = node.entry.clone();
-                        let size = node.delete(seqno);
+                        let size = node.delete(seqno).unwrap();
                         DeleteResult {
                             node: Some(Llrb::walkuprot_23(node)),
                             old_entry: Some(entry),
@@ -808,7 +808,7 @@ where
                 return DeleteResult {
                     node: None,
                     old_entry: Some(node.entry.clone()),
-                    size: node.footprint(),
+                    size: node.footprint().unwrap(),
                 };
             }
 
@@ -830,7 +830,7 @@ where
                 newnode.right = node.right.take();
                 newnode.black = node.black;
                 newnode.dirty = false;
-                let size: isize = node.footprint().try_into().unwrap();
+                let size: isize = node.footprint().unwrap().try_into().unwrap();
                 DeleteResult {
                     node: Some(Llrb::fixup(newnode)),
                     old_entry: Some(node.entry.clone()),
@@ -1057,7 +1057,7 @@ where
 
         Ok(Stats::new_full(
             self.n_count,
-            std::mem::size_of::<Node<K, V>>(),
+            mem::size_of::<Node<K, V>>(),
             self.latch.to_conflicts(),
             blacks,
             depths,
@@ -1195,7 +1195,8 @@ where
     V: Clone + Diff,
 {
     _refn: Arc<u32>,
-    index: Option<Box<std::ffi::c_void>>, // Box<Llrb<K, V>>
+    // TODO: Change Option<Box<ffi::c_void>> to Box<ffi::c_void>.
+    index: Option<Box<ffi::c_void>>, // Box<Llrb<K, V>>
     phantom_key: marker::PhantomData<K>,
     phantom_val: marker::PhantomData<V>,
 }
@@ -1220,7 +1221,7 @@ where
         unsafe {
             // transmute void pointer to mutable reference into index.
             let index_ptr = self.index.as_ref().unwrap().as_ref();
-            let index_ptr = index_ptr as *const std::ffi::c_void;
+            let index_ptr = index_ptr as *const ffi::c_void;
             (index_ptr as *const Llrb<K, V>).as_ref().unwrap()
         }
     }
@@ -1231,7 +1232,7 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    fn new(index: Box<std::ffi::c_void>, _refn: Arc<u32>) -> LlrbReader<K, V> {
+    fn new(index: Box<ffi::c_void>, _refn: Arc<u32>) -> LlrbReader<K, V> {
         LlrbReader {
             _refn,
             index: Some(index),
@@ -1326,7 +1327,7 @@ where
     V: Clone + Diff,
 {
     _refn: Arc<u32>,
-    index: Option<Box<std::ffi::c_void>>,
+    index: Option<Box<ffi::c_void>>,
     phantom_key: marker::PhantomData<K>,
     phantom_val: marker::PhantomData<V>,
 }
@@ -1351,7 +1352,7 @@ where
         unsafe {
             // transmute void pointer to mutable reference into index.
             let index_ptr = self.index.as_mut().unwrap().as_mut();
-            let index_ptr = index_ptr as *mut std::ffi::c_void;
+            let index_ptr = index_ptr as *mut ffi::c_void;
             (index_ptr as *mut Llrb<K, V>).as_mut().unwrap()
         }
     }
@@ -1362,7 +1363,7 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    fn new(index: Box<std::ffi::c_void>, _refn: Arc<u32>) -> LlrbWriter<K, V> {
+    fn new(index: Box<ffi::c_void>, _refn: Arc<u32>) -> LlrbWriter<K, V> {
         LlrbWriter {
             _refn,
             index: Some(index),

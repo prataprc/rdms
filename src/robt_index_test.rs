@@ -663,12 +663,16 @@ fn gen_entries(n: usize, mut seqno: u64) -> Vec<core::Entry<i32, i32>> {
             0 => {
                 let v: i32 = random();
                 let value = core::Value::new_upsert_value(v, seqno);
-                entry.prepend_version(core::Entry::new(key, value), false);
+                entry
+                    .prepend_version(core::Entry::new(key, value), false)
+                    .ok();
             }
             1 => {
                 let v: i32 = random();
                 let value = core::Value::new_upsert_value(v, seqno);
-                entry.prepend_version(core::Entry::new(key, value), true);
+                entry
+                    .prepend_version(core::Entry::new(key, value), true)
+                    .ok();
             }
             2 => {
                 entry.delete(seqno);

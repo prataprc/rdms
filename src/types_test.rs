@@ -29,10 +29,10 @@ fn test_bytes_serialize() {
 #[test]
 fn test_bytes_footprint() {
     let mut value: Vec<u8> = vec![];
-    assert_eq!(value.footprint(), 0);
+    assert_eq!(value.footprint().unwrap(), 0);
 
     value.extend_from_slice(&[10, 20, 30]);
-    assert_eq!(value.footprint(), 3);
+    assert_eq!(value.footprint().unwrap(), 3);
 }
 
 #[test]
@@ -59,7 +59,7 @@ fn test_empty_serialize() {
 #[test]
 fn test_empty_footprint() {
     let value = Empty;
-    assert_eq!(value.footprint(), 0);
+    assert_eq!(value.footprint().unwrap(), 0);
 }
 
 #[test]
@@ -86,7 +86,7 @@ fn test_i32_serialize() {
 #[test]
 fn test_i32_footprint() {
     let value = 0_i32;
-    assert_eq!(value.footprint(), 0);
+    assert_eq!(value.footprint().unwrap(), 0);
 }
 
 #[test]
@@ -113,5 +113,5 @@ fn test_i64_serialize() {
 #[test]
 fn test_i64_footprint() {
     let value = 0_i64;
-    assert_eq!(value.footprint(), 0);
+    assert_eq!(value.footprint().unwrap(), 0);
 }

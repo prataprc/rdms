@@ -49,7 +49,7 @@
 extern crate jsondata;
 
 mod core;
-// TODO: mod disk;
+// TODO mod disk;
 mod error;
 mod lsm;
 mod rdms;

@@ -23,8 +23,8 @@ impl<K, V> NoDisk<K, V> {
 }
 
 impl<K, V> Footprint for NoDisk<K, V> {
-    fn footprint(&self) -> isize {
-        0
+    fn footprint(&self) -> Result<isize> {
+        Ok(0)
     }
 }
 

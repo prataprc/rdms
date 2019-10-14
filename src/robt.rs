@@ -977,18 +977,15 @@ where
     /// and ``name``.
     pub fn open(dir: &ffi::OsStr, name: &str) -> Result<Snapshot<K, V>> {
         let meta_items = read_meta_items(dir, name)?;
-        let mut snap = Snapshot {
-            dir: dir.to_os_string(),
-            name: name.to_string(),
-            meta: meta_items,
-            config: Default::default(),
-            fd: unsafe { mem::zeroed() },
+        let stats: Stats = if let MetaItem::Stats(stats) = &meta_items[2] {
+            Ok(stats.parse()?)
+        } else {
+            let msg = "snapshot statistics missing".to_string();
+            Err(Error::InvalidSnapshot(msg))
+        }?;
+        let config: Config = stats.into();
 
-            phantom_key: marker::PhantomData,
-            phantom_val: marker::PhantomData,
-        };
-        snap.config = snap.to_stats()?.into();
-        snap.config.vlog_file = snap.config.vlog_file.map(|vfile| {
+        let vlog_file = config.vlog_file.map(|vfile| {
             // stem the file name.
             let vfile = path::Path::new(&vfile).file_name().unwrap();
             let ipath = Config::stitch_index_file(&dir, &name);
@@ -997,18 +994,26 @@ where
             vpath.push(vfile);
             vpath.as_os_str().to_os_string()
         });
-
         let index_fd = {
             let index_file = Config::stitch_index_file(dir, name);
             util::open_file_r(&index_file.as_ref())?
         };
-        let vlog_fd = snap
-            .config
-            .vlog_file
+        let vlog_fd = vlog_file
             .as_ref()
             .map(|s| util::open_file_r(s.as_ref()))
             .transpose()?;
-        snap.fd = sync::Mutex::new((index_fd, vlog_fd));
+
+        let mut snap = Snapshot {
+            dir: dir.to_os_string(),
+            name: name.to_string(),
+            meta: meta_items,
+            config: Default::default(),
+            fd: sync::Mutex::new((index_fd, vlog_fd)),
+
+            phantom_key: marker::PhantomData,
+            phantom_val: marker::PhantomData,
+        };
+        snap.config = snap.to_stats()?.into();
 
         Ok(snap) // Okey dockey
     }

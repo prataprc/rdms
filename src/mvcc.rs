@@ -41,8 +41,8 @@ use std::{
 };
 
 use crate::core::{Diff, Entry, Footprint, Result, ScanEntry, Value};
-use crate::core::{EphemeralIndex, FullScan, IndexFactory, IndexIter, ScanIter};
-use crate::core::{Reader, WalWriter, Writer};
+use crate::core::{EphemeralIndex, FullScan, IndexIter, ScanIter};
+use crate::core::{Reader, WalWriter, WriteIndexFactory, Writer};
 use crate::error::Error;
 use crate::llrb::Llrb;
 use crate::llrb_node::{LlrbDepth, Node, Stats};
@@ -69,14 +69,14 @@ impl MvccFactory {
     }
 }
 
-impl<K, V> IndexFactory<K, V> for MvccFactory
+impl<K, V> WriteIndexFactory<K, V> for MvccFactory
 where
     K: Clone + Ord,
     V: Clone + Diff,
 {
     type I = Box<Mvcc<K, V>>;
 
-    fn new<S: AsRef<str>>(&self, name: S) -> Self::I {
+    fn new(&self, name: &str) -> Self::I {
         if self.lsm {
             Mvcc::new_lsm(name)
         } else {

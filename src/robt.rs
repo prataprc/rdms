@@ -54,7 +54,7 @@ use std::{
 };
 
 use crate::core::{Diff, Entry, Footprint, Result, Serialize};
-use crate::core::{DurableIndex, IndexIter, Reader};
+use crate::core::{DiskIndexFactory, DurableIndex, IndexIter, Reader};
 use crate::error::Error;
 use crate::jsondata::{Json, Property};
 use crate::util;
@@ -63,6 +63,168 @@ use crate::robt_entry::MEntry;
 use crate::robt_index::{MBlock, ZBlock};
 
 include!("robt_marker.rs");
+
+pub struct RobtFactory {
+    config: Config,
+}
+
+pub fn robt_factory(config: Config) -> RobtFactory {
+    RobtFactory { config }
+}
+
+impl<K, V> DiskIndexFactory<K, V> for RobtFactory
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Serialize,
+{
+    type I = Robt<K, V>;
+
+    fn new(&self, dir: &ffi::OsStr, name: &str) -> Robt<K, V> {
+        Robt::Build {
+            dir: dir.to_os_string(),
+            name: name.to_string(),
+            config: self.config.clone(),
+            b: None,
+        }
+    }
+
+    fn open(&self, dir: &ffi::OsStr, file_name: &str) -> Result<Robt<K, V>> {
+        let name = match Config::to_name(file_name) {
+            Some(name) => name,
+            None => {
+                let msg = format!("file name {} is not for robt", file_name);
+                return Err(Error::InvalidFile(msg));
+            }
+        };
+        let snapshot = Snapshot::<K, V>::open(dir, &name)?;
+        Ok(Robt::Snapshot {
+            dir: dir.to_os_string(),
+            name: name.to_string(),
+            meta: snapshot.meta.clone(),
+            config: snapshot.config.clone(),
+        })
+    }
+}
+
+pub enum Robt<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Serialize,
+{
+    Build {
+        dir: ffi::OsString,
+        name: String,
+        config: Config,
+        b: Option<Builder<K, V>>,
+    },
+    Snapshot {
+        dir: ffi::OsString,
+        name: String,
+        meta: Vec<MetaItem>,
+        config: Config,
+    },
+}
+
+impl<K, V> DurableIndex<K, V> for Robt<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Serialize,
+{
+    type R = Snapshot<K, V>;
+    type C = PrepareCompact;
+
+    fn commit(&mut self, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<()> {
+        match self {
+            Robt::Build {
+                dir,
+                name,
+                config,
+                b,
+            } => {
+                let b = Builder::<K, V>::initial(dir, name, config.clone())?;
+                b.build(iter, meta)?;
+                let snapshot = Snapshot::<K, V>::open(dir, &name)?;
+                *self = Robt::Snapshot {
+                    dir: dir.clone(),
+                    name: name.clone(),
+                    meta: snapshot.meta.clone(),
+                    config: snapshot.config.clone(),
+                };
+                Ok(())
+            }
+            Robt::Snapshot { .. } => panic!("cannot commit into open snapshot"),
+        }
+    }
+
+    fn prepare_compact(&self) -> Self::C {
+        match self {
+            Robt::Snapshot {
+                dir,
+                name,
+                meta,
+                config,
+            } => PrepareCompact {
+                dir: dir.clone(),
+                name: name.clone(),
+                meta: meta.clone(),
+                config: config.clone(),
+            },
+            Robt::Build { .. } => panic!("cannot prepare commit on build robt"),
+        }
+    }
+
+    fn compact(
+        &mut self,
+        iter: IndexIter<K, V>,
+        meta: Vec<u8>,
+        prepare: Self::C, // obtained from the snapshot wishing to be compacted.
+    ) -> Result<()> {
+        match self {
+            Robt::Build {
+                dir,
+                name,
+                config,
+                b,
+            } => {
+                let config = match prepare.config.vlog_file {
+                    Some(vlog_file) => {
+                        config.set_value_log(Some(vlog_file));
+                        config
+                    }
+                    None => config,
+                };
+                let b = Builder::incremental(dir, name, config.clone())?;
+                b.build(iter, meta)?;
+                let snapshot = Snapshot::<K, V>::open(dir, &name)?;
+                *self = Robt::Snapshot {
+                    dir: dir.clone(),
+                    name: name.clone(),
+                    meta: snapshot.meta.clone(),
+                    config: snapshot.config.clone(),
+                };
+                Ok(())
+            }
+            Robt::Snapshot { .. } => panic!("cannot compact an open snapshot"),
+        }
+    }
+
+    fn to_reader(&mut self) -> Result<Self::R> {
+        match self {
+            Robt::Snapshot { dir, name, .. } => Snapshot::open(dir, &name),
+            Robt::Build { .. } => panic!("cannot create a reader"),
+        }
+    }
+}
+
+pub struct PrepareCompact {
+    dir: ffi::OsString,
+    name: String,
+    meta: Vec<MetaItem>,
+    config: Config,
+}
 
 /// Configuration options for Read Only BTree.
 #[derive(Clone)]
@@ -183,18 +345,18 @@ impl Config {
 }
 
 impl Config {
-    pub(crate) fn make_index_file(name: &str) -> String {
+    fn make_index_file(name: &str) -> String {
         format!("robt-{}.indx", name)
     }
 
-    pub(crate) fn make_vlog_file(name: &str) -> String {
+    fn make_vlog_file(name: &str) -> String {
         format!("robt-{}.vlog", name)
     }
 
-    pub(crate) fn to_name(file_name: &str) -> Option<String> {
+    fn to_name(file_name: &str) -> Option<String> {
         let stem = match path::Path::new(file_name).extension() {
             Some(ext) if ext.to_str() == Some("indx") => {
-                // ignore the dir-path and the extension, just the fil-stem
+                // ignore the dir-path and the extension, just the file-stem
                 path::Path::new(file_name).file_stem()
             }
             Some(_) | None => None,
@@ -208,7 +370,7 @@ impl Config {
         }
     }
 
-    pub(crate) fn stitch_index_file(
+    fn stitch_index_file(
         dir: &ffi::OsStr, // directory can be os-native string
         name: &str,       // but name must be a valid utf8 string
     ) -> ffi::OsString {
@@ -218,7 +380,7 @@ impl Config {
         index_file.to_os_string()
     }
 
-    pub(crate) fn stitch_vlog_file(
+    fn stitch_vlog_file(
         dir: &ffi::OsStr, // directory can be os-native string
         name: &str,       // but name must be a valid utf8 string
     ) -> ffi::OsString {
@@ -228,7 +390,7 @@ impl Config {
         vlog_file.to_os_string()
     }
 
-    pub(crate) fn compute_root_block(n: usize) -> usize {
+    fn compute_root_block(n: usize) -> usize {
         if (n % Config::MARKER_BLOCK_SIZE) == 0 {
             n
         } else {
@@ -245,6 +407,7 @@ impl Config {
 ///
 /// [Robt]: crate::robt::Robt
 /// [Btree]: https://en.wikipedia.org/wiki/B-tree
+#[derive(Clone)]
 pub enum MetaItem {
     /// A Unique marker that confirms that index file is valid.
     Marker(Vec<u8>), // tip of the file.
@@ -989,6 +1152,7 @@ where
             // stem the file name.
             let vfile = path::Path::new(&vfile).file_name().unwrap();
             let ipath = Config::stitch_index_file(&dir, &name);
+
             let mut vpath = path::PathBuf::new();
             vpath.push(path::Path::new(&ipath).parent().unwrap());
             vpath.push(vfile);
@@ -1076,27 +1240,6 @@ where
             }
             None => None,
         }
-    }
-}
-
-impl<K, V> DurableIndex<K, V> for Snapshot<K, V>
-where
-    K: Clone + Ord + Serialize + Footprint,
-    V: Clone + Diff + Serialize + Footprint,
-    <V as Diff>::D: Serialize,
-{
-    type R = Snapshot<K, V>;
-
-    fn commit(&mut self, _iter: IndexIter<K, V>) -> Result<usize> {
-        Ok(0)
-    }
-
-    fn compact(&mut self) -> Result<()> {
-        Ok(())
-    }
-
-    fn to_reader(&mut self) -> Result<Self::R> {
-        Snapshot::open(&self.dir, &self.name)
     }
 }
 

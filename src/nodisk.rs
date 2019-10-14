@@ -3,6 +3,7 @@ use std::{borrow::Borrow, marker, ops::RangeBounds};
 use crate::core::{Diff, DurableIndex, Footprint, IndexIter, Reader};
 use crate::core::{Entry, Result};
 use crate::error::Error;
+use crate::types::Empty;
 
 /// NoDisk type denotes empty Disk type.
 ///
@@ -35,11 +36,22 @@ where
 {
     type R = NoDisk<K, V>;
 
-    fn commit(&mut self, _iter: IndexIter<K, V>) -> Result<usize> {
-        Ok(0)
+    type C = Empty;
+
+    fn commit(&mut self, _iter: IndexIter<K, V>, _meta: Vec<u8>) -> Result<()> {
+        Ok(())
     }
 
-    fn compact(&mut self) -> Result<()> {
+    fn prepare_compact(&self) -> Self::C {
+        Empty
+    }
+
+    fn compact(
+        &mut self,
+        _iter: IndexIter<K, V>, // skip
+        _meta: Vec<u8>,
+        _prepare: Self::C,
+    ) -> Result<()> {
         Ok(())
     }
 

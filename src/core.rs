@@ -2,7 +2,7 @@ use std::borrow::Borrow;
 use std::convert::TryInto;
 use std::ops::{Bound, RangeBounds};
 use std::{
-    fs,
+    ffi, fs,
     mem::{self, ManuallyDrop},
     sync::atomic::AtomicBool,
     sync::atomic::Ordering::SeqCst,
@@ -141,12 +141,21 @@ where
     fn delete_index(&mut self, key: K, index: u64) -> Result<Entry<K, V>>;
 }
 
-/// Factory trait to create new index snapshot with pre-defined configuration.
-pub trait IndexFactory<K, V> {
+/// Factory trait to create new in-memory index snapshot.
+pub trait WriteIndexFactory<K, V> {
     type I;
 
     /// new index instance with predefined configuration.
-    fn new<S: AsRef<str>>(&self, name: S) -> Self::I;
+    fn new(&self, name: &str) -> Self::I;
+}
+
+/// Factory trait to create new on-disk index snapshot.
+pub trait DiskIndexFactory<K, V> {
+    type I;
+
+    fn new(&self, dir: &ffi::OsStr, name: &str) -> Self::I;
+
+    fn open(&self, dir: &ffi::OsStr, file_name: &str) -> Result<Self::I>;
 }
 
 /// EphemeralIndex trait implemented by in-memory index.
@@ -187,12 +196,16 @@ where
     /// A reader assciated type, that are thread safe.
     type R: Reader<K, V>;
 
+    type C;
+
     /// Flush to disk all new entries that are not yet persisted
     /// on to disk. Return number of entries commited to disk.
-    fn commit(&mut self, iter: IndexIter<K, V>) -> Result<usize>;
+    fn commit(&mut self, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<()>;
+
+    fn prepare_compact(&self) -> Self::C;
 
     /// Compact disk snapshots if there are any.
-    fn compact(&mut self) -> Result<()>;
+    fn compact(&mut self, iter: IndexIter<K, V>, meta: Vec<u8>, prepare: Self::C) -> Result<()>;
 
     /// Create a new read handle, for multi-threading. Note that not all
     /// indexes allow concurrent readers. Refer to index API for more details.

@@ -33,8 +33,8 @@ use std::sync::Arc;
 use std::{ffi, marker, mem};
 
 use crate::core::{Diff, Entry, Footprint, Result, ScanEntry, Value};
-use crate::core::{EphemeralIndex, FullScan, IndexFactory, IndexIter, ScanIter};
-use crate::core::{Reader, WalWriter, Writer};
+use crate::core::{EphemeralIndex, FullScan, IndexIter, ScanIter};
+use crate::core::{Reader, WalWriter, WriteIndexFactory, Writer};
 use crate::error::Error;
 use crate::llrb_node::{LlrbDepth, Node, Stats};
 use crate::mvcc::Snapshot;
@@ -57,14 +57,14 @@ impl LlrbFactory {
     }
 }
 
-impl<K, V> IndexFactory<K, V> for LlrbFactory
+impl<K, V> WriteIndexFactory<K, V> for LlrbFactory
 where
     K: Clone + Ord,
     V: Clone + Diff,
 {
     type I = Box<Llrb<K, V>>;
 
-    fn new<S: AsRef<str>>(&self, name: S) -> Self::I {
+    fn new(&self, name: &str) -> Self::I {
         if self.lsm {
             Llrb::new_lsm(name)
         } else {

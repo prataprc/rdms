@@ -959,12 +959,10 @@ where
     dir: ffi::OsString,
     name: String,
     meta: Vec<MetaItem>,
-    // working fields
     config: Config,
+    // working fields
     index_fd: fs::File,
     vlog_fd: Option<fs::File>,
-    // TODO: Do we need a sync::Mutex for Snapshot
-    mutex: sync::Mutex<i32>,
 
     phantom_key: marker::PhantomData<K>,
     phantom_val: marker::PhantomData<V>,
@@ -990,7 +988,6 @@ where
                 util::open_file_r(&index_file.as_ref())?
             },
             vlog_fd: Default::default(),
-            mutex: sync::Mutex::new(0),
 
             phantom_key: marker::PhantomData,
             phantom_val: marker::PhantomData,
@@ -1134,7 +1131,6 @@ where
         Q: Ord + ?Sized,
     {
         // println!("robt get ..");
-        let _lock = self.mutex.lock();
         let snap = unsafe {
             let snap = self as *const Snapshot<K, V> as *mut Snapshot<K, V>;
             snap.as_mut().unwrap()
@@ -1145,7 +1141,6 @@ where
     }
 
     fn iter(&self) -> Result<IndexIter<K, V>> {
-        let _lock = self.mutex.lock();
         let snap = unsafe {
             let snap = self as *const Snapshot<K, V> as *mut Snapshot<K, V>;
             snap.as_mut().unwrap()
@@ -1162,7 +1157,6 @@ where
         R: 'a + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        let _lock = self.mutex.lock();
         let snap = unsafe {
             let snap = self as *const Snapshot<K, V> as *mut Snapshot<K, V>;
             snap.as_mut().unwrap()
@@ -1178,7 +1172,6 @@ where
         R: 'a + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        let _lock = self.mutex.lock();
         let snap = unsafe {
             let snap = self as *const Snapshot<K, V> as *mut Snapshot<K, V>;
             snap.as_mut().unwrap()
@@ -1193,7 +1186,6 @@ where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        let _lock = self.mutex.lock();
         let snap = unsafe {
             let snap = self as *const Snapshot<K, V> as *mut Snapshot<K, V>;
             snap.as_mut().unwrap()
@@ -1206,7 +1198,6 @@ where
     /// Iterate over all entries in this index. Returned entry shall
     /// have all its previous versions, can be a costly call.
     fn iter_with_versions(&self) -> Result<IndexIter<K, V>> {
-        let _lock = self.mutex.lock();
         let snap = unsafe {
             let snap = self as *const Snapshot<K, V> as *mut Snapshot<K, V>;
             snap.as_mut().unwrap()
@@ -1228,7 +1219,6 @@ where
         R: 'a + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        let _lock = self.mutex.lock();
         let snap = unsafe {
             let snap = self as *const Snapshot<K, V> as *mut Snapshot<K, V>;
             snap.as_mut().unwrap()
@@ -1249,7 +1239,6 @@ where
         R: 'a + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        let _lock = self.mutex.lock();
         let snap = unsafe {
             let snap = self as *const Snapshot<K, V> as *mut Snapshot<K, V>;
             snap.as_mut().unwrap()

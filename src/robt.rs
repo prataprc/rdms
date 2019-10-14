@@ -961,8 +961,7 @@ where
     meta: Vec<MetaItem>,
     config: Config,
     // working fields
-    index_fd: fs::File,
-    vlog_fd: Option<fs::File>,
+    fd: sync::Mutex<(fs::File, Option<fs::File>)>,
 
     phantom_key: marker::PhantomData<K>,
     phantom_val: marker::PhantomData<V>,
@@ -983,11 +982,7 @@ where
             name: name.to_string(),
             meta: meta_items,
             config: Default::default(),
-            index_fd: {
-                let index_file = Config::stitch_index_file(dir, name);
-                util::open_file_r(&index_file.as_ref())?
-            },
-            vlog_fd: Default::default(),
+            fd: unsafe { mem::zeroed() },
 
             phantom_key: marker::PhantomData,
             phantom_val: marker::PhantomData,
@@ -1002,12 +997,18 @@ where
             vpath.push(vfile);
             vpath.as_os_str().to_os_string()
         });
-        snap.vlog_fd = snap
+
+        let index_fd = {
+            let index_file = Config::stitch_index_file(dir, name);
+            util::open_file_r(&index_file.as_ref())?
+        };
+        let vlog_fd = snap
             .config
             .vlog_file
             .as_ref()
             .map(|s| util::open_file_r(s.as_ref()))
             .transpose()?;
+        snap.fd = sync::Mutex::new((index_fd, vlog_fd));
 
         Ok(snap) // Okey dockey
     }
@@ -1107,7 +1108,10 @@ where
             fs::metadata(filen)?.len()
         };
         let vlog_file = self
-            .vlog_fd
+            .fd
+            .lock()
+            .unwrap()
+            .1
             .as_ref()
             .map(|_| Config::stitch_vlog_file(dir, name));
         footprint += match vlog_file {
@@ -1260,8 +1264,10 @@ where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        let fd = &mut self.index_fd;
-        let mblock = MBlock::<K, V>::new_decode(fd, fpos, &self.config)?;
+        let mblock = {
+            let fd = &mut self.fd.lock().unwrap().0;
+            MBlock::<K, V>::new_decode(fd, fpos, &self.config)?
+        };
         match mblock.get(key, Bound::Unbounded, Bound::Unbounded) {
             Err(Error::__LessThan) => Err(Error::KeyNotFound),
             Ok(mentry) if mentry.is_zblock() => Ok(mentry.to_fpos()),
@@ -1278,8 +1284,10 @@ where
         let zfpos = self.get_zpos(key, self.to_root().unwrap())?;
 
         // println!("do_get {}", zfpos);
-        let fd = &mut self.index_fd;
-        let zblock: ZBlock<K, V> = ZBlock::new_decode(fd, zfpos, &self.config)?;
+        let zblock: ZBlock<K, V> = {
+            let fd = &mut self.fd.lock().unwrap().0;
+            ZBlock::new_decode(fd, zfpos, &self.config)?
+        };
         match zblock.find(key, Bound::Unbounded, Bound::Unbounded) {
             Ok((_, entry)) => {
                 if entry.as_key().borrow().eq(key) {
@@ -1375,7 +1383,7 @@ where
         mut fpos: u64,           // from node
         mzs: &mut Vec<MZ<K, V>>, // output
     ) -> Result<()> {
-        let fd = &mut self.index_fd;
+        let fd = &mut self.fd.lock().unwrap().0;
         let config = &self.config;
 
         // println!("build_fwd {} {}", mzs.len(), fpos);
@@ -1397,19 +1405,24 @@ where
     }
 
     fn rebuild_fwd(&mut self, mzs: &mut Vec<MZ<K, V>>) -> Result<()> {
-        let fd = &mut self.index_fd;
         let config = &self.config;
 
         match mzs.pop() {
             None => Ok(()),
             Some(MZ::M { fpos, mut index }) => {
-                let mblock = MBlock::<K, V>::new_decode(fd, fpos, config)?;
+                let mblock = {
+                    let fd = &mut self.fd.lock().unwrap().0;
+                    MBlock::<K, V>::new_decode(fd, fpos, config)?
+                };
                 index += 1;
                 match mblock.to_entry(index) {
                     Ok(MEntry::DecZ { fpos: zfpos, .. }) => {
                         mzs.push(MZ::M { fpos, index });
 
-                        let zblock = ZBlock::new_decode(fd, zfpos, config)?;
+                        let zblock = {
+                            let fd = &mut self.fd.lock().unwrap().0;
+                            ZBlock::new_decode(fd, zfpos, config)?
+                        };
                         mzs.push(MZ::Z { zblock, index: 0 });
                         Ok(())
                     }
@@ -1431,11 +1444,13 @@ where
         mut fpos: u64,           // from node
         mzs: &mut Vec<MZ<K, V>>, // output
     ) -> Result<()> {
-        let fd = &mut self.index_fd;
         let config = &self.config;
 
         let zfpos = loop {
-            let mblock = MBlock::<K, V>::new_decode(fd, fpos, config)?;
+            let mblock = {
+                let fd = &mut self.fd.lock().unwrap().0;
+                MBlock::<K, V>::new_decode(fd, fpos, config)?
+            };
             let index = mblock.len() - 1;
             mzs.push(MZ::M { fpos, index });
 
@@ -1446,27 +1461,35 @@ where
             fpos = mentry.to_fpos();
         };
 
-        let zblock = ZBlock::new_decode(fd, zfpos, config)?;
+        let zblock = {
+            let fd = &mut self.fd.lock().unwrap().0;
+            ZBlock::new_decode(fd, zfpos, config)?
+        };
         let index: isize = (zblock.len() - 1).try_into().unwrap();
         mzs.push(MZ::Z { zblock, index });
         Ok(())
     }
 
     fn rebuild_rev(&mut self, mzs: &mut Vec<MZ<K, V>>) -> Result<()> {
-        let fd = &mut self.index_fd;
         let config = &self.config;
 
         match mzs.pop() {
             None => Ok(()),
             Some(MZ::M { index: 0, .. }) => self.rebuild_rev(mzs),
             Some(MZ::M { fpos, mut index }) => {
-                let mblock = MBlock::<K, V>::new_decode(fd, fpos, config)?;
+                let mblock = {
+                    let fd = &mut self.fd.lock().unwrap().0;
+                    MBlock::<K, V>::new_decode(fd, fpos, config)?
+                };
                 index -= 1;
                 match mblock.to_entry(index) {
                     Ok(MEntry::DecZ { fpos: zfpos, .. }) => {
                         mzs.push(MZ::M { fpos, index });
 
-                        let zblock = ZBlock::new_decode(fd, zfpos, config)?;
+                        let zblock = {
+                            let fd = &mut self.fd.lock().unwrap().0;
+                            ZBlock::new_decode(fd, zfpos, config)?
+                        };
                         let idx: isize = (zblock.len() - 1).try_into().unwrap();
                         mzs.push(MZ::Z { zblock, index: idx });
                         Ok(())
@@ -1493,7 +1516,7 @@ where
         Q: Ord + ?Sized,
     {
         let mut fpos = self.to_root().unwrap();
-        let fd = &mut self.index_fd;
+        let fd = &mut self.fd.lock().unwrap().0;
         let config = &self.config;
         let (from_min, to_max) = (Bound::Unbounded, Bound::Unbounded);
 
@@ -1534,12 +1557,12 @@ where
         mut entry: Entry<K, V>,
         versions: bool, // fetch deltas as well
     ) -> Result<Entry<K, V>> {
-        match &mut self.vlog_fd {
+        match &mut self.fd.lock().unwrap().1 {
             Some(fd) => entry.fetch_value(fd)?,
             _ => (),
         }
         if versions {
-            match &mut self.vlog_fd {
+            match &mut self.fd.lock().unwrap().1 {
                 Some(fd) => entry.fetch_deltas(fd)?,
                 _ => (),
             }

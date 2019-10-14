@@ -46,8 +46,8 @@ impl Config {
 /// the full set of features.
 pub struct Rdms<K, V, M, D>
 where
-    K: Send + Sync + Clone + Ord + Footprint,
-    V: Send + Sync + Clone + Diff + Footprint,
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
     M: EphemeralIndex<K, V>,
     D: DurableIndex<K, V>,
 {
@@ -63,8 +63,8 @@ where
 
 impl<K, V, M, D> Rdms<K, V, M, D>
 where
-    K: Send + Sync + Clone + Ord + Footprint,
-    V: Send + Sync + Clone + Diff + Footprint,
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
     M: EphemeralIndex<K, V>,
     D: DurableIndex<K, V>,
 {
@@ -92,8 +92,8 @@ where
 
 impl<K, V, M, D> Rdms<K, V, M, D>
 where
-    K: Send + Sync + Clone + Ord + Footprint,
-    V: Send + Sync + Clone + Diff + Footprint,
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
     M: EphemeralIndex<K, V>,
     D: DurableIndex<K, V>,
 {
@@ -110,8 +110,8 @@ where
 
 impl<K, V, M, D> Rdms<K, V, M, D>
 where
-    K: 'static + Send + Sync + Clone + Ord + Footprint,
-    V: 'static + Send + Sync + Clone + Diff + Footprint,
+    K: 'static + Clone + Ord + Footprint,
+    V: 'static + Clone + Diff + Footprint,
     M: EphemeralIndex<K, V> + Reader<K, V>,
     D: DurableIndex<K, V> + Reader<K, V>,
 {
@@ -166,8 +166,8 @@ where
 
 impl<K, V, M, D> Rdms<K, V, M, D>
 where
-    K: 'static + Send + Sync + Clone + Ord + Footprint,
-    V: 'static + Send + Sync + Clone + Diff + From<<V as Diff>::D> + Footprint,
+    K: 'static + Clone + Ord + Footprint,
+    V: 'static + Clone + Diff + From<<V as Diff>::D> + Footprint,
     M: EphemeralIndex<K, V> + Reader<K, V>,
     D: DurableIndex<K, V> + Reader<K, V>,
 {
@@ -227,8 +227,8 @@ where
 
 impl<K, V, M, D> Rdms<K, V, M, D>
 where
-    K: Send + Sync + Clone + Ord + Footprint,
-    V: Send + Sync + Clone + Diff + Footprint,
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
     M: EphemeralIndex<K, V> + Writer<K, V>,
     D: DurableIndex<K, V>,
 {
@@ -261,8 +261,8 @@ where
 
 impl<K, V, M, D> Rdms<K, V, M, D>
 where
-    K: Send + Sync + Clone + Ord + Debug + Footprint,
-    V: Send + Sync + Clone + Diff + Footprint,
+    K: Clone + Ord + Debug + Footprint,
+    V: Clone + Diff + Footprint,
     M: EphemeralIndex<K, V>,
     D: DurableIndex<K, V>,
 {

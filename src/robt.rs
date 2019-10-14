@@ -1081,8 +1081,8 @@ where
 
 impl<K, V> DurableIndex<K, V> for Snapshot<K, V>
 where
-    K: Send + Sync + Clone + Ord + Serialize + Footprint,
-    V: Send + Sync + Clone + Diff + Serialize + Footprint,
+    K: Clone + Ord + Serialize + Footprint,
+    V: Clone + Diff + Serialize + Footprint,
     <V as Diff>::D: Serialize,
 {
     type R = Snapshot<K, V>;

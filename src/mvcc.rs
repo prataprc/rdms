@@ -366,8 +366,8 @@ where
 
 impl<K, V> EphemeralIndex<K, V> for Mvcc<K, V>
 where
-    K: Send + Sync + Clone + Ord + Footprint,
-    V: Send + Sync + Clone + Diff + Footprint,
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
 {
     type W = MvccWriter<K, V>;
     type R = MvccReader<K, V>;
@@ -1048,7 +1048,7 @@ where
     fn range<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
-        R: 'a + RangeBounds<Q>,
+        R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
         let mut r = Box::new(Range {
@@ -1074,7 +1074,7 @@ where
     fn reverse<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
-        R: 'a + RangeBounds<Q>,
+        R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
         let mut r = Box::new(Reverse {
@@ -1115,7 +1115,7 @@ where
     fn range_with_versions<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
-        R: 'a + RangeBounds<Q>,
+        R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
         self.range(range)
@@ -1125,7 +1125,7 @@ where
     fn reverse_with_versions<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
-        R: 'a + RangeBounds<Q>,
+        R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
         self.reverse(range)
@@ -1641,7 +1641,7 @@ where
     }
 }
 
-/// Read handle into [Mvcc] index, that implements both [Send] and [Sync].
+/// Read handle into [Mvcc] index.
 pub struct MvccReader<K, V>
 where
     K: Clone + Ord,
@@ -1717,7 +1717,7 @@ where
     fn range<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
-        R: 'a + RangeBounds<Q>,
+        R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
         let index: &Mvcc<K, V> = self.as_ref();
@@ -1728,7 +1728,7 @@ where
     fn reverse<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
-        R: 'a + RangeBounds<Q>,
+        R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
         let index: &Mvcc<K, V> = self.as_ref();
@@ -1753,7 +1753,7 @@ where
     fn range_with_versions<'a, R, Q>(&'a self, r: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
-        R: 'a + RangeBounds<Q>,
+        R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
         self.range(r)
@@ -1763,14 +1763,14 @@ where
     fn reverse_with_versions<'a, R, Q>(&'a self, r: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
-        R: 'a + RangeBounds<Q>,
+        R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
         self.reverse(r)
     }
 }
 
-/// Write handle into [Mvcc] index, that implements both [Send] and [Sync].
+/// Write handle into [Mvcc] index.
 pub struct MvccWriter<K, V>
 where
     K: Clone + Ord,

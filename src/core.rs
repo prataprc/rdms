@@ -155,14 +155,14 @@ pub trait IndexFactory<K, V> {
 /// data on disk.
 pub trait EphemeralIndex<K, V>: Sized + Footprint
 where
-    K: Send + Sync + Clone + Ord + Footprint,
-    V: Send + Sync + Clone + Diff + Footprint,
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
 {
     /// A writer associated type, that can ingest key-value pairs.
-    type W: Writer<K, V> + Send + Sync;
+    type W: Writer<K, V>;
 
     /// A reader assciated type, that are thread safe.
-    type R: Reader<K, V> + Send + Sync;
+    type R: Reader<K, V>;
 
     /// Application can set the start sequence number for this index.
     fn set_seqno(&mut self, seqno: u64);
@@ -181,11 +181,11 @@ where
 /// To commit data onto disk, support read operations and other lsm-methods.
 pub trait DurableIndex<K, V>: Sized
 where
-    K: Send + Sync + Clone + Ord,
-    V: Send + Sync + Clone + Diff,
+    K: Clone + Ord,
+    V: Clone + Diff,
 {
     /// A reader assciated type, that are thread safe.
-    type R: Reader<K, V> + Send + Sync;
+    type R: Reader<K, V>;
 
     /// Flush to disk all new entries that are not yet persisted
     /// on to disk. Return number of entries commited to disk.
@@ -221,7 +221,7 @@ where
     fn range<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
-        R: 'a + RangeBounds<Q>,
+        R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized;
 
     /// Iterate from upper bound to lower bound. Returned entry may not
@@ -229,7 +229,7 @@ where
     fn reverse<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
-        R: 'a + RangeBounds<Q>,
+        R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized;
 
     /// Get ``key`` from index. Returned entry shall have all its
@@ -248,7 +248,7 @@ where
     fn range_with_versions<'a, R, Q>(&'a self, r: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
-        R: 'a + RangeBounds<Q>,
+        R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized;
 
     /// Iterate from upper bound to lower bound. Returned entry shall
@@ -256,7 +256,7 @@ where
     fn reverse_with_versions<'a, R, Q>(&'a self, r: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
-        R: 'a + RangeBounds<Q>,
+        R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized;
 }
 

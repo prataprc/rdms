@@ -301,8 +301,8 @@ where
 
 impl<K, V> EphemeralIndex<K, V> for Llrb<K, V>
 where
-    K: Send + Sync + Clone + Ord + Footprint,
-    V: Send + Sync + Clone + Diff + Footprint,
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
 {
     type W = LlrbWriter<K, V>;
     type R = LlrbReader<K, V>;
@@ -897,7 +897,7 @@ where
     fn range<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
-        R: 'a + RangeBounds<Q>,
+        R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
         let _latch = Some(self.latch.acquire_read(self.spin));
@@ -921,7 +921,7 @@ where
     fn reverse<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
-        R: 'a + RangeBounds<Q>,
+        R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
         let _latch = Some(self.latch.acquire_read(self.spin));
@@ -960,7 +960,7 @@ where
     fn range_with_versions<'a, R, Q>(&'a self, rng: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
-        R: 'a + RangeBounds<Q>,
+        R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
         self.range(rng)
@@ -970,7 +970,7 @@ where
     fn reverse_with_versions<'a, R, Q>(&'a self, r: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
-        R: 'a + RangeBounds<Q>,
+        R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
         self.reverse(r)
@@ -1188,14 +1188,13 @@ where
     }
 }
 
-/// Read handle into [Llrb] index, that implements both [Send] and [Sync].
+/// Read handle into [Llrb] index.
 pub struct LlrbReader<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff,
 {
     _refn: Arc<u32>,
-    // TODO: Change Option<Box<ffi::c_void>> to Box<ffi::c_void>.
     index: Option<Box<ffi::c_void>>, // Box<Llrb<K, V>>
     phantom_key: marker::PhantomData<K>,
     phantom_val: marker::PhantomData<V>,
@@ -1267,7 +1266,7 @@ where
     fn range<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
-        R: 'a + RangeBounds<Q>,
+        R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
         let index: &Llrb<K, V> = self.as_ref();
@@ -1278,7 +1277,7 @@ where
     fn reverse<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
-        R: 'a + RangeBounds<Q>,
+        R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
         let index: &Llrb<K, V> = self.as_ref();
@@ -1303,7 +1302,7 @@ where
     fn range_with_versions<'a, R, Q>(&'a self, r: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
-        R: 'a + RangeBounds<Q>,
+        R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
         self.range(r)
@@ -1313,14 +1312,14 @@ where
     fn reverse_with_versions<'a, R, Q>(&'a self, r: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
-        R: 'a + RangeBounds<Q>,
+        R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
         self.reverse(r)
     }
 }
 
-/// Write handle into [Llrb] index, that implements both [Send] and [Sync].
+/// Write handle into [Llrb] index.
 pub struct LlrbWriter<K, V>
 where
     K: Clone + Ord,

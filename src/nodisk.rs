@@ -30,8 +30,8 @@ impl<K, V> Footprint for NoDisk<K, V> {
 
 impl<K, V> DurableIndex<K, V> for NoDisk<K, V>
 where
-    K: Send + Sync + Clone + Ord + Footprint,
-    V: Send + Sync + Clone + Diff + Footprint,
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
 {
     type R = NoDisk<K, V>;
 

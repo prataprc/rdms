@@ -253,7 +253,7 @@ impl Stats {
     /// use rdms::llrb::Llrb;
     /// let mut llrb: Box<Llrb<i64,i64>> = Llrb::new("myinstance");
     ///
-    /// assert_eq!(llrb.stats().to_node_size(), 80);
+    /// assert_eq!(llrb.to_stats().to_node_size(), 80);
     /// ```
     pub fn to_node_size(&self) -> usize {
         match self {

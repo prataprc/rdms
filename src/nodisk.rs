@@ -1,9 +1,33 @@
-use std::{borrow::Borrow, marker, ops::RangeBounds};
+use std::{borrow::Borrow, ffi, marker, ops::RangeBounds};
 
 use crate::core::{Diff, DurableIndex, Footprint, IndexIter, Reader};
+use crate::core::{DiskIndexFactory, Serialize};
 use crate::core::{Entry, Result};
 use crate::error::Error;
 use crate::types::Empty;
+
+pub struct NoDiskFactory;
+
+pub fn nodisk_factory() -> NoDiskFactory {
+    NoDiskFactory
+}
+
+impl<K, V> DiskIndexFactory<K, V> for NoDiskFactory
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Serialize,
+{
+    type I = NoDisk<K, V>;
+
+    fn new(&self, _dir: &ffi::OsStr, _name: &str) -> NoDisk<K, V> {
+        NoDisk::new()
+    }
+
+    fn open(&self, _dir: &ffi::OsStr, _file_name: &str) -> Result<NoDisk<K, V>> {
+        Ok(NoDisk::new())
+    }
+}
 
 /// NoDisk type denotes empty Disk type.
 ///

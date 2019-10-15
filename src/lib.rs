@@ -47,10 +47,15 @@
 #![feature(drain_filter)]
 
 extern crate jsondata;
+#[cfg(unix)]
+extern crate libc;
+#[cfg(windows)]
+extern crate winapi;
 
 mod core;
 // TODO mod disk;
 mod error;
+mod file_lock;
 mod lsm;
 mod rdms;
 mod scans;

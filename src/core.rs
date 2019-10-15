@@ -155,7 +155,7 @@ pub trait DiskIndexFactory<K, V> {
 
     fn new(&self, dir: &ffi::OsStr, name: &str) -> Self::I;
 
-    fn open(&self, dir: &ffi::OsStr, file_name: &str) -> Result<Self::I>;
+    fn open(&self, dir: &ffi::OsStr, dir_entry: fs::DirEntry) -> Result<Self::I>;
 }
 
 /// EphemeralIndex trait implemented by in-memory index.
@@ -198,6 +198,8 @@ where
 
     type C;
 
+    fn to_name(&self) -> String;
+
     /// Flush to disk all new entries that are not yet persisted
     /// on to disk. Return number of entries commited to disk.
     fn commit(&mut self, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<()>;
@@ -205,7 +207,12 @@ where
     fn prepare_compact(&self) -> Self::C;
 
     /// Compact disk snapshots if there are any.
-    fn compact(&mut self, iter: IndexIter<K, V>, meta: Vec<u8>, prepare: Self::C) -> Result<()>;
+    fn compact(
+        &mut self,
+        iter: IndexIter<K, V>,
+        meta: Vec<u8>,
+        prepare: Self::C, // previously obtained from prepare_compact()
+    ) -> Result<()>;
 
     /// Create a new read handle, for multi-threading. Note that not all
     /// indexes allow concurrent readers. Refer to index API for more details.

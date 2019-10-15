@@ -1,4 +1,4 @@
-use std::{borrow::Borrow, ffi, marker, ops::RangeBounds};
+use std::{borrow::Borrow, ffi, fs, marker, ops::RangeBounds};
 
 use crate::core::{Diff, DurableIndex, Footprint, IndexIter, Reader};
 use crate::core::{DiskIndexFactory, Serialize};
@@ -24,7 +24,7 @@ where
         NoDisk::new()
     }
 
-    fn open(&self, _dir: &ffi::OsStr, _file_name: &str) -> Result<NoDisk<K, V>> {
+    fn open(&self, _: &ffi::OsStr, _: fs::DirEntry) -> Result<NoDisk<K, V>> {
         Ok(NoDisk::new())
     }
 }
@@ -61,6 +61,10 @@ where
     type R = NoDisk<K, V>;
 
     type C = Empty;
+
+    fn to_name(&self) -> String {
+        "no-disk mama !!".to_string()
+    }
 
     fn commit(&mut self, _iter: IndexIter<K, V>, _meta: Vec<u8>) -> Result<()> {
         Ok(())

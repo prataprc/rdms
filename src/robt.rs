@@ -89,11 +89,16 @@ where
         }
     }
 
-    fn open(&self, dir: &ffi::OsStr, file_name: &str) -> Result<Robt<K, V>> {
-        let name = match Config::to_name(file_name) {
+    fn open(
+        &self,
+        dir: &ffi::OsStr,
+        dir_entry: fs::DirEntry, // returned by read_dir()
+    ) -> Result<Robt<K, V>> {
+        let file_name = dir_entry.file_name();
+        let name = match Config::to_name(&file_name) {
             Some(name) => name,
             None => {
-                let msg = format!("file name {} is not for robt", file_name);
+                let msg = format!("file name {:?} is not for robt", file_name);
                 return Err(Error::InvalidFile(msg));
             }
         };
@@ -135,6 +140,13 @@ where
 {
     type R = Snapshot<K, V>;
     type C = PrepareCompact;
+
+    fn to_name(&self) -> String {
+        match self {
+            Robt::Snapshot { name, .. } => name.clone(),
+            _ => unreachable!(),
+        }
+    }
 
     fn commit(&mut self, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<()> {
         match self {
@@ -353,7 +365,7 @@ impl Config {
         format!("robt-{}.vlog", name)
     }
 
-    fn to_name(file_name: &str) -> Option<String> {
+    fn to_name(file_name: &ffi::OsStr) -> Option<String> {
         let stem = match path::Path::new(file_name).extension() {
             Some(ext) if ext.to_str() == Some("indx") => {
                 // ignore the dir-path and the extension, just the file-stem

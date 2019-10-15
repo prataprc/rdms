@@ -62,6 +62,7 @@ pub enum Error {
     InvalidFile(String),
     IoError(io::Error),
     JsonError(jsondata::Error),
+    Dgm(String),
     ThreadFail(String),
     EmptyIterator,
     InvalidSnapshot(String),

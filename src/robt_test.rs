@@ -382,7 +382,7 @@ fn llrb_to_refs2<R>(
     config: &Config,
 ) -> Vec<Entry<i64, i64>>
 where
-    R: RangeBounds<i64>,
+    R: Clone + RangeBounds<i64>,
 {
     let iter = FilterScan::new(llrb.range(range).unwrap(), within);
     iter.filter_map(|e| {
@@ -402,7 +402,7 @@ fn llrb_to_refs3<R>(
     config: &Config,
 ) -> Vec<Entry<i64, i64>>
 where
-    R: RangeBounds<i64>,
+    R: Clone + RangeBounds<i64>,
 {
     let iter = FilterScan::new(llrb.reverse(range).unwrap(), within);
     iter.filter_map(|e| {

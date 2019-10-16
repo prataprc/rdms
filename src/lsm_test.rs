@@ -1607,7 +1607,7 @@ fn random_robt(
     let mut config: robt::Config = Default::default();
     config.delta_ok = delta_ok;
     config.value_in_vlog = rng.gen();
-    let b = robt::Builder::initial(&dir, "random_robt", config.clone()).unwrap();
+    let b = robt::Builder::commit(&dir, "random_robt", config.clone()).unwrap();
     let app_meta = "heloo world".to_string();
     b.build(iter, app_meta.as_bytes().to_vec()).unwrap();
 

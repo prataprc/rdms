@@ -261,7 +261,7 @@ fn run_robt_llrb(name: &str, mut n_ops: u64, key_max: i64, repeat: usize, seed: 
             dir.push("test-robt-build");
             dir.into_os_string()
         };
-        let b = Builder::initial(&dir, name, config.clone()).unwrap();
+        let b = Builder::commit(&dir, name, config.clone()).unwrap();
         let app_meta = "heloo world".to_string();
         match b.build(iter, app_meta.as_bytes().to_vec()) {
             Err(Error::EmptyIterator) if refs.len() == 0 => continue,

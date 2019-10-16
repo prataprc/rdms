@@ -53,7 +53,7 @@ extern crate libc;
 extern crate winapi;
 
 mod core;
-// TODO mod disk;
+mod disk;
 mod error;
 mod file_lock;
 mod lsm;

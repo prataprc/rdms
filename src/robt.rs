@@ -106,6 +106,7 @@ where
         Ok(Robt::Snapshot {
             dir: dir.to_os_string(),
             name: name.to_string(),
+            footprint: snapshot.footprint()?,
             meta: snapshot.meta.clone(),
             config: snapshot.config.clone(),
         })
@@ -127,6 +128,7 @@ where
     Snapshot {
         dir: ffi::OsString,
         name: String,
+        footprint: isize,
         meta: Vec<MetaItem>,
         config: Config,
     },
@@ -156,12 +158,13 @@ where
                 config,
                 b,
             } => {
-                let b = Builder::<K, V>::initial(dir, name, config.clone())?;
+                let b = Builder::<K, V>::commit(dir, name, config.clone())?;
                 b.build(iter, meta)?;
                 let snapshot = Snapshot::<K, V>::open(dir, &name)?;
                 *self = Robt::Snapshot {
                     dir: dir.clone(),
                     name: name.clone(),
+                    footprint: snapshot.footprint()?,
                     meta: snapshot.meta.clone(),
                     config: snapshot.config.clone(),
                 };
@@ -178,6 +181,7 @@ where
                 name,
                 meta,
                 config,
+                ..
             } => PrepareCompact {
                 dir: dir.clone(),
                 name: name.clone(),
@@ -208,12 +212,13 @@ where
                     }
                     None => config,
                 };
-                let b = Builder::incremental(dir, name, config.clone())?;
+                let b = Builder::compact(dir, name, config.clone())?;
                 b.build(iter, meta)?;
                 let snapshot = Snapshot::<K, V>::open(dir, &name)?;
                 *self = Robt::Snapshot {
                     dir: dir.clone(),
                     name: name.clone(),
+                    footprint: snapshot.footprint()?,
                     meta: snapshot.meta.clone(),
                     config: snapshot.config.clone(),
                 };
@@ -227,6 +232,20 @@ where
         match self {
             Robt::Snapshot { dir, name, .. } => Snapshot::open(dir, &name),
             Robt::Build { .. } => panic!("cannot create a reader"),
+        }
+    }
+}
+
+impl<K, V> Footprint for Robt<K, V>
+where
+    K: Clone + Ord + Serialize + Footprint,
+    V: Clone + Diff + Serialize + Footprint,
+    <V as Diff>::D: Serialize + Footprint,
+{
+    fn footprint(&self) -> Result<isize> {
+        match self {
+            Robt::Snapshot { footprint, .. } => Ok(*footprint),
+            _ => unreachable!(),
         }
     }
 }
@@ -608,7 +627,7 @@ pub struct Stats {
     pub v_bytes: usize,
     /// Total disk size wasted in padding leaf-nodes and intermediate-nodes.
     pub padding: usize,
-    /// Older size of value-log file, applicable only in incremental build.
+    /// Older size of value-log file, applicable only in compact build.
     pub n_abytes: usize,
 
     /// Time take to build this btree.
@@ -752,9 +771,9 @@ where
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
 {
-    /// For initial builds, index file and value-log-file, if configured,
+    /// For commit builds, index file and value-log-file, if configured,
     /// shall be created new.
-    pub fn initial(
+    pub fn commit(
         dir: &ffi::OsStr, // directory path where index file(s) are stored
         name: &str,
         mut config: Config, //  TODO: Bit of ugliness here
@@ -786,9 +805,9 @@ where
         })
     }
 
-    /// For incremental build, index file is created new, while
+    /// For compact build, index file is created new, while
     /// value-log-file, if configured, shall be appended to older version.
-    pub fn incremental(
+    pub fn compact(
         dir: &ffi::OsStr, // directory path where index files are stored
         name: &str,
         mut config: Config, //  TODO: Bit of ugliness here

@@ -14,8 +14,8 @@ pub fn nodisk_factory() -> NoDiskFactory {
 
 impl<K, V> DiskIndexFactory<K, V> for NoDiskFactory
 where
-    K: Clone + Ord + Serialize,
-    V: Clone + Diff + Serialize,
+    K: Clone + Ord + Serialize + Footprint,
+    V: Clone + Diff + Serialize + Footprint,
     <V as Diff>::D: Serialize,
 {
     type I = NoDisk<K, V>;

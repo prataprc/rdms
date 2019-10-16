@@ -142,7 +142,11 @@ where
 }
 
 /// Factory trait to create new in-memory index snapshot.
-pub trait WriteIndexFactory<K, V> {
+pub trait WriteIndexFactory<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
     type I;
 
     /// new index instance with predefined configuration.
@@ -150,8 +154,12 @@ pub trait WriteIndexFactory<K, V> {
 }
 
 /// Factory trait to create new on-disk index snapshot.
-pub trait DiskIndexFactory<K, V> {
-    type I;
+pub trait DiskIndexFactory<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    type I: DurableIndex<K, V>;
 
     fn new(&self, dir: &ffi::OsStr, name: &str) -> Self::I;
 

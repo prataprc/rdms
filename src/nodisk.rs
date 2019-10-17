@@ -4,7 +4,7 @@ use crate::core::{Diff, DurableIndex, Footprint, IndexIter, Reader};
 use crate::core::{DiskIndexFactory, Serialize};
 use crate::core::{Entry, Result};
 use crate::error::Error;
-use crate::types::Empty;
+use crate::types::{Empty, EmptyIter};
 
 pub struct NoDiskFactory;
 
@@ -102,7 +102,7 @@ where
     }
 
     fn iter(&self) -> Result<IndexIter<K, V>> {
-        Ok(Box::new(NoDiskIter {
+        Ok(Box::new(EmptyIter {
             _phantom_key: &self.phantom_key,
             _phantom_val: &self.phantom_val,
         }))
@@ -114,7 +114,7 @@ where
         R: 'a + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        Ok(Box::new(NoDiskIter {
+        Ok(Box::new(EmptyIter {
             _phantom_key: &self.phantom_key,
             _phantom_val: &self.phantom_val,
         }))
@@ -126,7 +126,7 @@ where
         R: 'a + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        Ok(Box::new(NoDiskIter {
+        Ok(Box::new(EmptyIter {
             _phantom_key: &self.phantom_key,
             _phantom_val: &self.phantom_val,
         }))
@@ -141,7 +141,7 @@ where
     }
 
     fn iter_with_versions(&self) -> Result<IndexIter<K, V>> {
-        Ok(Box::new(NoDiskIter {
+        Ok(Box::new(EmptyIter {
             _phantom_key: &self.phantom_key,
             _phantom_val: &self.phantom_val,
         }))
@@ -153,7 +153,7 @@ where
         R: 'a + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        Ok(Box::new(NoDiskIter {
+        Ok(Box::new(EmptyIter {
             _phantom_key: &self.phantom_key,
             _phantom_val: &self.phantom_val,
         }))
@@ -165,30 +165,9 @@ where
         R: 'a + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        Ok(Box::new(NoDiskIter {
+        Ok(Box::new(EmptyIter {
             _phantom_key: &self.phantom_key,
             _phantom_val: &self.phantom_val,
         }))
-    }
-}
-
-struct NoDiskIter<'a, K, V>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-{
-    _phantom_key: &'a marker::PhantomData<K>,
-    _phantom_val: &'a marker::PhantomData<V>,
-}
-
-impl<'a, K, V> Iterator for NoDiskIter<'a, K, V>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-{
-    type Item = Result<Entry<K, V>>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        None
     }
 }

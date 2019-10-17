@@ -1,6 +1,6 @@
-use std::convert::TryInto;
+use std::{convert::TryInto, marker};
 
-use crate::core::{Diff, Footprint, Result, Serialize};
+use crate::core::{Diff, Entry, Footprint, Result, Serialize};
 use crate::error::Error;
 
 /// Empty value, can be used for indexing entries that have a
@@ -179,6 +179,26 @@ impl Footprint for i64 {
 
 //-------------------------------------------------------------------
 
+pub(crate) struct EmptyIter<'a, K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    pub(crate) _phantom_key: &'a marker::PhantomData<K>,
+    pub(crate) _phantom_val: &'a marker::PhantomData<V>,
+}
+
+impl<'a, K, V> Iterator for EmptyIter<'a, K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    type Item = Result<Entry<K, V>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        None
+    }
+}
 #[cfg(test)]
 #[path = "types_test.rs"]
 mod types_test;

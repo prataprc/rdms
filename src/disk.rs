@@ -8,7 +8,7 @@ use std::{
 use crate::core::{Diff, DiskIndexFactory, DurableIndex, Entry, Footprint};
 use crate::core::{IndexIter, Reader, Result, Serialize};
 use crate::error::Error;
-use crate::lsm;
+use crate::{lsm, types::EmptyIter};
 
 const NLEVELS: usize = 16;
 
@@ -369,7 +369,7 @@ where
     F: DiskIndexFactory<K, V>,
     F::I: Footprint,
 {
-    fn gather_flush(&self, footprint: usize) -> Result<FlushData<K, V, F::I>> {
+    fn gather_flush(&mut self, footprint: usize) -> Result<FlushData<K, V, F::I>> {
         let _guard = self.mu.lock().unwrap();
 
         match &self.levels[0].snapshot {
@@ -382,7 +382,7 @@ where
 
         let f = footprint as f64;
         let mut data: FlushData<K, V, F::I> = Default::default();
-        let iter = self.levels.iter().enumerate();
+        let mut iter = self.levels.iter_mut().enumerate();
         iter.next(); // skip the first level, it must be empty
         for (n, level) in iter {
             data = match data {
@@ -390,7 +390,7 @@ where
                 data @ FlushData {
                     d1: None,
                     disk: None,
-                } => match level.snapshot {
+                } => match &mut level.snapshot {
                     Some(Snapshot::Compact(_)) => {
                         let default = Snapshot::<K, V, F::I>::make_name(&self.name, n - 1, 0);
                         let name = self.levels[n - 1].next_name(default);
@@ -400,7 +400,7 @@ where
                             disk: Some((n - 1, d)),
                         }
                     }
-                    Some(Snapshot::Active(d)) => {
+                    Some(Snapshot::Active(ref mut d)) => {
                         let footprint = level.footprint().ok().unwrap() as f64;
                         let d1 = if (f / footprint) < self.mem_ratio {
                             Some((n, None))
@@ -621,6 +621,13 @@ where
             phantom_factory: marker::PhantomData,
         }
     }
+
+    fn empty_iter(&self) -> Result<IndexIter<K, V>> {
+        Ok(Box::new(EmptyIter {
+            _phantom_key: &self.phantom_key,
+            _phantom_val: &self.phantom_val,
+        }))
+    }
 }
 
 impl<K, V, F> Reader<K, V> for DgmReader<K, V, F>
@@ -654,7 +661,12 @@ where
     }
 
     fn iter(&self) -> Result<IndexIter<K, V>> {
-        let dgm: &mut Dgm<K, V, F> = self.as_mut();
+        let dgm: &mut Dgm<K, V, F> = {
+            // transmute void pointer to mutable reference into index.
+            let index_ptr = self.dgm.as_mut().unwrap().as_mut();
+            let index_ptr = index_ptr as *mut ffi::c_void;
+            unsafe { (index_ptr as *mut Dgm<K, V, F>).as_mut().unwrap() }
+        };
         let readers = dgm.take_readers(self.id);
 
         let mut iters: Vec<IndexIter<K, V>> = vec![];
@@ -662,11 +674,8 @@ where
             iters.push(reader.iter()?);
         }
 
-        match iters.len() {
-            0 => {
-                let entries: Vec<Result<Entry<K, V>>> = vec![];
-                Ok(Box::new(entries.into_iter()))
-            }
+        let iter = match iters.len() {
+            0 => self.empty_iter(),
             1 => Ok(iters.remove(0)),
             _ => {
                 let (mut iter, reverse) = (iters.remove(0), true);
@@ -675,7 +684,10 @@ where
                 }
                 Ok(iter)
             }
-        }
+        };
+
+        dgm.put_readers(self.id, readers);
+        iter
     }
 
     fn range<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
@@ -684,7 +696,12 @@ where
         R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        let dgm: &mut Dgm<K, V, F> = self.as_mut();
+        let dgm: &mut Dgm<K, V, F> = {
+            // transmute void pointer to mutable reference into index.
+            let index_ptr = self.dgm.as_mut().unwrap().as_mut();
+            let index_ptr = index_ptr as *mut ffi::c_void;
+            unsafe { (index_ptr as *mut Dgm<K, V, F>).as_mut().unwrap() }
+        };
         let readers = dgm.take_readers(self.id);
 
         let mut iters: Vec<IndexIter<K, V>> = vec![];
@@ -692,11 +709,8 @@ where
             iters.push(reader.range(range.clone())?);
         }
 
-        match iters.len() {
-            0 => {
-                let entries: Vec<Result<Entry<K, V>>> = vec![];
-                Ok(Box::new(entries.into_iter()))
-            }
+        let iter = match iters.len() {
+            0 => self.empty_iter(),
             1 => Ok(iters.remove(0)),
             _ => {
                 let (mut iter, reverse) = (iters.remove(0), true);
@@ -705,7 +719,10 @@ where
                 }
                 Ok(iter)
             }
-        }
+        };
+
+        dgm.put_readers(self.id, readers);
+        iter
     }
 
     fn reverse<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
@@ -714,7 +731,12 @@ where
         R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        let dgm: &mut Dgm<K, V, F> = self.as_mut();
+        let dgm: &mut Dgm<K, V, F> = {
+            // transmute void pointer to mutable reference into index.
+            let index_ptr = self.dgm.as_mut().unwrap().as_mut();
+            let index_ptr = index_ptr as *mut ffi::c_void;
+            unsafe { (index_ptr as *mut Dgm<K, V, F>).as_mut().unwrap() }
+        };
         let readers = dgm.take_readers(self.id);
 
         let mut iters: Vec<IndexIter<K, V>> = vec![];
@@ -722,11 +744,8 @@ where
             iters.push(reader.reverse(range.clone())?);
         }
 
-        match iters.len() {
-            0 => {
-                let entries: Vec<Result<Entry<K, V>>> = vec![];
-                Ok(Box::new(entries.into_iter()))
-            }
+        let iter = match iters.len() {
+            0 => self.empty_iter(),
             1 => Ok(iters.remove(0)),
             _ => {
                 let (mut iter, reverse) = (iters.remove(0), true);
@@ -735,7 +754,10 @@ where
                 }
                 Ok(iter)
             }
-        }
+        };
+
+        dgm.put_readers(self.id, readers);
+        iter
     }
 
     fn get_with_versions<Q>(&self, key: &Q) -> Result<Entry<K, V>>
@@ -743,7 +765,12 @@ where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        let dgm: &mut Dgm<K, V, F> = self.as_mut();
+        let dgm: &mut Dgm<K, V, F> = {
+            // transmute void pointer to mutable reference into index.
+            let index_ptr = self.dgm.as_mut().unwrap().as_mut();
+            let index_ptr = index_ptr as *mut ffi::c_void;
+            unsafe { (index_ptr as *mut Dgm<K, V, F>).as_mut().unwrap() }
+        };
         let readers = dgm.take_readers(self.id);
 
         let mut entries: Vec<Entry<K, V>> = vec![];
@@ -755,7 +782,7 @@ where
             }
         }
 
-        match entries.len() {
+        let entry = match entries.len() {
             0 => Err(Error::KeyNotFound),
             1 => Ok(entries.remove(0)),
             _ => {
@@ -765,11 +792,19 @@ where
                 }
                 Ok(entry)
             }
-        }
+        };
+
+        dgm.put_readers(self.id, readers);
+        entry
     }
 
     fn iter_with_versions(&self) -> Result<IndexIter<K, V>> {
-        let dgm: &mut Dgm<K, V, F> = self.as_mut();
+        let dgm: &mut Dgm<K, V, F> = {
+            // transmute void pointer to mutable reference into index.
+            let index_ptr = self.dgm.as_mut().unwrap().as_mut();
+            let index_ptr = index_ptr as *mut ffi::c_void;
+            unsafe { (index_ptr as *mut Dgm<K, V, F>).as_mut().unwrap() }
+        };
         let readers = dgm.take_readers(self.id);
 
         let mut iters: Vec<IndexIter<K, V>> = vec![];
@@ -777,11 +812,8 @@ where
             iters.push(reader.iter_with_versions()?);
         }
 
-        match iters.len() {
-            0 => {
-                let entries: Vec<Result<Entry<K, V>>> = vec![];
-                Ok(Box::new(entries.into_iter()))
-            }
+        let iter = match iters.len() {
+            0 => self.empty_iter(),
             1 => Ok(iters.remove(0)),
             _ => {
                 let (mut iter, reverse) = (iters.remove(0), true);
@@ -790,7 +822,10 @@ where
                 }
                 Ok(iter)
             }
-        }
+        };
+
+        dgm.put_readers(self.id, readers);
+        iter
     }
 
     fn range_with_versions<'a, R, Q>(&'a self, r: R) -> Result<IndexIter<K, V>>
@@ -799,7 +834,12 @@ where
         R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        let dgm: &mut Dgm<K, V, F> = self.as_mut();
+        let dgm: &mut Dgm<K, V, F> = {
+            // transmute void pointer to mutable reference into index.
+            let index_ptr = self.dgm.as_mut().unwrap().as_mut();
+            let index_ptr = index_ptr as *mut ffi::c_void;
+            unsafe { (index_ptr as *mut Dgm<K, V, F>).as_mut().unwrap() }
+        };
         let readers = dgm.take_readers(self.id);
 
         let mut iters: Vec<IndexIter<K, V>> = vec![];
@@ -807,11 +847,8 @@ where
             iters.push(reader.range_with_versions(r.clone())?);
         }
 
-        match iters.len() {
-            0 => {
-                let entries: Vec<Result<Entry<K, V>>> = vec![];
-                Ok(Box::new(entries.into_iter()))
-            }
+        let iter = match iters.len() {
+            0 => self.empty_iter(),
             1 => Ok(iters.remove(0)),
             _ => {
                 let (mut iter, reverse) = (iters.remove(0), true);
@@ -820,7 +857,10 @@ where
                 }
                 Ok(iter)
             }
-        }
+        };
+
+        dgm.put_readers(self.id, readers);
+        iter
     }
 
     fn reverse_with_versions<'a, R, Q>(&'a self, r: R) -> Result<IndexIter<K, V>>
@@ -834,7 +874,7 @@ where
             let index_ptr = self.dgm.as_mut().unwrap().as_mut();
             let index_ptr = index_ptr as *mut ffi::c_void;
             unsafe { (index_ptr as *mut Dgm<K, V, F>).as_mut().unwrap() }
-        }
+        };
         let readers = dgm.take_readers(self.id);
 
         let mut iters: Vec<IndexIter<K, V>> = vec![];
@@ -842,11 +882,8 @@ where
             iters.push(reader.reverse_with_versions(r.clone())?);
         }
 
-        let iter =  match iters.len() {
-            0 => {
-                let entries: Vec<Result<Entry<K, V>>> = vec![];
-                Ok(Box::new(entries.into_iter()))
-            }
+        let iter = match iters.len() {
+            0 => self.empty_iter(),
             1 => Ok(iters.remove(0)),
             _ => {
                 let (mut iter, reverse) = (iters.remove(0), true);

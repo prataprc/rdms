@@ -20,6 +20,10 @@ where
 {
     type I = NoDisk<K, V>;
 
+    fn name(&self) -> String {
+        "nodisk".to_string()
+    }
+
     fn new(&self, _dir: &ffi::OsStr, _name: &str) -> NoDisk<K, V> {
         NoDisk::new()
     }

@@ -80,6 +80,10 @@ where
 {
     type I = Robt<K, V>;
 
+    fn name(&self) -> String {
+        "robt".to_string()
+    }
+
     fn new(&self, dir: &ffi::OsStr, name: &str) -> Robt<K, V> {
         Robt::Build {
             dir: dir.to_os_string(),

@@ -12,180 +12,10 @@ use crate::{lsm, types::EmptyIter};
 
 const NLEVELS: usize = 16;
 
-type Dr<K, V, F> = <<F as DiskIndexFactory<K, V>>::I as DurableIndex<K, V>>::R;
-
-struct OuterSnapshot<K, V, D>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-{
-    snapshot: Option<Snapshot<K, V, D>>,
-}
-
-impl<K, V, D> Default for OuterSnapshot<K, V, D>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-{
-    fn default() -> OuterSnapshot<K, V, D> {
-        OuterSnapshot { snapshot: None }
-    }
-}
-
-impl<K, V, D> OuterSnapshot<K, V, D>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-    D: DurableIndex<K, V>,
-{
-    fn to_parts(&self) -> Option<(String, usize, usize)> {
-        let name = match &self.snapshot {
-            Some(Snapshot::Flush(d)) => d.to_name(),
-            Some(Snapshot::Compact(d)) => d.to_name(),
-            Some(Snapshot::Active(d)) => d.to_name(),
-            Some(Snapshot::Dead(name)) => name.to_string(),
-            None | _ => unreachable!(),
-        };
-        let mut parts = {
-            let parts: Vec<&str> = name.split('-').collect();
-            parts.into_iter()
-        };
-
-        let name = parts.next()?;
-        let level: usize = parts.next()?.parse().ok()?;
-        let file_no: usize = parts.next()?.parse().ok()?;
-        Some((name.to_string(), level, file_no))
-    }
-
-    fn next_name(&self, name: &str, level: usize) -> String {
-        let name = match &self.snapshot {
-            Some(Snapshot::Flush(d)) => d.to_name(),
-            Some(Snapshot::Compact(d)) => d.to_name(),
-            Some(Snapshot::Active(d)) => d.to_name(),
-            Some(Snapshot::Dead(name)) => name.to_string(),
-            None => Snapshot::<K, V, D>::make_name(name, level, 0),
-            _ => unreachable!(),
-        };
-        match Snapshot::<K, V, D>::split_parts(&name) {
-            Some((name, level, file_no)) => {
-                // next name
-                Snapshot::<K, V, D>::make_name(&name, level, file_no + 1)
-            }
-            None => Snapshot::<K, V, D>::make_name(&name, level, 0),
-        }
-    }
-}
-
-impl<K, V, D> Footprint for OuterSnapshot<K, V, D>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-    D: Footprint,
-{
-    fn footprint(&self) -> Result<isize> {
-        match &self.snapshot {
-            Some(Snapshot::Flush(d)) => d.footprint(),
-            Some(Snapshot::Compact(d)) => d.footprint(),
-            Some(Snapshot::Active(d)) => d.footprint(),
-            Some(Snapshot::Dead(_)) => Ok(0),
-            None => Ok(0),
-            _ => unreachable!(),
-        }
-    }
-}
-
-#[derive(Clone)]
-enum Snapshot<K, V, D>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-{
-    Flush(D),
-    Compact(D),
-    Active(D),
-    Dead(String),
-    __P(marker::PhantomData<K>, marker::PhantomData<V>),
-}
-
-impl<K, V, D> Snapshot<K, V, D>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-    D: DurableIndex<K, V>,
-{
-    fn make_name(name: &str, level: usize, file_no: usize) -> String {
-        format!("{}-{}-{}", name, level, file_no)
-    }
-
-    fn split_parts(full_name: &str) -> Option<(String, usize, usize)> {
-        let mut parts = {
-            let parts: Vec<&str> = full_name.split('-').collect();
-            parts.into_iter()
-        };
-        let name = parts.next()?;
-        let level: usize = parts.next()?.parse().ok()?;
-        let file_no: usize = parts.next()?.parse().ok()?;
-        Some((name.to_string(), level, file_no))
-    }
-}
-
-struct FlushData<K, V, D>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-    D: DurableIndex<K, V>,
-{
-    d1: Option<(usize, Option<D::R>)>,
-    disk: Option<(usize, D)>,
-}
-
-impl<K, V, D> Default for FlushData<K, V, D>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-    D: DurableIndex<K, V>,
-{
-    fn default() -> FlushData<K, V, D> {
-        FlushData {
-            d1: Default::default(),
-            disk: Default::default(),
-        }
-    }
-}
-
-struct CompactData<K, V, D>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-    D: DurableIndex<K, V>,
-{
-    d1: Option<(usize, Option<D::R>)>,
-    d2: Option<(usize, Option<D::R>)>,
-    disk: Option<(usize, D)>,
-}
-
-impl<K, V, D> Default for CompactData<K, V, D>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-    D: DurableIndex<K, V>,
-{
-    fn default() -> CompactData<K, V, D> {
-        CompactData {
-            d1: Default::default(),
-            d2: Default::default(),
-            disk: Default::default(),
-        }
-    }
-}
-
-type Levels<K, V, D> = [OuterSnapshot<K, V, D>; NLEVELS];
-
 struct Dgm<K, V, F>
 where
-    K: Clone + Ord + Serialize,
-    V: Clone + Diff + Serialize,
-    <V as Diff>::D: Serialize,
+    K: Clone + Ord,
+    V: Clone + Diff,
     F: DiskIndexFactory<K, V>,
 {
     dir: ffi::OsString,
@@ -213,10 +43,15 @@ where
         name: &str,
         factory: F,
     ) -> Result<Dgm<K, V, F>> {
+        #[cfg(feature = "console")]
+        println!("Dgm: removing directory path {:?}", dir);
         fs::remove_dir_all(dir)?;
+
+        #[cfg(feature = "console")]
+        println!("Dgm: creating directory path {:?} ...", dir);
         fs::create_dir_all(dir)?;
 
-        Ok(Dgm {
+        let index = Dgm {
             dir: dir.to_os_string(),
             name: name.to_string(),
             mem_ratio: Self::MEM_RATIO,
@@ -225,7 +60,12 @@ where
 
             levels: Default::default(),
             readers: Default::default(),
-        })
+        };
+
+        #[cfg(feature = "console")]
+        index.log_config();
+
+        Ok(index)
     }
 
     pub fn open(
@@ -317,6 +157,17 @@ where
             }
         }
         Ok(())
+    }
+
+    fn log_config(&self) {
+        println!(
+            "Dgm: dir:{:?} name:{} mem_ratio:{} disk_ratio:{} factory:{}",
+            self.dir,
+            self.name,
+            self.mem_ratio,
+            self.disk_ratio,
+            self.factory.name()
+        );
     }
 }
 
@@ -611,7 +462,7 @@ where
     }
 }
 
-impl<K, V, F> DgmReader<K, V, F>
+impl<K, V, F> Reader<K, V> for DgmReader<K, V, F>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize + From<<V as Diff>::D> + Footprint,
@@ -862,3 +713,172 @@ where
         }
     }
 }
+
+type Dr<K, V, F> = <<F as DiskIndexFactory<K, V>>::I as DurableIndex<K, V>>::R;
+
+struct OuterSnapshot<K, V, D>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    snapshot: Option<Snapshot<K, V, D>>,
+}
+
+impl<K, V, D> Default for OuterSnapshot<K, V, D>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    fn default() -> OuterSnapshot<K, V, D> {
+        OuterSnapshot { snapshot: None }
+    }
+}
+
+impl<K, V, D> OuterSnapshot<K, V, D>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+    D: DurableIndex<K, V>,
+{
+    fn to_parts(&self) -> Option<(String, usize, usize)> {
+        let name = match &self.snapshot {
+            Some(Snapshot::Flush(d)) => d.to_name(),
+            Some(Snapshot::Compact(d)) => d.to_name(),
+            Some(Snapshot::Active(d)) => d.to_name(),
+            Some(Snapshot::Dead(name)) => name.to_string(),
+            None | _ => unreachable!(),
+        };
+        let mut parts = {
+            let parts: Vec<&str> = name.split('-').collect();
+            parts.into_iter()
+        };
+
+        let name = parts.next()?;
+        let level: usize = parts.next()?.parse().ok()?;
+        let file_no: usize = parts.next()?.parse().ok()?;
+        Some((name.to_string(), level, file_no))
+    }
+
+    fn next_name(&self, name: &str, level: usize) -> String {
+        let name = match &self.snapshot {
+            Some(Snapshot::Flush(d)) => d.to_name(),
+            Some(Snapshot::Compact(d)) => d.to_name(),
+            Some(Snapshot::Active(d)) => d.to_name(),
+            Some(Snapshot::Dead(name)) => name.to_string(),
+            None => Snapshot::<K, V, D>::make_name(name, level, 0),
+            _ => unreachable!(),
+        };
+        match Snapshot::<K, V, D>::split_parts(&name) {
+            Some((name, level, file_no)) => {
+                // next name
+                Snapshot::<K, V, D>::make_name(&name, level, file_no + 1)
+            }
+            None => Snapshot::<K, V, D>::make_name(&name, level, 0),
+        }
+    }
+}
+
+impl<K, V, D> Footprint for OuterSnapshot<K, V, D>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+    D: Footprint,
+{
+    fn footprint(&self) -> Result<isize> {
+        match &self.snapshot {
+            Some(Snapshot::Flush(d)) => d.footprint(),
+            Some(Snapshot::Compact(d)) => d.footprint(),
+            Some(Snapshot::Active(d)) => d.footprint(),
+            Some(Snapshot::Dead(_)) => Ok(0),
+            None => Ok(0),
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[derive(Clone)]
+enum Snapshot<K, V, D>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    Flush(D),
+    Compact(D),
+    Active(D),
+    Dead(String),
+    __P(marker::PhantomData<K>, marker::PhantomData<V>),
+}
+
+impl<K, V, D> Snapshot<K, V, D>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+    D: DurableIndex<K, V>,
+{
+    fn make_name(name: &str, level: usize, file_no: usize) -> String {
+        format!("{}-{}-{}", name, level, file_no)
+    }
+
+    fn split_parts(full_name: &str) -> Option<(String, usize, usize)> {
+        let mut parts = {
+            let parts: Vec<&str> = full_name.split('-').collect();
+            parts.into_iter()
+        };
+        let name = parts.next()?;
+        let level: usize = parts.next()?.parse().ok()?;
+        let file_no: usize = parts.next()?.parse().ok()?;
+        Some((name.to_string(), level, file_no))
+    }
+}
+
+struct FlushData<K, V, D>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+    D: DurableIndex<K, V>,
+{
+    d1: Option<(usize, Option<D::R>)>,
+    disk: Option<(usize, D)>,
+}
+
+impl<K, V, D> Default for FlushData<K, V, D>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+    D: DurableIndex<K, V>,
+{
+    fn default() -> FlushData<K, V, D> {
+        FlushData {
+            d1: Default::default(),
+            disk: Default::default(),
+        }
+    }
+}
+
+struct CompactData<K, V, D>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+    D: DurableIndex<K, V>,
+{
+    d1: Option<(usize, Option<D::R>)>,
+    d2: Option<(usize, Option<D::R>)>,
+    disk: Option<(usize, D)>,
+}
+
+impl<K, V, D> Default for CompactData<K, V, D>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+    D: DurableIndex<K, V>,
+{
+    fn default() -> CompactData<K, V, D> {
+        CompactData {
+            d1: Default::default(),
+            d2: Default::default(),
+            disk: Default::default(),
+        }
+    }
+}
+
+type Levels<K, V, D> = [OuterSnapshot<K, V, D>; NLEVELS];

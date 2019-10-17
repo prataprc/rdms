@@ -64,6 +64,10 @@ where
 {
     type I = Box<Llrb<K, V>>;
 
+    fn name(&self) -> String {
+        "llrb".to_string()
+    }
+
     fn new(&self, name: &str) -> Self::I {
         if self.lsm {
             Llrb::new_lsm(name)

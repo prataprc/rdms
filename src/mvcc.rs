@@ -76,6 +76,10 @@ where
 {
     type I = Box<Mvcc<K, V>>;
 
+    fn name(&self) -> String {
+        "mvcc".to_string()
+    }
+
     fn new(&self, name: &str) -> Self::I {
         if self.lsm {
             Mvcc::new_lsm(name)

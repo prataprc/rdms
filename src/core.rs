@@ -149,7 +149,11 @@ where
 {
     type I;
 
-    /// new index instance with predefined configuration.
+    /// Factory name for identification purpose.
+    fn name(&self) -> String;
+
+    /// Create a new index instance with predefined configuration,
+    /// Typically this index will be used to index new set of entries.
     fn new(&self, name: &str) -> Self::I;
 }
 
@@ -161,8 +165,16 @@ where
 {
     type I: DurableIndex<K, V>;
 
+    /// factory name for identification purpose.
+    fn name(&self) -> String;
+
+    /// Create a new index instance with predefined configuration.
+    /// Typically this index will be used to commit and/or compact newer
+    /// snapshots onto disk.
     fn new(&self, dir: &ffi::OsStr, name: &str) -> Self::I;
 
+    /// Open an existin index instance with predefined configuration.
+    /// Typically called while bootstraing an index from disk.
     fn open(&self, dir: &ffi::OsStr, dir_entry: fs::DirEntry) -> Result<Self::I>;
 }
 
@@ -201,17 +213,20 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    /// A reader assciated type, that are thread safe.
+    /// Thread safe associated type, implementing Reader trait.
     type R: Reader<K, V>;
 
+    /// Associated type for disk-compaction.
     type C;
 
+    /// Return the name of the index.
     fn to_name(&self) -> String;
 
     /// Flush to disk all new entries that are not yet persisted
     /// on to disk. Return number of entries commited to disk.
     fn commit(&mut self, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<()>;
 
+    /// Prepare for compaction.
     fn prepare_compact(&self) -> Self::C;
 
     /// Compact disk snapshots if there are any.
@@ -226,9 +241,6 @@ where
     /// indexes allow concurrent readers. Refer to index API for more details.
     fn to_reader(&mut self) -> Result<Self::R>;
 }
-
-// TODO: should we make the methods in Reader trait as
-// &self, instead of &mut self ??
 
 /// Index read operations.
 pub trait Reader<K, V>

@@ -116,27 +116,27 @@ where
     D: DurableIndex<K, V> + Reader<K, V>,
 {
     /// Get ``key`` from index.
-    pub fn get<Q>(&self, key: &Q) -> Result<Entry<K, V>>
+    pub fn get<Q>(&mut self, key: &Q) -> Result<Entry<K, V>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
         let versions = false;
-        let y = lsm::y_get(
-            lsm::getter(&self.mem, versions),
-            lsm::getter(&self.disk, versions),
+        let mut y = lsm::y_get(
+            lsm::getter(&mut self.mem, versions),
+            lsm::getter(&mut self.disk, versions),
         );
         y(key)
     }
 
     /// Iterate over all entries in this index.
-    pub fn iter(&self) -> Result<IndexIter<K, V>> {
+    pub fn iter(&mut self) -> Result<IndexIter<K, V>> {
         let no_reverse = false;
         Ok(lsm::y_iter(self.mem.iter()?, self.disk.iter()?, no_reverse))
     }
 
     /// Iterate from lower bound to upper bound.
-    pub fn range<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
+    pub fn range<'a, R, Q>(&'a mut self, range: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
         R: 'a + Clone + RangeBounds<Q>,
@@ -150,7 +150,7 @@ where
     }
 
     /// Iterate from upper bound to lower bound.
-    pub fn reverse<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
+    pub fn reverse<'a, R, Q>(&'a mut self, range: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
         R: 'a + Clone + RangeBounds<Q>,
@@ -171,20 +171,20 @@ where
     M: EphemeralIndex<K, V> + Reader<K, V>,
     D: DurableIndex<K, V> + Reader<K, V>,
 {
-    pub fn get_with_versions<Q>(&self, key: &Q) -> Result<Entry<K, V>>
+    pub fn get_with_versions<Q>(&mut self, key: &Q) -> Result<Entry<K, V>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
         let versions = true;
-        let y = lsm::y_get_versions(
-            lsm::getter(&self.mem, versions),
-            lsm::getter(&self.disk, versions),
+        let mut y = lsm::y_get_versions(
+            lsm::getter(&mut self.mem, versions),
+            lsm::getter(&mut self.disk, versions),
         );
         y(key)
     }
 
-    pub fn iter_with_versions(&self) -> Result<IndexIter<K, V>> {
+    pub fn iter_with_versions(&mut self) -> Result<IndexIter<K, V>> {
         Ok(lsm::y_iter_versions(
             self.mem.iter()?,
             self.disk.iter()?,
@@ -193,7 +193,7 @@ where
     }
 
     pub fn range_with_versions<'a, R, Q>(
-        &'a self,
+        &'a mut self,
         range: R, // forward range from lower bound to upper bound
     ) -> Result<IndexIter<K, V>>
     where
@@ -209,7 +209,7 @@ where
     }
 
     pub fn reverse_with_versions<'a, R, Q>(
-        &'a self,
+        &'a mut self,
         range: R, // reverse range from upper bound to lower bound
     ) -> Result<IndexIter<K, V>>
     where

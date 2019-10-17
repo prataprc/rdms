@@ -93,7 +93,7 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    fn get<Q>(&self, _key: &Q) -> Result<Entry<K, V>>
+    fn get<Q>(&mut self, _key: &Q) -> Result<Entry<K, V>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -101,14 +101,14 @@ where
         Err(Error::KeyNotFound)
     }
 
-    fn iter(&self) -> Result<IndexIter<K, V>> {
+    fn iter(&mut self) -> Result<IndexIter<K, V>> {
         Ok(Box::new(EmptyIter {
             _phantom_key: &self.phantom_key,
             _phantom_val: &self.phantom_val,
         }))
     }
 
-    fn range<'a, R, Q>(&'a self, _range: R) -> Result<IndexIter<K, V>>
+    fn range<'a, R, Q>(&'a mut self, _range: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
         R: 'a + RangeBounds<Q>,
@@ -120,7 +120,7 @@ where
         }))
     }
 
-    fn reverse<'a, R, Q>(&'a self, _range: R) -> Result<IndexIter<K, V>>
+    fn reverse<'a, R, Q>(&'a mut self, _range: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
         R: 'a + RangeBounds<Q>,
@@ -132,7 +132,7 @@ where
         }))
     }
 
-    fn get_with_versions<Q>(&self, _key: &Q) -> Result<Entry<K, V>>
+    fn get_with_versions<Q>(&mut self, _key: &Q) -> Result<Entry<K, V>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -140,14 +140,14 @@ where
         Err(Error::KeyNotFound)
     }
 
-    fn iter_with_versions(&self) -> Result<IndexIter<K, V>> {
+    fn iter_with_versions(&mut self) -> Result<IndexIter<K, V>> {
         Ok(Box::new(EmptyIter {
             _phantom_key: &self.phantom_key,
             _phantom_val: &self.phantom_val,
         }))
     }
 
-    fn range_with_versions<'a, R, Q>(&self, _range: R) -> Result<IndexIter<K, V>>
+    fn range_with_versions<'a, R, Q>(&mut self, _r: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
         R: 'a + RangeBounds<Q>,
@@ -159,7 +159,7 @@ where
         }))
     }
 
-    fn reverse_with_versions<'a, R, Q>(&self, _rng: R) -> Result<IndexIter<K, V>>
+    fn reverse_with_versions<'a, R, Q>(&mut self, _: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
         R: 'a + RangeBounds<Q>,

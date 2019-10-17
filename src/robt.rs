@@ -85,7 +85,9 @@ where
             dir: dir.to_os_string(),
             name: name.to_string(),
             config: self.config.clone(),
-            b: None,
+
+            _phantom_key: marker::PhantomData,
+            _phantom_val: marker::PhantomData,
         }
     }
 
@@ -123,7 +125,9 @@ where
         dir: ffi::OsString,
         name: String,
         config: Config,
-        b: Option<Builder<K, V>>,
+
+        _phantom_key: marker::PhantomData<K>,
+        _phantom_val: marker::PhantomData<V>,
     },
     Snapshot {
         dir: ffi::OsString,
@@ -153,10 +157,7 @@ where
     fn commit(&mut self, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<()> {
         match self {
             Robt::Build {
-                dir,
-                name,
-                config,
-                b,
+                dir, name, config, ..
             } => {
                 let b = Builder::<K, V>::commit(dir, name, config.clone())?;
                 b.build(iter, meta)?;
@@ -200,10 +201,7 @@ where
     ) -> Result<()> {
         match self {
             Robt::Build {
-                dir,
-                name,
-                config,
-                b,
+                dir, name, config, ..
             } => {
                 let config = match prepare.config.vlog_file {
                     Some(vlog_file) => {
@@ -1155,7 +1153,7 @@ where
     meta: Vec<MetaItem>,
     config: Config,
     // working fields
-    fd: sync::Mutex<(fs::File, Option<fs::File>)>,
+    fd: (fs::File, Option<fs::File>),
 
     phantom_key: marker::PhantomData<K>,
     phantom_val: marker::PhantomData<V>,
@@ -1203,7 +1201,7 @@ where
             name: name.to_string(),
             meta: meta_items,
             config: Default::default(),
-            fd: sync::Mutex::new((index_fd, vlog_fd)),
+            fd: (index_fd, vlog_fd),
 
             phantom_key: marker::PhantomData,
             phantom_val: marker::PhantomData,
@@ -1288,8 +1286,6 @@ where
         };
         let vlog_file = self
             .fd
-            .lock()
-            .unwrap()
             .1
             .as_ref()
             .map(|_| Config::stitch_vlog_file(dir, name));
@@ -1308,84 +1304,60 @@ where
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
 {
-    fn get<Q>(&self, key: &Q) -> Result<Entry<K, V>>
+    fn get<Q>(&mut self, key: &Q) -> Result<Entry<K, V>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
         // println!("robt get ..");
-        let snap = unsafe {
-            let snap = self as *const Snapshot<K, V> as *mut Snapshot<K, V>;
-            snap.as_mut().unwrap()
-        };
-
+        let snap = unsafe { (self as *mut Snapshot<K, V>).as_mut().unwrap() };
         let versions = false;
         snap.do_get(key, versions)
     }
 
-    fn iter(&self) -> Result<IndexIter<K, V>> {
-        let snap = unsafe {
-            let snap = self as *const Snapshot<K, V> as *mut Snapshot<K, V>;
-            snap.as_mut().unwrap()
-        };
-
+    fn iter(&mut self) -> Result<IndexIter<K, V>> {
+        let snap = unsafe { (self as *mut Snapshot<K, V>).as_mut().unwrap() };
         let mut mzs = vec![];
         snap.build_fwd(snap.to_root().unwrap(), &mut mzs)?;
         Ok(Iter::new(snap, mzs))
     }
 
-    fn range<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
+    fn range<'a, R, Q>(&'a mut self, range: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
         R: 'a + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        let snap = unsafe {
-            let snap = self as *const Snapshot<K, V> as *mut Snapshot<K, V>;
-            snap.as_mut().unwrap()
-        };
-
+        let snap = unsafe { (self as *mut Snapshot<K, V>).as_mut().unwrap() };
         let versions = false;
         snap.do_range(range, versions)
     }
 
-    fn reverse<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
+    fn reverse<'a, R, Q>(&'a mut self, range: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
         R: 'a + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        let snap = unsafe {
-            let snap = self as *const Snapshot<K, V> as *mut Snapshot<K, V>;
-            snap.as_mut().unwrap()
-        };
-
+        let snap = unsafe { (self as *mut Snapshot<K, V>).as_mut().unwrap() };
         let versions = false;
         snap.do_reverse(range, versions)
     }
 
-    fn get_with_versions<Q>(&self, key: &Q) -> Result<Entry<K, V>>
+    fn get_with_versions<Q>(&mut self, key: &Q) -> Result<Entry<K, V>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        let snap = unsafe {
-            let snap = self as *const Snapshot<K, V> as *mut Snapshot<K, V>;
-            snap.as_mut().unwrap()
-        };
-
+        let snap = unsafe { (self as *mut Snapshot<K, V>).as_mut().unwrap() };
         let versions = true;
         snap.do_get(key, versions)
     }
 
     /// Iterate over all entries in this index. Returned entry shall
     /// have all its previous versions, can be a costly call.
-    fn iter_with_versions(&self) -> Result<IndexIter<K, V>> {
-        let snap = unsafe {
-            let snap = self as *const Snapshot<K, V> as *mut Snapshot<K, V>;
-            snap.as_mut().unwrap()
-        };
-
+    fn iter_with_versions(&mut self) -> Result<IndexIter<K, V>> {
+        let snap = unsafe { (self as *mut Snapshot<K, V>).as_mut().unwrap() };
         let mut mzs = vec![];
         snap.build_fwd(snap.to_root().unwrap(), &mut mzs)?;
         Ok(Iter::new_versions(snap, mzs))
@@ -1394,7 +1366,7 @@ where
     /// Iterate from lower bound to upper bound. Returned entry shall
     /// have all its previous versions, can be a costly call.
     fn range_with_versions<'a, R, Q>(
-        &'a self,
+        &'a mut self,
         range: R, // range bound
     ) -> Result<IndexIter<K, V>>
     where
@@ -1402,11 +1374,7 @@ where
         R: 'a + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        let snap = unsafe {
-            let snap = self as *const Snapshot<K, V> as *mut Snapshot<K, V>;
-            snap.as_mut().unwrap()
-        };
-
+        let snap = unsafe { (self as *mut Snapshot<K, V>).as_mut().unwrap() };
         let versions = true;
         snap.do_range(range, versions)
     }
@@ -1414,7 +1382,7 @@ where
     /// Iterate from upper bound to lower bound. Returned entry shall
     /// have all its previous versions, can be a costly call.
     fn reverse_with_versions<'a, R, Q>(
-        &'a self,
+        &'a mut self,
         range: R, // reverse range bound
     ) -> Result<IndexIter<K, V>>
     where
@@ -1422,11 +1390,7 @@ where
         R: 'a + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        let snap = unsafe {
-            let snap = self as *const Snapshot<K, V> as *mut Snapshot<K, V>;
-            snap.as_mut().unwrap()
-        };
-
+        let snap = unsafe { (self as *mut Snapshot<K, V>).as_mut().unwrap() };
         let versions = true;
         snap.do_reverse(range, versions)
     }
@@ -1444,7 +1408,7 @@ where
         Q: Ord + ?Sized,
     {
         let mblock = {
-            let fd = &mut self.fd.lock().unwrap().0;
+            let fd = &mut self.fd.0;
             MBlock::<K, V>::new_decode(fd, fpos, &self.config)?
         };
         match mblock.get(key, Bound::Unbounded, Bound::Unbounded) {
@@ -1464,7 +1428,7 @@ where
 
         // println!("do_get {}", zfpos);
         let zblock: ZBlock<K, V> = {
-            let fd = &mut self.fd.lock().unwrap().0;
+            let fd = &mut self.fd.0;
             ZBlock::new_decode(fd, zfpos, &self.config)?
         };
         match zblock.find(key, Bound::Unbounded, Bound::Unbounded) {
@@ -1562,7 +1526,7 @@ where
         mut fpos: u64,           // from node
         mzs: &mut Vec<MZ<K, V>>, // output
     ) -> Result<()> {
-        let fd = &mut self.fd.lock().unwrap().0;
+        let fd = &mut self.fd.0;
         let config = &self.config;
 
         // println!("build_fwd {} {}", mzs.len(), fpos);
@@ -1590,7 +1554,7 @@ where
             None => Ok(()),
             Some(MZ::M { fpos, mut index }) => {
                 let mblock = {
-                    let fd = &mut self.fd.lock().unwrap().0;
+                    let fd = &mut self.fd.0;
                     MBlock::<K, V>::new_decode(fd, fpos, config)?
                 };
                 index += 1;
@@ -1599,7 +1563,7 @@ where
                         mzs.push(MZ::M { fpos, index });
 
                         let zblock = {
-                            let fd = &mut self.fd.lock().unwrap().0;
+                            let fd = &mut self.fd.0;
                             ZBlock::new_decode(fd, zfpos, config)?
                         };
                         mzs.push(MZ::Z { zblock, index: 0 });
@@ -1627,7 +1591,7 @@ where
 
         let zfpos = loop {
             let mblock = {
-                let fd = &mut self.fd.lock().unwrap().0;
+                let fd = &mut self.fd.0;
                 MBlock::<K, V>::new_decode(fd, fpos, config)?
             };
             let index = mblock.len() - 1;
@@ -1641,7 +1605,7 @@ where
         };
 
         let zblock = {
-            let fd = &mut self.fd.lock().unwrap().0;
+            let fd = &mut self.fd.0;
             ZBlock::new_decode(fd, zfpos, config)?
         };
         let index: isize = (zblock.len() - 1).try_into().unwrap();
@@ -1657,7 +1621,7 @@ where
             Some(MZ::M { index: 0, .. }) => self.rebuild_rev(mzs),
             Some(MZ::M { fpos, mut index }) => {
                 let mblock = {
-                    let fd = &mut self.fd.lock().unwrap().0;
+                    let fd = &mut self.fd.0;
                     MBlock::<K, V>::new_decode(fd, fpos, config)?
                 };
                 index -= 1;
@@ -1666,7 +1630,7 @@ where
                         mzs.push(MZ::M { fpos, index });
 
                         let zblock = {
-                            let fd = &mut self.fd.lock().unwrap().0;
+                            let fd = &mut self.fd.0;
                             ZBlock::new_decode(fd, zfpos, config)?
                         };
                         let idx: isize = (zblock.len() - 1).try_into().unwrap();
@@ -1695,7 +1659,7 @@ where
         Q: Ord + ?Sized,
     {
         let mut fpos = self.to_root().unwrap();
-        let fd = &mut self.fd.lock().unwrap().0;
+        let fd = &mut self.fd.0;
         let config = &self.config;
         let (from_min, to_max) = (Bound::Unbounded, Bound::Unbounded);
 
@@ -1736,12 +1700,12 @@ where
         mut entry: Entry<K, V>,
         versions: bool, // fetch deltas as well
     ) -> Result<Entry<K, V>> {
-        match &mut self.fd.lock().unwrap().1 {
+        match &mut self.fd.1 {
             Some(fd) => entry.fetch_value(fd)?,
             _ => (),
         }
         if versions {
-            match &mut self.fd.lock().unwrap().1 {
+            match &mut self.fd.1 {
                 Some(fd) => entry.fetch_deltas(fd)?,
                 _ => (),
             }

@@ -872,7 +872,7 @@ where
     V: Clone + Diff,
 {
     /// Get the entry for `key`.
-    fn get<Q>(&self, key: &Q) -> Result<Entry<K, V>>
+    fn get<Q>(&mut self, key: &Q) -> Result<Entry<K, V>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -882,7 +882,7 @@ where
     }
 
     /// Return an iterator over all entries in this index.
-    fn iter(&self) -> Result<IndexIter<K, V>> {
+    fn iter(&mut self) -> Result<IndexIter<K, V>> {
         let _latch = Some(self.latch.acquire_read(self.spin));
 
         let node = self.root.as_ref().map(Deref::deref);
@@ -894,7 +894,7 @@ where
     }
 
     /// Range over all entries from low to high.
-    fn range<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
+    fn range<'a, R, Q>(&'a mut self, range: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
         R: 'a + Clone + RangeBounds<Q>,
@@ -918,7 +918,7 @@ where
     }
 
     /// Reverse range over all entries from high to low.
-    fn reverse<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
+    fn reverse<'a, R, Q>(&'a mut self, range: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
         R: 'a + Clone + RangeBounds<Q>,
@@ -943,7 +943,7 @@ where
     }
 
     /// Short circuited to get().
-    fn get_with_versions<Q>(&self, key: &Q) -> Result<Entry<K, V>>
+    fn get_with_versions<Q>(&mut self, key: &Q) -> Result<Entry<K, V>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -952,12 +952,15 @@ where
     }
 
     /// Short circuited to iter().
-    fn iter_with_versions(&self) -> Result<IndexIter<K, V>> {
+    fn iter_with_versions(&mut self) -> Result<IndexIter<K, V>> {
         self.iter()
     }
 
     /// Short circuited to range().
-    fn range_with_versions<'a, R, Q>(&'a self, rng: R) -> Result<IndexIter<K, V>>
+    fn range_with_versions<'a, R, Q>(
+        &'a mut self, // reader cannot be shared
+        rng: R,
+    ) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
         R: 'a + Clone + RangeBounds<Q>,
@@ -967,7 +970,10 @@ where
     }
 
     /// Short circuited to reverse()
-    fn reverse_with_versions<'a, R, Q>(&'a self, r: R) -> Result<IndexIter<K, V>>
+    fn reverse_with_versions<'a, R, Q>(
+        &'a mut self, // reader cannot be shared
+        r: R,
+    ) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
         R: 'a + Clone + RangeBounds<Q>,
@@ -1211,17 +1217,17 @@ where
     }
 }
 
-impl<K, V> AsRef<Llrb<K, V>> for LlrbReader<K, V>
+impl<K, V> AsMut<Llrb<K, V>> for LlrbReader<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    fn as_ref(&self) -> &Llrb<K, V> {
+    fn as_mut(&mut self) -> &mut Llrb<K, V> {
         unsafe {
             // transmute void pointer to mutable reference into index.
-            let index_ptr = self.index.as_ref().unwrap().as_ref();
-            let index_ptr = index_ptr as *const ffi::c_void;
-            (index_ptr as *const Llrb<K, V>).as_ref().unwrap()
+            let index_ptr = self.index.as_mut().unwrap().as_mut();
+            let index_ptr = index_ptr as *mut ffi::c_void;
+            (index_ptr as *mut Llrb<K, V>).as_mut().unwrap()
         }
     }
 }
@@ -1247,45 +1253,45 @@ where
     V: Clone + Diff,
 {
     /// Get ``key`` from index.
-    fn get<Q>(&self, key: &Q) -> Result<Entry<K, V>>
+    fn get<Q>(&mut self, key: &Q) -> Result<Entry<K, V>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        let index: &Llrb<K, V> = self.as_ref();
+        let index: &mut Llrb<K, V> = self.as_mut();
         index.get(key)
     }
 
     /// Iterate over all entries in this index.
-    fn iter(&self) -> Result<IndexIter<K, V>> {
-        let index: &Llrb<K, V> = self.as_ref();
+    fn iter(&mut self) -> Result<IndexIter<K, V>> {
+        let index: &mut Llrb<K, V> = self.as_mut();
         index.iter()
     }
 
     /// Iterate from lower bound to upper bound.
-    fn range<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
+    fn range<'a, R, Q>(&'a mut self, range: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
         R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        let index: &Llrb<K, V> = self.as_ref();
+        let index: &mut Llrb<K, V> = self.as_mut();
         index.range(range)
     }
 
     /// Iterate from upper bound to lower bound.
-    fn reverse<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
+    fn reverse<'a, R, Q>(&'a mut self, range: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
         R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        let index: &Llrb<K, V> = self.as_ref();
+        let index: &mut Llrb<K, V> = self.as_mut();
         index.reverse(range)
     }
 
     /// Short circuited to get().
-    fn get_with_versions<Q>(&self, key: &Q) -> Result<Entry<K, V>>
+    fn get_with_versions<Q>(&mut self, key: &Q) -> Result<Entry<K, V>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -1294,12 +1300,15 @@ where
     }
 
     /// Short circuited to iter().
-    fn iter_with_versions(&self) -> Result<IndexIter<K, V>> {
+    fn iter_with_versions(&mut self) -> Result<IndexIter<K, V>> {
         self.iter()
     }
 
     /// Short circuited to range().
-    fn range_with_versions<'a, R, Q>(&'a self, r: R) -> Result<IndexIter<K, V>>
+    fn range_with_versions<'a, R, Q>(
+        &'a mut self, // reader cannot be shared
+        r: R,
+    ) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
         R: 'a + Clone + RangeBounds<Q>,
@@ -1309,7 +1318,10 @@ where
     }
 
     /// Short circuited to reverse()
-    fn reverse_with_versions<'a, R, Q>(&'a self, r: R) -> Result<IndexIter<K, V>>
+    fn reverse_with_versions<'a, R, Q>(
+        &'a mut self, // reader cannot be shared
+        r: R,
+    ) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
         R: 'a + Clone + RangeBounds<Q>,

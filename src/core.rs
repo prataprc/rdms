@@ -227,6 +227,9 @@ where
     fn to_reader(&mut self) -> Result<Self::R>;
 }
 
+// TODO: should we make the methods in Reader trait as
+// &self, instead of &mut self ??
+
 /// Index read operations.
 pub trait Reader<K, V>
 where
@@ -235,18 +238,18 @@ where
 {
     /// Get ``key`` from index. Returned entry may not have all its
     /// previous versions, if it is costly to fetch from disk.
-    fn get<Q>(&self, key: &Q) -> Result<Entry<K, V>>
+    fn get<Q>(&mut self, key: &Q) -> Result<Entry<K, V>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized;
 
     /// Iterate over all entries in this index. Returned entry may not
     /// have all its previous versions, if it is costly to fetch from disk.
-    fn iter(&self) -> Result<IndexIter<K, V>>;
+    fn iter(&mut self) -> Result<IndexIter<K, V>>;
 
     /// Iterate from lower bound to upper bound. Returned entry may not
     /// have all its previous versions, if it is costly to fetch from disk.
-    fn range<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
+    fn range<'a, R, Q>(&'a mut self, range: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
         R: 'a + Clone + RangeBounds<Q>,
@@ -254,7 +257,7 @@ where
 
     /// Iterate from upper bound to lower bound. Returned entry may not
     /// have all its previous versions, if it is costly to fetch from disk.
-    fn reverse<'a, R, Q>(&'a self, range: R) -> Result<IndexIter<K, V>>
+    fn reverse<'a, R, Q>(&'a mut self, range: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
         R: 'a + Clone + RangeBounds<Q>,
@@ -262,18 +265,18 @@ where
 
     /// Get ``key`` from index. Returned entry shall have all its
     /// previous versions, can be a costly call.
-    fn get_with_versions<Q>(&self, key: &Q) -> Result<Entry<K, V>>
+    fn get_with_versions<Q>(&mut self, key: &Q) -> Result<Entry<K, V>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized;
 
     /// Iterate over all entries in this index. Returned entry shall
     /// have all its previous versions, can be a costly call.
-    fn iter_with_versions(&self) -> Result<IndexIter<K, V>>;
+    fn iter_with_versions(&mut self) -> Result<IndexIter<K, V>>;
 
     /// Iterate from lower bound to upper bound. Returned entry shall
     /// have all its previous versions, can be a costly call.
-    fn range_with_versions<'a, R, Q>(&'a self, r: R) -> Result<IndexIter<K, V>>
+    fn range_with_versions<'a, R, Q>(&'a mut self, range: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
         R: 'a + Clone + RangeBounds<Q>,
@@ -281,7 +284,7 @@ where
 
     /// Iterate from upper bound to lower bound. Returned entry shall
     /// have all its previous versions, can be a costly call.
-    fn reverse_with_versions<'a, R, Q>(&'a self, r: R) -> Result<IndexIter<K, V>>
+    fn reverse_with_versions<'a, R, Q>(&'a mut self, range: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
         R: 'a + Clone + RangeBounds<Q>,

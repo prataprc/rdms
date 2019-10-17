@@ -5,13 +5,13 @@ use std::cmp;
 use crate::core::{Diff, Entry, Footprint, IndexIter, Reader, Result};
 use crate::error::Error;
 
-pub(crate) type LsmGet<'a, K, V, Q> = Box<dyn Fn(&Q) -> Result<Entry<K, V>> + 'a>;
+pub(crate) type LsmGet<'a, K, V, Q> = Box<dyn FnMut(&Q) -> Result<Entry<K, V>> + 'a>;
 
 // ``x`` contains newer mutations than ``y``, get always fetches the latest
 // entry from the newest index.
 pub(crate) fn y_get<'a, 'b, K, V, Q>(
-    x: LsmGet<'a, K, V, Q>,
-    y: LsmGet<'a, K, V, Q>,
+    mut x: LsmGet<'a, K, V, Q>,
+    mut y: LsmGet<'a, K, V, Q>,
 ) -> LsmGet<'a, K, V, Q>
 where
     K: 'static + Clone + Ord + Borrow<Q>,
@@ -31,8 +31,8 @@ where
 // TODO NOTE: flush_merge called by this function assumes that all
 // mutations held by each index are mutually exclusive.
 pub(crate) fn y_get_versions<'a, 'b, K, V, Q>(
-    x: LsmGet<'a, K, V, Q>,
-    y: LsmGet<'a, K, V, Q>,
+    mut x: LsmGet<'a, K, V, Q>,
+    mut y: LsmGet<'a, K, V, Q>,
 ) -> LsmGet<'a, K, V, Q>
 where
     K: 'static + Clone + Ord + Borrow<Q>,
@@ -224,7 +224,7 @@ where
 }
 
 pub(crate) fn getter<'a, 'b, I, K, V, Q>(
-    index: &'a I,
+    index: &'a mut I,
     versions: bool, // if true, use get_versions
 ) -> LsmGet<'a, K, V, Q>
 where

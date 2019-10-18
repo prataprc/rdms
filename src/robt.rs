@@ -36,6 +36,7 @@
 //! [Config]: crate::robt::Config
 //!
 
+use fs2::FileExt;
 use jsondata::{Json, Property};
 use lazy_static::lazy_static;
 
@@ -1129,18 +1130,21 @@ fn thread_flush(
     mut fd: fs::File,
     rx: mpsc::Receiver<Vec<u8>>,
 ) -> Result<()> {
-    // let mut fpos = 0;
-    for data in rx.iter() {
+    fd.lock_exclusive(); // <----- write lock
+                         // let mut fpos = 0;
+    for data in rx {
         // println!("flusher {:?} {} {}", file, fpos, data.len());
         // fpos += data.len();
         let n = fd.write(&data)?;
         if n != data.len() {
             let msg = format!("flusher: {:?} {}/{}...", &file, data.len(), n);
+            fd.unlock(); // <----- write un-lock
             return Err(Error::PartialWrite(msg));
         }
     }
     fd.sync_all()?;
     // file descriptor and receiver channel shall be dropped.
+    fd.unlock(); // <----- write un-lock
     Ok(())
 }
 
@@ -1161,6 +1165,17 @@ where
 
     phantom_key: marker::PhantomData<K>,
     phantom_val: marker::PhantomData<V>,
+}
+
+impl<K, V> Drop for Snapshot<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+{
+    fn drop(&mut self) {
+        self.fd.0.unlock();
+        self.fd.1.as_ref().map(|fd| fd.unlock());
+    }
 }
 
 // Construction methods.
@@ -1199,6 +1214,9 @@ where
             .as_ref()
             .map(|s| util::open_file_r(s.as_ref()))
             .transpose()?;
+
+        index_fd.lock_shared();
+        vlog_fd.as_ref().map(|fd| fd.lock_shared());
 
         let mut snap = Snapshot {
             dir: dir.to_os_string(),
@@ -2021,6 +2039,9 @@ where
     }
 }
 
+#[cfg(test)]
+#[path = "fs2_test.rs"]
+mod fs2_test;
 #[cfg(test)]
 #[path = "robt_test.rs"]
 mod robt_test;

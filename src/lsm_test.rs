@@ -1,6 +1,6 @@
-use rand::prelude::{random, rngs::SmallRng, Rng, SeedableRng};
+use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
 
-use std::{convert::TryInto; ops::Bound, thread};
+use std::{convert::TryInto, ops::Bound, thread};
 
 use super::*;
 use crate::{

@@ -111,7 +111,7 @@ where
 
                 let mut hdr1: u64 = vlen.try_into().unwrap();
                 hdr1 |= Value::<V>::VALUE_FLAG;
-                buf[m..].copy_from_slice(&hdr1.to_be_bytes());
+                buf[m..m + 8].copy_from_slice(&hdr1.to_be_bytes());
 
                 Ok(vlen + 8)
             }

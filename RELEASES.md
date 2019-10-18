@@ -17,6 +17,8 @@ Code Review checklist
 * [ ] Check for dangling links in rustdoc.
 * [ ] 80-column width.
 * [ ] Copyright and License notice.
+* [ ] Make sure that generated artifact is debuggable. Like,
+  * [ ] RUSTLFAGS=-g
 
 Release Checklist
 =================

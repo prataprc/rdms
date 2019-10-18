@@ -46,7 +46,6 @@
 #![feature(bind_by_move_pattern_guards)]
 #![feature(drain_filter)]
 
-extern crate jsondata;
 #[cfg(unix)]
 extern crate libc;
 #[cfg(windows)]
@@ -54,7 +53,6 @@ extern crate winapi;
 
 // core modules
 mod core;
-mod disk;
 mod error;
 mod file_lock;
 mod lsm;
@@ -76,11 +74,12 @@ pub mod llrb;
 mod llrb_node;
 pub mod mvcc;
 
-mod nodisk;
+pub mod dgm;
+pub mod nodisk;
+
 mod panic;
 pub mod robt;
 mod robt_entry;
 mod robt_index;
-pub use crate::nodisk::NoDisk;
 
 pub mod wal;

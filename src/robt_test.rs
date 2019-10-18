@@ -138,7 +138,6 @@ fn test_config() {
     assert_eq!(Config::compute_root_block(4096), 4096);
     assert_eq!(Config::compute_root_block(4097), 8192);
 
-    let config: Config = Default::default();
     let dir_path = std::env::temp_dir();
     let dir = dir_path.clone().into_os_string();
     let ref_file = {
@@ -166,7 +165,7 @@ fn test_config() {
 #[test]
 fn test_robt_llrb1() {
     let seed: u128 = random();
-    let seed: u128 = 279765853267557126686238657580803488536;
+    // let seed: u128 = 279765853267557126686238657580803488536;
     run_robt_llrb("test-robt-llrb1-1", 60_000, 20_000_i64, 2, seed);
     println!("test_robt_llrb1 first run ...");
     run_robt_llrb("test-robt-llrb1-2", 6_000, 2_000_i64, 10, seed);
@@ -249,7 +248,7 @@ fn run_robt_llrb(name: &str, mut n_ops: u64, key_max: i64, repeat: usize, seed: 
             "seed:{} n_ops:{} lsm:{} delta:{} vlog:{} within:{:?}",
             seed, n_ops, lsm, config.delta_ok, config.value_in_vlog, within
         );
-        let (llrb, refs) = llrb_to_refs1(llrb, within.clone(), &config);
+        let (mut llrb, refs) = llrb_to_refs1(llrb, within.clone(), &config);
         let n_deleted: usize = refs
             .iter()
             .map(|e| if e.is_deleted() { 1 } else { 0 })
@@ -269,7 +268,7 @@ fn run_robt_llrb(name: &str, mut n_ops: u64, key_max: i64, repeat: usize, seed: 
             _ => (),
         }
 
-        let snap = robt::Snapshot::<i64, i64>::open(&dir, name).unwrap();
+        let mut snap = robt::Snapshot::<i64, i64>::open(&dir, name).unwrap();
         assert_eq!(snap.len(), refs.len());
         assert_eq!(snap.to_seqno(), llrb.to_seqno());
         assert_eq!(snap.to_app_meta().unwrap(), app_meta.as_bytes().to_vec());
@@ -312,7 +311,7 @@ fn run_robt_llrb(name: &str, mut n_ops: u64, key_max: i64, repeat: usize, seed: 
         for j in 0..100 {
             // test range
             let range = random_low_high(key_max, seed + j);
-            let refs = llrb_to_refs2(&llrb, range, within.clone(), &config);
+            let refs = llrb_to_refs2(&mut llrb, range, within.clone(), &config);
             // println!("range bounds {:?} {}", range, refs.len());
             let xs = snap.range(range).unwrap();
             let xs: Vec<Entry<i64, i64>> = xs.map(|e| e.unwrap()).collect();
@@ -322,7 +321,7 @@ fn run_robt_llrb(name: &str, mut n_ops: u64, key_max: i64, repeat: usize, seed: 
             }
             // test range_with_versions
             let range = random_low_high(key_max, seed + j);
-            let refs = llrb_to_refs2(&llrb, range, within.clone(), &config);
+            let refs = llrb_to_refs2(&mut llrb, range, within.clone(), &config);
             // println!("range..versions bounds {:?} {}", range, refs.len());
             let xs = snap.range_with_versions(range).unwrap();
             let xs: Vec<Entry<i64, i64>> = xs.map(|e| e.unwrap()).collect();
@@ -333,7 +332,7 @@ fn run_robt_llrb(name: &str, mut n_ops: u64, key_max: i64, repeat: usize, seed: 
             }
             // test reverse
             let range = random_low_high(key_max, seed + j);
-            let refs = llrb_to_refs3(&llrb, range, within.clone(), &config);
+            let refs = llrb_to_refs3(&mut llrb, range, within.clone(), &config);
             // println!("reverse bounds {:?} {}", range, refs.len());
             let xs = snap.reverse(range).unwrap();
             let xs: Vec<Entry<i64, i64>> = xs.map(|e| e.unwrap()).collect();
@@ -343,7 +342,7 @@ fn run_robt_llrb(name: &str, mut n_ops: u64, key_max: i64, repeat: usize, seed: 
             }
             // test reverse_with_versions
             let range = random_low_high(key_max, seed + j);
-            let refs = llrb_to_refs3(&llrb, range, within.clone(), &config);
+            let refs = llrb_to_refs3(&mut llrb, range, within.clone(), &config);
             // println!("reverse..versions bounds {:?} {}", range, refs.len());
             let xs = snap.reverse_with_versions(range).unwrap();
             let xs: Vec<Entry<i64, i64>> = xs.map(|e| e.unwrap()).collect();
@@ -376,7 +375,7 @@ fn llrb_to_refs1(
 }
 
 fn llrb_to_refs2<R>(
-    llrb: &Llrb<i64, i64>, // reference
+    llrb: &mut Llrb<i64, i64>, // reference
     range: R,
     within: (Bound<u64>, Bound<u64>),
     config: &Config,
@@ -396,7 +395,7 @@ where
 }
 
 fn llrb_to_refs3<R>(
-    llrb: &Llrb<i64, i64>, // reference
+    llrb: &mut Llrb<i64, i64>, // reference
     range: R,
     within: (Bound<u64>, Bound<u64>),
     config: &Config,

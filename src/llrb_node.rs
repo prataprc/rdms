@@ -1,7 +1,7 @@
 use std::{convert::TryInto, ops::Deref};
 
 use crate::core::{Diff, Entry, Footprint, Result, Value};
-#[allow(unused_imports)]
+#[allow(unused_imports)] // for documentation
 use crate::llrb::Llrb;
 
 /// Node corresponds to a single entry in Llrb instance.

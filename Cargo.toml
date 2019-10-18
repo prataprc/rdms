@@ -25,8 +25,8 @@ travis-ci = { repository = "bnclabs/rdms" }
 lazy_static = "1.2.0"
 # TODO: this goes into enterpise mode.
 jsondata = "0.6.2"
-rand = "0.6.4"
 log = "0.4.8"
+fs2 = "0.4.3"
 
 [target.'cfg(unix)'.dependencies]
 # TODO: remove this and start using fs2-rs

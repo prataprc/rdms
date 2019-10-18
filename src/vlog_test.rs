@@ -1,9 +1,9 @@
-use crate::vlog;
+use crate::{core::Footprint, vlog};
 
 #[test]
 fn test_value() {
     let value = vlog::Value::new_native(10);
-    assert_eq!(value.value_footprint().unwrap(), 0);
+    assert_eq!(value.footprint().unwrap(), 0);
     // encode
     let mut out = vec![];
     assert_eq!(value.encode(&mut out).unwrap(), 12);
@@ -12,11 +12,11 @@ fn test_value() {
     assert_eq!(value.to_native_value(), Some(10));
 
     let value = vlog::Value::<i32>::new_reference(10, 100, 20);
-    assert_eq!(value.value_footprint().unwrap(), 0);
+    assert_eq!(value.footprint().unwrap(), 0);
     assert_eq!(value.to_native_value(), None);
 
     let value = vlog::Value::new_native(vec![10_u8, 20, 30]);
-    assert_eq!(value.value_footprint().unwrap(), 3);
+    assert_eq!(value.footprint().unwrap(), 3);
     // encode
     let mut out = vec![];
     assert_eq!(value.encode(&mut out).unwrap(), 15);

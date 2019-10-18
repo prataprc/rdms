@@ -1,9 +1,10 @@
-use std::convert::TryInto;
-use std::{fs, mem};
+use std::{convert::TryInto, fs, mem};
 
-use crate::core::{self, Diff, Footprint, Result, Serialize};
-use crate::error::Error;
-use crate::util;
+use crate::{
+    core::{self, Diff, Footprint, Result, Serialize},
+    error::Error,
+    util,
+};
 
 // *-----*------------------------------------*
 // |flags|        60-bit length               |

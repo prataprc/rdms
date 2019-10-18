@@ -1,8 +1,8 @@
 // TODO: write test case for iter_within for Llrb and Mvcc index.
 
-use std::ops::Bound;
-
 use rand::prelude::random;
+
+use std::ops::Bound;
 
 use crate::core::{Reader, Writer};
 use crate::error::Error;
@@ -65,11 +65,13 @@ fn test_set() {
         check_node(entry.ok(), refn);
     }
     // test iter
-    let (mut iter, mut iter_ref) = (llrb.iter().unwrap(), refns.iter());
-    loop {
-        let item = iter.next().transpose().unwrap();
-        if check_node(item, iter_ref.next().cloned()) == false {
-            break;
+    {
+        let (mut iter, mut iter_ref) = (llrb.iter().unwrap(), refns.iter());
+        loop {
+            let item = iter.next().transpose().unwrap();
+            if check_node(item, iter_ref.next().cloned()) == false {
+                break;
+            }
         }
     }
     assert!(llrb.validate().is_ok());
@@ -298,31 +300,35 @@ fn test_range() {
     for _ in 0..1_000 {
         let (low, high) = random_low_high(llrb.len());
 
-        let mut iter = llrb.range((low, high)).unwrap();
-        let mut iter_ref = refns.range(low, high);
-        loop {
-            let item = iter.next().transpose().unwrap();
-            match (item, iter_ref.next()) {
-                (None, None) => break,
-                (entry, Some(refn)) => check_node(entry, Some(refn.clone())),
-                _ => panic!("invalid"),
-            };
+        {
+            let mut iter = llrb.range((low, high)).unwrap();
+            let mut iter_ref = refns.range(low, high);
+            loop {
+                let item = iter.next().transpose().unwrap();
+                match (item, iter_ref.next()) {
+                    (None, None) => break,
+                    (entry, Some(refn)) => check_node(entry, Some(refn.clone())),
+                    _ => panic!("invalid"),
+                };
+            }
+            assert!(iter.next().is_none());
+            assert!(iter.next().is_none());
         }
-        assert!(iter.next().is_none());
-        assert!(iter.next().is_none());
 
-        let mut iter = llrb.reverse((low, high)).unwrap();
-        let mut iter_ref = refns.reverse(low, high);
-        loop {
-            let item = iter.next().transpose().unwrap();
-            match (item, iter_ref.next()) {
-                (None, None) => break,
-                (entry, Some(refn)) => check_node(entry, Some(refn.clone())),
-                _ => panic!("invalid"),
-            };
+        {
+            let mut iter = llrb.reverse((low, high)).unwrap();
+            let mut iter_ref = refns.reverse(low, high);
+            loop {
+                let item = iter.next().transpose().unwrap();
+                match (item, iter_ref.next()) {
+                    (None, None) => break,
+                    (entry, Some(refn)) => check_node(entry, Some(refn.clone())),
+                    _ => panic!("invalid"),
+                };
+            }
+            assert!(iter.next().is_none());
+            assert!(iter.next().is_none());
         }
-        assert!(iter.next().is_none());
-        assert!(iter.next().is_none());
     }
 }
 
@@ -436,14 +442,16 @@ fn test_crud() {
     }
 
     //println!("len {}", llrb.len());
-
     assert_eq!(refns.to_seqno(), llrb.to_seqno());
-    // test iter
-    let (mut iter, mut iter_ref) = (llrb.iter().unwrap(), refns.iter());
-    loop {
-        let item = iter.next().transpose().unwrap();
-        if check_node(item, iter_ref.next().cloned()) == false {
-            break;
+
+    {
+        // test iter
+        let (mut iter, mut iter_ref) = (llrb.iter().unwrap(), refns.iter());
+        loop {
+            let item = iter.next().transpose().unwrap();
+            if check_node(item, iter_ref.next().cloned()) == false {
+                break;
+            }
         }
     }
 
@@ -452,21 +460,25 @@ fn test_crud() {
         let (low, high) = random_low_high(size);
         //println!("test loop {:?} {:?}", low, high);
 
-        let mut iter = llrb.range((low, high)).unwrap();
-        let mut iter_ref = refns.range(low, high);
-        loop {
-            let item = iter.next().transpose().unwrap();
-            if check_node(item, iter_ref.next().cloned()) == false {
-                break;
+        {
+            let mut iter = llrb.range((low, high)).unwrap();
+            let mut iter_ref = refns.range(low, high);
+            loop {
+                let item = iter.next().transpose().unwrap();
+                if check_node(item, iter_ref.next().cloned()) == false {
+                    break;
+                }
             }
         }
 
-        let mut iter = llrb.reverse((low, high)).unwrap();
-        let mut iter_ref = refns.reverse(low, high);
-        loop {
-            let item = iter.next().transpose().unwrap();
-            if check_node(item, iter_ref.next().cloned()) == false {
-                break;
+        {
+            let mut iter = llrb.reverse((low, high)).unwrap();
+            let mut iter_ref = refns.reverse(low, high);
+            loop {
+                let item = iter.next().transpose().unwrap();
+                if check_node(item, iter_ref.next().cloned()) == false {
+                    break;
+                }
             }
         }
     }
@@ -519,14 +531,16 @@ fn test_crud_lsm() {
     }
 
     // println!("len {}", llrb.len());
-
     assert_eq!(refns.to_seqno(), llrb.to_seqno());
-    // test iter
-    let (mut iter, mut iter_ref) = (llrb.iter().unwrap(), refns.iter());
-    loop {
-        let item = iter.next().transpose().unwrap();
-        if check_node(item, iter_ref.next().cloned()) == false {
-            break;
+
+    {
+        // test iter
+        let (mut iter, mut iter_ref) = (llrb.iter().unwrap(), refns.iter());
+        loop {
+            let item = iter.next().transpose().unwrap();
+            if check_node(item, iter_ref.next().cloned()) == false {
+                break;
+            }
         }
     }
 
@@ -535,21 +549,25 @@ fn test_crud_lsm() {
         let (low, high) = random_low_high(size as usize);
         // println!("test loop {:?} {:?}", low, high);
 
-        let mut iter = llrb.range((low, high)).unwrap();
-        let mut iter_ref = refns.range(low, high);
-        loop {
-            let item = iter.next().transpose().unwrap();
-            if check_node(item, iter_ref.next().cloned()) == false {
-                break;
+        {
+            let mut iter = llrb.range((low, high)).unwrap();
+            let mut iter_ref = refns.range(low, high);
+            loop {
+                let item = iter.next().transpose().unwrap();
+                if check_node(item, iter_ref.next().cloned()) == false {
+                    break;
+                }
             }
         }
 
-        let mut iter = llrb.reverse((low, high)).unwrap();
-        let mut iter_ref = refns.reverse(low, high);
-        loop {
-            let item = iter.next().transpose().unwrap();
-            if check_node(item, iter_ref.next().cloned()) == false {
-                break;
+        {
+            let mut iter = llrb.reverse((low, high)).unwrap();
+            let mut iter_ref = refns.reverse(low, high);
+            loop {
+                let item = iter.next().transpose().unwrap();
+                if check_node(item, iter_ref.next().cloned()) == false {
+                    break;
+                }
             }
         }
     }

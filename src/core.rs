@@ -1,11 +1,10 @@
-use std::borrow::Borrow;
-use std::convert::TryInto;
-use std::ops::{Bound, RangeBounds};
 use std::{
+    borrow::Borrow,
+    convert::TryInto,
     ffi, fs,
     mem::{self, ManuallyDrop},
-    sync::atomic::AtomicBool,
-    sync::atomic::Ordering::SeqCst,
+    ops::{Bound, RangeBounds},
+    sync::atomic::{AtomicBool, Ordering::SeqCst},
 };
 
 use crate::{error::Error, vlog};

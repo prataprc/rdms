@@ -2,8 +2,7 @@
 
 use std::{fs, io};
 
-use crate::core::Result;
-use crate::error::Error;
+use crate::{core::Result, error::Error};
 
 struct FileLock;
 

@@ -1,11 +1,14 @@
-use std::sync::mpsc;
-use std::{any, ffi, io};
+//! Module error define enumeration of `rdms` errors and convertion
+//! traits from other error types, like from std-lib, to `rdms` error.
 
-use crate::jsondata;
+use jsondata;
+
+use std::{any, ffi, io, sync::mpsc};
 
 // TODO: check unused error variants and double check error arguments.
 // TODO: Generic but meaningful error messages.
 // TODO: Document error variants.
+// TODO: Consolidate convertion traits from other error types.
 
 /// Error enumerates over all possible errors cases in `rdms` package.
 #[derive(Debug)]

@@ -292,32 +292,36 @@ fn test_range() {
     for _ in 0..1_000 {
         let (low, high) = random_low_high(mvcc.len());
 
-        let mut iter = mvcc.range((low, high)).unwrap();
-        let mut iter_ref = refns.range(low, high);
-        loop {
-            let item = iter.next().transpose().unwrap();
-            match (item, iter_ref.next()) {
-                (None, None) => break,
-                (node, Some(refn)) => check_node(node, Some(refn.clone())),
-                _ => panic!("invalid"),
-            };
+        {
+            let mut iter = mvcc.range((low, high)).unwrap();
+            let mut iter_ref = refns.range(low, high);
+            loop {
+                let item = iter.next().transpose().unwrap();
+                match (item, iter_ref.next()) {
+                    (None, None) => break,
+                    (node, Some(refn)) => check_node(node, Some(refn.clone())),
+                    _ => panic!("invalid"),
+                };
+            }
+            assert!(iter.next().is_none());
+            assert!(iter.next().is_none());
         }
-        assert!(iter.next().is_none());
-        assert!(iter.next().is_none());
 
-        //println!("{:?} {:?}", low, high);
-        let mut iter = mvcc.reverse((low, high)).unwrap();
-        let mut iter_ref = refns.reverse(low, high);
-        loop {
-            let item = iter.next().transpose().unwrap();
-            match (item, iter_ref.next()) {
-                (None, None) => break,
-                (node, Some(refn)) => check_node(node, Some(refn.clone())),
-                _ => panic!("invalid"),
-            };
+        {
+            //println!("{:?} {:?}", low, high);
+            let mut iter = mvcc.reverse((low, high)).unwrap();
+            let mut iter_ref = refns.reverse(low, high);
+            loop {
+                let item = iter.next().transpose().unwrap();
+                match (item, iter_ref.next()) {
+                    (None, None) => break,
+                    (node, Some(refn)) => check_node(node, Some(refn.clone())),
+                    _ => panic!("invalid"),
+                };
+            }
+            assert!(iter.next().is_none());
+            assert!(iter.next().is_none());
         }
-        assert!(iter.next().is_none());
-        assert!(iter.next().is_none());
     }
 }
 
@@ -369,11 +373,13 @@ fn test_crud() {
 
     assert_eq!(refns.to_seqno(), mvcc.to_seqno());
     // test iter
-    let (mut iter, mut iter_ref) = (mvcc.iter().unwrap(), refns.iter());
-    loop {
-        let item = iter.next().transpose().unwrap();
-        if check_node(item, iter_ref.next().cloned()) == false {
-            break;
+    {
+        let (mut iter, mut iter_ref) = (mvcc.iter().unwrap(), refns.iter());
+        loop {
+            let item = iter.next().transpose().unwrap();
+            if check_node(item, iter_ref.next().cloned()) == false {
+                break;
+            }
         }
     }
 
@@ -382,21 +388,25 @@ fn test_crud() {
         let (low, high) = random_low_high(size);
         //println!("test loop {:?} {:?}", low, high);
 
-        let mut iter = mvcc.range((low, high)).unwrap();
-        let mut iter_ref = refns.range(low, high);
-        loop {
-            let item = iter.next().transpose().unwrap();
-            if check_node(item, iter_ref.next().cloned()) == false {
-                break;
+        {
+            let mut iter = mvcc.range((low, high)).unwrap();
+            let mut iter_ref = refns.range(low, high);
+            loop {
+                let item = iter.next().transpose().unwrap();
+                if check_node(item, iter_ref.next().cloned()) == false {
+                    break;
+                }
             }
         }
 
-        let mut iter = mvcc.reverse((low, high)).unwrap();
-        let mut iter_ref = refns.reverse(low, high);
-        loop {
-            let item = iter.next().transpose().unwrap();
-            if check_node(item, iter_ref.next().cloned()) == false {
-                break;
+        {
+            let mut iter = mvcc.reverse((low, high)).unwrap();
+            let mut iter_ref = refns.reverse(low, high);
+            loop {
+                let item = iter.next().transpose().unwrap();
+                if check_node(item, iter_ref.next().cloned()) == false {
+                    break;
+                }
             }
         }
     }
@@ -451,11 +461,13 @@ fn test_crud_lsm() {
 
     assert_eq!(refns.to_seqno(), mvcc.to_seqno());
     // test iter
-    let (mut iter, mut iter_ref) = (mvcc.iter().unwrap(), refns.iter());
-    loop {
-        let item = iter.next().transpose().unwrap();
-        if check_node(item, iter_ref.next().cloned()) == false {
-            break;
+    {
+        let (mut iter, mut iter_ref) = (mvcc.iter().unwrap(), refns.iter());
+        loop {
+            let item = iter.next().transpose().unwrap();
+            if check_node(item, iter_ref.next().cloned()) == false {
+                break;
+            }
         }
     }
 
@@ -463,22 +475,25 @@ fn test_crud_lsm() {
     for _ in 0..3000 {
         let (low, high) = random_low_high(size as usize);
         //println!("test loop {:?} {:?}", low, high);
-
-        let mut iter = mvcc.range((low, high)).unwrap();
-        let mut iter_ref = refns.range(low, high);
-        loop {
-            let item = iter.next().transpose().unwrap();
-            if check_node(item, iter_ref.next().cloned()) == false {
-                break;
+        {
+            let mut iter = mvcc.range((low, high)).unwrap();
+            let mut iter_ref = refns.range(low, high);
+            loop {
+                let item = iter.next().transpose().unwrap();
+                if check_node(item, iter_ref.next().cloned()) == false {
+                    break;
+                }
             }
         }
 
-        let mut iter = mvcc.reverse((low, high)).unwrap();
-        let mut iter_ref = refns.reverse(low, high);
-        loop {
-            let item = iter.next().transpose().unwrap();
-            if check_node(item, iter_ref.next().cloned()) == false {
-                break;
+        {
+            let mut iter = mvcc.reverse((low, high)).unwrap();
+            let mut iter_ref = refns.reverse(low, high);
+            loop {
+                let item = iter.next().transpose().unwrap();
+                if check_node(item, iter_ref.next().cloned()) == false {
+                    break;
+                }
             }
         }
     }

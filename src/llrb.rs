@@ -24,21 +24,28 @@
 //!
 //! [llrb]: https://en.wikipedia.org/wiki/Left-leaning_red-black_tree
 //! [LSM mode]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
-use std::borrow::Borrow;
-use std::cmp::{Ord, Ordering};
-use std::convert::TryInto;
-use std::fmt::Debug;
-use std::ops::{Bound, Deref, DerefMut, RangeBounds};
-use std::sync::Arc;
-use std::{ffi, marker, mem};
+//!
 
-use crate::core::{Diff, Entry, Footprint, Result, ScanEntry, Value};
-use crate::core::{EphemeralIndex, FullScan, IndexIter, ScanIter};
-use crate::core::{Reader, WalWriter, WriteIndexFactory, Writer};
-use crate::error::Error;
-use crate::llrb_node::{LlrbDepth, Node, Stats};
-use crate::mvcc::Snapshot;
-use crate::spinlock::{self, RWSpinlock};
+use std::{
+    borrow::Borrow,
+    cmp::{Ord, Ordering},
+    convert::TryInto,
+    fmt::Debug,
+    ops::{Bound, Deref, DerefMut, RangeBounds},
+    sync::Arc,
+    {ffi, marker, mem},
+};
+
+use crate::{
+    core::{
+        Diff, Entry, EphemeralIndex, Footprint, FullScan, IndexIter, Reader, Result, ScanEntry,
+        ScanIter, Value, WalWriter, WriteIndexFactory, Writer,
+    },
+    error::Error,
+    llrb_node::{LlrbDepth, Node, Stats},
+    mvcc::Snapshot,
+    spinlock::{self, RWSpinlock},
+};
 
 include!("llrb_common.rs");
 

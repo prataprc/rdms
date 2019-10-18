@@ -35,6 +35,8 @@
 //!
 //! [Config]: crate::robt::Config
 //!
+
+use jsondata::{Json, Property};
 use lazy_static::lazy_static;
 
 use std::{
@@ -49,18 +51,16 @@ use std::{
     ops::{Bound, RangeBounds},
     path, result,
     str::FromStr,
-    sync::{self, mpsc},
+    sync::mpsc,
     thread, time,
 };
 
 use crate::core::{Diff, Entry, Footprint, Result, Serialize};
 use crate::core::{DiskIndexFactory, DurableIndex, IndexIter, Reader};
 use crate::error::Error;
-use crate::jsondata::{Json, Property};
-use crate::util;
-
 use crate::robt_entry::MEntry;
 use crate::robt_index::{MBlock, ZBlock};
+use crate::util;
 
 include!("robt_marker.rs");
 

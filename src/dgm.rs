@@ -10,9 +10,10 @@ use crate::core::{IndexIter, Reader, Result, Serialize};
 use crate::error::Error;
 use crate::{lsm, types::EmptyIter};
 
-const NLEVELS: usize = 16;
+/// Maximum number of levels to be used for disk indexes.
+pub const NLEVELS: usize = 16;
 
-struct Dgm<K, V, F>
+pub struct Dgm<K, V, F>
 where
     K: Clone + Ord,
     V: Clone + Diff,
@@ -35,8 +36,14 @@ where
     <V as Diff>::D: Serialize,
     F: DiskIndexFactory<K, V>,
 {
-    const MEM_RATIO: f64 = 0.5;
-    const DISK_RATIO: f64 = 0.5;
+    /// Default ratio threshold between memory index footprint and
+    /// the latest disk index footprint, below which a newer level
+    /// shall be created.
+    pub const MEM_RATIO: f64 = 0.5;
+    /// Default ratio threshold between a disk index footprint and
+    /// the next-level disk index footprint, above which the two
+    /// levels shall be compacted into a single index.
+    pub const DISK_RATIO: f64 = 0.5;
 
     pub fn new(
         dir: &ffi::OsStr, // directory path
@@ -399,7 +406,7 @@ where
     }
 }
 
-struct DgmReader<K, V, F>
+pub struct DgmReader<K, V, F>
 where
     K: Clone + Ord,
     V: Clone + Diff,
@@ -497,7 +504,7 @@ where
         let no_reverse = false;
         for reader in dgmi.readers.iter_mut() {
             let iter = unsafe {
-                let reader = (reader as *mut Dr<K, V, F>);
+                let reader = reader as *mut Dr<K, V, F>;
                 reader.as_mut().unwrap().iter()?
             };
             dgmi.iter = Some(
@@ -518,7 +525,7 @@ where
         let no_reverse = false;
         for reader in dgmi.readers.iter_mut() {
             let iter = unsafe {
-                let reader = (reader as *mut Dr<K, V, F>);
+                let reader = reader as *mut Dr<K, V, F>;
                 reader.as_mut().unwrap().range(range.clone())?
             };
             dgmi.iter = Some(
@@ -539,7 +546,7 @@ where
         let no_reverse = true;
         for reader in dgmi.readers.iter_mut() {
             let iter = unsafe {
-                let reader = (reader as *mut Dr<K, V, F>);
+                let reader = reader as *mut Dr<K, V, F>;
                 reader.as_mut().unwrap().reverse(range.clone())?
             };
             dgmi.iter = Some(
@@ -576,7 +583,7 @@ where
             0 => Err(Error::KeyNotFound),
             1 => Ok(entries.remove(0)),
             _ => {
-                let mut entry = entries.remove(0);
+                let entry = entries.remove(0);
                 let entry = entries
                     .into_iter()
                     .fold(entry, |entry, older| entry.flush_merge(older));
@@ -590,7 +597,7 @@ where
         let no_reverse = false;
         for reader in dgmi.readers.iter_mut() {
             let iter = unsafe {
-                let reader = (reader as *mut Dr<K, V, F>);
+                let reader = reader as *mut Dr<K, V, F>;
                 reader.as_mut().unwrap().iter_with_versions()?
             };
             dgmi.iter = Some(
@@ -614,7 +621,7 @@ where
         let no_reverse = false;
         for reader in dgmi.readers.iter_mut() {
             let iter = unsafe {
-                let reader = (reader as *mut Dr<K, V, F>);
+                let reader = reader as *mut Dr<K, V, F>;
                 reader
                     .as_mut()
                     .unwrap()
@@ -641,7 +648,7 @@ where
         let no_reverse = true;
         for reader in dgmi.readers.iter_mut() {
             let iter = unsafe {
-                let reader = (reader as *mut Dr<K, V, F>);
+                let reader = reader as *mut Dr<K, V, F>;
                 reader
                     .as_mut()
                     .unwrap()

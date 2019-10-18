@@ -52,6 +52,7 @@ extern crate libc;
 #[cfg(windows)]
 extern crate winapi;
 
+// core modules
 mod core;
 mod disk;
 mod error;

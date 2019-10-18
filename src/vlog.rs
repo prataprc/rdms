@@ -74,11 +74,11 @@ where
     }
 }
 
-impl<V> Value<V>
+impl<V> Footprint for Value<V>
 where
     V: Clone + Footprint,
 {
-    pub(crate) fn value_footprint(&self) -> Result<isize> {
+    fn footprint(&self) -> Result<isize> {
         match self {
             Value::Native { value } => value.footprint(),
             Value::Reference { .. } => Ok(0),
@@ -90,6 +90,7 @@ impl<V> Value<V>
 where
     V: Clone + Serialize,
 {
+    // Return the size of header + payload.
     pub(crate) fn encode(&self, buf: &mut Vec<u8>) -> Result<usize>
     where
         V: Serialize,
@@ -109,7 +110,7 @@ where
 
                 let mut hdr1: u64 = vlen.try_into().unwrap();
                 hdr1 |= Value::<V>::VALUE_FLAG;
-                buf[m..m + 8].copy_from_slice(&hdr1.to_be_bytes());
+                buf[m..].copy_from_slice(&hdr1.to_be_bytes());
 
                 Ok(vlen + 8)
             }
@@ -117,6 +118,7 @@ where
         }
     }
 
+    // not meant for disk serialization, only value is encoded.
     pub(crate) fn encode_local(&self, buf: &mut Vec<u8>) -> Result<usize>
     where
         V: Serialize,

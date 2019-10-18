@@ -49,7 +49,8 @@ pub trait Diff: Sized {
     fn merge(&self, delta: &Self::D) -> Self;
 }
 
-/// To be implemented by index-types, key-types and value-types.
+/// Footprint shall be implemented by index-types, key-types and,
+/// value-types.
 ///
 /// This trait is required to compute the memory or disk foot-print
 /// for index-types, key-types and value-types.
@@ -57,6 +58,10 @@ pub trait Diff: Sized {
 /// **Note: This can be an approximate measure.**
 ///
 pub trait Footprint {
+    /// Return the approximate size of the underlying type, when
+    /// stored in memory or serialized on disk.
+    ///
+    /// NOTE: `isize` is used instead of `usize` because of delta computation.
     fn footprint(&self) -> Result<isize>;
 }
 
@@ -643,7 +648,7 @@ where
     fn footprint(&self) -> Result<isize> {
         let mut fp: isize = mem::size_of::<Value<V>>().try_into().unwrap();
         fp += match self {
-            Value::U { value, .. } => value.value_footprint()?,
+            Value::U { value, .. } => value.footprint()?,
             Value::D { .. } => 0,
         };
         Ok(fp)

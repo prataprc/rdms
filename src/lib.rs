@@ -39,9 +39,7 @@
 //!
 //!
 //! [LSM]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
-
-// TODO: Document work. Mvcc does not allow concurrent write access.
-// and doing so will panic.
+//!
 
 #![feature(bind_by_move_pattern_guards)]
 #![feature(drain_filter)]
@@ -54,32 +52,39 @@ extern crate winapi;
 // core modules
 mod core;
 mod error;
-mod file_lock;
-mod lsm;
-mod rdms;
-mod scans;
+mod panic;
 mod spinlock;
 mod sync_writer;
+mod types;
 mod util;
 mod vlog;
-pub use crate::core::{Diff, Entry, Replay, Result, Serialize, VersionIter};
-pub use crate::core::{DurableIndex, EphemeralIndex, Footprint, IndexIter, Reader, Writer};
-pub use crate::error::Error;
-pub use crate::rdms::Rdms;
+pub use crate::{
+    core::{
+        Diff, DurableIndex, Entry, EphemeralIndex, Footprint, IndexIter, Reader, Replay, Result,
+        Serialize, VersionIter, Writer,
+    },
+    error::Error,
+    types::Empty,
+};
 
-mod types;
-pub use crate::types::Empty;
+// support modules
+mod lsm;
+mod scans;
+pub mod wal;
 
+// mem indexes
 pub mod llrb;
 mod llrb_node;
+// mem indexes
 pub mod mvcc;
-
+// disk indexes
 pub mod dgm;
+// disk indexes
 pub mod nodisk;
-
-mod panic;
+// disk indexes
 pub mod robt;
 mod robt_entry;
 mod robt_index;
 
-pub mod wal;
+mod rdms;
+pub use crate::rdms::Rdms;

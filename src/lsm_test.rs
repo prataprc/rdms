@@ -1,18 +1,16 @@
-use std::convert::TryInto;
-use std::ops::Bound;
-use std::thread;
+use rand::prelude::{random, rngs::SmallRng, Rng, SeedableRng};
 
-use rand::prelude::random;
-use rand::{rngs::SmallRng, Rng, SeedableRng};
+use std::{convert::TryInto; ops::Bound, thread};
 
 use super::*;
-
-use crate::core::{EphemeralIndex, IndexIter, Reader, Writer};
-use crate::error::Error;
-use crate::llrb::Llrb;
-use crate::mvcc::{Mvcc, MvccReader, MvccWriter};
-use crate::robt;
-use crate::scans::SkipScan;
+use crate::{
+    core::{EphemeralIndex, IndexIter, Reader, Writer},
+    error::Error,
+    llrb::Llrb,
+    mvcc::{Mvcc, MvccReader, MvccWriter},
+    robt,
+    scans::SkipScan,
+};
 
 #[test]
 fn test_lsm_get1() {

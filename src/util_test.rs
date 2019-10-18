@@ -4,8 +4,7 @@ use std::{
     path::PathBuf,
 };
 
-use crate::error::Error;
-use crate::util;
+use crate::{error::Error, util};
 
 #[test]
 fn test_open_file_rw() {

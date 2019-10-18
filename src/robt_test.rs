@@ -1,12 +1,12 @@
-use rand::prelude::random;
+use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
 
 use super::*;
-use crate::core::{Delta, Reader, Writer};
-use crate::llrb::Llrb;
-use crate::robt;
-use crate::scans::{FilterScan, SkipScan};
-
-use rand::{rngs::SmallRng, Rng, SeedableRng};
+use crate::{
+    core::{Delta, Reader, Writer},
+    llrb::Llrb,
+    robt,
+    scans::{FilterScan, SkipScan},
+};
 
 #[test]
 fn test_stats() {

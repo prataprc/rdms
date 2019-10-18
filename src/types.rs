@@ -1,7 +1,9 @@
 use std::{convert::TryInto, marker};
 
-use crate::core::{Diff, Entry, Footprint, Result, Serialize};
-use crate::error::Error;
+use crate::{
+    core::{Diff, Entry, Footprint, Result, Serialize},
+    error::Error,
+};
 
 /// Empty value, can be used for indexing entries that have a
 /// key but no value.

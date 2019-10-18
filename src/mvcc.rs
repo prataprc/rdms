@@ -26,6 +26,8 @@
 //! [llrb]: https://en.wikipedia.org/wiki/Left-leaning_red-black_tree
 //! [mvcc]: https://en.wikipedia.org/wiki/Multiversion_concurrency_control
 //! [LSM mode]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
+//!
+
 use std::{
     borrow::Borrow,
     cmp::{Ord, Ordering},
@@ -40,13 +42,16 @@ use std::{
     thread,
 };
 
-use crate::core::{Diff, Entry, Footprint, Result, ScanEntry, Value};
-use crate::core::{EphemeralIndex, FullScan, IndexIter, ScanIter};
-use crate::core::{Reader, WalWriter, WriteIndexFactory, Writer};
-use crate::error::Error;
-use crate::llrb::Llrb;
-use crate::llrb_node::{LlrbDepth, Node, Stats};
-use crate::spinlock::{self, RWSpinlock};
+use crate::{
+    core::{
+        Diff, Entry, EphemeralIndex, Footprint, FullScan, IndexIter, Reader, Result, ScanEntry,
+        ScanIter, Value, WalWriter, WriteIndexFactory, Writer,
+    },
+    error::Error,
+    llrb::Llrb,
+    llrb_node::{LlrbDepth, Node, Stats},
+    spinlock::{self, RWSpinlock},
+};
 
 // TODO: Experiment with different atomic::Ordering to improve performance.
 

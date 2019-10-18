@@ -1,8 +1,10 @@
 use std::{convert::TryInto, marker, mem};
 
-use crate::core::{self, Diff, Result, Serialize};
-use crate::error::Error;
-use crate::vlog;
+use crate::{
+    core::{self, Diff, Result, Serialize},
+    error::Error,
+    vlog,
+};
 
 // Binary format (interMediate-Entry):
 //

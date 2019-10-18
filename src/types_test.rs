@@ -1,5 +1,7 @@
-use crate::core::{Diff, Footprint, Serialize};
-use crate::types::Empty;
+use crate::{
+    core::{Diff, Footprint, Serialize},
+    types::Empty,
+};
 
 #[test]
 fn test_bytes_diff() {

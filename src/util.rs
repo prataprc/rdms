@@ -5,8 +5,7 @@ use std::{
     path,
 };
 
-use crate::core::Result;
-use crate::error::Error;
+use crate::{core::Result, error::Error};
 
 // create a file in append mode for writing.
 pub(crate) fn open_file_cw(file: ffi::OsString) -> Result<fs::File> {

@@ -1,7 +1,9 @@
-use std::sync::Arc;
-use std::{thread, time};
-
 use rand::prelude::random;
+
+use std::{
+    sync::Arc,
+    {thread, time},
+};
 
 use super::*;
 

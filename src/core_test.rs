@@ -1,7 +1,9 @@
 use std::ops::Bound;
 
-use crate::core::{Delta, Entry, Value};
-use crate::vlog;
+use crate::{
+    core::{Delta, Entry, Value},
+    vlog,
+};
 
 #[test]
 fn test_delta_new_upsert() {

@@ -1,11 +1,11 @@
-use rand::prelude::random;
-use rand::{rngs::SmallRng, Rng, SeedableRng};
+use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
 
 use super::*;
-
-use crate::core::{Reader, Writer};
-use crate::error::Error;
-use crate::llrb::Llrb;
+use crate::{
+    core::{Reader, Writer},
+    error::Error,
+    llrb::Llrb,
+};
 
 #[test]
 fn test_skip_scan() {

@@ -76,8 +76,10 @@ use std::{
 
 use lazy_static::lazy_static;
 
-use crate::core::{Diff, Replay, Result, Serialize};
-use crate::{error::Error, util};
+use crate::{
+    core::{Diff, Replay, Result, Serialize},
+    {error::Error, util},
+};
 
 include!("wal_marker.rs");
 

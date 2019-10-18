@@ -1,10 +1,13 @@
 use std::{borrow::Borrow, ffi, fs, marker, ops::RangeBounds};
 
-use crate::core::{Diff, DurableIndex, Footprint, IndexIter, Reader};
-use crate::core::{DiskIndexFactory, Serialize};
-use crate::core::{Entry, Result};
-use crate::error::Error;
-use crate::types::{Empty, EmptyIter};
+use crate::{
+    core::{
+        Diff, DiskIndexFactory, DurableIndex, Entry, Footprint, IndexIter, Reader, Result,
+        Serialize,
+    },
+    error::Error,
+    types::{Empty, EmptyIter},
+};
 
 pub struct NoDiskFactory;
 

@@ -56,12 +56,16 @@ use std::{
     thread, time,
 };
 
-use crate::core::{Diff, Entry, Footprint, Result, Serialize};
-use crate::core::{DiskIndexFactory, DurableIndex, IndexIter, Reader};
-use crate::error::Error;
-use crate::robt_entry::MEntry;
-use crate::robt_index::{MBlock, ZBlock};
-use crate::util;
+use crate::{
+    core::{
+        Diff, DiskIndexFactory, DurableIndex, Entry, Footprint, IndexIter, Reader, Result,
+        Serialize,
+    },
+    error::Error,
+    robt_entry::MEntry,
+    robt_index::{MBlock, ZBlock},
+    util,
+};
 
 include!("robt_marker.rs");
 

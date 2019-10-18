@@ -1,9 +1,10 @@
 //! Implement get() and iter() for LSM indexes.
-use std::borrow::Borrow;
-use std::cmp;
+use std::{borrow::Borrow, cmp};
 
-use crate::core::{Diff, Entry, Footprint, IndexIter, Reader, Result};
-use crate::error::Error;
+use crate::{
+    core::{Diff, Entry, Footprint, IndexIter, Reader, Result},
+    error::Error,
+};
 
 pub(crate) type LsmGet<'a, K, V, Q> = Box<dyn FnMut(&Q) -> Result<Entry<K, V>> + 'a>;
 

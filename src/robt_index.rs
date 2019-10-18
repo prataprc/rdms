@@ -1,13 +1,14 @@
 // TODO: flush put blocks into tx channel. Right now we simply unwrap()
 
-use std::ops::Bound;
-use std::{borrow::Borrow, cmp::Ordering, convert::TryInto, fs, marker};
+use std::{borrow::Borrow, cmp::Ordering, convert::TryInto, fs, marker, ops::Bound};
 
-use crate::core::{self, Diff, Result, Serialize};
-use crate::error::Error;
-use crate::robt::{Config, Flusher, Stats};
-use crate::robt_entry::{MEntry, ZEntry};
-use crate::util;
+use crate::{
+    core::{self, Diff, Result, Serialize},
+    error::Error,
+    robt::{Config, Flusher, Stats},
+    robt_entry::{MEntry, ZEntry},
+    util,
+};
 
 // Binary format (InterMediate-Block prefix):
 //

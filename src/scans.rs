@@ -2,8 +2,10 @@
 //!
 //! Typically used for memory-only index.
 
-use std::ops::{Bound, RangeBounds};
-use std::vec;
+use std::{
+    ops::{Bound, RangeBounds},
+    vec,
+};
 
 use crate::core::{Diff, Entry, FullScan, IndexIter, Result, ScanEntry};
 

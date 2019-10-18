@@ -5,10 +5,15 @@ use std::{
     sync::{self, Arc},
 };
 
-use crate::core::{Diff, DiskIndexFactory, DurableIndex, Entry, Footprint};
-use crate::core::{IndexIter, Reader, Result, Serialize};
-use crate::error::Error;
-use crate::{lsm, types::EmptyIter};
+use crate::{
+    core::{
+        Diff, DiskIndexFactory, DurableIndex, Entry, Footprint, IndexIter, Reader, Result,
+        Serialize,
+    },
+    error::Error,
+    lsm,
+    types::EmptyIter,
+};
 
 /// Maximum number of levels to be used for disk indexes.
 pub const NLEVELS: usize = 16;

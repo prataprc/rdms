@@ -1,12 +1,14 @@
-use std::ops::Bound;
-
 use rand::prelude::random;
 
-use crate::core::{Reader, Writer};
-use crate::error::Error;
-use crate::mvcc::Mvcc;
-use crate::scans::SkipScan;
-use crate::types::Empty;
+use std::ops::Bound;
+
+use crate::{
+    core::{Reader, Writer},
+    error::Error,
+    mvcc::Mvcc,
+    scans::SkipScan,
+    types::Empty,
+};
 
 include!("./ref_test.rs");
 

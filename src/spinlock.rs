@@ -37,8 +37,11 @@
 ///
 /// [rw-lock]: https://en.wikipedia.org/wiki/Readers–writer_lock
 ///
-use std::sync::atomic::{AtomicU64, Ordering::SeqCst};
-use std::{fmt, thread};
+use std::{
+    fmt,
+    sync::atomic::{AtomicU64, Ordering::SeqCst},
+    thread,
+};
 
 // TODO: Experiment with different atomic::Ordering to improve performance.
 

@@ -1,8 +1,7 @@
 use rand::prelude::random;
 
 use super::*;
-use crate::core;
-use crate::vlog;
+use crate::{core, vlog};
 
 #[test]
 fn test_mblock_m() {

@@ -4,11 +4,13 @@ use rand::prelude::random;
 
 use std::ops::Bound;
 
-use crate::core::{Reader, Writer};
-use crate::error::Error;
-use crate::llrb::Llrb;
-use crate::scans::SkipScan;
-use crate::types::Empty;
+use crate::{
+    core::{Reader, Writer},
+    error::Error,
+    llrb::Llrb,
+    scans::SkipScan,
+    types::Empty,
+};
 
 include!("./ref_test.rs");
 

@@ -7,11 +7,9 @@ use crate::jsondata;
 // TODO: Generic but meaningful error messages.
 // TODO: Document error variants.
 
-/// Error enumerates over all possible errors that this package
-/// shall return.
+/// Error enumerates over all possible errors cases in `rdms` package.
 #[derive(Debug)]
 pub enum Error {
-    NotImplemented,
     /// Can be returned by set_cas() API when:
     /// * In non-lsm mode, requested entry is missing but specified
     ///   CAS is not ZERO. Note that this combination is an alias for

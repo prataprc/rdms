@@ -19,7 +19,7 @@ use crate::util;
 
 #[derive(Clone)]
 pub(crate) enum Value<V> {
-    // Native value, already de-serialized.
+    // Native value.
     Native { value: V },
     // Refers to serialized value on disk, either index-file or vlog-file
     Reference { fpos: u64, length: u64, seqno: u64 },
@@ -35,10 +35,10 @@ where
         Value::Native { value }
     }
 
-    pub(crate) fn new_reference(fpos: u64, length: u64, seqno: u64) -> Value<V> {
+    pub(crate) fn new_reference(fpos: u64, len: u64, seqno: u64) -> Value<V> {
         Value::Reference {
             fpos,
-            length,
+            length: len,
             seqno,
         }
     }

@@ -4,6 +4,7 @@ use rand::prelude::random;
 
 use std::ops::Bound;
 
+use super::*;
 use crate::{
     core::{Reader, Writer},
     error::Error,
@@ -15,6 +16,11 @@ use crate::{
 include!("./ref_test.rs");
 
 // TODO: repeatable randoms.
+
+#[test]
+fn test_node_size() {
+    assert_eq!(std::mem::size_of::<Node<i64, i64>>(), 80);
+}
 
 #[test]
 fn test_id() {

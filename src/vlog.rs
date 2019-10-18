@@ -26,10 +26,7 @@ pub(crate) enum Value<V> {
     Reference { fpos: u64, length: u64, seqno: u64 },
 }
 
-impl<V> Value<V>
-where
-    V: Clone,
-{
+impl<V> Value<V> {
     const VALUE_FLAG: u64 = 0x1000000000000000;
 
     pub(crate) fn new_native(value: V) -> Value<V> {
@@ -77,7 +74,7 @@ where
 
 impl<V> Footprint for Value<V>
 where
-    V: Clone + Footprint,
+    V: Footprint,
 {
     fn footprint(&self) -> Result<isize> {
         match self {
@@ -89,7 +86,7 @@ where
 
 impl<V> Value<V>
 where
-    V: Clone + Serialize,
+    V: Serialize,
 {
     // Return the size of header + payload.
     pub(crate) fn encode(&self, buf: &mut Vec<u8>) -> Result<usize>
@@ -139,7 +136,7 @@ where
 
 pub(crate) fn fetch_value<V>(fpos: u64, n: u64, fd: &mut fs::File) -> Result<Value<V>>
 where
-    V: Clone + Serialize,
+    V: Serialize,
 {
     let block = util::read_buffer(fd, fpos, n, "reading value from vlog")?;
     let mut value: V = unsafe { mem::zeroed() };
@@ -204,8 +201,14 @@ where
             _ => None,
         }
     }
+}
 
-    pub(crate) fn diff_footprint(&self) -> Result<isize> {
+impl<V> Footprint for Delta<V>
+where
+    V: Diff,
+    <V as Diff>::D: Footprint,
+{
+    fn footprint(&self) -> Result<isize> {
         match self {
             Delta::Native { diff } => diff.footprint(),
             Delta::Reference { .. } => Ok(0),

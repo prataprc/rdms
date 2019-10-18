@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering::AcqRel};
 /// cause panic. It is better to deligate all write operations to
 /// single thread as opposed to serializing the write operations from
 /// multiple threads.
-#[allow(dead_code)]
+#[allow(dead_code)] // TODO: do we really need this type for rdms ??
 pub(crate) struct SyncWriter {
     writers: AtomicU64,
 }

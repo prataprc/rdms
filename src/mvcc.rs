@@ -81,7 +81,7 @@ where
 {
     type I = Box<Mvcc<K, V>>;
 
-    fn name(&self) -> String {
+    fn to_name(&self) -> String {
         "mvcc".to_string()
     }
 
@@ -333,8 +333,12 @@ where
     /// Return quickly with basic statisics, only entries() method is valid
     /// with this statisics.
     pub fn to_stats(&self) -> Stats {
-        let n = self.latch.to_conflicts() + self.snapshot.ulatch.to_conflicts();
-        Stats::new_partial(self.len(), mem::size_of::<Node<K, V>>(), n)
+        Stats::new_mvcc_partial(
+            self.len(),
+            mem::size_of::<Node<K, V>>(),
+            self.latch.to_stats(),
+            self.snapshot.ulatch.to_stats(),
+        )
     }
 
     fn multi_rw(&self) -> usize {
@@ -1231,11 +1235,11 @@ where
             panic!("LLRB depth has exceeded limit: {}", depths.to_max());
         }
 
-        let n = self.latch.to_conflicts() + self.snapshot.ulatch.to_conflicts();
-        Ok(Stats::new_full(
+        Ok(Stats::new_mvcc_full(
             arc_mvcc.n_count,
             std::mem::size_of::<Node<K, V>>(),
-            n,
+            self.latch.to_stats(),
+            self.snapshot.ulatch.to_stats(),
             blacks,
             depths,
         ))

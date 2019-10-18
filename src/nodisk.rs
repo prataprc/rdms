@@ -23,7 +23,7 @@ where
 {
     type I = NoDisk<K, V>;
 
-    fn name(&self) -> String {
+    fn to_name(&self) -> String {
         "nodisk".to_string()
     }
 

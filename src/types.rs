@@ -10,6 +10,8 @@ use crate::{
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub struct Empty;
 
+//-------------------------------------------------------------------
+
 impl Diff for Empty {
     type D = Empty;
 
@@ -40,7 +42,7 @@ impl Footprint for Empty {
     }
 }
 
-/***** Value-Trait implementation for builtin types  *****/
+//-------------------------------------------------------------------
 
 impl Diff for Vec<u8> {
     type D = Vec<u8>;
@@ -201,6 +203,9 @@ where
         None
     }
 }
+
+//-------------------------------------------------------------------
+
 #[cfg(test)]
 #[path = "types_test.rs"]
 mod types_test;

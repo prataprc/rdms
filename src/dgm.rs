@@ -178,7 +178,7 @@ where
             self.name,
             self.mem_ratio,
             self.disk_ratio,
-            self.factory.name()
+            self.factory.to_name()
         );
     }
 }

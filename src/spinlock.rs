@@ -43,6 +43,8 @@ use std::{
     thread,
 };
 
+use crate::core::ToJson;
+
 // TODO: Experiment with different atomic::Ordering to improve performance.
 
 /// RWSpinlock implements latch-and-spin mechanism for non-blocking
@@ -55,8 +57,8 @@ use std::{
 ///
 pub(crate) struct RWSpinlock {
     value: AtomicU64,
-    reads: AtomicU64,
-    writes: AtomicU64,
+    read_locks: AtomicU64,
+    write_locks: AtomicU64,
     conflicts: AtomicU64,
 }
 
@@ -70,8 +72,8 @@ impl RWSpinlock {
     pub(crate) fn new() -> RWSpinlock {
         RWSpinlock {
             value: AtomicU64::new(0),
-            reads: AtomicU64::new(0),
-            writes: AtomicU64::new(0),
+            read_locks: AtomicU64::new(0),
+            write_locks: AtomicU64::new(0),
             conflicts: AtomicU64::new(0),
         }
     }
@@ -85,7 +87,7 @@ impl RWSpinlock {
                 // latch is not acquired by a writer
                 let n = c + 1;
                 if self.value.compare_and_swap(c, n, SeqCst) == c {
-                    self.reads.fetch_add(1, SeqCst);
+                    self.read_locks.fetch_add(1, SeqCst);
                     break Reader { door: self };
                 }
             }
@@ -123,7 +125,7 @@ impl RWSpinlock {
             if (c & Self::READERS_FLAG) == 0 {
                 let n = c | Self::LOCK_FLAG;
                 if self.value.compare_and_swap(c, n, SeqCst) == c {
-                    self.writes.fetch_add(1, SeqCst);
+                    self.write_locks.fetch_add(1, SeqCst);
                     break Writer { door: self };
                 }
                 panic!("latch is acquired, ZERO readers, but unable to lock !")
@@ -135,8 +137,13 @@ impl RWSpinlock {
         }
     }
 
-    pub(crate) fn to_conflicts(&self) -> u64 {
-        self.conflicts.load(SeqCst)
+    pub(crate) fn to_stats(&self) -> Stats {
+        Stats {
+            value: self.value.load(SeqCst),
+            read_locks: self.read_locks.load(SeqCst),
+            write_locks: self.write_locks.load(SeqCst),
+            conflicts: self.conflicts.load(SeqCst),
+        }
     }
 }
 
@@ -166,15 +173,28 @@ impl<'a> Drop for Writer<'a> {
     }
 }
 
-impl fmt::Display for RWSpinlock {
+pub struct Stats {
+    value: u64,
+    read_locks: u64,
+    write_locks: u64,
+    conflicts: u64,
+}
+
+impl fmt::Display for Stats {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         write!(
             f,
-            "value:{:X} rs:{} ws:{} cs:{}",
-            self.value.load(SeqCst),
-            self.reads.load(SeqCst),
-            self.writes.load(SeqCst),
-            self.conflicts.load(SeqCst),
+            "value:{:X} read_locks:{} write_locks:{} conflicts:{}",
+            self.value, self.read_locks, self.write_locks, self.conflicts,
+        )
+    }
+}
+
+impl ToJson for Stats {
+    fn to_json(&self) -> String {
+        format!(
+            r#"{{ "value": {:X}, "read_locks": {}, "write_locks": {}, "conflicts": {} }}"#,
+            self.value, self.read_locks, self.write_locks, self.conflicts
         )
     }
 }

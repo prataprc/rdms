@@ -71,7 +71,7 @@ where
 {
     type I = Box<Llrb<K, V>>;
 
-    fn name(&self) -> String {
+    fn to_name(&self) -> String {
         "llrb".to_string()
     }
 
@@ -298,10 +298,10 @@ where
     /// Return quickly with basic statisics, only entries() method is valid
     /// with this statisics.
     pub fn to_stats(&self) -> Stats {
-        Stats::new_partial(
+        Stats::new_llrb_partial(
             self.len(),
             mem::size_of::<Node<K, V>>(),
-            self.latch.to_conflicts(),
+            self.latch.to_stats(),
         )
     }
 
@@ -1072,10 +1072,10 @@ where
             panic!("LLRB depth has exceeded limit: {}", depths.to_max());
         }
 
-        Ok(Stats::new_full(
+        Ok(Stats::new_llrb_full(
             self.n_count,
             mem::size_of::<Node<K, V>>(),
-            self.latch.to_conflicts(),
+            self.latch.to_stats(),
             blacks,
             depths,
         ))

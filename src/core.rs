@@ -154,7 +154,7 @@ where
     type I;
 
     /// Factory name for identification purpose.
-    fn name(&self) -> String;
+    fn to_name(&self) -> String;
 
     /// Create a new index instance with predefined configuration,
     /// Typically this index will be used to index new set of entries.
@@ -170,7 +170,7 @@ where
     type I: DurableIndex<K, V>;
 
     /// factory name for identification purpose.
-    fn name(&self) -> String;
+    fn to_name(&self) -> String;
 
     /// Create a new index instance with predefined configuration.
     /// Typically this index will be used to commit and/or compact newer
@@ -372,6 +372,14 @@ where
         G: Clone + RangeBounds<u64>;
 }
 
+/// Convert a type to JSON encoded string. Typically used for
+/// web-interfaces.
+///
+pub(crate) trait ToJson {
+    /// Call the method to get the JSON encoded string.
+    fn to_json(&self) -> String;
+}
+
 /// Delta maintains the older version of value, with necessary fields for
 /// log-structured-merge.
 #[derive(Clone)]
@@ -416,7 +424,7 @@ where
     fn footprint(&self) -> Result<isize> {
         let mut footprint: isize = mem::size_of::<Delta<V>>().try_into().unwrap();
         footprint += match &self.data {
-            InnerDelta::U { delta, .. } => delta.diff_footprint()?,
+            InnerDelta::U { delta, .. } => delta.footprint()?,
             InnerDelta::D { .. } => 0,
         };
         Ok(footprint)
@@ -776,7 +784,7 @@ where
                     let d: <V as Diff>::D = From::from(value);
                     vlog::Delta::new_native(d)
                 };
-                let size = delta.diff_footprint()?;
+                let size = delta.footprint()?;
                 self.deltas.insert(0, Delta::new_upsert(delta, *seqno));
                 size
             }

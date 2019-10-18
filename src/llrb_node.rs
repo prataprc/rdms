@@ -1,6 +1,8 @@
-use std::{convert::TryInto, ops::Deref};
+use std::{convert::TryInto, fmt, ops::Deref, result};
 
-use crate::core::{Diff, Entry, Footprint, Result, Value};
+use crate::core::{Diff, Entry, Footprint, Result, ToJson, Value};
+use crate::spinlock;
+
 #[allow(unused_imports)] // for documentation
 use crate::llrb::Llrb;
 
@@ -195,97 +197,192 @@ where
 /// Statistics for [`Llrb`] and [`Mvcc`] tree.
 pub enum Stats {
     /// full statisics via [`Llrb::validate`] method.
-    Full {
+    Llrb {
         entries: usize,
         node_size: usize,
-        lock_conflicts: u64,
-        blacks: usize,
-        depths: LlrbDepth,
+        rw_latch: spinlock::Stats,
+        blacks: Option<usize>,
+        depths: Option<LlrbDepth>,
     },
     /// partial but quick statistics via [`Llrb::stats`] method.
-    Partial {
+    Mvcc {
         entries: usize,
         node_size: usize,
-        lock_conflicts: u64,
+        rw_latch: spinlock::Stats,
+        snapshot_latch: spinlock::Stats,
+        blacks: Option<usize>,
+        depths: Option<LlrbDepth>,
     },
 }
 
 impl Stats {
-    pub(crate) fn new_partial(entries: usize, node_size: usize, lock_conflicts: u64) -> Stats {
-        Stats::Partial {
+    pub(crate) fn new_llrb_partial(
+        entries: usize,
+        node_size: usize,
+        rw_latch: spinlock::Stats,
+    ) -> Stats {
+        Stats::Llrb {
             entries,
             node_size,
-            lock_conflicts,
+            rw_latch,
+            blacks: None,
+            depths: None,
         }
     }
 
-    pub(crate) fn new_full(
+    pub(crate) fn new_llrb_full(
         entries: usize,
         node_size: usize,
-        lock_conflicts: u64,
+        rw_latch: spinlock::Stats,
         blacks: usize,
         depths: LlrbDepth,
     ) -> Stats {
-        Stats::Full {
+        Stats::Llrb {
             entries,
             node_size,
-            lock_conflicts,
-            blacks,
-            depths,
+            rw_latch,
+            blacks: Some(blacks),
+            depths: Some(depths),
         }
     }
 
-    #[inline]
-    /// Return number entries in [`Llrb`] / [`Mvcc`] instance.
-    pub fn to_entries(&self) -> usize {
-        match self {
-            Stats::Partial { entries, .. } => *entries,
-            Stats::Full { entries, .. } => *entries,
+    pub(crate) fn new_mvcc_partial(
+        entries: usize,
+        node_size: usize,
+        rw_latch: spinlock::Stats,
+        snapshot_latch: spinlock::Stats,
+    ) -> Stats {
+        Stats::Mvcc {
+            entries,
+            node_size,
+            rw_latch,
+            snapshot_latch,
+            blacks: None,
+            depths: None,
         }
     }
 
-    #[inline]
-    /// Return node-size, including over-head for `Llrb<k,V>` / `Mvcc<K,V>.
-    /// Although the node overhead is constant, the node size varies based
-    /// on key and value types. EG:
-    ///
-    /// ```
-    /// use rdms::llrb::Llrb;
-    /// let mut llrb: Box<Llrb<i64,i64>> = Llrb::new("myinstance");
-    ///
-    /// assert_eq!(llrb.to_stats().to_node_size(), 80);
-    /// ```
-    pub fn to_node_size(&self) -> usize {
-        match self {
-            Stats::Partial { node_size, .. } => *node_size,
-            Stats::Full { node_size, .. } => *node_size,
+    pub(crate) fn new_mvcc_full(
+        entries: usize,
+        node_size: usize,
+        rw_latch: spinlock::Stats,
+        snapshot_latch: spinlock::Stats,
+        blacks: usize,
+        depths: LlrbDepth,
+    ) -> Stats {
+        Stats::Mvcc {
+            entries,
+            node_size,
+            rw_latch,
+            snapshot_latch,
+            blacks: Some(blacks),
+            depths: Some(depths),
         }
     }
+}
 
-    #[inline]
-    /// Return number of lock-conflicts between [`Llrb`] / [`Mvcc`] ops.
-    pub fn to_conflicts(&self) -> u64 {
+impl fmt::Display for Stats {
+    fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
+        let none = "none".to_string();
         match self {
-            Stats::Partial { lock_conflicts, .. } => *lock_conflicts,
-            Stats::Full { lock_conflicts, .. } => *lock_conflicts,
+            Stats::Llrb {
+                entries,
+                node_size,
+                rw_latch,
+                blacks,
+                depths,
+            } => {
+                write!(
+                    f,
+                    concat!(
+                        "llrb entries:{} ",
+                        "node_size:{} rw_latch:``{}`` ",
+                        "blacks:{} depths:{}",
+                    ),
+                    entries,
+                    node_size,
+                    rw_latch,
+                    blacks.as_ref().map_or(none.clone(), |x| format!("{}", x)),
+                    depths.as_ref().map_or(none.clone(), |x| format!("{}", x))
+                );
+            }
+            Stats::Mvcc {
+                entries,
+                node_size,
+                rw_latch,
+                snapshot_latch,
+                blacks,
+                depths,
+            } => {
+                write!(
+                    f,
+                    concat!(
+                        "mvcc entries:{} node_size:{} ",
+                        "rw_latch:``{}`` ",
+                        "snapshot_latch:``{}`` ",
+                        "blacks:{} depths:{}",
+                    ),
+                    entries,
+                    node_size,
+                    rw_latch,
+                    snapshot_latch,
+                    blacks.as_ref().map_or(none.clone(), |x| format!("{}", x)),
+                    depths.as_ref().map_or(none.clone(), |x| format!("{}", x))
+                );
+            }
         }
+        Ok(())
     }
+}
 
-    #[inline]
-    /// Return number of black nodes from root to leaf, on both left
-    /// and right child.
-    pub fn to_blacks(&self) -> Option<usize> {
+impl ToJson for Stats {
+    fn to_json(&self) -> String {
+        let nil = "nil".to_string();
         match self {
-            Stats::Partial { .. } => None,
-            Stats::Full { blacks, .. } => Some(*blacks),
-        }
-    }
-
-    /// Return [`LlrbDepth`] statistics.
-    pub fn to_depths(&self) -> Option<LlrbDepth> {
-        match self {
-            Stats::Partial { .. } => None,
-            Stats::Full { depths, .. } => Some(depths.clone()),
+            Stats::Llrb {
+                entries,
+                node_size,
+                rw_latch,
+                blacks,
+                depths,
+            } => {
+                let l_stats = rw_latch.to_json();
+                format!(
+                    concat!(
+                        r#"{{"entries": {:X}, "node_size": {}, "#,
+                        r#""rw_latch": {}, "blacks": {}, "depths": {} }}"#,
+                    ),
+                    entries,
+                    node_size,
+                    l_stats,
+                    blacks.as_ref().map_or(nil.clone(), |x| format!("{}", x)),
+                    depths.as_ref().map_or(nil.clone(), |x| x.to_json()),
+                )
+            }
+            Stats::Mvcc {
+                entries,
+                node_size,
+                rw_latch,
+                snapshot_latch,
+                blacks,
+                depths,
+            } => {
+                let l_stats = rw_latch.to_json();
+                let s_stats = snapshot_latch.to_json();
+                format!(
+                    concat!(
+                        r#"{{"entries": {:X}, "node_size": {}, "#,
+                        r#""rw_latch": {}, "snapshot_latch": {}, "#,
+                        r#""blacks": {}, "depths": {} }}"#,
+                    ),
+                    entries,
+                    node_size,
+                    l_stats,
+                    s_stats,
+                    blacks.as_ref().map_or(nil.clone(), |x| format!("{}", x)),
+                    depths.as_ref().map_or(nil.clone(), |x| x.to_json()),
+                )
+            }
         }
     }
 }
@@ -352,34 +449,36 @@ impl LlrbDepth {
         }
         percentiles
     }
+}
 
-    pub fn pretty_print(&self, prefix: &str) {
-        let mean = self.to_mean();
-        println!(
-            "{}depth (min, max, avg): {:?}",
-            prefix,
-            (self.min, mean, self.max)
+impl fmt::Display for LlrbDepth {
+    fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
+        write!(
+            f,
+            "depth (min, max, avg): {:?}",
+            (self.min, self.to_mean(), self.max)
         );
         for (depth, n) in self.to_percentiles().into_iter() {
             if n > 0 {
-                println!("{}  {} percentile = {}", prefix, depth, n);
+                write!(f, "  {} percentile = {}", depth, n);
             }
         }
+        Ok(())
     }
+}
 
-    // TODO: start using jsondata package. Can be a single line implementation
-    // From::from::<jsondata::Json>(self).to_string()
-    pub fn to_json_text(&self) -> String {
+impl ToJson for LlrbDepth {
+    fn to_json(&self) -> String {
         let ps: Vec<String> = self
             .to_percentiles()
             .into_iter()
-            .map(|(d, n)| format!("{}: {}", d, n))
+            .map(|(d, n)| format!(r#""{}": {}"#, d, n))
             .collect();
         let strs = [
-            format!("min: {}", self.to_min()),
-            format!("mean: {}", self.to_mean()),
-            format!("max: {}", self.to_max()),
-            format!("percentiles: {}", ps.join(", ")),
+            format!(r#"min: {}"#, self.to_min()),
+            format!(r#"mean: {}"#, self.to_mean()),
+            format!(r#"max: {}"#, self.to_max()),
+            format!(r#"percentiles: {}"#, ps.join(", ")),
         ];
         ("{ ".to_string() + strs.join(", ").as_str() + " }").to_string()
     }

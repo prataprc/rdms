@@ -85,7 +85,7 @@ where
 {
     type I = Robt<K, V>;
 
-    fn name(&self) -> String {
+    fn to_name(&self) -> String {
         "robt".to_string()
     }
 

@@ -376,7 +376,7 @@ where
 /// Convert a type to JSON encoded string. Typically used for
 /// web-interfaces.
 ///
-pub(crate) trait ToJson {
+pub trait ToJson {
     /// Call the method to get the JSON encoded string.
     fn to_json(&self) -> String;
 }

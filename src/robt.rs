@@ -159,7 +159,7 @@ where
     fn to_name(&self) -> String {
         match self {
             Robt::Snapshot { name, .. } => name.clone(),
-            _ => unreachable!(),
+            Robt::Build { .. } => unreachable!(),
         }
     }
 
@@ -252,7 +252,7 @@ where
     fn footprint(&self) -> Result<isize> {
         match self {
             Robt::Snapshot { footprint, .. } => Ok(*footprint),
-            _ => unreachable!(),
+            Robt::Build { .. } => unreachable!(),
         }
     }
 }
@@ -1120,7 +1120,7 @@ impl Flusher {
         match self.t_handle.join() {
             Ok(Ok(())) => Ok(()),
             Ok(Err(Error::PartialWrite(err))) => Err(Error::PartialWrite(err)),
-            Ok(Err(_)) => unreachable!(),
+            Ok(Err(err)) => panic!("unreachable arm with err : {:?}", err),
             Err(err) => match err.downcast_ref::<String>() {
                 Some(msg) => Err(Error::ThreadFail(msg.to_string())),
                 None => Err(Error::ThreadFail("unknown error".to_string())),

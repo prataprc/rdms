@@ -187,7 +187,7 @@ where
     fn buffer(&self) -> Vec<u8> {
         match self {
             MBlock::Encode { mblock, .. } => mblock.clone(),
-            _ => unreachable!(),
+            MBlock::Decode { .. } => unreachable!(),
         }
     }
 }
@@ -320,7 +320,7 @@ where
                 offsets,
                 ..
             } => (block, *count, offsets),
-            _ => unreachable!(),
+            MBlock::Encode { .. } => unreachable!(),
         };
         if index < count {
             let idx = index * 4;
@@ -340,7 +340,7 @@ where
                 offsets,
                 ..
             } => (block, *count, offsets),
-            _ => unreachable!(),
+            MBlock::Encode { .. } => unreachable!(),
         };
         if index < count {
             let idx = index * 4;
@@ -575,7 +575,7 @@ where
     fn buffer(&self) -> (Vec<u8>, Vec<u8>) {
         match self {
             ZBlock::Encode { leaf, blob, .. } => (leaf.clone(), blob.clone()),
-            _ => unreachable!(),
+            ZBlock::Decode { .. } => unreachable!(),
         }
     }
 }
@@ -609,7 +609,7 @@ where
     pub(crate) fn len(&self) -> usize {
         match self {
             ZBlock::Decode { count, .. } => *count,
-            _ => unreachable!(),
+            ZBlock::Encode { .. } => unreachable!(),
         }
     }
 
@@ -677,7 +677,7 @@ where
                 offsets,
                 ..
             } => (block, *count, offsets),
-            _ => unreachable!(),
+            ZBlock::Encode { .. } => unreachable!(),
         };
 
         if index < count {
@@ -694,7 +694,7 @@ where
     fn to_key(&self, index: usize) -> Result<K> {
         let (block, offsets) = match self {
             ZBlock::Decode { block, offsets, .. } => (block, offsets),
-            _ => unreachable!(),
+            ZBlock::Encode { .. } => unreachable!(),
         };
         let idx = index * 4;
         let offset = offsets[idx..idx + 4].try_into().unwrap();

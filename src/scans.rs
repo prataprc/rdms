@@ -7,7 +7,9 @@ use std::{
     vec,
 };
 
-use crate::core::{Diff, Entry, FullScan, IndexIter, Result, ScanEntry};
+use crate::core::{Diff, Entry, IndexIter, PiecewiseScan, Result, ScanEntry};
+
+// TODO: benchmark SkipScan and FilterScan and measure the difference.
 
 /// SkipScan can be used to stitch piece-wise scanning of LSM
 /// data-structure, only selecting mutations (and versions)
@@ -29,15 +31,15 @@ use crate::core::{Diff, Entry, FullScan, IndexIter, Result, ScanEntry};
 /// a. Applicable only for LSM based data structures.
 /// b. Data-structure must not suffer any delete/purge
 ///    operation until full-scan is completed.
-/// c. Data-structure must implement FullScan trait.
-pub(crate) struct SkipScan<'a, M, K, V, G>
+/// c. Data-structure must implement PiecewiseScan trait.
+pub(crate) struct SkipScan<R, K, V, G>
 where
-    K: 'a + Clone + Ord,
-    V: 'a + Clone + Diff + From<<V as Diff>::D>,
+    K: Clone + Ord,
+    V: Clone + Diff + From<<V as Diff>::D>,
     G: Clone + RangeBounds<u64>,
-    M: FullScan<K, V>,
+    R: PiecewiseScan<K, V>,
 {
-    index: &'a M,   // read reference to index.
+    reader: R,      // reader handle into index
     within: G,      // pick mutations withing this sequence-no range.
     from: Bound<K>, // place to start the next batch of scan.
     iter: vec::IntoIter<Result<Entry<K, V>>>,
@@ -54,18 +56,18 @@ where
     Finish(Vec<Result<Entry<K, V>>>),
 }
 
-impl<'a, M, K, V, G> SkipScan<'a, M, K, V, G>
+impl<R, K, V, G> SkipScan<R, K, V, G>
 where
-    K: 'a + Clone + Ord,
-    V: 'a + Clone + Diff + From<<V as Diff>::D>,
+    K: Clone + Ord,
+    V: Clone + Diff + From<<V as Diff>::D>,
     G: Clone + RangeBounds<u64>,
-    M: FullScan<K, V>,
+    R: PiecewiseScan<K, V>,
 {
     const BATCH_SIZE: usize = 1000;
 
-    pub(crate) fn new(index: &'a M, within: G) -> SkipScan<M, K, V, G> {
+    pub(crate) fn new(reader: R, within: G) -> SkipScan<R, K, V, G> {
         SkipScan {
-            index,
+            reader,
             within,
             from: Bound::Unbounded,
             iter: vec![].into_iter(),
@@ -80,7 +82,7 @@ where
     fn refill(&mut self) -> Refill<K, V> {
         let from = self.from.clone();
         let mut entries: Vec<Result<Entry<K, V>>> = vec![];
-        match self.index.full_scan(from, self.within.clone()) {
+        match self.reader.pw_scan(from, self.within.clone()) {
             Ok(niter) => {
                 let mut niter = niter.enumerate();
                 loop {
@@ -110,12 +112,12 @@ where
     }
 }
 
-impl<'a, M, K, V, G> Iterator for SkipScan<'a, M, K, V, G>
+impl<R, K, V, G> Iterator for SkipScan<R, K, V, G>
 where
-    K: 'a + Clone + Ord,
-    V: 'a + Clone + Diff + From<<V as Diff>::D>,
+    K: Clone + Ord,
+    V: Clone + Diff + From<<V as Diff>::D>,
     G: Clone + RangeBounds<u64>,
-    M: FullScan<K, V>,
+    R: PiecewiseScan<K, V>,
 {
     type Item = Result<Entry<K, V>>;
 

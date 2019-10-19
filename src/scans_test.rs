@@ -2,7 +2,7 @@ use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
 
 use super::*;
 use crate::{
-    core::{Reader, Writer},
+    core::{EphemeralIndex, Reader, Writer},
     error::Error,
     llrb::Llrb,
 };
@@ -27,7 +27,8 @@ fn test_skip_scan() {
         (Bound::Unbounded, Bound::Unbounded),
     ];
     for within in testcases {
-        let es: Vec<Entry<i64, i64>> = SkipScan::new(&*llrb, within)
+        let r = llrb.to_reader().unwrap();
+        let es: Vec<Entry<i64, i64>> = SkipScan::new(r, within)
             .map(|e| e.unwrap()) // unwrap
             .collect();
         for e in es {
@@ -38,47 +39,54 @@ fn test_skip_scan() {
         }
     }
 
+    let r = llrb.to_reader().unwrap();
     let within = (Bound::Included(5000), Bound::Included(5000));
-    let es: Vec<Entry<i64, i64>> = SkipScan::new(&*llrb, within)
+    let es: Vec<Entry<i64, i64>> = SkipScan::new(r, within)
         .map(|e| e.unwrap()) // unwrap
         .collect();
     assert_eq!(es.len(), 1);
     assert_eq!(es[0].to_seqno(), 5000);
 
+    let r = llrb.to_reader().unwrap();
     let within = (Bound::Included(5000), Bound::Excluded(5000));
-    let es: Vec<Entry<i64, i64>> = SkipScan::new(&*llrb, within)
+    let es: Vec<Entry<i64, i64>> = SkipScan::new(r, within)
         .map(|e| e.unwrap()) // unwrap
         .collect();
     assert_eq!(es.len(), 0);
 
+    let r = llrb.to_reader().unwrap();
     let within = (Bound::Excluded(5000), Bound::Included(5000));
-    let es: Vec<Entry<i64, i64>> = SkipScan::new(&*llrb, within)
+    let es: Vec<Entry<i64, i64>> = SkipScan::new(r, within)
         .map(|e| e.unwrap()) // unwrap
         .collect();
     assert_eq!(es.len(), 0);
 
+    let r = llrb.to_reader().unwrap();
     let within = (Bound::Excluded(5000), Bound::Excluded(5000));
-    let es: Vec<Entry<i64, i64>> = SkipScan::new(&*llrb, within)
+    let es: Vec<Entry<i64, i64>> = SkipScan::new(r, within)
         .map(|e| e.unwrap()) // unwrap
         .collect();
     assert_eq!(es.len(), 0);
 
+    let r = llrb.to_reader().unwrap();
     let within = (Bound::Included(5000), Bound::Excluded(5001));
-    let es: Vec<Entry<i64, i64>> = SkipScan::new(&*llrb, within)
+    let es: Vec<Entry<i64, i64>> = SkipScan::new(r, within)
         .map(|e| e.unwrap()) // unwrap
         .collect();
     assert_eq!(es.len(), 1);
     assert_eq!(es[0].to_seqno(), 5000);
 
+    let r = llrb.to_reader().unwrap();
     let within = (Bound::Excluded(5000), Bound::Included(5001));
-    let es: Vec<Entry<i64, i64>> = SkipScan::new(&*llrb, within)
+    let es: Vec<Entry<i64, i64>> = SkipScan::new(r, within)
         .map(|e| e.unwrap()) // unwrap
         .collect();
     assert_eq!(es.len(), 1);
     assert_eq!(es[0].to_seqno(), 5001);
 
+    let r = llrb.to_reader().unwrap();
     let within = (Bound::Excluded(5000), Bound::Excluded(5001));
-    let es: Vec<Entry<i64, i64>> = SkipScan::new(&*llrb, within)
+    let es: Vec<Entry<i64, i64>> = SkipScan::new(r, within)
         .map(|e| e.unwrap()) // unwrap
         .collect();
     assert_eq!(es.len(), 0);

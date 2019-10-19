@@ -354,8 +354,9 @@ pub trait Serialize: Sized {
     fn decode(&mut self, buf: &[u8]) -> Result<usize>;
 }
 
-/// Index full table scan.
-pub(crate) trait FullScan<K, V>
+/// PiecewiseScan trait implemented, typically by mem-only indexes,
+/// to construct a stable full-table scan.
+pub(crate) trait PiecewiseScan<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff + From<<V as Diff>::D>,
@@ -367,7 +368,7 @@ where
     /// This method is typically valid only for memory-only indexes. Also,
     /// returned entry may not have all its previous versions, if it is
     /// costly to fetch from disk.
-    fn full_scan<G>(&self, from: Bound<K>, within: G) -> Result<ScanIter<K, V>>
+    fn pw_scan<G>(&mut self, from: Bound<K>, within: G) -> Result<ScanIter<K, V>>
     where
         G: Clone + RangeBounds<u64>;
 }

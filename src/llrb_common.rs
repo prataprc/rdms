@@ -163,7 +163,7 @@ where
 ///
 /// [Llrb]: crate::llrb::Llrb
 /// [Mvcc]: crate::mvcc::Mvcc
-pub struct IterFullScan<'a, K, V>
+pub struct IterPWScan<'a, K, V>
 where
     K: Ord + Clone,
     V: Clone + Diff + From<<V as Diff>::D>,
@@ -175,7 +175,7 @@ where
     paths: Option<Vec<Fragment<'a, K, V>>>,
 }
 
-impl<'a, K, V> Iterator for IterFullScan<'a, K, V>
+impl<'a, K, V> Iterator for IterPWScan<'a, K, V>
 where
     K: Ord + Clone,
     V: Clone + Diff + From<<V as Diff>::D>,

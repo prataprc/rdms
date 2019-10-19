@@ -2,7 +2,7 @@ use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
 
 use super::*;
 use crate::{
-    core::{Delta, Reader, Writer},
+    core::{Delta, EphemeralIndex, Reader, Writer},
     llrb::Llrb,
     robt,
     scans::{FilterScan, SkipScan},
@@ -254,7 +254,7 @@ fn run_robt_llrb(name: &str, mut n_ops: u64, key_max: i64, repeat: usize, seed: 
             .map(|e| if e.is_deleted() { 1 } else { 0 })
             .sum();
         // println!("refs len: {}", refs.len());
-        let iter = SkipScan::new(&*llrb, within);
+        let iter = SkipScan::new(llrb.to_reader().unwrap(), within);
         let dir = {
             let mut dir = std::env::temp_dir();
             dir.push("test-robt-build");
@@ -356,11 +356,11 @@ fn run_robt_llrb(name: &str, mut n_ops: u64, key_max: i64, repeat: usize, seed: 
 }
 
 fn llrb_to_refs1(
-    llrb: Box<Llrb<i64, i64>>, // reference
+    mut llrb: Box<Llrb<i64, i64>>, // reference
     within: (Bound<u64>, Bound<u64>),
     config: &Config,
 ) -> (Box<Llrb<i64, i64>>, Vec<Entry<i64, i64>>) {
-    let iter = SkipScan::new(&*llrb, within);
+    let iter = SkipScan::new(llrb.to_reader().unwrap(), within);
     let refs = iter
         .filter_map(|e| {
             let mut e = e.unwrap();

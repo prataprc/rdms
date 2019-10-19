@@ -38,8 +38,8 @@ use std::{
 
 use crate::{
     core::{
-        Diff, Entry, EphemeralIndex, Footprint, FullScan, IndexIter, Reader, Result, ScanEntry,
-        ScanIter, Value, WalWriter, WriteIndexFactory, Writer,
+        Diff, Entry, EphemeralIndex, Footprint, IndexIter, PiecewiseScan, Reader, Result,
+        ScanEntry, ScanIter, Value, WalWriter, WriteIndexFactory, Writer,
     },
     error::Error,
     llrb_node::{LlrbDepth, Node, Stats},
@@ -994,7 +994,7 @@ where
     }
 }
 
-impl<K, V> FullScan<K, V> for Llrb<K, V>
+impl<K, V> PiecewiseScan<K, V> for Llrb<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff + From<<V as Diff>::D>,
@@ -1002,7 +1002,7 @@ where
     /// Return an iterator over entries that meet following properties
     /// * Only entries greater than from bound,
     /// * Only entries whose modified seqno is within seqno-range.
-    fn full_scan<G>(&self, from: Bound<K>, within: G) -> Result<ScanIter<K, V>>
+    fn pw_scan<G>(&mut self, from: Bound<K>, within: G) -> Result<ScanIter<K, V>>
     where
         G: Clone + RangeBounds<u64>,
     {
@@ -1031,7 +1031,7 @@ where
             Bound::Excluded(x) => Bound::Excluded(*x),
             Bound::Unbounded => Bound::Unbounded,
         };
-        Ok(Box::new(IterFullScan {
+        Ok(Box::new(IterPWScan {
             _latch,
             _arc: Default::default(),
             start,
@@ -1217,6 +1217,21 @@ where
     phantom_val: marker::PhantomData<V>,
 }
 
+impl<K, V> LlrbReader<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    fn new(index: Box<ffi::c_void>, _refn: Arc<u32>) -> LlrbReader<K, V> {
+        LlrbReader {
+            _refn,
+            index: Some(index),
+            phantom_key: marker::PhantomData,
+            phantom_val: marker::PhantomData,
+        }
+    }
+}
+
 impl<K, V> Drop for LlrbReader<K, V>
 where
     K: Clone + Ord,
@@ -1239,21 +1254,6 @@ where
             let index_ptr = self.index.as_mut().unwrap().as_mut();
             let index_ptr = index_ptr as *mut ffi::c_void;
             (index_ptr as *mut Llrb<K, V>).as_mut().unwrap()
-        }
-    }
-}
-
-impl<K, V> LlrbReader<K, V>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-{
-    fn new(index: Box<ffi::c_void>, _refn: Arc<u32>) -> LlrbReader<K, V> {
-        LlrbReader {
-            _refn,
-            index: Some(index),
-            phantom_key: marker::PhantomData,
-            phantom_val: marker::PhantomData,
         }
     }
 }
@@ -1339,6 +1339,23 @@ where
         Q: 'a + Ord + ?Sized,
     {
         self.reverse(r)
+    }
+}
+
+impl<K, V> PiecewiseScan<K, V> for LlrbReader<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff + From<<V as Diff>::D>,
+{
+    /// Return an iterator over entries that meet following properties
+    /// * Only entries greater than from bound,
+    /// * Only entries whose modified seqno is within seqno-range.
+    fn pw_scan<G>(&mut self, from: Bound<K>, within: G) -> Result<ScanIter<K, V>>
+    where
+        G: Clone + RangeBounds<u64>,
+    {
+        let index: &mut Llrb<K, V> = self.as_mut();
+        index.pw_scan(from, within)
     }
 }
 

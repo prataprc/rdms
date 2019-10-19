@@ -6,7 +6,7 @@ use std::ops::Bound;
 
 use super::*;
 use crate::{
-    core::{Reader, Writer},
+    core::{EphemeralIndex, Reader, Writer},
     error::Error,
     llrb::Llrb,
     scans::SkipScan,
@@ -582,7 +582,7 @@ fn test_crud_lsm() {
 }
 
 #[test]
-fn test_full_scan() {
+fn test_pw_scan() {
     let mut llrb: Box<Llrb<i32, i32>> = Llrb::new_lsm("test-llrb");
 
     // populate
@@ -595,7 +595,7 @@ fn test_full_scan() {
     assert_eq!(llrb.to_seqno(), 10000);
     let seqno1 = llrb.to_seqno();
 
-    let iter = SkipScan::new(&*llrb, ..=seqno1);
+    let iter = SkipScan::new(llrb.to_reader().unwrap(), ..=seqno1);
     for (i, entry) in iter.enumerate() {
         let entry = entry.unwrap();
         let ref_key = i as i32;
@@ -613,7 +613,7 @@ fn test_full_scan() {
     assert_eq!(llrb.to_seqno(), 10334);
 
     // skip scan after first-inject.
-    let iter = SkipScan::new(&*llrb, ..=seqno1);
+    let iter = SkipScan::new(llrb.to_reader().unwrap(), ..=seqno1);
     for (i, entry) in iter.enumerate() {
         let entry = entry.unwrap();
         let ref_key = i as i32;
@@ -651,7 +651,7 @@ fn test_full_scan() {
 
     // skip scan in-between.
     let r = (Bound::Excluded(seqno1), Bound::Included(seqno2));
-    let iter = SkipScan::new(&*llrb, r);
+    let iter = SkipScan::new(llrb.to_reader().unwrap(), r);
     for entry in iter {
         let entry = entry.unwrap();
         let key = entry.to_key();
@@ -714,7 +714,7 @@ fn test_full_scan() {
 
     // skip scan final.
     let r = (Bound::Excluded(seqno2), Bound::Unbounded);
-    let iter = SkipScan::new(&*llrb, r);
+    let iter = SkipScan::new(llrb.to_reader().unwrap(), r);
     let mut ref_key = 0;
     for entry in iter {
         let entry = entry.unwrap();

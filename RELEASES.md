@@ -19,6 +19,8 @@ Code Review checklist
 * [ ] Copyright and License notice.
 * [ ] Make sure that generated artifact is debuggable. Like,
   * [ ] RUSTLFAGS=-g
+* [ ] Verify panic!() calls
+* [ ] Verify unreachable!() calls
 
 Release Checklist
 =================

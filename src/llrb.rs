@@ -299,6 +299,7 @@ where
     /// with this statisics.
     pub fn to_stats(&self) -> Stats {
         Stats::new_llrb_partial(
+            &self.name,
             self.len(),
             mem::size_of::<Node<K, V>>(),
             self.latch.to_stats(),
@@ -1073,6 +1074,7 @@ where
         }
 
         Ok(Stats::new_llrb_full(
+            &self.name,
             self.n_count,
             mem::size_of::<Node<K, V>>(),
             self.latch.to_stats(),

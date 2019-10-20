@@ -73,7 +73,7 @@ where
         }
     }
 
-    pub(crate) fn as_first_key(&mut self) -> &K {
+    pub(crate) fn as_first_key(&self) -> &K {
         match self {
             MBlock::Encode { first_key, .. } => first_key.as_ref().unwrap(),
             MBlock::Decode { .. } => unreachable!(),
@@ -99,15 +99,15 @@ where
                 first_key,
                 m_blocksize,
             } => {
-                let block_i = mblock.len();
+                let offset = mblock.len();
                 MEntry::new_m(fpos, key).encode(mblock)?;
                 let n = 4 + (offsets.len() + 1) * 4 + mblock.len();
                 if n < *m_blocksize {
-                    offsets.push(block_i.try_into().unwrap());
+                    offsets.push(offset.try_into().unwrap());
                     first_key.get_or_insert_with(|| key.clone());
                     Ok(offsets.len().try_into().unwrap())
                 } else {
-                    mblock.truncate(block_i);
+                    mblock.truncate(offset);
                     Err(Error::__MBlockOverflow(n))
                 }
             }
@@ -124,15 +124,15 @@ where
                 first_key,
                 m_blocksize,
             } => {
-                let block_i = mblock.len();
+                let offset = mblock.len();
                 MEntry::new_z(fpos, key).encode(mblock)?;
                 let n = 4 + (offsets.len() + 1) * 4 + mblock.len();
                 if n < *m_blocksize {
-                    offsets.push(block_i.try_into().unwrap());
+                    offsets.push(offset.try_into().unwrap());
                     first_key.get_or_insert_with(|| key.clone());
                     Ok(offsets.len().try_into().unwrap())
                 } else {
-                    mblock.truncate(block_i);
+                    mblock.truncate(offset);
                     Err(Error::__MBlockOverflow(n))
                 }
             }

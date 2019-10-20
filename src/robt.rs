@@ -39,6 +39,7 @@
 use fs2::FileExt;
 use jsondata::{Json, Property};
 use lazy_static::lazy_static;
+use log::info;
 
 use std::{
     borrow::Borrow,
@@ -59,7 +60,7 @@ use std::{
 use crate::{
     core::{
         Diff, DiskIndexFactory, DurableIndex, Entry, Footprint, IndexIter, Reader, Result,
-        Serialize,
+        Serialize, ToJson,
     },
     error::Error,
     robt_entry::MEntry,
@@ -85,11 +86,8 @@ where
 {
     type I = Robt<K, V>;
 
-    fn to_name(&self) -> String {
-        "robt".to_string()
-    }
-
     fn new(&self, dir: &ffi::OsStr, name: &str) -> Robt<K, V> {
+        info!("[robt] new disk index at {:?}/{}", dir, name);
         Robt::Build {
             dir: dir.to_os_string(),
             name: name.to_string(),
@@ -109,7 +107,7 @@ where
         let name = match Config::to_name(&file_name) {
             Some(name) => name,
             None => {
-                let msg = format!("file name {:?} is not for robt", file_name);
+                let msg = format!("not an robt index `{:?}`", file_name);
                 return Err(Error::InvalidFile(msg));
             }
         };
@@ -121,6 +119,10 @@ where
             meta: snapshot.meta.clone(),
             config: snapshot.config.clone(),
         })
+    }
+
+    fn to_name(&self) -> String {
+        "robt".to_string()
     }
 }
 
@@ -289,6 +291,47 @@ pub struct Config {
     pub value_in_vlog: bool,
     /// Flush queue size. Default: Config::FLUSH_QUEUE_SIZE
     pub flush_queue_size: usize,
+}
+
+impl fmt::Display for Config {
+    fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
+        let (z, m, v) = (self.z_blocksize, self.m_blocksize, self.v_blocksize);
+        let nil: ffi::OsString = From::from("nil");
+        write!(
+            f,
+            "config.blocksize = {{ z = {}, m = {}, v = {} }}\n",
+            z, m, v
+        )?;
+        write!(
+            f,
+            "config = {{ delta_ok = {}, value_in_vlog = {} }}\n",
+            self.delta_ok, self.value_in_vlog,
+        )?;
+        write!(
+            f,
+            "config = {{ vlog_file = {:?}, flush_queue_size: {} }}\n",
+            self.vlog_file.as_ref().map_or(nil, |f| f.clone()),
+            self.flush_queue_size,
+        )
+    }
+}
+
+impl ToJson for Config {
+    fn to_json(&self) -> String {
+        let (z, m, v) = (self.z_blocksize, self.m_blocksize, self.v_blocksize);
+        let nil: ffi::OsString = From::from("nil");
+        let props = [
+            format!(r#"blocksize":  {{ "z": {}, "m": {}, "v": {} }}"#, z, m, v),
+            format!(r#""delta_ok": {}"#, self.delta_ok,),
+            format!(r#""value_in_vlog": {}"#, self.value_in_vlog,),
+            format!(
+                r#""vlog_file": {:?}"#,
+                self.vlog_file.as_ref().map_or(nil, |f| f.clone()),
+            ),
+            format!(r#""flush_queue_size": {}"#, self.flush_queue_size,),
+        ];
+        format!("{{ {} }}", props.join(", "))
+    }
 }
 
 impl Default for Config {

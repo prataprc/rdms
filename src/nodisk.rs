@@ -23,16 +23,16 @@ where
 {
     type I = NoDisk<K, V>;
 
-    fn to_name(&self) -> String {
-        "nodisk".to_string()
-    }
-
     fn new(&self, _dir: &ffi::OsStr, _name: &str) -> NoDisk<K, V> {
         NoDisk::new()
     }
 
     fn open(&self, _: &ffi::OsStr, _: fs::DirEntry) -> Result<NoDisk<K, V>> {
         Ok(NoDisk::new())
+    }
+
+    fn to_name(&self) -> String {
+        "nodisk".to_string()
     }
 }
 

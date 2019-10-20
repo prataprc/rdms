@@ -153,12 +153,12 @@ where
 {
     type I;
 
-    /// Factory name for identification purpose.
-    fn to_name(&self) -> String;
-
     /// Create a new index instance with predefined configuration,
     /// Typically this index will be used to index new set of entries.
     fn new(&self, name: &str) -> Self::I;
+
+    /// Factory name for identification purpose.
+    fn to_name(&self) -> String;
 }
 
 /// Factory trait to create new on-disk index snapshot.
@@ -169,9 +169,6 @@ where
 {
     type I: DurableIndex<K, V>;
 
-    /// factory name for identification purpose.
-    fn to_name(&self) -> String;
-
     /// Create a new index instance with predefined configuration.
     /// Typically this index will be used to commit and/or compact newer
     /// snapshots onto disk.
@@ -180,6 +177,9 @@ where
     /// Open an existin index instance with predefined configuration.
     /// Typically called while bootstraing an index from disk.
     fn open(&self, dir: &ffi::OsStr, dir_entry: fs::DirEntry) -> Result<Self::I>;
+
+    /// Factory name for identification purpose.
+    fn to_name(&self) -> String;
 }
 
 /// EphemeralIndex trait implemented by in-memory index.

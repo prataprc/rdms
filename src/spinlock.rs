@@ -182,11 +182,10 @@ pub struct Stats {
 
 impl fmt::Display for Stats {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(
-            f,
-            "value:{:X} read_locks:{} write_locks:{} conflicts:{}",
-            self.value, self.read_locks, self.write_locks, self.conflicts,
-        )
+        write!(f, "{{ value = {:X}, ", self.value)?;
+        write!(f, "read_locks = {}, ", self.read_locks)?;
+        write!(f, "write_locks = {}, ", self.write_locks)?;
+        write!(f, "conflicts = {} }}", self.conflicts)
     }
 }
 

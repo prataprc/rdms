@@ -334,6 +334,7 @@ where
     /// with this statisics.
     pub fn to_stats(&self) -> Stats {
         Stats::new_mvcc_partial(
+            &self.name,
             self.len(),
             mem::size_of::<Node<K, V>>(),
             self.latch.to_stats(),
@@ -1236,6 +1237,7 @@ where
         }
 
         Ok(Stats::new_mvcc_full(
+            &self.name,
             arc_mvcc.n_count,
             std::mem::size_of::<Node<K, V>>(),
             self.latch.to_stats(),

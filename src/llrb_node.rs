@@ -198,6 +198,7 @@ where
 pub enum Stats {
     /// full statisics via [`Llrb::validate`] method.
     Llrb {
+        name: String,
         entries: usize,
         node_size: usize,
         rw_latch: spinlock::Stats,
@@ -206,6 +207,7 @@ pub enum Stats {
     },
     /// partial but quick statistics via [`Llrb::stats`] method.
     Mvcc {
+        name: String,
         entries: usize,
         node_size: usize,
         rw_latch: spinlock::Stats,
@@ -217,11 +219,13 @@ pub enum Stats {
 
 impl Stats {
     pub(crate) fn new_llrb_partial(
+        name: &str,
         entries: usize,
         node_size: usize,
         rw_latch: spinlock::Stats,
     ) -> Stats {
         Stats::Llrb {
+            name: name.to_string(),
             entries,
             node_size,
             rw_latch,
@@ -231,6 +235,7 @@ impl Stats {
     }
 
     pub(crate) fn new_llrb_full(
+        name: &str,
         entries: usize,
         node_size: usize,
         rw_latch: spinlock::Stats,
@@ -238,6 +243,7 @@ impl Stats {
         depths: LlrbDepth,
     ) -> Stats {
         Stats::Llrb {
+            name: name.to_string(),
             entries,
             node_size,
             rw_latch,
@@ -247,12 +253,14 @@ impl Stats {
     }
 
     pub(crate) fn new_mvcc_partial(
+        name: &str,
         entries: usize,
         node_size: usize,
         rw_latch: spinlock::Stats,
         snapshot_latch: spinlock::Stats,
     ) -> Stats {
         Stats::Mvcc {
+            name: name.to_string(),
             entries,
             node_size,
             rw_latch,
@@ -263,6 +271,7 @@ impl Stats {
     }
 
     pub(crate) fn new_mvcc_full(
+        name: &str,
         entries: usize,
         node_size: usize,
         rw_latch: spinlock::Stats,
@@ -271,6 +280,7 @@ impl Stats {
         depths: LlrbDepth,
     ) -> Stats {
         Stats::Mvcc {
+            name: name.to_string(),
             entries,
             node_size,
             rw_latch,
@@ -286,27 +296,26 @@ impl fmt::Display for Stats {
         let none = "none".to_string();
         match self {
             Stats::Llrb {
+                name,
                 entries,
                 node_size,
                 rw_latch,
                 blacks,
                 depths,
             } => {
+                let b = blacks.as_ref().map_or(none.clone(), |x| x.to_string());
+                let d = depths.as_ref().map_or(none.clone(), |x| x.to_string());
+                write!(f, r#"llrb.name = {}\n"#, name);
                 write!(
                     f,
-                    concat!(
-                        "llrb entries:{} ",
-                        "node_size:{} rw_latch:``{}`` ",
-                        "blacks:{} depths:{}",
-                    ),
-                    entries,
-                    node_size,
-                    rw_latch,
-                    blacks.as_ref().map_or(none.clone(), |x| format!("{}", x)),
-                    depths.as_ref().map_or(none.clone(), |x| format!("{}", x))
+                    r#"llrb = {{ entries = {}, node_size = {}, blacks = {} }}"#,
+                    entries, node_size, b,
                 );
+                write!(f, "llrb.rw_latch = {}\n", rw_latch);
+                write!(f, "llrb.depths = {}\n", d);
             }
             Stats::Mvcc {
+                name,
                 entries,
                 node_size,
                 rw_latch,
@@ -314,21 +323,17 @@ impl fmt::Display for Stats {
                 blacks,
                 depths,
             } => {
+                let b = blacks.as_ref().map_or(none.clone(), |x| x.to_string());
+                let d = depths.as_ref().map_or(none.clone(), |x| x.to_string());
+                write!(f, r#"mvcc.name = {}\n"#, name);
                 write!(
                     f,
-                    concat!(
-                        "mvcc entries:{} node_size:{} ",
-                        "rw_latch:``{}`` ",
-                        "snapshot_latch:``{}`` ",
-                        "blacks:{} depths:{}",
-                    ),
-                    entries,
-                    node_size,
-                    rw_latch,
-                    snapshot_latch,
-                    blacks.as_ref().map_or(none.clone(), |x| format!("{}", x)),
-                    depths.as_ref().map_or(none.clone(), |x| format!("{}", x))
+                    r#"mvcc = {{ entries = {}, node_size = {}, blacks = {} }}"#,
+                    entries, node_size, b,
                 );
+                write!(f, "mvcc.rw_latch = {}\n", rw_latch);
+                write!(f, "mvcc.snap_latch = {}\n", snapshot_latch);
+                write!(f, "mvcc.depths = {}\n", d);
             }
         }
         Ok(())
@@ -340,6 +345,7 @@ impl ToJson for Stats {
         let nil = "nil".to_string();
         match self {
             Stats::Llrb {
+                name,
                 entries,
                 node_size,
                 rw_latch,
@@ -349,9 +355,11 @@ impl ToJson for Stats {
                 let l_stats = rw_latch.to_json();
                 format!(
                     concat!(
-                        r#"{{"entries": {:X}, "node_size": {}, "#,
-                        r#""rw_latch": {}, "blacks": {}, "depths": {} }}"#,
+                        r#"{{ ""llrb": {{ "name": {}, "entries": {:X}, ",
+                        r#""node_size": {}, "#,
+                        r#""rw_latch": {}, "blacks": {}, "depths": {} }} }}"#,
                     ),
+                    name,
                     entries,
                     node_size,
                     l_stats,
@@ -360,6 +368,7 @@ impl ToJson for Stats {
                 )
             }
             Stats::Mvcc {
+                name,
                 entries,
                 node_size,
                 rw_latch,
@@ -367,18 +376,19 @@ impl ToJson for Stats {
                 blacks,
                 depths,
             } => {
-                let l_stats = rw_latch.to_json();
-                let s_stats = snapshot_latch.to_json();
+                let rw_l = rw_latch.to_json();
+                let snap_l = snapshot_latch.to_json();
                 format!(
                     concat!(
-                        r#"{{"entries": {:X}, "node_size": {}, "#,
-                        r#""rw_latch": {}, "snapshot_latch": {}, "#,
-                        r#""blacks": {}, "depths": {} }}"#,
+                        r#"{{ ""mvcc": {{ "name": {}, "entries": {:X}, ",
+                        r#""node_size": {}, "rw_latch": {}, "#,
+                        r#""snap_latch": {}, "blacks": {}, "depths": {} }} }}"#,
                     ),
+                    name,
                     entries,
                     node_size,
-                    l_stats,
-                    s_stats,
+                    rw_l,
+                    snap_l,
                     blacks.as_ref().map_or(nil.clone(), |x| format!("{}", x)),
                     depths.as_ref().map_or(nil.clone(), |x| x.to_json()),
                 )
@@ -404,12 +414,8 @@ impl LlrbDepth {
     pub(crate) fn sample(&mut self, depth: usize) {
         self.samples += 1;
         self.total += depth;
-        if self.min == 0 || self.min > depth {
-            self.min = depth
-        }
-        if self.max == 0 || self.max < depth {
-            self.max = depth
-        }
+        self.min = usize::min(self.min, depth);
+        self.max = usize::max(self.max, depth);
         self.depths[depth] += 1;
     }
 
@@ -434,7 +440,7 @@ impl LlrbDepth {
     }
 
     /// Return depth as tuple of percentiles, each tuple provides
-    /// (percentile, depth). Returned percentiles from 90, 91 .. 99
+    /// (percentile, depth). Returned percentiles from 91 .. 99
     pub fn to_percentiles(&self) -> Vec<(u8, usize)> {
         let mut percentiles: Vec<(u8, usize)> = vec![];
         let (mut acc, mut prev_perc) = (0_u64, 90_u8);
@@ -442,7 +448,7 @@ impl LlrbDepth {
         for (depth, samples) in iter {
             acc += *samples;
             let perc = ((acc as f64 / (self.samples as f64)) * 100_f64) as u8;
-            if perc >= prev_perc {
+            if perc > prev_perc {
                 percentiles.push((perc, depth));
                 prev_perc = perc;
             }
@@ -453,34 +459,35 @@ impl LlrbDepth {
 
 impl fmt::Display for LlrbDepth {
     fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
-        write!(
-            f,
-            "depth (min, max, avg): {:?}",
-            (self.min, self.to_mean(), self.max)
-        );
-        for (depth, n) in self.to_percentiles().into_iter() {
-            if n > 0 {
-                write!(f, "  {} percentile = {}", depth, n);
-            }
-        }
-        Ok(())
+        let (m, n, x) = (self.to_min(), self.to_mean(), self.to_max());
+        let props: Vec<String> = self
+            .to_percentiles()
+            .into_iter()
+            .map(|(perc, depth)| format!(r#""{}" = {}"#, perc, depth))
+            .collect();
+        let depth = props.join(", ");
+
+        write!(f, "{{ samples = {}, ", self.samples)?;
+        write!(f, "min = {}, mean = {}, max = {}, ", m, n, x)?;
+        write!(f, "percentiles = {{ {} }} }}", depth)
     }
 }
 
 impl ToJson for LlrbDepth {
     fn to_json(&self) -> String {
-        let ps: Vec<String> = self
+        let props: Vec<String> = self
             .to_percentiles()
             .into_iter()
             .map(|(d, n)| format!(r#""{}": {}"#, d, n))
             .collect();
         let strs = [
-            format!(r#"min: {}"#, self.to_min()),
-            format!(r#"mean: {}"#, self.to_mean()),
-            format!(r#"max: {}"#, self.to_max()),
-            format!(r#"percentiles: {}"#, ps.join(", ")),
+            format!(r#""samples": {}"#, self.to_samples()),
+            format!(r#""min": {}"#, self.to_min()),
+            format!(r#""mean": {}"#, self.to_mean()),
+            format!(r#""max": {}"#, self.to_max()),
+            format!(r#""percentiles": {{ {} }}"#, props.join(", ")),
         ];
-        ("{ ".to_string() + strs.join(", ").as_str() + " }").to_string()
+        format!(r#"{{ {} }}"#, strs.join(", "))
     }
 }
 
@@ -488,8 +495,8 @@ impl Default for LlrbDepth {
     fn default() -> Self {
         LlrbDepth {
             samples: 0,
-            min: 0,
-            max: 0,
+            min: std::usize::MAX,
+            max: std::usize::MIN,
             total: 0,
             depths: [0; 256],
         }

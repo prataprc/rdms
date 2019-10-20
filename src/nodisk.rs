@@ -65,10 +65,13 @@ where
 {
     type R = NoDisk<K, V>;
     type W = NoDisk<K, V>;
-    type C = Empty;
 
     fn to_name(&self) -> String {
         "no-disk mama !!".to_string()
+    }
+
+    fn to_metadata(&mut self) -> Result<Vec<u8>> {
+        Ok(vec![])
     }
 
     fn to_seqno(&mut self) -> u64 {
@@ -92,19 +95,12 @@ where
         Ok(Empty)
     }
 
-    fn commit<M>(&mut self, s1: &M, meta: Vec<u8>) -> Result<()>
-    where
-        M: Index,
-    {
-        Ok(())
+    fn commit(&mut self, _: IndexIter<K, V>, _: Vec<u8>) -> Result<Self> {
+        Ok(NoDisk::new())
     }
 
-    fn compact<M, N>(&mut self, s1: &M, s2: &N, meta: Vec<u8>) -> Result<()>
-    where
-        M: Index,
-        N: Index,
-    {
-        Ok(())
+    fn compact(&mut self, _: IndexIter<K, V>, _: Vec<u8>) -> Result<Self> {
+        Ok(NoDisk::new())
     }
 }
 

@@ -61,10 +61,10 @@ use crate::{
     core::{Diff, DiskIndexFactory, Entry, Footprint, IndexIter, Reader, Result},
     core::{Serialize, ToJson},
     error::Error,
+    nodisk::NoDisk,
     robt_entry::MEntry,
     robt_index::{MBlock, ZBlock},
     util,
-    nodisk::NoDisk,
 };
 
 include!("robt_marker.rs");
@@ -126,6 +126,7 @@ where
             footprint: snapshot.footprint()?,
             meta: snapshot.meta.clone(),
             config: snapshot.config.clone(),
+            stats: snapshot.to_stats()?,
         })
     }
 
@@ -140,7 +141,7 @@ where
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
 {
-    Commit {
+    Build {
         dir: ffi::OsString,
         name: String,
         config: Config,
@@ -148,19 +149,13 @@ where
         _phantom_key: marker::PhantomData<K>,
         _phantom_val: marker::PhantomData<V>,
     },
-    Compact {
+    Snapshot {
         dir: ffi::OsString,
         name: String,
         footprint: isize,
         meta: Vec<MetaItem>,
         config: Config,
-    }
-    Active {
-        dir: ffi::OsString,
-        name: String,
-        footprint: isize,
-        meta: Vec<MetaItem>,
-        config: Config,
+        stats: Stats,
     },
 }
 
@@ -171,77 +166,81 @@ where
     <V as Diff>::D: Serialize,
 {
     type R = Snapshot<K, V>;
-    type W = NoDisk<K,V>,
-    type C = Robt<K,V>;
+    type W = NoDisk<K, V>;
 
     fn to_name(&self) -> String {
         match self {
+            Robt::Build { name, .. } => name.clone(),
             Robt::Snapshot { name, .. } => name.clone(),
-            Robt::Build { .. } => unreachable!(),
         }
     }
 
-    fn commit<M>(
-        &mut self,
-        _m: &M, // reference to memory index
-        iter: IndexIter<K, V>,
-        meta: Vec<u8>,
-    ) -> Result<()>
-    where
-        M: Footprint,
-    {
+    fn to_metadata(&mut self) -> Result<Vec<u8>> {
+        match self {
+            Robt::Snapshot { meta, .. } => {
+                if let MetaItem::AppMetadata(data) = meta[2] {
+                    Ok(data.clone())
+                }
+                panic!("not reachable")
+            }
+            Robt::Build { .. } => panic!("not reachable"),
+        }
+    }
+
+    /// Return the current seqno tracked by this index.
+    fn to_seqno(&mut self) -> u64 {
+        match self {
+            Robt::Build { .. } => panic!("not reachable"),
+            Robt::Snapshot { stats, .. } => stats.seqno,
+        }
+    }
+
+    /// Application can set the start sequence number for this index.
+    fn set_seqno(&mut self, seqno: u64) {
+        panic!("not supported")
+    }
+
+    fn to_reader(&mut self) -> Result<Self::R> {
+        match self {
+            Robt::Snapshot { dir, name, .. } => Snapshot::open(dir, &name),
+            Robt::Build { .. } => panic!("cannot create a reader"),
+        }
+    }
+
+    fn to_writer(&mut self) -> Result<Self::W> {
+        panic!("not supported")
+    }
+
+    fn commit(&mut self, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<Self> {
         match self {
             Robt::Build {
                 dir, name, config, ..
             } => {
                 let b = Builder::<K, V>::commit(dir, name, config.clone())?;
                 b.build(iter, meta)?;
+
                 let snapshot = Snapshot::<K, V>::open(dir, &name)?;
-                *self = Robt::Snapshot {
+                Robt::Snapshot {
                     dir: dir.clone(),
                     name: name.clone(),
                     footprint: snapshot.footprint()?,
                     meta: snapshot.meta.clone(),
                     config: snapshot.config.clone(),
-                };
-                Ok(())
+                    stats: snapshot.to_stats()?,
+                }
             }
-            Robt::Snapshot { .. } => panic!("cannot commit into open snapshot"),
-        }
-    }
-
-    fn prepare_compact(&self) -> Result<Self::C> {
-        match self {
             Robt::Snapshot {
                 dir,
                 name,
                 meta,
                 config,
-                ..
-            } => Ok(PrepareCompact {
-                dir: dir.clone(),
-                name: name.clone(),
-                meta: meta.clone(),
-                config: config.clone(),
-            }),
-            Robt::Build { .. } => panic!("cannot prepare commit on build robt"),
-        }
-    }
-
-    fn compact(
-        &mut self,
-        iter: IndexIter<K, V>,
-        meta: Vec<u8>,
-        prepare: Self::C, // obtained from the snapshot wishing to be compacted.
-    ) -> Result<()> {
-        match self {
-            Robt::Build {
-                dir, name, config, ..
+                stats,
             } => {
-                let config = match prepare.config.vlog_file {
+                let new_config = config.clone();
+                let new_config = match config.vlog_file {
                     Some(vlog_file) => {
-                        config.set_value_log(Some(vlog_file));
-                        config
+                        new_config.set_value_log(Some(vlog_file));
+                        new_config
                     }
                     None => config,
                 };
@@ -257,15 +256,11 @@ where
                 };
                 Ok(())
             }
-            Robt::Snapshot { .. } => panic!("cannot compact an open snapshot"),
         }
     }
 
-    fn to_reader(&mut self) -> Result<Self::R> {
-        match self {
-            Robt::Snapshot { dir, name, .. } => Snapshot::open(dir, &name),
-            Robt::Build { .. } => panic!("cannot create a reader"),
-        }
+    fn compact(&mut self, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<Self> {
+        self.commit(iter, meta)
     }
 }
 
@@ -281,13 +276,6 @@ where
             Robt::Build { .. } => unreachable!(),
         }
     }
-}
-
-pub struct PrepareCompact {
-    dir: ffi::OsString,
-    name: String,
-    meta: Vec<MetaItem>,
-    config: Config,
 }
 
 /// Configuration options for Read Only BTree.

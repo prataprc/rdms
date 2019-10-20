@@ -197,11 +197,11 @@ where
     /// A reader associated type, that are thread safe.
     type R: Reader<K, V>;
 
-    /// Associated type for compaction.
-    type C: Reader<K, V>;
-
     /// Return the name of the index.
     fn to_name(&self) -> String;
+
+    /// Return the metadata from index that was previously committed.
+    fn to_metadata(&mut self) -> Result<Vec<u8>>;
 
     /// Return the current seqno tracked by this index.
     fn to_seqno(&mut self) -> u64;
@@ -217,21 +217,14 @@ where
     /// indexes allow concurrent writers. Refer to index API for more details.
     fn to_writer(&mut self) -> Result<Self::W>;
 
-    /// Prepare for compaction.
-    fn to_compact(&self) -> Result<Self::C>;
-
-    /// Commit entries from `source` index into the implementing index.
+    /// Commit entries from iterator into the implementing index.
     /// TODO: Return number of entries commited to disk.
-    fn commit<M>(&mut self, s1: &M, meta: Vec<u8>) -> Result<()>
-    where
-        M: Index;
+    fn commit(&mut self, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<Self>;
 
-    /// Compact to source indexes into the implementing index.
+    /// Commit entries from iterator into the implementing index and
+    /// compact the index.
     /// TODO: Return number of entries commited to disk.
-    fn compact<M, N>(&mut self, s1: &M, s2: &N, meta: Vec<u8>) -> Result<()>
-    where
-        M: Index,
-        N: Index;
+    fn compact(&mut self, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<Self>;
 }
 
 /// Index read operations.

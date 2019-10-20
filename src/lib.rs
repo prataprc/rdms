@@ -70,19 +70,19 @@ mod lsm;
 mod scans;
 pub mod wal;
 
-// mem indexes
+// mem index
 pub mod llrb;
 mod llrb_node;
-// mem indexes
+// mem index
 pub mod mvcc;
-// disk indexes
-pub mod dgm;
-// disk indexes
-pub mod nodisk;
-// disk indexes
+// disk index
+// TODO pub mod dgm;
+// disk index
 pub mod robt;
 mod robt_entry;
 mod robt_index;
+// disk index
+pub mod nodisk;
 
 mod rdms;
 pub use crate::rdms::Rdms;

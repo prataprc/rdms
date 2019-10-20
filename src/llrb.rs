@@ -312,10 +312,13 @@ where
 {
     type W = LlrbWriter<K, V>;
     type R = LlrbReader<K, V>;
-    type C = Empty;
 
     fn to_name(&self) -> String {
         self.name.clone()
+    }
+
+    fn to_metadata(&mut self) -> Result<Vec<u8>> {
+        Ok(vec![])
     }
 
     fn to_seqno(&self) -> u64 {
@@ -353,28 +356,14 @@ where
         Ok(LlrbWriter::<K, V>::new(index, writer))
     }
 
-    /// Prepare for compaction.
-    fn to_compact(&self) -> Result<Self::C> {
-        panic!("not supported!!");
+    fn commit(&mut self, _: IndexIter<K, V>, _: Vec<u8>) -> Result<Self> {
+        // TODO: figure out a way to merge `iter` into Llrb
+        panic!("to be implemented")
     }
 
-    /// Commit entries from `source` index into the implementing index.
-    /// TODO: Return number of entries commited to disk.
-    fn commit<M>(&mut self, source: &M, meta: Vec<u8>) -> Result<()>
-    where
-        M: Index,
-    {
-        panic!("not supported!!");
-    }
-
-    /// Compact to source indexes into the implementing index.
-    /// TODO: Return number of entries commited to disk.
-    fn compact<M, N>(&mut self, s1: &M, s2: &N, meta: Vec<u8>) -> Result<()>
-    where
-        M: Index,
-        N: Index,
-    {
-        panic!("not supported!!");
+    fn compact(&mut self, _: IndexIter<K, V>, _: Vec<u8>) -> Result<Self> {
+        // TODO: figure out a way to merge `iter` into Llrb
+        panic!("to be implemented")
     }
 }
 

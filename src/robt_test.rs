@@ -2,7 +2,7 @@ use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
 
 use super::*;
 use crate::{
-    core::{Delta, EphemeralIndex, Reader, Writer},
+    core::{Delta, Index, Reader, Writer},
     llrb::Llrb,
     robt,
     scans::{FilterScan, SkipScan},

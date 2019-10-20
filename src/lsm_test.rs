@@ -4,7 +4,7 @@ use std::{convert::TryInto, ops::Bound, thread};
 
 use super::*;
 use crate::{
-    core::{EphemeralIndex, IndexIter, Reader, Writer},
+    core::{Index, IndexIter, Reader, Writer},
     error::Error,
     llrb::Llrb,
     mvcc::{Mvcc, MvccReader, MvccWriter},

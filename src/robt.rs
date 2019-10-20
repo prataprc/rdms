@@ -58,14 +58,13 @@ use std::{
 };
 
 use crate::{
-    core::{
-        Diff, DiskIndexFactory, DurableIndex, Entry, Footprint, IndexIter, Reader, Result,
-        Serialize, ToJson,
-    },
+    core::{Diff, DiskIndexFactory, Entry, Footprint, IndexIter, Reader, Result},
+    core::{Serialize, ToJson},
     error::Error,
     robt_entry::MEntry,
     robt_index::{MBlock, ZBlock},
     util,
+    nodisk::NoDisk,
 };
 
 include!("robt_marker.rs");
@@ -141,7 +140,7 @@ where
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
 {
-    Build {
+    Commit {
         dir: ffi::OsString,
         name: String,
         config: Config,
@@ -149,7 +148,14 @@ where
         _phantom_key: marker::PhantomData<K>,
         _phantom_val: marker::PhantomData<V>,
     },
-    Snapshot {
+    Compact {
+        dir: ffi::OsString,
+        name: String,
+        footprint: isize,
+        meta: Vec<MetaItem>,
+        config: Config,
+    }
+    Active {
         dir: ffi::OsString,
         name: String,
         footprint: isize,
@@ -158,15 +164,15 @@ where
     },
 }
 
-impl<K, V> DurableIndex<K, V> for Robt<K, V>
+impl<K, V> Index<K, V> for Robt<K, V>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
 {
     type R = Snapshot<K, V>;
-
-    type C = PrepareCompact;
+    type W = NoDisk<K,V>,
+    type C = Robt<K,V>;
 
     fn to_name(&self) -> String {
         match self {

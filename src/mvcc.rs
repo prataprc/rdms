@@ -43,14 +43,14 @@ use std::{
 };
 
 use crate::{
-    core::{
-        Diff, Entry, EphemeralIndex, Footprint, IndexIter, PiecewiseScan, Reader, Result,
-        ScanEntry, ScanIter, Value, WalWriter, WriteIndexFactory, Writer,
-    },
+    core::Writer,
+    core::{Diff, Entry, Footprint, Index, IndexIter, PiecewiseScan, Reader},
+    core::{Result, ScanEntry, ScanIter, Value, WalWriter, WriteIndexFactory},
     error::Error,
     llrb::Llrb,
     llrb_node::{LlrbDepth, Node, Stats},
     spinlock::{self, RWSpinlock},
+    types::Empty,
 };
 
 // TODO: Experiment with different atomic::Ordering to improve performance.
@@ -324,12 +324,6 @@ where
         self.name.clone()
     }
 
-    /// Return current seqno.
-    #[inline]
-    pub fn to_seqno(&self) -> u64 {
-        OuterSnapshot::clone(&self.snapshot).seqno
-    }
-
     /// Return quickly with basic statisics, only entries() method is valid
     /// with this statisics.
     pub fn to_stats(&self) -> Stats {
@@ -378,19 +372,23 @@ where
     }
 }
 
-impl<K, V> EphemeralIndex<K, V> for Mvcc<K, V>
+impl<K, V> Index<K, V> for Mvcc<K, V>
 where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
 {
     type W = MvccWriter<K, V>;
     type R = MvccReader<K, V>;
+    type C = Empty;
 
     fn to_name(&self) -> String {
         self.name.clone()
     }
 
-    /// Application can set the start sequence number for this index.
+    fn to_seqno(&self) -> u64 {
+        OuterSnapshot::clone(&self.snapshot).seqno
+    }
+
     fn set_seqno(&mut self, seqno: u64) {
         let n = self.multi_rw();
         if n > Self::CONCUR_REF_COUNT {
@@ -420,6 +418,30 @@ where
             Box::from_raw(self as *mut Mvcc<K, V> as *mut std::ffi::c_void)
         };
         Ok(MvccWriter::<K, V>::new(index))
+    }
+
+    /// Prepare for compaction.
+    fn to_compact(&self) -> Result<Self::C> {
+        panic!("not supported!!");
+    }
+
+    /// Commit entries from `source` index into the implementing index.
+    /// TODO: Return number of entries commited to disk.
+    fn commit<M>(&mut self, source: &M, meta: Vec<u8>) -> Result<()>
+    where
+        M: Index,
+    {
+        panic!("not supported!!");
+    }
+
+    /// Compact to source indexes into the implementing index.
+    /// TODO: Return number of entries commited to disk.
+    fn compact<M, N>(&mut self, s1: &M, s2: &N, meta: Vec<u8>) -> Result<()>
+    where
+        M: Index,
+        N: Index,
+    {
+        panic!("not supported!!");
     }
 }
 

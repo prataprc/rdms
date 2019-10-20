@@ -1,10 +1,8 @@
 use std::{borrow::Borrow, ffi, fs, marker, ops::RangeBounds};
 
 use crate::{
-    core::{
-        Diff, DiskIndexFactory, DurableIndex, Entry, Footprint, IndexIter, Reader, Result,
-        Serialize,
-    },
+    core::{Diff, DiskIndexFactory, Entry, Footprint, Index, IndexIter, Reader},
+    core::{Result, Serialize},
     error::Error,
     types::{Empty, EmptyIter},
 };
@@ -60,46 +58,75 @@ impl<K, V> Footprint for NoDisk<K, V> {
     }
 }
 
-impl<K, V> DurableIndex<K, V> for NoDisk<K, V>
+impl<K, V> Index<K, V> for NoDisk<K, V>
 where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
 {
     type R = NoDisk<K, V>;
-
+    type W = NoDisk<K, V>;
     type C = Empty;
 
     fn to_name(&self) -> String {
         "no-disk mama !!".to_string()
     }
 
-    fn commit<M>(
-        &mut self,
-        _m: &M, // reference to memory index
-        _iter: IndexIter<K, V>,
-        _meta: Vec<u8>,
-    ) -> Result<()>
-    where
-        M: Footprint,
-    {
-        Ok(())
+    fn to_seqno(&mut self) -> u64 {
+        0
     }
 
-    fn prepare_compact(&self) -> Result<Self::C> {
-        Ok(Empty)
-    }
-
-    fn compact(
-        &mut self,
-        _iter: IndexIter<K, V>, // skip
-        _meta: Vec<u8>,
-        _prepare: Self::C,
-    ) -> Result<()> {
-        Ok(())
+    fn set_seqno(&mut self, seqno: u64) {
+        // noop
     }
 
     fn to_reader(&mut self) -> Result<Self::R> {
         Ok(NoDisk::new())
+    }
+
+    fn to_writer(&mut self) -> Result<Self::W> {
+        Ok(NoDisk::new())
+    }
+
+    /// Prepare for compaction.
+    fn to_compact(&self) -> Result<Self::C> {
+        Ok(Empty)
+    }
+
+    fn commit<M>(&mut self, s1: &M, meta: Vec<u8>) -> Result<()>
+    where
+        M: Index,
+    {
+        Ok(())
+    }
+
+    fn compact<M, N>(&mut self, s1: &M, s2: &N, meta: Vec<u8>) -> Result<()>
+    where
+        M: Index,
+        N: Index,
+    {
+        Ok(())
+    }
+}
+
+impl<K, V> Writer<K, V> for NoDisk<K, V>
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+{
+    fn set(&mut self, k: K, v: V) -> Result<Option<Entry<K, V>>> {
+        panic!("not supported")
+    }
+
+    fn set_cas(&mut self, k: K, v: V, cas: u64) -> Result<Option<Entry<K, V>>> {
+        panic!("not supported")
+    }
+
+    fn delete<Q>(&mut self, key: &Q) -> Result<Option<Entry<K, V>>>
+    where
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
+    {
+        panic!("not supported")
     }
 }
 

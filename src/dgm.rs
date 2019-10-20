@@ -6,10 +6,8 @@ use std::{
 };
 
 use crate::{
-    core::{
-        Diff, DiskIndexFactory, DurableIndex, Entry, Footprint, IndexIter, Reader, Result,
-        Serialize,
-    },
+    core::{Diff, DiskIndexFactory, Entry, Footprint, Index, IndexIter, Reader},
+    core::{Result, Serialize},
     error::Error,
     lsm,
     types::{Empty, EmptyIter},
@@ -20,7 +18,7 @@ pub const NLEVELS: usize = 16;
 
 type Levels<K, V, D> = [OuterSnapshot<K, V, D>; NLEVELS];
 
-type Dr<K, V, F> = <<F as DiskIndexFactory<K, V>>::I as DurableIndex<K, V>>::R;
+type Dr<K, V, F> = <<F as DiskIndexFactory<K, V>>::I as Index<K, V>>::R;
 
 pub struct Dgm<K, V, F>
 where
@@ -195,7 +193,7 @@ struct CommitData<K, V, D>
 where
     K: Clone + Ord,
     V: Clone + Diff,
-    D: DurableIndex<K, V>,
+    D: Index<K, V>,
 {
     d1: Option<(usize, Option<D::R>)>,
     disk: Option<(usize, D)>,
@@ -205,7 +203,7 @@ impl<K, V, D> Default for CommitData<K, V, D>
 where
     K: Clone + Ord,
     V: Clone + Diff,
-    D: DurableIndex<K, V>,
+    D: Index<K, V>,
 {
     fn default() -> CommitData<K, V, D> {
         CommitData {
@@ -219,7 +217,7 @@ struct CompactData<K, V, D>
 where
     K: Clone + Ord,
     V: Clone + Diff,
-    D: DurableIndex<K, V>,
+    D: Index<K, V>,
 {
     d1: Option<(usize, Option<D::R>)>,
     d2: Option<(usize, Option<D::R>)>,
@@ -230,7 +228,7 @@ impl<K, V, D> Default for CompactData<K, V, D>
 where
     K: Clone + Ord,
     V: Clone + Diff,
-    D: DurableIndex<K, V>,
+    D: Index<K, V>,
 {
     fn default() -> CompactData<K, V, D> {
         CompactData {
@@ -241,20 +239,59 @@ where
     }
 }
 
-impl<K, V, F> DurableIndex<K, V> for Dgm<K, V, F>
+impl<K, V, F> Index<K, V> for Dgm<K, V, F>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize + Footprint + From<<V as Diff>::D>,
     <V as Diff>::D: Serialize,
     F: DiskIndexFactory<K, V>,
-    F::I: DurableIndex<K, V> + Footprint,
+    F::I: Index<K, V> + Footprint,
 {
+    type W = Empty;
     type R = DgmReader<K, V, F>;
-
-    type C = Empty;
 
     fn to_name(&self) -> String {
         self.name.clone()
+    }
+
+    fn to_seqno(&self) -> String {
+        panic!("to be implemented")
+    }
+
+    fn set_seqno(&mut self, seqno: u64) {
+        panic!("not supported")
+    }
+
+    fn to_reader(&mut self) -> Result<DgmReader<K, V, F>> {
+        let mut levels = self.levels.lock().unwrap();
+
+        // create a new set of snapshot-reader
+        let mut readers = vec![];
+        for level in levels.iter_mut() {
+            if let Some(snapshot) = &mut level.snapshot {
+                let reader = match snapshot {
+                    Snapshot::Flush(d) => d.to_reader()?,
+                    Snapshot::Compact(d) => d.to_reader()?,
+                    Snapshot::Active(d) => d.to_reader()?,
+                    Snapshot::Dead(_) => continue,
+                    _ => unreachable!(),
+                };
+                readers.push(reader);
+            }
+        }
+        let readers = Arc::new(sync::Mutex::new(readers));
+        self.readers.push(Arc::clone(&readers));
+        Ok(DgmReader::new(&self.name, readers))
+    }
+
+    /// Create a new write handle, for multi-threading. Note that not all
+    /// indexes allow concurrent writers. Refer to index API for more details.
+    fn to_writer(&mut self) -> Result<Self::W> {
+        panic!("not supported")
+    }
+
+    fn to_compact(&self) -> Result<Self> {
+        Ok(Self)
     }
 
     fn commit<M>(
@@ -314,28 +351,6 @@ where
 
     fn compact(&mut self, _: IndexIter<K, V>, _: Vec<u8>, _: Self::C) -> Result<()> {
         Ok(())
-    }
-
-    fn to_reader(&mut self) -> Result<DgmReader<K, V, F>> {
-        let mut levels = self.levels.lock().unwrap();
-
-        // create a new set of snapshot-reader
-        let mut readers = vec![];
-        for level in levels.iter_mut() {
-            if let Some(snapshot) = &mut level.snapshot {
-                let reader = match snapshot {
-                    Snapshot::Flush(d) => d.to_reader()?,
-                    Snapshot::Compact(d) => d.to_reader()?,
-                    Snapshot::Active(d) => d.to_reader()?,
-                    Snapshot::Dead(_) => continue,
-                    _ => unreachable!(),
-                };
-                readers.push(reader);
-            }
-        }
-        let readers = Arc::new(sync::Mutex::new(readers));
-        self.readers.push(Arc::clone(&readers));
-        Ok(DgmReader::new(&self.name, readers))
     }
 }
 
@@ -829,7 +844,7 @@ impl<K, V, D> OuterSnapshot<K, V, D>
 where
     K: Clone + Ord,
     V: Clone + Diff,
-    D: DurableIndex<K, V>,
+    D: Index<K, V>,
 {
     fn new(index: Snapshot<K, V, D>) -> OuterSnapshot<K, V, D> {
         OuterSnapshot {
@@ -910,7 +925,7 @@ impl<K, V, D> Snapshot<K, V, D>
 where
     K: Clone + Ord,
     V: Clone + Diff,
-    D: DurableIndex<K, V>,
+    D: Index<K, V>,
 {
     fn make_name(name: &str, level: usize, file_no: usize) -> String {
         format!("{}-{}-{}", name, level, file_no)

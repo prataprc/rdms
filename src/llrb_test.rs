@@ -6,7 +6,7 @@ use std::ops::Bound;
 
 use super::*;
 use crate::{
-    core::{EphemeralIndex, Reader, Writer},
+    core::{Index, Reader, Writer},
     error::Error,
     llrb::Llrb,
     scans::SkipScan,

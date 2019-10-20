@@ -151,7 +151,7 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    type I;
+    type I: Index<K, V>;
 
     /// Create a new index instance with predefined configuration,
     /// Typically this index will be used to index new set of entries.
@@ -167,7 +167,7 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    type I: DurableIndex<K, V>;
+    type I: Index<K, V>;
 
     /// Create a new index instance with predefined configuration.
     /// Typically this index will be used to commit and/or compact newer
@@ -182,11 +182,11 @@ where
     fn to_type(&self) -> String;
 }
 
-/// EphemeralIndex trait implemented by in-memory index.
+/// Index trait implemented by all types of rdms-indexes. Note that not all
+/// index types shall implement all the traits/constraints and methods
+/// by Index.
 ///
-/// To ingest key, value pairs, support read, but does not persist
-/// data on disk.
-pub trait EphemeralIndex<K, V>: Sized + Footprint
+pub trait Index<K, V>: Sized + Footprint
 where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
@@ -194,11 +194,17 @@ where
     /// A writer associated type, that can ingest key-value pairs.
     type W: Writer<K, V>;
 
-    /// A reader assciated type, that are thread safe.
+    /// A reader associated type, that are thread safe.
     type R: Reader<K, V>;
+
+    /// Associated type for compaction.
+    type C: Reader<K, V>;
 
     /// Return the name of the index.
     fn to_name(&self) -> String;
+
+    /// Return the current seqno tracked by this index.
+    fn to_seqno(&mut self) -> u64;
 
     /// Application can set the start sequence number for this index.
     fn set_seqno(&mut self, seqno: u64);
@@ -210,46 +216,22 @@ where
     /// Create a new write handle, for multi-threading. Note that not all
     /// indexes allow concurrent writers. Refer to index API for more details.
     fn to_writer(&mut self) -> Result<Self::W>;
-}
 
-/// DurableIndex trait implemented by disk index.
-///
-/// To commit data onto disk, support read operations and other lsm-methods.
-pub trait DurableIndex<K, V>: Sized
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-{
-    /// Thread safe associated type, implementing Reader trait.
-    type R: Reader<K, V>;
+    /// Prepare for compaction.
+    fn to_compact(&self) -> Result<Self::C>;
 
-    /// Associated type for disk-compact.
-    type C;
-
-    /// Return the name of the index.
-    fn to_name(&self) -> String;
-
-    /// Flush to disk all new entries that are not yet persisted
-    /// on to disk. Return number of entries commited to disk.
-    fn commit<M>(&mut self, mem_index: &M, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<()>
+    /// Commit entries from `source` index into the implementing index.
+    /// TODO: Return number of entries commited to disk.
+    fn commit<M>(&mut self, s1: &M, meta: Vec<u8>) -> Result<()>
     where
-        M: Footprint;
+        M: Index;
 
-    /// Prepare for compaction
-    fn prepare_compact(&self) -> Result<Self::C>;
-
-    /// Compact disk snapshots, if there are duplicated entries with one
-    /// or more snapshots.
-    fn compact(
-        &mut self,
-        iter: IndexIter<K, V>,
-        meta: Vec<u8>,
-        prepare: Self::C, // previously obtained from prepare_compact()
-    ) -> Result<()>;
-
-    /// Create a new read handle, for multi-threading. Note that not all
-    /// indexes allow concurrent readers. Refer to index API for more details.
-    fn to_reader(&mut self) -> Result<Self::R>;
+    /// Compact to source indexes into the implementing index.
+    /// TODO: Return number of entries commited to disk.
+    fn compact<M, N>(&mut self, s1: &M, s2: &N, meta: Vec<u8>) -> Result<()>
+    where
+        M: Index,
+        N: Index;
 }
 
 /// Index read operations.

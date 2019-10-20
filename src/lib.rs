@@ -59,10 +59,8 @@ mod types;
 mod util;
 mod vlog;
 pub use crate::{
-    core::{
-        Diff, DurableIndex, Entry, EphemeralIndex, Footprint, IndexIter, Reader, Replay, Result,
-        Serialize, VersionIter, Writer,
-    },
+    core::{Diff, Entry, Footprint, Index, IndexIter, Reader, Replay, Result},
+    core::{Serialize, VersionIter, Writer},
     error::Error,
     types::Empty,
 };

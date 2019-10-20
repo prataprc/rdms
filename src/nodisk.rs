@@ -73,12 +73,20 @@ where
         "no-disk mama !!".to_string()
     }
 
-    fn commit(&mut self, _iter: IndexIter<K, V>, _meta: Vec<u8>) -> Result<()> {
+    fn commit<M>(
+        &mut self,
+        _m: &M, // reference to memory index
+        _iter: IndexIter<K, V>,
+        _meta: Vec<u8>,
+    ) -> Result<()>
+    where
+        M: Footprint,
+    {
         Ok(())
     }
 
-    fn prepare_compact(&self) -> Self::C {
-        Empty
+    fn prepare_compact(&self) -> Result<Self::C> {
+        Ok(Empty)
     }
 
     fn compact(

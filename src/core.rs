@@ -223,7 +223,7 @@ where
     /// Thread safe associated type, implementing Reader trait.
     type R: Reader<K, V>;
 
-    /// Associated type for disk-compaction.
+    /// Associated type for disk-compact.
     type C;
 
     /// Return the name of the index.
@@ -231,12 +231,15 @@ where
 
     /// Flush to disk all new entries that are not yet persisted
     /// on to disk. Return number of entries commited to disk.
-    fn commit(&mut self, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<()>;
+    fn commit<M>(&mut self, mem_index: &M, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<()>
+    where
+        M: Footprint;
 
-    /// Prepare for compaction.
-    fn prepare_compact(&self) -> Self::C;
+    /// Prepare for compaction
+    fn prepare_compact(&self) -> Result<Self::C>;
 
-    /// Compact disk snapshots if there are any.
+    /// Compact disk snapshots, if there are duplicated entries with one
+    /// or more snapshots.
     fn compact(
         &mut self,
         iter: IndexIter<K, V>,

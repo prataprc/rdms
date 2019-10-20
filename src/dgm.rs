@@ -12,11 +12,15 @@ use crate::{
     },
     error::Error,
     lsm,
-    types::EmptyIter,
+    types::{Empty, EmptyIter},
 };
 
 /// Maximum number of levels to be used for disk indexes.
 pub const NLEVELS: usize = 16;
+
+type Levels<K, V, D> = [OuterSnapshot<K, V, D>; NLEVELS];
+
+type Dr<K, V, F> = <<F as DiskIndexFactory<K, V>>::I as DurableIndex<K, V>>::R;
 
 pub struct Dgm<K, V, F>
 where
@@ -30,7 +34,7 @@ where
     disk_ratio: f64,
     factory: F,
 
-    levels: Levels<K, V, F::I>, // snapshots
+    levels: sync::Mutex<Levels<K, V, F::I>>, // snapshots
     readers: Vec<Arc<sync::Mutex<Vec<Dr<K, V, F>>>>>,
 }
 
@@ -55,12 +59,7 @@ where
         name: &str,
         factory: F,
     ) -> Result<Dgm<K, V, F>> {
-        #[cfg(feature = "console")]
-        println!("Dgm: removing directory path {:?}", dir);
         fs::remove_dir_all(dir)?;
-
-        #[cfg(feature = "console")]
-        println!("Dgm: creating directory path {:?} ...", dir);
         fs::create_dir_all(dir)?;
 
         let index = Dgm {
@@ -73,9 +72,6 @@ where
             levels: Default::default(),
             readers: Default::default(),
         };
-
-        #[cfg(feature = "console")]
-        index.log_config();
 
         Ok(index)
     }
@@ -120,9 +116,7 @@ where
                         }
                         _ => unreachable!(),
                     };
-                    levels[level] = OuterSnapshot {
-                        snapshot: Some(index),
-                    };
+                    levels[level] = OuterSnapshot::new(index);
                 }
             }
         }
@@ -134,7 +128,7 @@ where
             disk_ratio: Self::DISK_RATIO,
             factory: factory,
 
-            levels: levels,
+            levels: sync::Mutex::new(levels),
             readers: Default::default(),
         })
     }
@@ -146,8 +140,15 @@ where
     pub fn set_disk_ratio(&mut self, ratio: f64) {
         self.disk_ratio = ratio
     }
+}
 
-    fn reset_readers(&mut self) -> Result<()> {
+impl<K, V, F> Dgm<K, V, F>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+    F: DiskIndexFactory<K, V>,
+{
+    fn reset_readers(&mut self, levels: &mut Levels<K, V, F::I>) -> Result<()> {
         for readers in self.readers.iter_mut() {
             if Arc::strong_count(&readers) == 1 {
                 // this reader-thread has dropped out.
@@ -155,7 +156,7 @@ where
             }
             let mut rs = readers.lock().unwrap();
             rs.drain(..);
-            for level in self.levels.iter_mut() {
+            for level in levels.iter_mut() {
                 if let Some(snapshot) = &mut level.snapshot {
                     let r = match snapshot {
                         Snapshot::Flush(d) => d.to_reader()?,
@@ -170,33 +171,171 @@ where
         }
         Ok(())
     }
-
-    fn log_config(&self) {
-        println!(
-            "Dgm: dir:{:?} name:{} mem_ratio:{} disk_ratio:{} factory:{}",
-            self.dir,
-            self.name,
-            self.mem_ratio,
-            self.disk_ratio,
-            self.factory.to_type()
-        );
-    }
 }
 
 impl<K, V, F> Footprint for Dgm<K, V, F>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
-    <V as Diff>::D: Serialize,
     F: DiskIndexFactory<K, V>,
     F::I: Footprint,
 {
     fn footprint(&self) -> Result<isize> {
+        let levels = self.levels.lock().unwrap();
+
         let mut footprint: isize = Default::default();
-        for level in self.levels.iter() {
+        for level in levels.iter() {
             footprint += level.footprint()?;
         }
         Ok(footprint)
+    }
+}
+
+struct CommitData<K, V, D>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+    D: DurableIndex<K, V>,
+{
+    d1: Option<(usize, Option<D::R>)>,
+    disk: Option<(usize, D)>,
+}
+
+impl<K, V, D> Default for CommitData<K, V, D>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+    D: DurableIndex<K, V>,
+{
+    fn default() -> CommitData<K, V, D> {
+        CommitData {
+            d1: Default::default(),
+            disk: Default::default(),
+        }
+    }
+}
+
+struct CompactData<K, V, D>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+    D: DurableIndex<K, V>,
+{
+    d1: Option<(usize, Option<D::R>)>,
+    d2: Option<(usize, Option<D::R>)>,
+    disk: Option<(usize, D)>,
+}
+
+impl<K, V, D> Default for CompactData<K, V, D>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+    D: DurableIndex<K, V>,
+{
+    fn default() -> CompactData<K, V, D> {
+        CompactData {
+            d1: Default::default(),
+            d2: Default::default(),
+            disk: Default::default(),
+        }
+    }
+}
+
+impl<K, V, F> DurableIndex<K, V> for Dgm<K, V, F>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize + Footprint + From<<V as Diff>::D>,
+    <V as Diff>::D: Serialize,
+    F: DiskIndexFactory<K, V>,
+    F::I: DurableIndex<K, V> + Footprint,
+{
+    type R = DgmReader<K, V, F>;
+
+    type C = Empty;
+
+    fn to_name(&self) -> String {
+        self.name.clone()
+    }
+
+    fn commit<M>(
+        &mut self,
+        mem_index: &M, // reference to memory index.
+        iter: IndexIter<K, V>,
+        meta: Vec<u8>,
+    ) -> Result<()>
+    where
+        M: Footprint,
+    {
+        let mut levels = self.levels.lock().unwrap();
+        let data = self.gather_commit(mem_index.footprint()?, &mut levels)?;
+
+        let (disk_off, mut disk) = match data.disk {
+            // first commit
+            None => {
+                let name = Snapshot::<K, V, F::I>::make_name(&self.name, 0, 0);
+                let d = self.factory.new(&self.dir, &name);
+                (levels.len() - 1, d)
+            }
+            // subsequent commits
+            Some((disk_off, disk)) => (disk_off, disk),
+        };
+        let (d1_off, mut d1_r) = match data.d1 {
+            // first commit to disk,
+            None => (levels.len() - 1, None),
+            // mem-only commit to disk.
+            Some((d1_off, None)) => (d1_off, None),
+            // merge commit (between mem and a disk level) to disk.
+            Some((d1_off, d1_r)) => (d1_off, d1_r),
+        };
+        levels[d1_off] = match levels[d1_off].snapshot.take() {
+            None => Default::default(),
+            Some(s) => match s.to_disk() {
+                Ok(d1) => OuterSnapshot::new(Snapshot::Flush(d1)),
+                Err(s) => OuterSnapshot::new(s),
+            },
+        };
+
+        if d1_off != disk_off && d1_r.is_some() {
+            let d1_iter = d1_r.as_mut().unwrap().iter_with_versions()?;
+            let iter = lsm::y_iter_versions(iter, d1_iter, false /*reverse*/);
+            disk.commit(mem_index, iter, meta)
+        } else if d1_r.is_some() {
+            let d1_iter = d1_r.as_mut().unwrap().iter()?;
+            let iter = lsm::y_iter(iter, d1_iter, false /*reverse*/);
+            disk.commit(mem_index, iter, meta)
+        } else {
+            disk.commit(mem_index, iter, meta)
+        }
+    }
+
+    fn prepare_compact(&self) -> Result<Self::C> {
+        Ok(Empty)
+    }
+
+    fn compact(&mut self, _: IndexIter<K, V>, _: Vec<u8>, _: Self::C) -> Result<()> {
+        Ok(())
+    }
+
+    fn to_reader(&mut self) -> Result<DgmReader<K, V, F>> {
+        let mut levels = self.levels.lock().unwrap();
+
+        // create a new set of snapshot-reader
+        let mut readers = vec![];
+        for level in levels.iter_mut() {
+            if let Some(snapshot) = &mut level.snapshot {
+                let reader = match snapshot {
+                    Snapshot::Flush(d) => d.to_reader()?,
+                    Snapshot::Compact(d) => d.to_reader()?,
+                    Snapshot::Active(d) => d.to_reader()?,
+                    Snapshot::Dead(_) => continue,
+                    _ => unreachable!(),
+                };
+                readers.push(reader);
+            }
+        }
+        let readers = Arc::new(sync::Mutex::new(readers));
+        self.readers.push(Arc::clone(&readers));
+        Ok(DgmReader::new(&self.name, readers))
     }
 }
 
@@ -208,10 +347,14 @@ where
     F: DiskIndexFactory<K, V>,
     F::I: Footprint,
 {
-    fn gather_flush(&mut self, f: f64) -> Result<FlushData<K, V, F::I>> {
+    fn gather_commit(
+        &self,
+        f: isize,
+        levels: &mut Levels<K, V, F::I>,
+    ) -> Result<CommitData<K, V, F::I>> {
         use Snapshot::{Active, Compact, Flush};
 
-        match &self.levels[0].snapshot {
+        match &levels[0].snapshot {
             Some(Flush(_)) | Some(Compact(_)) | Some(Active(_)) => {
                 let msg = format!("exhausted all levels !!");
                 return Err(Error::Dgm(msg));
@@ -219,8 +362,8 @@ where
             _ => (),
         }
 
-        let mut data: FlushData<K, V, F::I> = Default::default();
-        let mut iter = self.levels.iter_mut().enumerate();
+        let mut data: CommitData<K, V, F::I> = Default::default();
+        let mut iter = levels.iter_mut().enumerate();
         let mut prev_level_name = match iter.next() {
             Some((n, level)) => level.next_name(&self.name, n),
             _ => unreachable!(),
@@ -229,42 +372,42 @@ where
             let footprint = level.footprint().ok().unwrap() as f64;
             data = match data {
                 // first: gather, if any, a disk level that needs to be read.
-                data @ FlushData {
+                data @ CommitData {
                     d1: None,
                     disk: None,
                 } => match &mut level.snapshot {
                     Some(Snapshot::Compact(_)) => {
                         let d = self.factory.new(&self.dir, &prev_level_name);
-                        FlushData {
+                        CommitData {
                             d1: Some((n - 1, None)),
                             disk: Some((n - 1, d)),
                         }
                     }
                     Some(Snapshot::Active(ref mut d)) => {
-                        let d1 = if (f / footprint) < self.mem_ratio {
+                        let d1 = if (f as f64 / footprint) < self.mem_ratio {
                             Some((n, None))
                         } else {
                             Some((n, Some(d.to_reader()?)))
                         };
-                        FlushData { d1, disk: None }
+                        CommitData { d1, disk: None }
                     }
                     Some(Snapshot::Dead(_)) | None => data,
                     Some(Snapshot::Flush(_)) | _ => unreachable!(),
                 },
                 // second: gather a disk level that needs to be written to.
-                FlushData {
+                CommitData {
                     d1: d1 @ Some(_),
                     disk: None,
                 } => match &mut level.snapshot {
                     Some(Snapshot::Compact(_)) | Some(Snapshot::Active(_)) => {
                         let d = self.factory.new(&self.dir, &prev_level_name);
-                        FlushData {
+                        CommitData {
                             d1,
                             disk: Some((n - 1, d)),
                         }
                     }
-                    Some(Snapshot::Dead(_)) => FlushData { d1, disk: None },
-                    None => FlushData { d1, disk: None },
+                    Some(Snapshot::Dead(_)) => CommitData { d1, disk: None },
+                    None => CommitData { d1, disk: None },
                     Some(Snapshot::Flush(_)) | _ => unreachable!(),
                 },
                 // okey dokey
@@ -275,9 +418,13 @@ where
         unreachable!()
     }
 
-    fn gather_compact(&mut self, f: f64) -> Result<CompactData<K, V, F::I>> {
+    fn gather_compact(
+        &self,
+        f: isize,
+        levels: &mut Levels<K, V, F::I>,
+    ) -> Result<CompactData<K, V, F::I>> {
         let mut data: CompactData<K, V, F::I> = Default::default();
-        let iter = self.levels.iter_mut().enumerate();
+        let iter = levels.iter_mut().enumerate();
         let mut prev_level_name = "".to_string();
         for (n, level) in iter {
             data = match data {
@@ -342,72 +489,6 @@ where
             prev_level_name = level.next_name(&self.name, n);
         }
         unreachable!();
-    }
-}
-
-impl<K, V, F> Dgm<K, V, F>
-where
-    K: Clone + Ord + Serialize,
-    V: Clone + Diff + Serialize,
-    <V as Diff>::D: Serialize,
-    F: DiskIndexFactory<K, V>,
-    F::I: Footprint,
-{
-    // to be called when a new snapshot is created with fresh set of files,
-    // without any compaction.
-    // pub fn flush(
-    //     &mut self,
-    //     iter: IndexIter<K, V>, meta: Vec<u8>,
-    //     footprint: usize
-    // ) -> Result<()> {
-    //     // gather commit data
-    //     let mut data = self.gather_commit(footprint);
-    //     // do commit
-    //     match &data.d1 {
-    //         Some((offset, r)) if *offset == data.disk.0 => {
-    //             let iter = lsm::y_iter(iter, r.iter());
-    //             let prepare = self.levels[offset].prepare_compact();
-    //             data.disk.1.compact(iter, meta, prepare)?;
-    //         }
-    //         Some((_, r)) | None => {
-    //             let iter = lsm::y_iter_versions(iter, r.iter());
-    //             data.disk.1.commit(iter, meta)?;
-    //         }
-    //     };
-    //     // update local fields and reader snapshots.
-    //     {
-    //         let _guard = self.mu.lock().unwrap();
-    //         let (offset, disk) = data.disk;
-    //         let self.levels[offset] = Snapshot::Active(disk);
-    //     }
-    //     (0..self.readers.len()).for_each(|i| self.reset_readers(i))
-    //     Ok(())
-    // }
-
-    /// Compact disk snapshots if there are any.
-    pub fn compact(&mut self) -> Result<()> {
-        // TBD
-        Ok(())
-    }
-
-    pub fn to_reader(&mut self) -> Result<DgmReader<K, V, F>> {
-        // create a new set of snapshot-reader
-        let mut readers = vec![];
-        for level in self.levels.iter_mut() {
-            if let Some(snapshot) = &mut level.snapshot {
-                let reader = match snapshot {
-                    Snapshot::Flush(d) => d.to_reader()?,
-                    Snapshot::Compact(d) => d.to_reader()?,
-                    Snapshot::Active(d) => d.to_reader()?,
-                    Snapshot::Dead(_) => continue,
-                    _ => unreachable!(),
-                };
-                readers.push(reader);
-            }
-        }
-        let readers = Arc::new(sync::Mutex::new(readers));
-        self.readers.push(Arc::clone(&readers));
-        Ok(DgmReader::new(&self.name, readers))
     }
 }
 
@@ -726,8 +807,6 @@ where
     }
 }
 
-type Dr<K, V, F> = <<F as DiskIndexFactory<K, V>>::I as DurableIndex<K, V>>::R;
-
 struct OuterSnapshot<K, V, D>
 where
     K: Clone + Ord,
@@ -752,6 +831,12 @@ where
     V: Clone + Diff,
     D: DurableIndex<K, V>,
 {
+    fn new(index: Snapshot<K, V, D>) -> OuterSnapshot<K, V, D> {
+        OuterSnapshot {
+            snapshot: Some(index),
+        }
+    }
+
     fn to_parts(&self) -> Option<(String, usize, usize)> {
         let name = match &self.snapshot {
             Some(Snapshot::Flush(d)) => d.to_name(),
@@ -841,56 +926,15 @@ where
         let file_no: usize = parts.next()?.parse().ok()?;
         Some((name.to_string(), level, file_no))
     }
-}
 
-struct FlushData<K, V, D>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-    D: DurableIndex<K, V>,
-{
-    d1: Option<(usize, Option<D::R>)>,
-    disk: Option<(usize, D)>,
-}
+    fn to_disk(self) -> std::result::Result<D, Self> {
+        use Snapshot::{Active, Compact, Flush};
 
-impl<K, V, D> Default for FlushData<K, V, D>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-    D: DurableIndex<K, V>,
-{
-    fn default() -> FlushData<K, V, D> {
-        FlushData {
-            d1: Default::default(),
-            disk: Default::default(),
+        match self {
+            Flush(d) => Ok(d),
+            Compact(d) => Ok(d),
+            Active(d) => Ok(d),
+            s => Err(s),
         }
     }
 }
-
-struct CompactData<K, V, D>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-    D: DurableIndex<K, V>,
-{
-    d1: Option<(usize, Option<D::R>)>,
-    d2: Option<(usize, Option<D::R>)>,
-    disk: Option<(usize, D)>,
-}
-
-impl<K, V, D> Default for CompactData<K, V, D>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-    D: DurableIndex<K, V>,
-{
-    fn default() -> CompactData<K, V, D> {
-        CompactData {
-            d1: Default::default(),
-            d2: Default::default(),
-            disk: Default::default(),
-        }
-    }
-}
-
-type Levels<K, V, D> = [OuterSnapshot<K, V, D>; NLEVELS];

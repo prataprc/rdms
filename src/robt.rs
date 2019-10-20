@@ -165,6 +165,7 @@ where
     <V as Diff>::D: Serialize,
 {
     type R = Snapshot<K, V>;
+
     type C = PrepareCompact;
 
     fn to_name(&self) -> String {
@@ -174,7 +175,15 @@ where
         }
     }
 
-    fn commit(&mut self, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<()> {
+    fn commit<M>(
+        &mut self,
+        _m: &M, // reference to memory index
+        iter: IndexIter<K, V>,
+        meta: Vec<u8>,
+    ) -> Result<()>
+    where
+        M: Footprint,
+    {
         match self {
             Robt::Build {
                 dir, name, config, ..
@@ -195,7 +204,7 @@ where
         }
     }
 
-    fn prepare_compact(&self) -> Self::C {
+    fn prepare_compact(&self) -> Result<Self::C> {
         match self {
             Robt::Snapshot {
                 dir,
@@ -203,12 +212,12 @@ where
                 meta,
                 config,
                 ..
-            } => PrepareCompact {
+            } => Ok(PrepareCompact {
                 dir: dir.clone(),
                 name: name.clone(),
                 meta: meta.clone(),
                 config: config.clone(),
-            },
+            }),
             Robt::Build { .. } => panic!("cannot prepare commit on build robt"),
         }
     }

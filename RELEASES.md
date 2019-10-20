@@ -19,8 +19,10 @@ Code Review checklist
 * [ ] Copyright and License notice.
 * [ ] Make sure that generated artifact is debuggable. Like,
   * [ ] RUSTLFAGS=-g
-* [ ] Verify panic!() calls
-* [ ] Verify unreachable!() calls
+* [ ] Verify panic!() macro, try to replace them with Err(Error).
+* [ ] Verify unreachable!() macro, try to replace them with Err(Error).
+* [ ] Avoid println!() macro in production code.
+* [ ] Document rdms::error::Error type and all its variants.
 
 Release Checklist
 =================

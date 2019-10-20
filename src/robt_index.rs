@@ -252,11 +252,11 @@ where
         //);
         match key.cmp(self.to_key(pivot)?.borrow()) {
             Ordering::Less if pivot == 0 => Err(Error::__LessThan),
-            Ordering::Less if pivot == f => unreachable!(),
             Ordering::Less => self.get(key, from, Bound::Excluded(pivot)),
             Ordering::Equal => self.to_entry(pivot),
             Ordering::Greater if pivot == f => self.to_entry(pivot),
             Ordering::Greater => self.get(key, Bound::Included(pivot), to),
+            Ordering::Less if pivot == f => unreachable!(),
         }
     }
 
@@ -286,11 +286,11 @@ where
         //);
         match key.cmp(self.to_key(pivot)?.borrow()) {
             Ordering::Less if pivot == 0 => Err(Error::__LessThan),
-            Ordering::Less if pivot == f => unreachable!(),
             Ordering::Less => self.find(key, from, Bound::Excluded(pivot)),
             Ordering::Equal => self.to_entry(pivot),
             Ordering::Greater if pivot == f => self.to_entry(pivot),
             Ordering::Greater => self.find(key, Bound::Included(pivot), to),
+            Ordering::Less if pivot == f => unreachable!(),
         }
     }
 
@@ -307,8 +307,8 @@ where
             Bound::Included(_) => unreachable!(),
         };
         match to - from {
-            n if n < 1 => unreachable!(),
-            n => from + (n / 2),
+            n if n > 0 => from + (n / 2),
+            _ => unreachable!(),
         }
     }
 
@@ -640,11 +640,11 @@ where
         //);
         match key.cmp(self.to_key(pivot)?.borrow()) {
             Ordering::Less if pivot == 0 => Err(Error::__LessThan),
-            Ordering::Less if pivot == f => unreachable!(),
             Ordering::Less => self.find(key, from, Bound::Excluded(pivot)),
             Ordering::Equal => self.to_entry(pivot),
             Ordering::Greater if pivot == f => Err(Error::__ZBlockExhausted(f)),
             Ordering::Greater => self.find(key, Bound::Included(pivot), to),
+            Ordering::Less if pivot == f => unreachable!(),
         }
     }
 
@@ -660,8 +660,8 @@ where
             Bound::Included(_) => unreachable!(),
         };
         match to - from {
-            n if n < 1 => unreachable!(),
-            n => from + (n / 2),
+            n if n > 0 => from + (n / 2),
+            _ => unreachable!(),
         }
     }
 

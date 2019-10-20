@@ -39,7 +39,7 @@
 use fs2::FileExt;
 use jsondata::{Json, Property};
 use lazy_static::lazy_static;
-use log::info;
+use log::{info, warn};
 
 use std::{
     borrow::Borrow,
@@ -87,7 +87,10 @@ where
     type I = Robt<K, V>;
 
     fn new(&self, dir: &ffi::OsStr, name: &str) -> Robt<K, V> {
-        info!("[robt] new disk index at {:?}/{}", dir, name);
+        info!(target: "robt-factory", "new disk index at {:?}/{}", dir, name);
+        info!(target: "robt-factory", "new index {} configuration ...", name);
+        info!(target: "robt-factory", "index {} - {}", name, self.config);
+
         Robt::Build {
             dir: dir.to_os_string(),
             name: name.to_string(),
@@ -108,9 +111,15 @@ where
             Some(name) => name,
             None => {
                 let msg = format!("not an robt index `{:?}`", file_name);
+                warn!(target: "robt-factory", "{}", msg);
                 return Err(Error::InvalidFile(msg));
             }
         };
+
+        info!(target: "robt-factory", "open disk index at {:?}/{}", dir, name);
+        info!(target: "robt-factory", "open index {} configuration ...", name);
+        info!(target: "robt-factory", "{}", self.config);
+
         let snapshot = Snapshot::<K, V>::open(dir, &name)?;
         Ok(Robt::Snapshot {
             dir: dir.to_os_string(),
@@ -121,7 +130,7 @@ where
         })
     }
 
-    fn to_name(&self) -> String {
+    fn to_type(&self) -> String {
         "robt".to_string()
     }
 }
@@ -269,69 +278,32 @@ pub struct PrepareCompact {
 /// Configuration options for Read Only BTree.
 #[derive(Clone)]
 pub struct Config {
+    /// location path where index files are created.
+    pub(crate) dir: ffi::OsString,
+    /// name of the index.
+    pub(crate) name: String,
     /// Leaf block size in btree index.
     /// Default: Config::ZBLOCKSIZE
-    pub z_blocksize: usize,
+    pub(crate) z_blocksize: usize,
     /// Intemediate block size in btree index.
     /// Default: Config::MBLOCKSIZE
-    pub m_blocksize: usize,
+    pub(crate) m_blocksize: usize,
     /// If deltas are indexed and/or value to be stored in separate log file.
     /// Default: Config::VBLOCKSIZE
-    pub v_blocksize: usize,
+    pub(crate) v_blocksize: usize,
     /// Include delta as part of entry. Note that delta values are always
     /// stored in separate value-log file.
     /// Default: true
-    pub delta_ok: bool,
+    pub(crate) delta_ok: bool,
     /// Optional name for value log file. If not supplied, but `delta_ok` or
     /// `value_in_vlog` is true, then value log file name will be computed
     /// based on configuration`name` and `dir`. Default: None
-    pub vlog_file: Option<ffi::OsString>,
+    pub(crate) vlog_file: Option<ffi::OsString>,
     /// If true, then value shall be persisted in value log file. Otherwise
     /// value shall be saved in the index' leaf node. Default: false
-    pub value_in_vlog: bool,
+    pub(crate) value_in_vlog: bool,
     /// Flush queue size. Default: Config::FLUSH_QUEUE_SIZE
-    pub flush_queue_size: usize,
-}
-
-impl fmt::Display for Config {
-    fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
-        let (z, m, v) = (self.z_blocksize, self.m_blocksize, self.v_blocksize);
-        let nil: ffi::OsString = From::from("nil");
-        write!(
-            f,
-            "config.blocksize = {{ z = {}, m = {}, v = {} }}\n",
-            z, m, v
-        )?;
-        write!(
-            f,
-            "config = {{ delta_ok = {}, value_in_vlog = {} }}\n",
-            self.delta_ok, self.value_in_vlog,
-        )?;
-        write!(
-            f,
-            "config = {{ vlog_file = {:?}, flush_queue_size: {} }}\n",
-            self.vlog_file.as_ref().map_or(nil, |f| f.clone()),
-            self.flush_queue_size,
-        )
-    }
-}
-
-impl ToJson for Config {
-    fn to_json(&self) -> String {
-        let (z, m, v) = (self.z_blocksize, self.m_blocksize, self.v_blocksize);
-        let nil: ffi::OsString = From::from("nil");
-        let props = [
-            format!(r#"blocksize":  {{ "z": {}, "m": {}, "v": {} }}"#, z, m, v),
-            format!(r#""delta_ok": {}"#, self.delta_ok,),
-            format!(r#""value_in_vlog": {}"#, self.value_in_vlog,),
-            format!(
-                r#""vlog_file": {:?}"#,
-                self.vlog_file.as_ref().map_or(nil, |f| f.clone()),
-            ),
-            format!(r#""flush_queue_size": {}"#, self.flush_queue_size,),
-        ];
-        format!("{{ {} }}", props.join(", "))
-    }
+    pub(crate) flush_queue_size: usize,
 }
 
 impl Default for Config {
@@ -343,27 +315,16 @@ impl Default for Config {
     /// * Deltas are persisted in default value-log-file.
     /// * Main index is persisted in default index-file.
     fn default() -> Config {
+        let dir: &ffi::OsStr = "not/a/path".as_ref();
         Config {
+            name: "-not-a-name-".to_string(),
+            dir: dir.to_os_string(),
             z_blocksize: Self::ZBLOCKSIZE,
             v_blocksize: Self::VBLOCKSIZE,
             m_blocksize: Self::MBLOCKSIZE,
             delta_ok: true,
             vlog_file: Default::default(),
             value_in_vlog: false,
-            flush_queue_size: Self::FLUSH_QUEUE_SIZE,
-        }
-    }
-}
-
-impl From<Stats> for Config {
-    fn from(stats: Stats) -> Config {
-        Config {
-            z_blocksize: stats.z_blocksize,
-            m_blocksize: stats.m_blocksize,
-            v_blocksize: stats.v_blocksize,
-            delta_ok: stats.delta_ok,
-            vlog_file: stats.vlog_file,
-            value_in_vlog: stats.value_in_vlog,
             flush_queue_size: Self::FLUSH_QUEUE_SIZE,
         }
     }
@@ -376,7 +337,9 @@ impl Config {
     pub const MBLOCKSIZE: usize = 4 * 1024; // 4KB intermediate node
     /// Default value for v-block-size, 4 * 1024 bytes.
     pub const VBLOCKSIZE: usize = 4 * 1024; // 4KB of blobs.
+    /// Marker block size, not to be tampered with.
     const MARKER_BLOCK_SIZE: usize = 1024 * 4;
+    /// Flush queue size, channel queue size, holding index blocks.
     const FLUSH_QUEUE_SIZE: usize = 64;
 
     /// Configure differt set of block size for leaf-node, intermediate-node.
@@ -422,6 +385,66 @@ impl Config {
     pub fn set_flush_queue_size(&mut self, size: usize) -> &mut Self {
         self.flush_queue_size = size;
         self
+    }
+}
+
+impl fmt::Display for Config {
+    fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
+        let (z, m, v) = (self.z_blocksize, self.m_blocksize, self.v_blocksize);
+        let nil: ffi::OsString = From::from("nil");
+        write!(f, "config.name = {}\n", self.name)?;
+        write!(
+            f,
+            "config.blocksize = {{ z = {}, m = {}, v = {} }}\n",
+            z, m, v
+        )?;
+        write!(
+            f,
+            "config = {{ delta_ok = {}, value_in_vlog = {} }}\n",
+            self.delta_ok, self.value_in_vlog,
+        )?;
+        write!(
+            f,
+            "config = {{ vlog_file = {:?}, flush_queue_size: {} }}\n",
+            self.vlog_file.as_ref().map_or(nil, |f| f.clone()),
+            self.flush_queue_size,
+        )
+    }
+}
+
+impl ToJson for Config {
+    fn to_json(&self) -> String {
+        let (z, m, v) = (self.z_blocksize, self.m_blocksize, self.v_blocksize);
+        let nil: ffi::OsString = From::from("nil");
+        let props = [
+            format!(r#""name": {}"#, self.name),
+            format!(r#""blocksize":  {{ "z": {}, "m": {}, "v": {} }}"#, z, m, v),
+            format!(r#""delta_ok": {}"#, self.delta_ok,),
+            format!(r#""value_in_vlog": {}"#, self.value_in_vlog,),
+            format!(
+                r#""vlog_file": {:?}"#,
+                self.vlog_file.as_ref().map_or(nil, |f| f.clone()),
+            ),
+            format!(r#""flush_queue_size": {}"#, self.flush_queue_size,),
+        ];
+        format!("{{ {} }}", props.join(", "))
+    }
+}
+
+impl From<Stats> for Config {
+    fn from(stats: Stats) -> Config {
+        let dir: &ffi::OsStr = "not/a/path".as_ref();
+        Config {
+            name: stats.name,
+            dir: dir.to_os_string(),
+            z_blocksize: stats.z_blocksize,
+            m_blocksize: stats.m_blocksize,
+            v_blocksize: stats.v_blocksize,
+            delta_ok: stats.delta_ok,
+            vlog_file: stats.vlog_file,
+            value_in_vlog: stats.value_in_vlog,
+            flush_queue_size: Self::FLUSH_QUEUE_SIZE,
+        }
     }
 }
 
@@ -637,6 +660,7 @@ impl fmt::Display for MetaItem {
 ///
 #[derive(Clone, Default, PartialEq)]
 pub struct Stats {
+    pub name: String,
     /// Part of _build-configuration_, specifies the leaf block size
     /// in btree index.
     pub z_blocksize: usize,
@@ -689,6 +713,7 @@ pub struct Stats {
 impl From<Config> for Stats {
     fn from(config: Config) -> Stats {
         Stats {
+            name: config.name,
             z_blocksize: config.z_blocksize,
             m_blocksize: config.m_blocksize,
             v_blocksize: config.v_blocksize,
@@ -734,6 +759,7 @@ impl FromStr for Stats {
         };
 
         Ok(Stats {
+            name: js.get("/name")?.string().unwrap(),
             // config fields.
             z_blocksize: to_usize("/z_blocksize")?,
             m_blocksize: to_usize("/m_blocksize")?,
@@ -770,6 +796,7 @@ impl Display for Stats {
             Err(err) => panic!(err), // TODO: will is explode in production ??
         };
 
+        js.set("/name", Json::new(self.name.clone())).ok();
         js.set("/z_blocksize", Json::new(self.z_blocksize)).ok();
         js.set("/m_blocksize", Json::new(self.m_blocksize)).ok();
         js.set("/v_blocksize", Json::new(self.v_blocksize)).ok();
@@ -1163,11 +1190,11 @@ impl Flusher {
         match self.t_handle.join() {
             Ok(Ok(())) => Ok(()),
             Ok(Err(Error::PartialWrite(err))) => Err(Error::PartialWrite(err)),
-            Ok(Err(err)) => panic!("unreachable arm with err : {:?}", err),
             Err(err) => match err.downcast_ref::<String>() {
                 Some(msg) => Err(Error::ThreadFail(msg.to_string())),
                 None => Err(Error::ThreadFail("unknown error".to_string())),
             },
+            Ok(Err(err)) => panic!("unreachable arm with err : {:?}", err),
         }
     }
 }

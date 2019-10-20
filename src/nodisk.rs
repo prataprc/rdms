@@ -31,7 +31,7 @@ where
         Ok(NoDisk::new())
     }
 
-    fn to_name(&self) -> String {
+    fn to_type(&self) -> String {
         "nodisk".to_string()
     }
 }

@@ -158,7 +158,7 @@ where
     fn new(&self, name: &str) -> Self::I;
 
     /// Factory name for identification purpose.
-    fn to_name(&self) -> String;
+    fn to_type(&self) -> String;
 }
 
 /// Factory trait to create new on-disk index snapshot.
@@ -179,7 +179,7 @@ where
     fn open(&self, dir: &ffi::OsStr, dir_entry: fs::DirEntry) -> Result<Self::I>;
 
     /// Factory name for identification purpose.
-    fn to_name(&self) -> String;
+    fn to_type(&self) -> String;
 }
 
 /// EphemeralIndex trait implemented by in-memory index.
@@ -196,6 +196,9 @@ where
 
     /// A reader assciated type, that are thread safe.
     type R: Reader<K, V>;
+
+    /// Return the name of the index.
+    fn to_name(&self) -> String;
 
     /// Application can set the start sequence number for this index.
     fn set_seqno(&mut self, seqno: u64);

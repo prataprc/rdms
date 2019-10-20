@@ -33,7 +33,7 @@ pub(crate) struct Fence<'a> {
 impl<'a> Drop for Fence<'a> {
     fn drop(&mut self) {
         if self.fence.writers.compare_and_swap(1, 0, AcqRel) != 1 {
-            unreachable!();
+            panic!("unepxected situation in spinlock drop");
         }
     }
 }

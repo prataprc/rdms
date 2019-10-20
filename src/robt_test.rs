@@ -13,6 +13,7 @@ fn test_stats() {
     let vlog_file: &ffi::OsStr = "robt-users-level-1.vlog".as_ref();
 
     let stats1 = Stats {
+        name: "test_stats".to_string(),
         z_blocksize: 16384,
         m_blocksize: 4096,
         v_blocksize: 65536,
@@ -40,7 +41,10 @@ fn test_stats() {
     assert!(stats1 == stats2);
 
     let vlog_file: &ffi::OsStr = "robt-users-level-1.vlog".as_ref();
+    let dir: &ffi::OsStr = "/path/to/dummy/dir".as_ref();
     let cnf = Config {
+        dir: dir.to_os_string(),
+        name: "test_stats".to_string(),
         z_blocksize: 16384,
         m_blocksize: 4096,
         v_blocksize: 65536,
@@ -103,7 +107,10 @@ fn test_meta_items() {
 #[test]
 fn test_config() {
     let vlog_file: &ffi::OsStr = "same-file.log".as_ref();
+    let dir: &ffi::OsStr = "/path/to/dummy/dir".as_ref();
     let mut config1 = Config {
+        dir: dir.to_os_string(),
+        name: "test_config".to_string(),
         z_blocksize: 1024 * 4,
         v_blocksize: 1024 * 16,
         m_blocksize: 1024 * 32,

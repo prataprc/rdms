@@ -81,7 +81,7 @@ where
 {
     type I = Box<Mvcc<K, V>>;
 
-    fn to_name(&self) -> String {
+    fn to_type(&self) -> String {
         "mvcc".to_string()
     }
 
@@ -385,6 +385,10 @@ where
 {
     type W = MvccWriter<K, V>;
     type R = MvccReader<K, V>;
+
+    fn to_name(&self) -> String {
+        self.name.clone()
+    }
 
     /// Application can set the start sequence number for this index.
     fn set_seqno(&mut self, seqno: u64) {

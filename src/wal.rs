@@ -447,12 +447,12 @@ where
                             *y_entry = Some(Ok(ye));
                             Some(Ok(xe))
                         }
-                        cmp::Ordering::Equal => unreachable!(),
                         cmp::Ordering::Greater => {
                             *y_entry = y.next();
                             *x_entry = Some(Ok(xe));
                             Some(Ok(ye))
                         }
+                        cmp::Ordering::Equal => unreachable!(),
                     }
                 }
                 (Some(Ok(xe)), None) => {

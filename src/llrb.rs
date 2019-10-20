@@ -71,7 +71,7 @@ where
 {
     type I = Box<Llrb<K, V>>;
 
-    fn to_name(&self) -> String {
+    fn to_type(&self) -> String {
         "llrb".to_string()
     }
 
@@ -318,6 +318,10 @@ where
 {
     type W = LlrbWriter<K, V>;
     type R = LlrbReader<K, V>;
+
+    fn to_name(&self) -> String {
+        self.name.clone()
+    }
 
     /// Application can set the start sequence number for this index.
     fn set_seqno(&mut self, seqno: u64) {

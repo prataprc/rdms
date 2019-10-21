@@ -70,7 +70,7 @@ use crate::{
 include!("robt_marker.rs");
 
 #[derive(Clone)]
-struct Name(String);
+pub struct Name(String);
 
 impl Name {
     fn next(self) -> Name {
@@ -121,15 +121,16 @@ impl RobtFactory {
     // a. must have a `.indx` suffix.
     // b. must have the robt naming convention, refer `Name` type for details.
     fn to_name(file_name: &ffi::OsStr) -> Option<Name> {
-        let stem: &str = match path::Path::new(file_name).extension() {
+        let stem = match path::Path::new(file_name).extension() {
             Some(ext) if ext.to_str() == Some("indx") => {
                 // ignore the dir-path and the extension, just the file-stem
-                path::Path::new(file_name).file_stem().map(|x| x.as_ref())
+                path::Path::new(file_name).file_stem()
             }
             Some(_) | None => None,
         }?;
-        let (s, n): (String, usize) = Name(stem.to_string()).into()?;
-        Some((s, n).into())
+        let stem = stem.to_str()?.to_string();
+        let parts: Option<(String, usize)> = Name(stem).into();
+        Some(parts?.into())
     }
 }
 
@@ -234,7 +235,7 @@ where
     fn to_metadata(&mut self) -> Result<Vec<u8>> {
         match self {
             Robt::Snapshot { meta, .. } => {
-                if let MetaItem::AppMetadata(data) = meta[2] {
+                if let MetaItem::AppMetadata(data) = &meta[2] {
                     Ok(data.clone())
                 } else {
                     panic!("not reachable")
@@ -268,15 +269,15 @@ where
         panic!("not supported")
     }
 
-    fn commit(&mut self, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<Self> {
+    fn commit(&mut self, iter: IndexIter<K, V>, md: Vec<u8>) -> Result<Self> {
         match self {
             Robt::Build {
                 dir, name, config, ..
             } => {
                 let b = Builder::<K, V>::initial(dir, &name.0, config.clone())?;
-                b.build(iter, meta)?;
+                b.build(iter, md)?;
 
-                let snapshot = Snapshot::<K, V>::open(dir, &name)?;
+                let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
                 Ok(Robt::Snapshot {
                     dir: dir.clone(),
                     name: name.clone(),
@@ -294,9 +295,9 @@ where
                 stats,
                 ..
             } => {
-                let name = name.next();
+                let name = name.clone().next();
                 let b = Builder::incremental(dir, &name.0, config.clone())?;
-                b.build(iter, meta)?;
+                b.build(iter, md)?;
 
                 let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
                 Ok(Robt::Snapshot {
@@ -306,18 +307,18 @@ where
                     meta: snapshot.meta.clone(),
                     config: snapshot.config.clone(),
                     stats: snapshot.to_stats()?,
-                });
+                })
             }
         }
     }
 
-    fn compact(&mut self, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<Self> {
+    fn compact(&mut self, iter: IndexIter<K, V>, md: Vec<u8>) -> Result<Self> {
         match self {
             Robt::Build {
                 dir, name, config, ..
             } => {
                 let b = Builder::<K, V>::initial(dir, &name.0, config.clone())?;
-                b.build(iter, meta)?;
+                b.build(iter, md)?;
 
                 let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
                 Ok(Robt::Snapshot {
@@ -337,9 +338,9 @@ where
                 stats,
                 ..
             } => {
-                let name = name.next();
+                let name = name.clone().next();
                 let b = Builder::initial(dir, &name.0, config.clone())?;
-                b.build(iter, meta)?;
+                b.build(iter, md.clone())?;
 
                 let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
                 Ok(Robt::Snapshot {
@@ -349,7 +350,7 @@ where
                     meta: snapshot.meta.clone(),
                     config: snapshot.config.clone(),
                     stats: snapshot.to_stats()?,
-                });
+                })
             }
         }
     }

@@ -69,6 +69,37 @@ use crate::{
 
 include!("robt_marker.rs");
 
+#[derive(Clone)]
+struct Name(String);
+
+impl Name {
+    fn next(self) -> Name {
+        let (s, n): (String, usize) = From::from(self);
+        From::from(s, n + 1)
+    }
+}
+
+impl From<(String, usize)> for Name {
+    fn from((s, n): (String, usize)) -> Name {
+        Name(format!("{}-robt-{}", s, n))
+    }
+}
+
+impl From<Name> for Option<(String, usize)> {
+    fn from(name: Name) -> Option<(String, usize)> {
+        let parts: Vec<&str> = name.split('-').collect();
+        if parts.len() < 3 {
+            None
+        } else if parts[parts.len() - 2] != "robt" {
+            None
+        } else {
+            let n = parts[parts.len() - 1].parse::<usize>().ok()?;
+            let s = parts[..(parts.len() - 3)].join('-');
+            Some((s, n))
+        }
+    }
+}
+
 pub struct RobtFactory {
     config: Config,
 }

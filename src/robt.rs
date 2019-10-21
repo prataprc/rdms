@@ -50,7 +50,7 @@ use std::{
     fs,
     io::Write,
     marker, mem,
-    ops::{Bound, RangeBounds},
+    ops::{Bound, Deref, RangeBounds},
     path, result,
     str::FromStr,
     sync::{self, mpsc},
@@ -186,7 +186,7 @@ where
             config: snapshot.config.clone(),
             stats: snapshot.to_stats()?,
         };
-        Ok(Robt::new( inner ))
+        Ok(Robt::new(inner))
     }
 
     fn to_type(&self) -> String {
@@ -252,14 +252,15 @@ where
 
     fn to_name(&self) -> String {
         let inner = self.inner.lock().unwrap();
-        match inner {
+        match inner.deref() {
             InnerRobt::Build { name, .. } => name.0.clone(),
             InnerRobt::Snapshot { name, .. } => name.0.clone(),
         }
     }
 
     fn to_metadata(&mut self) -> Result<Vec<u8>> {
-        match &self.inner {
+        let inner = self.inner.lock().unwrap();
+        match inner.deref() {
             InnerRobt::Snapshot { meta, .. } => {
                 if let MetaItem::AppMetadata(data) = &meta[2] {
                     Ok(data.clone())
@@ -273,7 +274,8 @@ where
 
     /// Return the current seqno tracked by this index.
     fn to_seqno(&mut self) -> u64 {
-        match &self.inner {
+        let inner = self.inner.lock().unwrap();
+        match inner.deref() {
             InnerRobt::Build { .. } => panic!("not reachable"),
             InnerRobt::Snapshot { stats, .. } => stats.seqno,
         }
@@ -285,11 +287,14 @@ where
     }
 
     fn to_reader(&mut self) -> Result<Self::R> {
-        info!(target: "robt", "creating a new reader for {}", self.to_name());
-
-        match &self.inner {
+        let inner = self.inner.lock().unwrap();
+        match inner.deref() {
             InnerRobt::Snapshot { dir, name, .. } => {
-                Snapshot::open(dir, &name.0),
+                info!(
+                    target: "robt",
+                    "creating a new reader for {}", self.to_name()
+                );
+                Snapshot::open(dir, &name.0)
             }
             InnerRobt::Build { .. } => panic!("cannot create a reader"),
         }
@@ -300,7 +305,8 @@ where
     }
 
     fn commit(&mut self, iter: IndexIter<K, V>, md: Vec<u8>) -> Result<Self> {
-        match &self.inner {
+        let inner = self.inner.lock().unwrap();
+        match inner.deref() {
             InnerRobt::Build {
                 dir, name, config, ..
             } => {
@@ -308,13 +314,21 @@ where
                 b.build(iter, md)?;
 
                 let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
+                let stats = snapshot.to_stats()?;
+
+                info!(
+                    target: "robt",
+                    "flush commit to {}, epoch:{} build_time:{}",
+                    stats.epoch, time::Duration::from_nanos(stats.build_time)
+                );
+
                 let inner = InnerRobt::Snapshot {
                     dir: dir.clone(),
                     name: name.clone(),
                     footprint: snapshot.footprint()?,
                     meta: snapshot.meta.clone(),
                     config: snapshot.config.clone(),
-                    stats: snapshot.to_stats()?,
+                    stats,
                 };
                 Ok(Robt { inner })
             }
@@ -331,6 +345,14 @@ where
                 b.build(iter, md)?;
 
                 let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
+                let stats = snapshot.to_stats()?;
+
+                info!(
+                    target: "robt",
+                    "incremental commit to {}, epoch:{} build_time:{}",
+                    stats.epoch, time::Duration::from_nanos(stats.build_time)
+                );
+
                 let inner = InnerRobt::Snapshot {
                     dir: dir.clone(),
                     name: name.clone(),
@@ -351,6 +373,12 @@ where
             } => {
                 let b = Builder::<K, V>::initial(dir, &name.0, config.clone())?;
                 b.build(iter, md)?;
+
+                info!(
+                    target: "robt",
+                    "flush compact to {} epoch:{} build_time:{}",
+                    stats.epoch, time::Duration::from_nanos(stats.build_time)
+                );
 
                 let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
                 let inner = InnerRobt::Snapshot {
@@ -376,6 +404,14 @@ where
                 b.build(iter, md.clone())?;
 
                 let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
+                let stats = snapshot.to_stats()?;
+
+                info!(
+                    target: "robt",
+                    "full compact to {}, epoch:{} build_time:{}",
+                    stats.epoch, time::Duration::from_nanos(stats.build_time)
+                );
+
                 let inner = InnerRobt::Snapshot {
                     dir: dir.clone(),
                     name: name.clone(),

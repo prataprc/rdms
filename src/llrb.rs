@@ -327,7 +327,7 @@ where
 
     fn set_seqno(&mut self, seqno: u64) {
         let n = self.multi_rw();
-        if n > Llrb::CONCUR_REF_COUNT {
+        if n > Llrb::<K, V>::CONCUR_REF_COUNT {
             panic!("cannot configure Llrb with active readers/writers {}", n)
         }
         self.seqno = seqno;
@@ -349,7 +349,7 @@ where
     fn to_writer(&mut self) -> Result<Self::W> {
         let index = unsafe {
             // transmute self as void pointer.
-            Box::from_raw(self as *mut Llrb<K, V> as *mut ffi::c_void)
+            Box::from_raw(&mut **self as *mut Llrb<K, V> as *mut ffi::c_void)
         };
         let writer = Arc::clone(&self.writers);
         Ok(LlrbWriter::<K, V>::new(index, writer))

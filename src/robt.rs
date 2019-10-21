@@ -74,8 +74,10 @@ struct Name(String);
 
 impl Name {
     fn next(self) -> Name {
-        let (s, n): (String, usize) = From::from(self);
-        From::from((s, n + 1))
+        match From::from(self) {
+            Some((s, n)) => From::from((s, n + 1)),
+            None => unreachable!(),
+        }
     }
 }
 
@@ -87,14 +89,14 @@ impl From<(String, usize)> for Name {
 
 impl From<Name> for Option<(String, usize)> {
     fn from(name: Name) -> Option<(String, usize)> {
-        let parts: Vec<&str> = name.split('-').collect();
+        let parts: Vec<&str> = name.0.split('-').collect();
         if parts.len() < 3 {
             None
         } else if parts[parts.len() - 2] != "robt" {
             None
         } else {
             let n = parts[parts.len() - 1].parse::<usize>().ok()?;
-            let s = parts[..(parts.len() - 3)].join('-');
+            let s = parts[..(parts.len() - 3)].join("-");
             Some((s, n))
         }
     }
@@ -119,10 +121,10 @@ impl RobtFactory {
     // a. must have a `.indx` suffix.
     // b. must have the robt naming convention, refer `Name` type for details.
     fn to_name(file_name: &ffi::OsStr) -> Option<Name> {
-        let stem = match path::Path::new(file_name).extension() {
+        let stem: &str = match path::Path::new(file_name).extension() {
             Some(ext) if ext.to_str() == Some("indx") => {
                 // ignore the dir-path and the extension, just the file-stem
-                path::Path::new(file_name).file_stem()
+                path::Path::new(file_name).file_stem().map(|x| x.as_ref())
             }
             Some(_) | None => None,
         }?;
@@ -224,8 +226,8 @@ where
 
     fn to_name(&self) -> String {
         match self {
-            Robt::Build { name, .. } => name.clone(),
-            Robt::Snapshot { name, .. } => name.clone(),
+            Robt::Build { name, .. } => name.0.clone(),
+            Robt::Snapshot { name, .. } => name.0.clone(),
         }
     }
 
@@ -234,8 +236,9 @@ where
             Robt::Snapshot { meta, .. } => {
                 if let MetaItem::AppMetadata(data) = meta[2] {
                     Ok(data.clone())
+                } else {
+                    panic!("not reachable")
                 }
-                panic!("not reachable")
             }
             Robt::Build { .. } => panic!("not reachable"),
         }
@@ -256,7 +259,7 @@ where
 
     fn to_reader(&mut self) -> Result<Self::R> {
         match self {
-            Robt::Snapshot { dir, name, .. } => Snapshot::open(dir, &name),
+            Robt::Snapshot { dir, name, .. } => Snapshot::open(dir, &name.0),
             Robt::Build { .. } => panic!("cannot create a reader"),
         }
     }
@@ -270,18 +273,18 @@ where
             Robt::Build {
                 dir, name, config, ..
             } => {
-                let b = Builder::<K, V>::initial(dir, name, config.clone())?;
+                let b = Builder::<K, V>::initial(dir, &name.0, config.clone())?;
                 b.build(iter, meta)?;
 
                 let snapshot = Snapshot::<K, V>::open(dir, &name)?;
-                Robt::Snapshot {
+                Ok(Robt::Snapshot {
                     dir: dir.clone(),
                     name: name.clone(),
                     footprint: snapshot.footprint()?,
                     meta: snapshot.meta.clone(),
                     config: snapshot.config.clone(),
                     stats: snapshot.to_stats()?,
-                }
+                })
             }
             Robt::Snapshot {
                 dir,
@@ -289,20 +292,21 @@ where
                 meta,
                 config,
                 stats,
+                ..
             } => {
                 let name = name.next();
-                let b = Builder::incremental(dir, name, config.clone())?;
+                let b = Builder::incremental(dir, &name.0, config.clone())?;
                 b.build(iter, meta)?;
 
-                let snapshot = Snapshot::<K, V>::open(dir, &name)?;
-                Robt::Snapshot {
+                let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
+                Ok(Robt::Snapshot {
                     dir: dir.clone(),
                     name: name.clone(),
                     footprint: snapshot.footprint()?,
                     meta: snapshot.meta.clone(),
                     config: snapshot.config.clone(),
                     stats: snapshot.to_stats()?,
-                };
+                });
             }
         }
     }
@@ -312,18 +316,18 @@ where
             Robt::Build {
                 dir, name, config, ..
             } => {
-                let b = Builder::<K, V>::initial(dir, name, config.clone())?;
+                let b = Builder::<K, V>::initial(dir, &name.0, config.clone())?;
                 b.build(iter, meta)?;
 
-                let snapshot = Snapshot::<K, V>::open(dir, &name)?;
-                Robt::Snapshot {
+                let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
+                Ok(Robt::Snapshot {
                     dir: dir.clone(),
                     name: name.clone(),
                     footprint: snapshot.footprint()?,
                     meta: snapshot.meta.clone(),
                     config: snapshot.config.clone(),
                     stats: snapshot.to_stats()?,
-                }
+                })
             }
             Robt::Snapshot {
                 dir,
@@ -331,20 +335,21 @@ where
                 meta,
                 config,
                 stats,
+                ..
             } => {
                 let name = name.next();
-                let b = Builder::initial(dir, name, config.clone())?;
+                let b = Builder::initial(dir, &name.0, config.clone())?;
                 b.build(iter, meta)?;
 
-                let snapshot = Snapshot::<K, V>::open(dir, &name)?;
-                Robt::Snapshot {
+                let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
+                Ok(Robt::Snapshot {
                     dir: dir.clone(),
                     name: name.clone(),
                     footprint: snapshot.footprint()?,
                     meta: snapshot.meta.clone(),
                     config: snapshot.config.clone(),
                     stats: snapshot.to_stats()?,
-                };
+                });
             }
         }
     }

@@ -393,7 +393,7 @@ where
 
     fn set_seqno(&mut self, seqno: u64) {
         let n = self.multi_rw();
-        if n > Self::CONCUR_REF_COUNT {
+        if n > Mvcc::<K, V>::CONCUR_REF_COUNT {
             panic!("cannot configure Mvcc with active readers/writer {}", n);
         }
 
@@ -407,7 +407,7 @@ where
     fn to_reader(&mut self) -> Result<Self::R> {
         let index: Box<std::ffi::c_void> = unsafe {
             // transmute self as void pointer.
-            Box::from_raw(self as *mut Mvcc<K, V> as *mut std::ffi::c_void)
+            Box::from_raw(&mut **self as *mut Mvcc<K, V> as *mut std::ffi::c_void)
         };
         Ok(MvccReader::<K, V>::new(index))
     }
@@ -417,7 +417,7 @@ where
     fn to_writer(&mut self) -> Result<Self::W> {
         let index: Box<std::ffi::c_void> = unsafe {
             // transmute self as void pointer.
-            Box::from_raw(self as *mut Mvcc<K, V> as *mut std::ffi::c_void)
+            Box::from_raw(&mut **self as *mut Mvcc<K, V> as *mut std::ffi::c_void)
         };
         Ok(MvccWriter::<K, V>::new(index))
     }

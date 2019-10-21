@@ -282,8 +282,8 @@ where
     }
 
     /// Application can set the start sequence number for this index.
-    fn set_seqno(&mut self, seqno: u64) {
-        panic!("not supported")
+    fn set_seqno(&mut self, _seqno: u64) {
+        // noop
     }
 
     fn to_reader(&mut self) -> Result<Self::R> {
@@ -316,10 +316,12 @@ where
                 let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
                 let stats = snapshot.to_stats()?;
 
+                // TODO: make this into stats-display
+                let bt = time::Duration::from_nanos(stats.build_time);
                 info!(
                     target: "robt",
-                    "flush commit to {}, epoch:{} build_time:{}",
-                    stats.epoch, time::Duration::from_nanos(stats.build_time)
+                    "flush commit to {}, epoch:{} build_time:{:?}",
+                    name, stats.epoch, bt
                 );
 
                 let inner = InnerRobt::Snapshot {
@@ -330,15 +332,10 @@ where
                     config: snapshot.config.clone(),
                     stats,
                 };
-                Ok(Robt { inner })
+                Ok(Robt::new(inner))
             }
             InnerRobt::Snapshot {
-                dir,
-                name,
-                meta,
-                config,
-                stats,
-                ..
+                dir, name, config, ..
             } => {
                 let name = name.clone().next();
                 let b = Builder::incremental(dir, &name.0, config.clone())?;
@@ -347,10 +344,12 @@ where
                 let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
                 let stats = snapshot.to_stats()?;
 
+                // TODO: make this into stats-display
+                let bt = time::Duration::from_nanos(stats.build_time);
                 info!(
                     target: "robt",
-                    "incremental commit to {}, epoch:{} build_time:{}",
-                    stats.epoch, time::Duration::from_nanos(stats.build_time)
+                    "incremental commit to {}, epoch:{} build_time:{:?}",
+                    name, stats.epoch, bt
                 );
 
                 let inner = InnerRobt::Snapshot {
@@ -361,43 +360,43 @@ where
                     config: snapshot.config.clone(),
                     stats: snapshot.to_stats()?,
                 };
-                Ok(Robt { inner })
+                Ok(Robt::new(inner))
             }
         }
     }
 
     fn compact(&mut self, iter: IndexIter<K, V>, md: Vec<u8>) -> Result<Self> {
-        match &self.inner {
+        let inner = self.inner.lock().unwrap();
+        match inner.deref() {
             InnerRobt::Build {
                 dir, name, config, ..
             } => {
                 let b = Builder::<K, V>::initial(dir, &name.0, config.clone())?;
                 b.build(iter, md)?;
 
+                let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
+                let stats = snapshot.to_stats()?;
+
+                // TODO: make this into stats-display
+                let bt = time::Duration::from_nanos(stats.build_time);
                 info!(
                     target: "robt",
-                    "flush compact to {} epoch:{} build_time:{}",
-                    stats.epoch, time::Duration::from_nanos(stats.build_time)
+                    "flush compact to {} epoch:{} build_time:{:?}",
+                    name, stats.epoch, bt,
                 );
 
-                let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
                 let inner = InnerRobt::Snapshot {
                     dir: dir.clone(),
                     name: name.clone(),
                     footprint: snapshot.footprint()?,
                     meta: snapshot.meta.clone(),
                     config: snapshot.config.clone(),
-                    stats: snapshot.to_stats()?,
+                    stats,
                 };
-                Ok(Robt { inner })
+                Ok(Robt::new(inner))
             }
             InnerRobt::Snapshot {
-                dir,
-                name,
-                meta,
-                config,
-                stats,
-                ..
+                dir, name, config, ..
             } => {
                 let name = name.clone().next();
                 let b = Builder::initial(dir, &name.0, config.clone())?;
@@ -406,10 +405,12 @@ where
                 let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
                 let stats = snapshot.to_stats()?;
 
+                // TODO: make this into stats-display
+                let bt = time::Duration::from_nanos(stats.build_time);
                 info!(
                     target: "robt",
-                    "full compact to {}, epoch:{} build_time:{}",
-                    stats.epoch, time::Duration::from_nanos(stats.build_time)
+                    "full compact to {}, epoch:{} build_time:{:?}",
+                    name, stats.epoch, bt
                 );
 
                 let inner = InnerRobt::Snapshot {
@@ -418,9 +419,9 @@ where
                     footprint: snapshot.footprint()?,
                     meta: snapshot.meta.clone(),
                     config: snapshot.config.clone(),
-                    stats: snapshot.to_stats()?,
+                    stats,
                 };
-                Ok(Robt { inner })
+                Ok(Robt::new(inner))
             }
         }
     }
@@ -433,7 +434,8 @@ where
     <V as Diff>::D: Serialize + Footprint,
 {
     fn footprint(&self) -> Result<isize> {
-        match &self.inner {
+        let inner = self.inner.lock().unwrap();
+        match inner.deref() {
             InnerRobt::Snapshot { footprint, .. } => Ok(*footprint),
             InnerRobt::Build { .. } => unreachable!(),
         }
@@ -557,20 +559,20 @@ impl fmt::Display for Config {
     fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
         let (z, m, v) = (self.z_blocksize, self.m_blocksize, self.v_blocksize);
         let nil: ffi::OsString = From::from("nil");
-        write!(f, "config.name = {}\n", self.name)?;
+        write!(f, "robt.name = {}\n", self.name)?;
         write!(
             f,
-            "config.blocksize = {{ z = {}, m = {}, v = {} }}\n",
+            "robt.config.blocksize = {{ z = {}, m = {}, v = {} }}\n",
             z, m, v
         )?;
         write!(
             f,
-            "config = {{ delta_ok = {}, value_in_vlog = {} }}\n",
+            "robt.config = {{ delta_ok = {}, value_in_vlog = {} }}\n",
             self.delta_ok, self.value_in_vlog,
         )?;
         write!(
             f,
-            "config = {{ vlog_file = {:?}, flush_queue_size: {} }}\n",
+            "robt.config = {{ vlog_file = {:?}, flush_queue_size: {} }}\n",
             self.vlog_file.as_ref().map_or(nil, |f| f.clone()),
             self.flush_queue_size,
         )
@@ -582,17 +584,20 @@ impl ToJson for Config {
         let (z, m, v) = (self.z_blocksize, self.m_blocksize, self.v_blocksize);
         let nil: ffi::OsString = From::from("nil");
         let props = [
-            format!(r#""name": {}"#, self.name),
             format!(r#""blocksize":  {{ "z": {}, "m": {}, "v": {} }}"#, z, m, v),
-            format!(r#""delta_ok": {}"#, self.delta_ok,),
-            format!(r#""value_in_vlog": {}"#, self.value_in_vlog,),
+            format!(r#""delta_ok": {}"#, self.delta_ok),
+            format!(r#""value_in_vlog": {}"#, self.value_in_vlog),
             format!(
-                r#""vlog_file": {:?}"#,
+                r#""vlog_file": "{:?}""#,
                 self.vlog_file.as_ref().map_or(nil, |f| f.clone()),
             ),
             format!(r#""flush_queue_size": {}"#, self.flush_queue_size,),
         ];
-        format!("{{ {} }}", props.join(", "))
+        format!(
+            r#"{{ "robt": {{ "name": "{}", "config": {{ {} }} }}"#,
+            self.name,
+            props.join(", ")
+        )
     }
 }
 
@@ -1352,21 +1357,21 @@ fn thread_flush(
     mut fd: fs::File,
     rx: mpsc::Receiver<Vec<u8>>,
 ) -> Result<()> {
-    fd.lock_exclusive(); // <----- write lock
-                         // let mut fpos = 0;
+    fd.lock_exclusive()?; // <----- write lock
+                          // let mut fpos = 0;
     for data in rx {
         // println!("flusher {:?} {} {}", file, fpos, data.len());
         // fpos += data.len();
         let n = fd.write(&data)?;
         if n != data.len() {
             let msg = format!("flusher: {:?} {}/{}...", &file, data.len(), n);
-            fd.unlock(); // <----- write un-lock
+            fd.unlock()?; // <----- write un-lock
             return Err(Error::PartialWrite(msg));
         }
     }
     fd.sync_all()?;
     // file descriptor and receiver channel shall be dropped.
-    fd.unlock(); // <----- write un-lock
+    fd.unlock()?; // <----- write un-lock
     Ok(())
 }
 
@@ -1395,8 +1400,8 @@ where
     V: Clone + Diff + Serialize,
 {
     fn drop(&mut self) {
-        self.fd.0.unlock();
-        self.fd.1.as_ref().map(|fd| fd.unlock());
+        self.fd.0.unlock().ok();
+        self.fd.1.as_ref().map(|fd| fd.unlock().ok());
     }
 }
 
@@ -1437,7 +1442,7 @@ where
             .map(|s| util::open_file_r(s.as_ref()))
             .transpose()?;
 
-        index_fd.lock_shared();
+        index_fd.lock_shared()?;
         vlog_fd.as_ref().map(|fd| fd.lock_shared());
 
         let mut snap = Snapshot {

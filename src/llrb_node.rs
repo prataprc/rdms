@@ -305,14 +305,14 @@ impl fmt::Display for Stats {
             } => {
                 let b = blacks.as_ref().map_or(none.clone(), |x| x.to_string());
                 let d = depths.as_ref().map_or(none.clone(), |x| x.to_string());
-                write!(f, r#"llrb.name = {}\n"#, name);
+                write!(f, r#"llrb.name = {}\n"#, name)?;
                 write!(
                     f,
                     r#"llrb = {{ entries = {}, node_size = {}, blacks = {} }}"#,
                     entries, node_size, b,
-                );
-                write!(f, "llrb.rw_latch = {}\n", rw_latch);
-                write!(f, "llrb.depths = {}\n", d);
+                )?;
+                write!(f, "llrb.rw_latch = {}\n", rw_latch)?;
+                write!(f, "llrb.depths = {}\n", d)
             }
             Stats::Mvcc {
                 name,
@@ -325,18 +325,17 @@ impl fmt::Display for Stats {
             } => {
                 let b = blacks.as_ref().map_or(none.clone(), |x| x.to_string());
                 let d = depths.as_ref().map_or(none.clone(), |x| x.to_string());
-                write!(f, r#"mvcc.name = {}\n"#, name);
+                write!(f, r#"mvcc.name = {}\n"#, name)?;
                 write!(
                     f,
                     r#"mvcc = {{ entries = {}, node_size = {}, blacks = {} }}"#,
                     entries, node_size, b,
-                );
-                write!(f, "mvcc.rw_latch = {}\n", rw_latch);
-                write!(f, "mvcc.snap_latch = {}\n", snapshot_latch);
-                write!(f, "mvcc.depths = {}\n", d);
+                )?;
+                write!(f, "mvcc.rw_latch = {}\n", rw_latch)?;
+                write!(f, "mvcc.snap_latch = {}\n", snapshot_latch)?;
+                write!(f, "mvcc.depths = {}\n", d)
             }
         }
-        Ok(())
     }
 }
 

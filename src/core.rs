@@ -750,7 +750,7 @@ where
         };
 
         self.deltas.insert(0, delta);
-        self.prepend_version_nolsm(nentry);
+        self.prepend_version_nolsm(nentry)?;
         Ok(size.try_into().unwrap())
     }
 
@@ -919,7 +919,8 @@ where
         a.validate_flush_merge(&b);
         for ne in a.versions().collect::<Vec<Entry<K, V>>>().into_iter().rev() {
             // println!("flush_merge {} {}", ne.to_seqno(), ne.is_deleted());
-            b.prepend_version(ne, true /* lsm */);
+            // TODO: is it okay to ignore the result-err here ?
+            b.prepend_version(ne, true /* lsm */).ok();
         }
         b
     }

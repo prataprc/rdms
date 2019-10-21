@@ -78,7 +78,7 @@ where
         0
     }
 
-    fn set_seqno(&mut self, seqno: u64) {
+    fn set_seqno(&mut self, _seqno: u64) {
         // noop
     }
 
@@ -104,15 +104,15 @@ where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
 {
-    fn set(&mut self, k: K, v: V) -> Result<Option<Entry<K, V>>> {
+    fn set(&mut self, _: K, _: V) -> Result<Option<Entry<K, V>>> {
         panic!("not supported")
     }
 
-    fn set_cas(&mut self, k: K, v: V, cas: u64) -> Result<Option<Entry<K, V>>> {
+    fn set_cas(&mut self, _: K, _: V, _cas: u64) -> Result<Option<Entry<K, V>>> {
         panic!("not supported")
     }
 
-    fn delete<Q>(&mut self, key: &Q) -> Result<Option<Entry<K, V>>>
+    fn delete<Q>(&mut self, _key: &Q) -> Result<Option<Entry<K, V>>>
     where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,

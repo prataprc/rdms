@@ -292,7 +292,7 @@ where
     }
 
     fn set_seqno(&mut self, seqno: u64) {
-        panic!("not supported")
+        // noop
     }
 
     fn to_reader(&mut self) -> Result<DgmReader<K, V, F>> {

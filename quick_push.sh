@@ -1,4 +1,4 @@
 git add .
-git commitv . -m "development commit"
+git commitv . -m '$1'
 git push -u origin master
 

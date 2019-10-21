@@ -53,7 +53,7 @@ use std::{
     ops::{Bound, RangeBounds},
     path, result,
     str::FromStr,
-    sync::mpsc,
+    sync::{self, mpsc},
     thread, time,
 };
 
@@ -155,7 +155,7 @@ where
             _phantom_key: marker::PhantomData,
             _phantom_val: marker::PhantomData,
         };
-        Ok(Robt { inner })
+        Ok(Robt::new(inner))
     }
 
     fn open(
@@ -186,7 +186,7 @@ where
             config: snapshot.config.clone(),
             stats: snapshot.to_stats()?,
         };
-        Ok(Robt { inner })
+        Ok(Robt::new( inner ))
     }
 
     fn to_type(&self) -> String {
@@ -194,13 +194,27 @@ where
     }
 }
 
+/// Read only btree. Immutable, fully-packed and lockless sharing.
 pub struct Robt<K, V>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
 {
-    inner: InnerRobt<K, V>,
+    inner: sync::Mutex<InnerRobt<K, V>>,
+}
+
+impl<K, V> Robt<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Serialize,
+{
+    fn new(inner: InnerRobt<K, V>) -> Robt<K, V> {
+        Robt {
+            inner: sync::Mutex::new(inner),
+        }
+    }
 }
 
 enum InnerRobt<K, V>
@@ -237,7 +251,8 @@ where
     type W = NoDisk<K, V>;
 
     fn to_name(&self) -> String {
-        match &self.inner {
+        let inner = self.inner.lock().unwrap();
+        match inner {
             InnerRobt::Build { name, .. } => name.0.clone(),
             InnerRobt::Snapshot { name, .. } => name.0.clone(),
         }
@@ -270,8 +285,12 @@ where
     }
 
     fn to_reader(&mut self) -> Result<Self::R> {
+        info!(target: "robt", "creating a new reader for {}", self.to_name());
+
         match &self.inner {
-            InnerRobt::Snapshot { dir, name, .. } => Snapshot::open(dir, &name.0),
+            InnerRobt::Snapshot { dir, name, .. } => {
+                Snapshot::open(dir, &name.0),
+            }
             InnerRobt::Build { .. } => panic!("cannot create a reader"),
         }
     }

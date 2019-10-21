@@ -24,6 +24,9 @@ Code Review checklist
 * [ ] Avoid println!() macro in production code.
 * [ ] Document rdms::error::Error type and all its variants.
 
+* Avoid panic!() in inner-level functions. If at all it is used, use
+them at the API level.
+
 Release Checklist
 =================
 

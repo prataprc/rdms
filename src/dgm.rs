@@ -15,10 +15,43 @@ use crate::{
 
 /// Maximum number of levels to be used for disk indexes.
 pub const NLEVELS: usize = 16;
-
+// type alias to array of snapshots.
 type Levels<K, V, D> = [OuterSnapshot<K, V, D>; NLEVELS];
-
+// type alias to reader associated type for each snapshot (aka disk-index)
 type Dr<K, V, F> = <<F as DiskIndexFactory<K, V>>::I as Index<K, V>>::R;
+
+#[derive(Clone)]
+struct Name(String);
+
+impl Name {
+    fn next(self) -> Name {
+        match From::from(self) {
+            Some((s, n)) => From::from((s, n + 1)),
+            None => unreachable!(),
+        }
+    }
+}
+
+impl From<(String, usize)> for Name {
+    fn from((s, n): (String, usize)) -> Name {
+        Name(format!("{}-robt-{}", s, n))
+    }
+}
+
+impl From<Name> for Option<(String, usize)> {
+    fn from(name: Name) -> Option<(String, usize)> {
+        let parts: Vec<&str> = name.0.split('-').collect();
+        if parts.len() < 3 {
+            None
+        } else if parts[parts.len() - 2] != "robt" {
+            None
+        } else {
+            let n = parts[parts.len() - 1].parse::<usize>().ok()?;
+            let s = parts[..(parts.len() - 3)].join("-");
+            Some((s, n))
+        }
+    }
+}
 
 pub struct Dgm<K, V, F>
 where
@@ -27,7 +60,7 @@ where
     F: DiskIndexFactory<K, V>,
 {
     dir: ffi::OsString,
-    name: String,
+    name: Name,
     mem_ratio: f64,
     disk_ratio: f64,
     factory: F,
@@ -43,11 +76,11 @@ where
     <V as Diff>::D: Serialize,
     F: DiskIndexFactory<K, V>,
 {
-    /// Default ratio threshold between memory index footprint and
+    /// Default threshold between memory index footprint and
     /// the latest disk index footprint, below which a newer level
-    /// shall be created.
+    /// shall be created, for commiting new entries.
     pub const MEM_RATIO: f64 = 0.5;
-    /// Default ratio threshold between a disk index footprint and
+    /// Default threshold between a disk index footprint and
     /// the next-level disk index footprint, above which the two
     /// levels shall be compacted into a single index.
     pub const DISK_RATIO: f64 = 0.5;

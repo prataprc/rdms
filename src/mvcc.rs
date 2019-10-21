@@ -50,7 +50,6 @@ use crate::{
     llrb::Llrb,
     llrb_node::{LlrbDepth, Node, Stats},
     spinlock::{self, RWSpinlock},
-    types::Empty,
 };
 
 // TODO: Experiment with different atomic::Ordering to improve performance.
@@ -76,8 +75,8 @@ impl MvccFactory {
 
 impl<K, V> WriteIndexFactory<K, V> for MvccFactory
 where
-    K: Clone + Ord,
-    V: Clone + Diff,
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
 {
     type I = Box<Mvcc<K, V>>;
 
@@ -372,7 +371,7 @@ where
     }
 }
 
-impl<K, V> Index<K, V> for Mvcc<K, V>
+impl<K, V> Index<K, V> for Box<Mvcc<K, V>>
 where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
@@ -388,7 +387,7 @@ where
         Ok(vec![])
     }
 
-    fn to_seqno(&self) -> u64 {
+    fn to_seqno(&mut self) -> u64 {
         OuterSnapshot::clone(&self.snapshot).seqno
     }
 
@@ -434,7 +433,7 @@ where
     }
 }
 
-impl<K, V> Footprint for Mvcc<K, V>
+impl<K, V> Footprint for Box<Mvcc<K, V>>
 where
     K: Clone + Ord,
     V: Clone + Diff,

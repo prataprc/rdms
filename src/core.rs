@@ -148,8 +148,8 @@ where
 /// Factory trait to create new in-memory index snapshot.
 pub trait WriteIndexFactory<K, V>
 where
-    K: Clone + Ord,
-    V: Clone + Diff,
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
 {
     type I: Index<K, V>;
 
@@ -164,18 +164,19 @@ where
 /// Factory trait to create new on-disk index snapshot.
 pub trait DiskIndexFactory<K, V>
 where
-    K: Clone + Ord,
-    V: Clone + Diff,
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
 {
     type I: Index<K, V>;
 
     /// Create a new index instance with predefined configuration.
-    /// Typically this index will be used to commit and/or compact newer
-    /// snapshots onto disk.
+    /// Typically this index will be used to commit newer snapshots
+    /// onto disk.
     fn new(&self, dir: &ffi::OsStr, name: &str) -> Self::I;
 
-    /// Open an existin index instance with predefined configuration.
-    /// Typically called while bootstraing an index from disk.
+    /// Open an existing index instance with predefined configuration.
+    /// Typically called while bootstrapping an index from disk, and/or
+    /// compacting them.
     fn open(&self, dir: &ffi::OsStr, dir_entry: fs::DirEntry) -> Result<Self::I>;
 
     /// Factory name for identification purpose.

@@ -44,7 +44,6 @@ use crate::{
     llrb_node::{LlrbDepth, Node, Stats},
     mvcc::Snapshot,
     spinlock::{self, RWSpinlock},
-    types::Empty,
 };
 
 include!("llrb_common.rs");
@@ -66,8 +65,8 @@ impl LlrbFactory {
 
 impl<K, V> WriteIndexFactory<K, V> for LlrbFactory
 where
-    K: Clone + Ord,
-    V: Clone + Diff,
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
 {
     type I = Box<Llrb<K, V>>;
 
@@ -305,7 +304,7 @@ where
     }
 }
 
-impl<K, V> Index<K, V> for Llrb<K, V>
+impl<K, V> Index<K, V> for Box<Llrb<K, V>>
 where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
@@ -321,14 +320,14 @@ where
         Ok(vec![])
     }
 
-    fn to_seqno(&self) -> u64 {
+    fn to_seqno(&mut self) -> u64 {
         let _latch = self.latch.acquire_read(self.spin);
         self.seqno
     }
 
     fn set_seqno(&mut self, seqno: u64) {
         let n = self.multi_rw();
-        if n > Self::CONCUR_REF_COUNT {
+        if n > Llrb::CONCUR_REF_COUNT {
             panic!("cannot configure Llrb with active readers/writers {}", n)
         }
         self.seqno = seqno;
@@ -339,7 +338,7 @@ where
     fn to_reader(&mut self) -> Result<Self::R> {
         let index = unsafe {
             // transmute self as void pointer.
-            Box::from_raw(self as *mut Llrb<K, V> as *mut ffi::c_void)
+            Box::from_raw(&mut **self as *mut Llrb<K, V> as *mut ffi::c_void)
         };
         let reader = Arc::clone(&self.readers);
         Ok(LlrbReader::<K, V>::new(index, reader))
@@ -367,7 +366,7 @@ where
     }
 }
 
-impl<K, V> Footprint for Llrb<K, V>
+impl<K, V> Footprint for Box<Llrb<K, V>>
 where
     K: Clone + Ord,
     V: Clone + Diff,

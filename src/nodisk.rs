@@ -2,9 +2,9 @@ use std::{borrow::Borrow, ffi, fs, marker, ops::RangeBounds};
 
 use crate::{
     core::{Diff, DiskIndexFactory, Entry, Footprint, Index, IndexIter, Reader},
-    core::{Result, Serialize},
+    core::{Result, Serialize, Writer},
     error::Error,
-    types::{Empty, EmptyIter},
+    types::EmptyIter,
 };
 
 pub struct NoDiskFactory;
@@ -88,11 +88,6 @@ where
 
     fn to_writer(&mut self) -> Result<Self::W> {
         Ok(NoDisk::new())
-    }
-
-    /// Prepare for compaction.
-    fn to_compact(&self) -> Result<Self::C> {
-        Ok(Empty)
     }
 
     fn commit(&mut self, _: IndexIter<K, V>, _: Vec<u8>) -> Result<Self> {

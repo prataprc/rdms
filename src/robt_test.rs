@@ -9,6 +9,21 @@ use crate::{
 };
 
 #[test]
+fn test_name() {
+    let name = "somename-0-robt-0".to_string();
+    let parts: Option<(String, usize)> = name.into();
+    assert!(parts.is_some());
+    let (s, n) = parts.unwrap();
+    assert_eq!(s, "somename-0".to_string());
+    assert_eq!(n, 0);
+
+    let name1 = (s, n).into();
+    assert_eq!(name.0, name1);
+
+    assert_eq!(n.next().0, "somename-0-robt-1".to_string());
+}
+
+#[test]
 fn test_stats() {
     let vlog_file: &ffi::OsStr = "robt-users-level-1.vlog".as_ref();
 
@@ -65,7 +80,7 @@ fn test_meta_items() {
 
     let dir = std::env::temp_dir().into_os_string();
     fs::remove_file(dir.clone()).ok();
-    let name = "users".to_string();
+    let name = "test-meta-items-users-robt-0".to_string();
     let file = Config::stitch_index_file(&dir, &name);
     fs::write(&file, [1, 2, 3, 4, 5]).unwrap();
 
@@ -150,7 +165,7 @@ fn test_config() {
     let ref_file = {
         let mut rpath = path::PathBuf::new();
         rpath.push(dir_path.clone());
-        rpath.push("robt-users.indx");
+        rpath.push("users.indx");
         rpath.into_os_string()
     };
     assert_eq!(
@@ -267,7 +282,7 @@ fn run_robt_llrb(name: &str, mut n_ops: u64, key_max: i64, repeat: usize, seed: 
             dir.push("test-robt-build");
             dir.into_os_string()
         };
-        let b = Builder::commit(&dir, name, config.clone()).unwrap();
+        let b = Builder::initial(&dir, name, config.clone()).unwrap();
         let app_meta = "heloo world".to_string();
         match b.build(iter, app_meta.as_bytes().to_vec()) {
             Err(Error::EmptyIterator) if refs.len() == 0 => continue,

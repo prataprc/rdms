@@ -66,6 +66,7 @@ pub enum Error {
     Dgm(String),
     ThreadFail(String),
     EmptyIterator,
+    /// On disk snapshot is invalid.
     InvalidSnapshot(String),
     Utf8Error(std::str::Utf8Error),
     /// Inter-Process-Communication error

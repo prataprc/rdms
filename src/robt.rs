@@ -70,7 +70,7 @@ use crate::{
 include!("robt_marker.rs");
 
 #[derive(Clone)]
-pub struct Name(String);
+struct Name(String);
 
 impl Name {
     fn next(self) -> Name {
@@ -142,19 +142,20 @@ where
 {
     type I = Robt<K, V>;
 
-    fn new(&self, dir: &ffi::OsStr, name: &str) -> Robt<K, V> {
+    fn new(&self, dir: &ffi::OsStr, name: &str) -> Result<Robt<K, V>> {
         info!(target: "robt-factory", "new disk index at {:?}/{}", dir, name);
         info!(target: "robt-factory", "new index {} configuration ...", name);
         info!(target: "robt-factory", "index {} - {}", name, self.config);
 
-        Robt::Build {
+        let inner = InnerRobt::Build {
             dir: dir.to_os_string(),
             name: (name.to_string(), 0).into(),
             config: self.config.clone(),
 
             _phantom_key: marker::PhantomData,
             _phantom_val: marker::PhantomData,
-        }
+        };
+        Ok(Robt { inner })
     }
 
     fn open(
@@ -177,14 +178,15 @@ where
         info!(target: "robt-factory", "{}", self.config);
 
         let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
-        Ok(Robt::Snapshot {
+        let inner = InnerRobt::Snapshot {
             dir: dir.to_os_string(),
             name: name,
             footprint: snapshot.footprint()?,
             meta: snapshot.meta.clone(),
             config: snapshot.config.clone(),
             stats: snapshot.to_stats()?,
-        })
+        };
+        Ok(Robt { inner })
     }
 
     fn to_type(&self) -> String {
@@ -192,7 +194,16 @@ where
     }
 }
 
-pub enum Robt<K, V>
+pub struct Robt<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Serialize,
+{
+    inner: InnerRobt<K, V>,
+}
+
+enum InnerRobt<K, V>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
@@ -226,30 +237,30 @@ where
     type W = NoDisk<K, V>;
 
     fn to_name(&self) -> String {
-        match self {
-            Robt::Build { name, .. } => name.0.clone(),
-            Robt::Snapshot { name, .. } => name.0.clone(),
+        match &self.inner {
+            InnerRobt::Build { name, .. } => name.0.clone(),
+            InnerRobt::Snapshot { name, .. } => name.0.clone(),
         }
     }
 
     fn to_metadata(&mut self) -> Result<Vec<u8>> {
-        match self {
-            Robt::Snapshot { meta, .. } => {
+        match &self.inner {
+            InnerRobt::Snapshot { meta, .. } => {
                 if let MetaItem::AppMetadata(data) = &meta[2] {
                     Ok(data.clone())
                 } else {
                     panic!("not reachable")
                 }
             }
-            Robt::Build { .. } => panic!("not reachable"),
+            InnerRobt::Build { .. } => panic!("not reachable"),
         }
     }
 
     /// Return the current seqno tracked by this index.
     fn to_seqno(&mut self) -> u64 {
-        match self {
-            Robt::Build { .. } => panic!("not reachable"),
-            Robt::Snapshot { stats, .. } => stats.seqno,
+        match &self.inner {
+            InnerRobt::Build { .. } => panic!("not reachable"),
+            InnerRobt::Snapshot { stats, .. } => stats.seqno,
         }
     }
 
@@ -259,9 +270,9 @@ where
     }
 
     fn to_reader(&mut self) -> Result<Self::R> {
-        match self {
-            Robt::Snapshot { dir, name, .. } => Snapshot::open(dir, &name.0),
-            Robt::Build { .. } => panic!("cannot create a reader"),
+        match &self.inner {
+            InnerRobt::Snapshot { dir, name, .. } => Snapshot::open(dir, &name.0),
+            InnerRobt::Build { .. } => panic!("cannot create a reader"),
         }
     }
 
@@ -270,24 +281,25 @@ where
     }
 
     fn commit(&mut self, iter: IndexIter<K, V>, md: Vec<u8>) -> Result<Self> {
-        match self {
-            Robt::Build {
+        match &self.inner {
+            InnerRobt::Build {
                 dir, name, config, ..
             } => {
                 let b = Builder::<K, V>::initial(dir, &name.0, config.clone())?;
                 b.build(iter, md)?;
 
                 let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
-                Ok(Robt::Snapshot {
+                let inner = InnerRobt::Snapshot {
                     dir: dir.clone(),
                     name: name.clone(),
                     footprint: snapshot.footprint()?,
                     meta: snapshot.meta.clone(),
                     config: snapshot.config.clone(),
                     stats: snapshot.to_stats()?,
-                })
+                };
+                Ok(Robt { inner })
             }
-            Robt::Snapshot {
+            InnerRobt::Snapshot {
                 dir,
                 name,
                 meta,
@@ -300,37 +312,39 @@ where
                 b.build(iter, md)?;
 
                 let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
-                Ok(Robt::Snapshot {
+                let inner = InnerRobt::Snapshot {
                     dir: dir.clone(),
                     name: name.clone(),
                     footprint: snapshot.footprint()?,
                     meta: snapshot.meta.clone(),
                     config: snapshot.config.clone(),
                     stats: snapshot.to_stats()?,
-                })
+                };
+                Ok(Robt { inner })
             }
         }
     }
 
     fn compact(&mut self, iter: IndexIter<K, V>, md: Vec<u8>) -> Result<Self> {
-        match self {
-            Robt::Build {
+        match &self.inner {
+            InnerRobt::Build {
                 dir, name, config, ..
             } => {
                 let b = Builder::<K, V>::initial(dir, &name.0, config.clone())?;
                 b.build(iter, md)?;
 
                 let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
-                Ok(Robt::Snapshot {
+                let inner = InnerRobt::Snapshot {
                     dir: dir.clone(),
                     name: name.clone(),
                     footprint: snapshot.footprint()?,
                     meta: snapshot.meta.clone(),
                     config: snapshot.config.clone(),
                     stats: snapshot.to_stats()?,
-                })
+                };
+                Ok(Robt { inner })
             }
-            Robt::Snapshot {
+            InnerRobt::Snapshot {
                 dir,
                 name,
                 meta,
@@ -343,14 +357,15 @@ where
                 b.build(iter, md.clone())?;
 
                 let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
-                Ok(Robt::Snapshot {
+                let inner = InnerRobt::Snapshot {
                     dir: dir.clone(),
                     name: name.clone(),
                     footprint: snapshot.footprint()?,
                     meta: snapshot.meta.clone(),
                     config: snapshot.config.clone(),
                     stats: snapshot.to_stats()?,
-                })
+                };
+                Ok(Robt { inner })
             }
         }
     }
@@ -363,9 +378,9 @@ where
     <V as Diff>::D: Serialize + Footprint,
 {
     fn footprint(&self) -> Result<isize> {
-        match self {
-            Robt::Snapshot { footprint, .. } => Ok(*footprint),
-            Robt::Build { .. } => unreachable!(),
+        match &self.inner {
+            InnerRobt::Snapshot { footprint, .. } => Ok(*footprint),
+            InnerRobt::Build { .. } => unreachable!(),
         }
     }
 }

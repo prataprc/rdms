@@ -84,11 +84,11 @@ where
         "mvcc".to_string()
     }
 
-    fn new(&self, name: &str) -> Self::I {
+    fn new(&self, name: &str) -> Result<Self::I> {
         if self.lsm {
-            Mvcc::new_lsm(name)
+            Ok(Mvcc::new_lsm(name))
         } else {
-            Mvcc::new(name)
+            Ok(Mvcc::new(name))
         }
     }
 }

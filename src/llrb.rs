@@ -74,11 +74,11 @@ where
         "llrb".to_string()
     }
 
-    fn new(&self, name: &str) -> Self::I {
+    fn new(&self, name: &str) -> Result<Self::I> {
         if self.lsm {
-            Llrb::new_lsm(name)
+            Ok(Llrb::new_lsm(name))
         } else {
-            Llrb::new(name)
+            Ok(Llrb::new(name))
         }
     }
 }

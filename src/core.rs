@@ -155,7 +155,7 @@ where
 
     /// Create a new index instance with predefined configuration,
     /// Typically this index will be used to index new set of entries.
-    fn new(&self, name: &str) -> Self::I;
+    fn new(&self, name: &str) -> Result<Self::I>;
 
     /// Factory name for identification purpose.
     fn to_type(&self) -> String;
@@ -172,7 +172,7 @@ where
     /// Create a new index instance with predefined configuration.
     /// Typically this index will be used to commit newer snapshots
     /// onto disk.
-    fn new(&self, dir: &ffi::OsStr, name: &str) -> Self::I;
+    fn new(&self, dir: &ffi::OsStr, name: &str) -> Result<Self::I>;
 
     /// Open an existing index instance with predefined configuration.
     /// Typically called while bootstrapping an index from disk, and/or

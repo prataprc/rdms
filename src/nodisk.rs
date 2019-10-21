@@ -21,8 +21,8 @@ where
 {
     type I = NoDisk<K, V>;
 
-    fn new(&self, _dir: &ffi::OsStr, _name: &str) -> NoDisk<K, V> {
-        NoDisk::new()
+    fn new(&self, _dir: &ffi::OsStr, _name: &str) -> Result<NoDisk<K, V>> {
+        Ok(NoDisk::new())
     }
 
     fn open(&self, _: &ffi::OsStr, _: fs::DirEntry) -> Result<NoDisk<K, V>> {

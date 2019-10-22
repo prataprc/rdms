@@ -220,12 +220,12 @@ where
 
     /// Commit entries from iterator into the implementing index.
     /// TODO: Return number of entries commited to disk.
-    fn commit(&mut self, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<Self>;
+    fn commit(self, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<Self>;
 
     /// Commit entries from iterator into the implementing index and
     /// compact the index.
     /// TODO: Return number of entries commited to disk.
-    fn compact(&mut self, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<Self>;
+    fn compact(self) -> Result<Self>;
 }
 
 /// Index read operations.

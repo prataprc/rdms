@@ -422,14 +422,13 @@ where
         Ok(MvccWriter::<K, V>::new(index))
     }
 
-    fn commit(&mut self, _: IndexIter<K, V>, _: Vec<u8>) -> Result<Self> {
+    fn commit(self, _: IndexIter<K, V>, _: Vec<u8>) -> Result<Self> {
         // TODO: figure out a way to merge `iter` into Mvcc
-        panic!("to be implemented")
+        Ok(self)
     }
 
-    fn compact(&mut self, _: IndexIter<K, V>, _: Vec<u8>) -> Result<Self> {
-        // TODO: figure out a way to merge `iter` into Mvcc
-        panic!("to be implemented")
+    fn compact(self) -> Result<Self> {
+        Ok(self)
     }
 }
 

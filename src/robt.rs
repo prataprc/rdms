@@ -37,7 +37,7 @@
 //!
 
 use fs2::FileExt;
-use jsondata::{Json, Property};
+use jsondata::Json;
 use lazy_static::lazy_static;
 use log::{debug, info};
 
@@ -45,9 +45,7 @@ use std::{
     borrow::Borrow,
     cmp,
     convert::TryInto,
-    ffi,
-    fmt::{self, Display},
-    fs,
+    ffi, fmt, fs,
     io::Write,
     marker, mem,
     ops::{Bound, Deref, RangeBounds},
@@ -208,6 +206,20 @@ where
     inner: sync::Mutex<InnerRobt<K, V>>,
 }
 
+impl<K, V> Clone for Robt<K, V>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Serialize,
+{
+    fn clone(&self) -> Robt<K, V> {
+        let inner = self.inner.lock().unwrap();
+        Robt {
+            inner: sync::Mutex::new(inner.clone()),
+        }
+    }
+}
+
 impl<K, V> Robt<K, V>
 where
     K: Clone + Ord + Serialize,
@@ -221,6 +233,7 @@ where
     }
 }
 
+#[derive(Clone)]
 enum InnerRobt<K, V>
 where
     K: Clone + Ord + Serialize,
@@ -235,6 +248,8 @@ where
         _phantom_key: marker::PhantomData<K>,
         _phantom_val: marker::PhantomData<V>,
     },
+    // TODO: Even though the file is not opened, should we hold a file_lock
+    // in lock_shared() mode ??
     Snapshot {
         dir: ffi::OsString,
         name: Name,
@@ -307,7 +322,7 @@ where
         panic!("not supported")
     }
 
-    fn commit(&mut self, iter: IndexIter<K, V>, md: Vec<u8>) -> Result<Self> {
+    fn commit(self, iter: IndexIter<K, V>, md: Vec<u8>) -> Result<Self> {
         let inner = self.inner.lock().unwrap();
         match inner.deref() {
             InnerRobt::Build {
@@ -362,46 +377,37 @@ where
         }
     }
 
-    fn compact(&mut self, iter: IndexIter<K, V>, md: Vec<u8>) -> Result<Self> {
+    fn compact(self) -> Result<Self> {
         let inner = self.inner.lock().unwrap();
         match inner.deref() {
             InnerRobt::Build {
                 dir, name, config, ..
-            } => {
-                let b = Builder::<K, V>::initial(dir, &name.0, config.clone())?;
-                b.build(iter, md)?;
-
-                let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
-                let stats = snapshot.to_stats()?;
-
-                info!(
-                    target: "robt",
-                    "flush compact to {}, stats ... \n{}", name, stats
-                );
-
-                let inner = InnerRobt::Snapshot {
-                    dir: dir.clone(),
-                    name: name.clone(),
-                    footprint: snapshot.footprint()?,
-                    meta: snapshot.meta.clone(),
-                    config: snapshot.config.clone(),
-                    stats,
-                };
-                Ok(Robt::new(inner))
-            }
+            } => unreachable!(),
             InnerRobt::Snapshot {
-                dir, name, config, ..
+                dir,
+                name,
+                config,
+                meta,
+                ..
             } => {
+                info!(target: "robt", "opening {} for compaction ...", name.0);
+                let mut index = Snapshot::<K, V>::open(dir, &name.0)?;
+                let iter = index.iter()?;
+                let meta = match &meta[2] {
+                    MetaItem::AppMetadata(data) => data.clone(),
+                    _ => unreachable!(),
+                };
+
                 let name = name.clone().next();
                 let b = Builder::initial(dir, &name.0, config.clone())?;
-                b.build(iter, md.clone())?;
+                b.build(iter, meta)?;
 
                 let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
                 let stats = snapshot.to_stats()?;
 
                 info!(
                     target: "robt",
-                    "full compact to {}, stats ... \n{}", name, stats
+                    "compacted to {}, stats ... \n{}", name, stats
                 );
 
                 let inner = InnerRobt::Snapshot {

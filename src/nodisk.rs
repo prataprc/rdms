@@ -38,6 +38,7 @@ where
 ///
 /// Applications can use this type while instantiating `rdms-index` in
 /// mem-only mode.
+#[derive(Clone)]
 pub struct NoDisk<K, V> {
     phantom_key: marker::PhantomData<K>,
     phantom_val: marker::PhantomData<V>,
@@ -90,12 +91,12 @@ where
         Ok(NoDisk::new())
     }
 
-    fn commit(&mut self, _: IndexIter<K, V>, _: Vec<u8>) -> Result<Self> {
-        Ok(NoDisk::new())
+    fn commit(self, _: IndexIter<K, V>, _: Vec<u8>) -> Result<Self> {
+        Ok(self)
     }
 
-    fn compact(&mut self, _: IndexIter<K, V>, _: Vec<u8>) -> Result<Self> {
-        Ok(NoDisk::new())
+    fn compact(self) -> Result<Self> {
+        Ok(self)
     }
 }
 

@@ -355,14 +355,13 @@ where
         Ok(LlrbWriter::<K, V>::new(index, writer))
     }
 
-    fn commit(&mut self, _: IndexIter<K, V>, _: Vec<u8>) -> Result<Self> {
+    fn commit(self, _: IndexIter<K, V>, _: Vec<u8>) -> Result<Self> {
         // TODO: figure out a way to merge `iter` into Llrb
-        panic!("to be implemented")
+        Ok(self)
     }
 
-    fn compact(&mut self, _: IndexIter<K, V>, _: Vec<u8>) -> Result<Self> {
-        // TODO: figure out a way to merge `iter` into Llrb
-        panic!("to be implemented")
+    fn compact(self) -> Result<Self> {
+        Ok(self)
     }
 }
 

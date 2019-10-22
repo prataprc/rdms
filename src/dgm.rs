@@ -15,8 +15,6 @@ use crate::{
 
 /// Maximum number of levels to be used for disk indexes.
 pub const NLEVELS: usize = 16;
-// type alias to array of snapshots.
-type Levels<K, V, D> = [OuterSnapshot<K, V, D>; NLEVELS];
 // type alias to reader associated type for each snapshot (aka disk-index)
 type Dr<K, V, F> = <<F as DiskIndexFactory<K, V>>::I as Index<K, V>>::R;
 
@@ -33,8 +31,8 @@ impl Name {
 }
 
 impl From<(String, usize)> for Name {
-    fn from((s, n): (String, usize)) -> Name {
-        Name(format!("{}-robt-{}", s, n))
+    fn from((name, level): (String, usize)) -> Name {
+        Name(format!("{}-dgmlevel-{}", name, level))
     }
 }
 
@@ -43,28 +41,35 @@ impl From<Name> for Option<(String, usize)> {
         let parts: Vec<&str> = name.0.split('-').collect();
         if parts.len() < 3 {
             None
-        } else if parts[parts.len() - 2] != "robt" {
+        } else if parts[parts.len() - 2] != "dgmlevel" {
             None
         } else {
-            let n = parts[parts.len() - 1].parse::<usize>().ok()?;
-            let s = parts[..(parts.len() - 3)].join("-");
-            Some((s, n))
+            let level = parts[parts.len() - 1].parse::<usize>().ok()?;
+            let name = parts[..(parts.len() - 3)].join("-");
+            Some((name, level))
         }
     }
 }
 
-pub struct Dgm<K, V, F>
+// type alias to array of snapshots.
+type Levels<K, V, D> = [OuterSnapshot<K, V, D>; NLEVELS];
+
+pub struct Dgm<K, V, M, D>
 where
     K: Clone + Ord,
     V: Clone + Diff,
-    F: DiskIndexFactory<K, V>,
+    M: WriteIndexFactory<K, V>,
+    D: DiskIndexFactory<K, V>,
 {
     dir: ffi::OsString,
     name: Name,
     mem_ratio: f64,
     disk_ratio: f64,
-    factory: F,
+    mem_factory: M,
+    disk_factory: D,
 
+    w_index: (M::I, <M as Index>::W),
+    f_index: (M::I, <M as Index>::R),
     levels: sync::Mutex<Levels<K, V, F::I>>, // snapshots
     readers: Vec<Arc<sync::Mutex<Vec<Dr<K, V, F>>>>>,
 }
@@ -855,24 +860,6 @@ where
     }
 }
 
-struct OuterSnapshot<K, V, D>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-{
-    snapshot: Option<Snapshot<K, V, D>>,
-}
-
-impl<K, V, D> Default for OuterSnapshot<K, V, D>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-{
-    fn default() -> OuterSnapshot<K, V, D> {
-        OuterSnapshot { snapshot: None }
-    }
-}
-
 impl<K, V, D> OuterSnapshot<K, V, D>
 where
     K: Clone + Ord,
@@ -923,66 +910,85 @@ where
     }
 }
 
-impl<K, V, D> Footprint for OuterSnapshot<K, V, D>
+enum Snapshot<K, V, M, D>
 where
     K: Clone + Ord,
     V: Clone + Diff,
-    D: Footprint,
+    M: WriteIndexFactory<K, V>,
+    D: DiskIndexFactory<K, V>,
+{
+    // memory snapshot that handles all the write operation.
+    Write(M::I<K, V>),
+    // memory snapshot that is waiting to be flushed to disk.
+    Flush(M::I<K, V>),
+    // disk snapshot that is being commited with new batch of entries.
+    Commit(D::I<K, V>),
+    // disk snapshot that is being compacted.
+    Compact(D::I<K, V>),
+    // disk snapshot that is in active state, for either commit or compact.
+    Active(D::I<K, V>),
+    // empty slot
+    None,
+}
+
+impl<K, V, M, D> Default for Snapshot<K, V, M, D>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+    M: WriteIndexFactory<K, V>,
+    D: DiskIndexFactory<K, V>,
+{
+    fn default() -> Snapshot<K, V, M, D> {
+        Snapshot::None
+    }
+}
+
+impl<K, V, M, D> Footprint for Snapshot<K, V, M, D>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+    M: WriteIndexFactory<K, V>,
+    D: DiskIndexFactory<K, V>,
 {
     fn footprint(&self) -> Result<isize> {
-        match &self.snapshot {
-            Some(Snapshot::Flush(d)) => d.footprint(),
-            Some(Snapshot::Compact(d)) => d.footprint(),
-            Some(Snapshot::Active(d)) => d.footprint(),
-            Some(Snapshot::Dead(_)) => Ok(0),
-            None => Ok(0),
-            _ => unreachable!(),
-        }
-    }
-}
-
-#[derive(Clone)]
-enum Snapshot<K, V, D>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-{
-    Flush(D),
-    Compact(D),
-    Active(D),
-    Dead(String),
-    __P(marker::PhantomData<K>, marker::PhantomData<V>),
-}
-
-impl<K, V, D> Snapshot<K, V, D>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-    D: Index<K, V>,
-{
-    fn make_name(name: &str, level: usize, file_no: usize) -> String {
-        format!("{}-{}-{}", name, level, file_no)
-    }
-
-    fn split_parts(full_name: &str) -> Option<(String, usize, usize)> {
-        let mut parts = {
-            let parts: Vec<&str> = full_name.split('-').collect();
-            parts.into_iter()
-        };
-        let name = parts.next()?;
-        let level: usize = parts.next()?.parse().ok()?;
-        let file_no: usize = parts.next()?.parse().ok()?;
-        Some((name.to_string(), level, file_no))
-    }
-
-    fn to_disk(self) -> std::result::Result<D, Self> {
-        use Snapshot::{Active, Compact, Flush};
-
         match self {
-            Flush(d) => Ok(d),
-            Compact(d) => Ok(d),
-            Active(d) => Ok(d),
-            s => Err(s),
+            Snapshot::Write(m) => m.footprint(),
+            Snapshot::Flush(m) => m.footprint(),
+            Snapshot::Commit(d) => d.footprint(),
+            Snapshot::Compact(d) => d.footprint(),
+            Snapshot::Active(d) => d.footprint(),
         }
     }
 }
+
+impl<K, V, D> Snapshot<K, V, M, D>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+    M: WriteIndexFactory<K, V>,
+    D: DiskIndexFactory<K, V>,
+{
+    fn to_disk(self) -> Option<D::I<K, V>> {
+        match self {
+            Snapshot::Write(_) => None,
+            Snapshot::Flush(_) => None,
+            Snapshot::Commit(d) => Some(d),
+            Snapshot::Compact(d) => Some(d),
+            Snapshot::Active(d) => Some(d),
+        }
+    }
+
+    fn to_memory(self) -> Option<D::I<K, V>> {
+        match self {
+            Snapshot::Write(m) => Some(m),
+            Snapshot::Flush(m) => Some(m),
+            Snapshot::Commit(_) => None,
+            Snapshot::Compact(_) => None,
+            Snapshot::Active(_) => None,
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "dgm_test.rs"]
+mod dgm_test;

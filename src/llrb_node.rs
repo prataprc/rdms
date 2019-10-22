@@ -308,7 +308,7 @@ impl fmt::Display for Stats {
                 write!(f, r#"llrb.name = {}\n"#, name)?;
                 write!(
                     f,
-                    r#"llrb = {{ entries = {}, node_size = {}, blacks = {} }}"#,
+                    r#"llrb = {{ entries={}, node_size={}, blacks={} }}"#,
                     entries, node_size, b,
                 )?;
                 write!(f, "llrb.rw_latch = {}\n", rw_latch)?;
@@ -328,7 +328,7 @@ impl fmt::Display for Stats {
                 write!(f, r#"mvcc.name = {}\n"#, name)?;
                 write!(
                     f,
-                    r#"mvcc = {{ entries = {}, node_size = {}, blacks = {} }}"#,
+                    r#"mvcc = {{ entries={}, node_size={}, blacks={} }}"#,
                     entries, node_size, b,
                 )?;
                 write!(f, "mvcc.rw_latch = {}\n", rw_latch)?;
@@ -341,7 +341,7 @@ impl fmt::Display for Stats {
 
 impl ToJson for Stats {
     fn to_json(&self) -> String {
-        let nil = "nil".to_string();
+        let null = "null".to_string();
         match self {
             Stats::Llrb {
                 name,
@@ -362,8 +362,8 @@ impl ToJson for Stats {
                     entries,
                     node_size,
                     l_stats,
-                    blacks.as_ref().map_or(nil.clone(), |x| format!("{}", x)),
-                    depths.as_ref().map_or(nil.clone(), |x| x.to_json()),
+                    blacks.as_ref().map_or(null.clone(), |x| format!("{}", x)),
+                    depths.as_ref().map_or(null.clone(), |x| x.to_json()),
                 )
             }
             Stats::Mvcc {
@@ -388,8 +388,8 @@ impl ToJson for Stats {
                     node_size,
                     rw_l,
                     snap_l,
-                    blacks.as_ref().map_or(nil.clone(), |x| format!("{}", x)),
-                    depths.as_ref().map_or(nil.clone(), |x| x.to_json()),
+                    blacks.as_ref().map_or(null.clone(), |x| format!("{}", x)),
+                    depths.as_ref().map_or(null.clone(), |x| x.to_json()),
                 )
             }
         }

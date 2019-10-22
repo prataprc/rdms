@@ -96,7 +96,7 @@ impl From<Name> for Option<(String, usize)> {
             None
         } else {
             let n = parts[parts.len() - 1].parse::<usize>().ok()?;
-            let s = parts[..(parts.len() - 3)].join("-");
+            let s = parts[..(parts.len() - 2)].join("-");
             Some((s, n))
         }
     }
@@ -143,9 +143,11 @@ where
     type I = Robt<K, V>;
 
     fn new(&self, dir: &ffi::OsStr, name: &str) -> Result<Robt<K, V>> {
-        info!(target: "robt-factory", "new disk index at {:?}/{}", dir, name);
-        info!(target: "robt-factory", "new index {} configuration ...", name);
-        info!(target: "robt-factory", "index {} - {}", name, self.config);
+        info!(
+            target: "robt-factory",
+            "new disk index at {:?}/{} with configuration ...\n{}",
+            dir, name, self.config
+        );
 
         let inner = InnerRobt::Build {
             dir: dir.to_os_string(),
@@ -173,9 +175,11 @@ where
             }
         };
 
-        info!(target: "robt-factory", "open disk index at {:?}/{}", dir, name);
-        info!(target: "robt-factory", "open index {} configuration ...", name);
-        info!(target: "robt-factory", "{}", self.config);
+        info!(
+            target: "robt-factory",
+            "open disk index at {:?}/{} with configuration ...\n{}",
+            dir, name, self.config
+        );
 
         let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
         let inner = InnerRobt::Snapshot {
@@ -252,10 +256,12 @@ where
 
     fn to_name(&self) -> String {
         let inner = self.inner.lock().unwrap();
-        match inner.deref() {
-            InnerRobt::Build { name, .. } => name.0.clone(),
-            InnerRobt::Snapshot { name, .. } => name.0.clone(),
-        }
+        let name = match inner.deref() {
+            InnerRobt::Build { name, .. } => name.clone(),
+            InnerRobt::Snapshot { name, .. } => name.clone(),
+        };
+        let parts: Option<(String, usize)> = name.into();
+        parts.unwrap().0 // just the name as passed to new().
     }
 
     fn to_metadata(&mut self) -> Result<Vec<u8>> {
@@ -290,10 +296,7 @@ where
         let inner = self.inner.lock().unwrap();
         match inner.deref() {
             InnerRobt::Snapshot { dir, name, .. } => {
-                info!(
-                    target: "robt",
-                    "creating a new reader for {}", self.to_name()
-                );
+                info!(target: "robt", "creating a new reader for {}", name.0);
                 Snapshot::open(dir, &name.0)
             }
             InnerRobt::Build { .. } => panic!("cannot create a reader"),
@@ -316,12 +319,9 @@ where
                 let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
                 let stats = snapshot.to_stats()?;
 
-                // TODO: make this into stats-display
-                let bt = time::Duration::from_nanos(stats.build_time);
                 info!(
                     target: "robt",
-                    "flush commit to {}, epoch:{} build_time:{:?}",
-                    name, stats.epoch, bt
+                    "flush commit to {}, stats ... \n{}", name, stats
                 );
 
                 let inner = InnerRobt::Snapshot {
@@ -344,12 +344,9 @@ where
                 let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
                 let stats = snapshot.to_stats()?;
 
-                // TODO: make this into stats-display
-                let bt = time::Duration::from_nanos(stats.build_time);
                 info!(
                     target: "robt",
-                    "incremental commit to {}, epoch:{} build_time:{:?}",
-                    name, stats.epoch, bt
+                    "incremental commit to {}, stats ... \n{}", name, stats
                 );
 
                 let inner = InnerRobt::Snapshot {
@@ -377,12 +374,9 @@ where
                 let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
                 let stats = snapshot.to_stats()?;
 
-                // TODO: make this into stats-display
-                let bt = time::Duration::from_nanos(stats.build_time);
                 info!(
                     target: "robt",
-                    "flush compact to {} epoch:{} build_time:{:?}",
-                    name, stats.epoch, bt,
+                    "flush compact to {}, stats ... \n{}", name, stats
                 );
 
                 let inner = InnerRobt::Snapshot {
@@ -405,12 +399,9 @@ where
                 let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
                 let stats = snapshot.to_stats()?;
 
-                // TODO: make this into stats-display
-                let bt = time::Duration::from_nanos(stats.build_time);
                 info!(
                     target: "robt",
-                    "full compact to {}, epoch:{} build_time:{:?}",
-                    name, stats.epoch, bt
+                    "full compact to {}, stats ... \n{}", name, stats
                 );
 
                 let inner = InnerRobt::Snapshot {
@@ -558,23 +549,25 @@ impl Config {
 impl fmt::Display for Config {
     fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
         let (z, m, v) = (self.z_blocksize, self.m_blocksize, self.v_blocksize);
-        let nil: ffi::OsString = From::from("nil");
+        let vlog_file = self
+            .vlog_file
+            .as_ref()
+            .map_or("".to_string(), |f| format!("vlog_file={:?}, ", f));
         write!(f, "robt.name = {}\n", self.name)?;
         write!(
             f,
-            "robt.config.blocksize = {{ z = {}, m = {}, v = {} }}\n",
+            "robt.config.blocksize = {{ z={}, m={}, v={} }}\n",
             z, m, v
         )?;
         write!(
             f,
-            "robt.config = {{ delta_ok = {}, value_in_vlog = {} }}\n",
+            "robt.config = {{ delta_ok={}, value_in_vlog={} }}\n",
             self.delta_ok, self.value_in_vlog,
         )?;
         write!(
             f,
-            "robt.config = {{ vlog_file = {:?}, flush_queue_size: {} }}\n",
-            self.vlog_file.as_ref().map_or(nil, |f| f.clone()),
-            self.flush_queue_size,
+            "robt.config = {{ {}, flush_queue_size={} }}\n",
+            vlog_file, self.flush_queue_size,
         )
     }
 }
@@ -582,14 +575,14 @@ impl fmt::Display for Config {
 impl ToJson for Config {
     fn to_json(&self) -> String {
         let (z, m, v) = (self.z_blocksize, self.m_blocksize, self.v_blocksize);
-        let nil: ffi::OsString = From::from("nil");
+        let null: ffi::OsString = From::from("null");
         let props = [
             format!(r#""blocksize":  {{ "z": {}, "m": {}, "v": {} }}"#, z, m, v),
             format!(r#""delta_ok": {}"#, self.delta_ok),
             format!(r#""value_in_vlog": {}"#, self.value_in_vlog),
             format!(
                 r#""vlog_file": "{:?}""#,
-                self.vlog_file.as_ref().map_or(nil, |f| f.clone()),
+                self.vlog_file.as_ref().map_or(null, |f| f.clone()),
             ),
             format!(r#""flush_queue_size": {}"#, self.flush_queue_size,),
         ];
@@ -863,6 +856,65 @@ pub struct Stats {
     pub epoch: i128,
 }
 
+impl fmt::Display for Stats {
+    fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
+        write!(f, "robt.name = {}\n", self.name)?;
+        write!(
+            f,
+            "robt.stats = {{ seqno={}, n_count={}, n_deleted={} }}\n",
+            self.seqno, self.n_count, self.n_deleted,
+        )?;
+        write!(
+            f,
+            "robt.stats = {{ key_mem={}, val_mem={}, diff_mem={} }}\n",
+            self.key_mem, self.val_mem, self.diff_mem,
+        )?;
+        write!(
+            f,
+            "robt.stats = {{ z_bytes={}, m_bytes={}, v_bytes={} }}\n",
+            self.z_bytes, self.m_bytes, self.v_bytes,
+        )?;
+        let bt = time::Duration::from_nanos(self.build_time);
+        write!(
+            f,
+            r#"robt.stats = {{ padding={}, n_abytes={}, took="{:?}" }}\n"#,
+            self.padding, self.n_abytes, bt
+        )
+    }
+}
+
+impl ToJson for Stats {
+    fn to_json(&self) -> String {
+        let vlog_file = match &self.vlog_file {
+            Some(vlog_file) => format!("{:?}", vlog_file),
+            None => "null".to_string(),
+        };
+        let props = [
+            format!(r#""name": "{}""#, self.name),
+            format!(r#""z_blocksize": {}"#, self.z_blocksize),
+            format!(r#""m_blocksize": {}"#, self.m_blocksize),
+            format!(r#""v_blocksize": {}"#, self.v_blocksize),
+            format!(r#""delta_ok": {}"#, self.delta_ok),
+            format!(r#""vlog_file": {}"#, vlog_file),
+            format!(r#""value_in_vlog": {}"#, self.value_in_vlog),
+            format!(r#""seqno": {}"#, self.seqno),
+            format!(r#""n_count": {}"#, self.n_count),
+            format!(r#""n_deleted": {}"#, self.n_deleted),
+            format!(r#""key_mem": {}"#, self.key_mem),
+            format!(r#""val_mem": {}"#, self.val_mem),
+            format!(r#""diff_mem": {}"#, self.diff_mem),
+            format!(r#""z_bytes": {}"#, self.z_bytes),
+            format!(r#""m_bytes": {}"#, self.m_bytes),
+            format!(r#""v_bytes": {}"#, self.v_bytes),
+            format!(r#""padding": {}"#, self.padding),
+            format!(r#""n_abytes": {}"#, self.n_abytes),
+            format!(r#""build_time": {}"#, self.build_time),
+            format!(r#""epoch": {}"#, self.epoch),
+        ];
+        format!(r#"{{ {} }}"#, props.join(", "))
+    }
+}
+
 impl From<Config> for Stats {
     fn from(config: Config) -> Stats {
         Stats {
@@ -905,10 +957,13 @@ impl FromStr for Stats {
             let n: u64 = js.get(key)?.integer().unwrap().try_into().unwrap();
             Ok(n)
         };
-        let s = js.get("/vlog_file")?.string().unwrap();
-        let vlog_file: Option<ffi::OsString> = match s {
-            s if s.len() == 0 => None,
-            s => Some(s.into()),
+        let vlog_file = match js.get("/vlog_file")?.string() {
+            Some(s) if s.len() == 0 => None,
+            None => None,
+            Some(s) => {
+                let vlog_file: ffi::OsString = s.into();
+                Some(vlog_file)
+            }
         };
 
         Ok(Stats {
@@ -936,43 +991,6 @@ impl FromStr for Stats {
             build_time: to_u64("/build_time")?,
             epoch: js.get("/epoch")?.integer().unwrap(),
         })
-    }
-}
-
-impl Display for Stats {
-    fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
-        let mut js = Json::new::<Vec<Property>>(vec![]);
-
-        let vlog_file = self.vlog_file.clone().unwrap_or(Default::default());
-        let vlog_file = match vlog_file.into_string() {
-            Ok(vlog_file) => vlog_file,
-            Err(err) => panic!(err), // TODO: will is explode in production ??
-        };
-
-        js.set("/name", Json::new(self.name.clone())).ok();
-        js.set("/z_blocksize", Json::new(self.z_blocksize)).ok();
-        js.set("/m_blocksize", Json::new(self.m_blocksize)).ok();
-        js.set("/v_blocksize", Json::new(self.v_blocksize)).ok();
-        js.set("/delta_ok", Json::new(self.delta_ok)).ok();
-        js.set("/vlog_file", Json::new(vlog_file)).ok();
-        js.set("/value_in_vlog", Json::new(self.value_in_vlog)).ok();
-
-        js.set("/n_count", Json::new(self.n_count)).ok();
-        js.set("/n_deleted", Json::new(self.n_deleted)).ok();
-        js.set("/seqno", Json::new(self.seqno)).ok();
-        js.set("/key_mem", Json::new(self.key_mem)).ok();
-        js.set("/diff_mem", Json::new(self.diff_mem)).ok();
-        js.set("/val_mem", Json::new(self.val_mem)).ok();
-        js.set("/z_bytes", Json::new(self.z_bytes)).ok();
-        js.set("/v_bytes", Json::new(self.v_bytes)).ok();
-        js.set("/m_bytes", Json::new(self.m_bytes)).ok();
-        js.set("/padding", Json::new(self.padding)).ok();
-        js.set("/n_abytes", Json::new(self.n_abytes)).ok();
-
-        js.set("/build_time", Json::new(self.build_time)).ok();
-        js.set("/epoch", Json::new(self.epoch)).ok();
-
-        write!(f, "{}", js.to_string())
     }
 }
 
@@ -1098,7 +1116,7 @@ where
                 .try_into()
                 .unwrap();
             self.stats.epoch = epoch;
-            self.stats.to_string()
+            self.stats.to_json()
         };
 
         // start building metadata items for index files
@@ -1433,7 +1451,7 @@ where
         let vlog_file = config.vlog_file.map(|vfile| {
             // stem the file name.
             let mut vpath = path::PathBuf::new();
-            vpath.push(path::Path::new(dir).parent().unwrap());
+            vpath.push(path::Path::new(dir));
             vpath.push(path::Path::new(&vfile).file_name().unwrap());
             vpath.as_os_str().to_os_string()
         });

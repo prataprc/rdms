@@ -10,17 +10,17 @@ use crate::{
 
 #[test]
 fn test_name() {
-    let name = "somename-0-robt-0".to_string();
-    let parts: Option<(String, usize)> = name.into();
+    let name = Name("somename-0-robt-0".to_string());
+    let parts: Option<(String, usize)> = name.clone().into();
     assert!(parts.is_some());
     let (s, n) = parts.unwrap();
     assert_eq!(s, "somename-0".to_string());
     assert_eq!(n, 0);
 
-    let name1 = (s, n).into();
-    assert_eq!(name.0, name1);
+    let name1: Name = (s, n).into();
+    assert_eq!(name.0, name1.0);
 
-    assert_eq!(n.next().0, "somename-0-robt-1".to_string());
+    assert_eq!(name1.next().0, "somename-0-robt-1".to_string());
 }
 
 #[test]
@@ -51,7 +51,7 @@ fn test_stats() {
         build_time: 10000000000000,
         epoch: 121345678998765,
     };
-    let s = stats1.to_string();
+    let s = stats1.to_json();
     let stats2: Stats = s.parse().unwrap();
     assert!(stats1 == stats2);
 
@@ -69,7 +69,7 @@ fn test_stats() {
         flush_queue_size: 1024,
     };
     let stats1: Stats = cnf.into();
-    let s = stats1.to_string();
+    let s = stats1.to_json();
     let stats2: Stats = s.parse().unwrap();
     assert!(stats1 == stats2);
 }
@@ -92,7 +92,7 @@ fn test_meta_items() {
         .try_into()
         .unwrap();
     let len1 = ROOT_MARKER.len();
-    let stats = <Stats as Default>::default().to_string();
+    let stats = <Stats as Default>::default().to_json();
     let len2 = (n % 65536) as usize;
     let app_meta: Vec<u8> = (0..len2).map(|x| (x % 256) as u8).collect();
     let len3 = stats.len();
@@ -175,7 +175,7 @@ fn test_config() {
     let ref_file = {
         let mut rpath = path::PathBuf::new();
         rpath.push(dir_path.clone());
-        rpath.push("robt-users.vlog");
+        rpath.push("users.vlog");
         rpath.into_os_string()
     };
     assert_eq!(

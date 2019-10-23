@@ -42,7 +42,7 @@ impl From<Name> for Option<(String, usize)> {
             None
         } else {
             let level = parts[parts.len() - 1].parse::<usize>().ok()?;
-            let name = parts[..(parts.len() - 3)].join("-");
+            let name = parts[..(parts.len() - 2)].join("-");
             Some((name, level))
         }
     }

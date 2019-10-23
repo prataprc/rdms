@@ -100,6 +100,14 @@ impl From<Name> for Option<(String, usize)> {
     }
 }
 
+impl From<Name> for ffi::OsString {
+    fn from(name: Name) -> ffi::OsString {
+        let file_name = format!("{}.indx", name.0);
+        let file_name: &ffi::OsStr = file_name.as_ref();
+        file_name.to_os_string()
+    }
+}
+
 impl fmt::Display for Name {
     fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
         write!(f, "{}", self.0)
@@ -161,13 +169,12 @@ where
     fn open(
         &self,
         dir: &ffi::OsStr,
-        dir_entry: fs::DirEntry, // returned by read_dir()
+        master_file: Option<ffi::OsString>, // master file name.
     ) -> Result<Robt<K, V>> {
-        let file_name = dir_entry.file_name();
-        let name = match Self::to_name(&file_name) {
+        let name = match Self::to_name(master_file.as_ref().unwrap()) {
             Some(name) => name,
             None => {
-                let msg = format!("not an robt index `{:?}`", file_name);
+                let msg = format!("not an robt index `{:?}`", master_file);
                 debug!(target: "robt-factory", "{}", msg);
                 return Err(Error::InvalidFile(msg));
             }
@@ -279,6 +286,14 @@ where
         parts.unwrap().0 // just the name as passed to new().
     }
 
+    fn to_file_name(&self) -> Option<ffi::OsString> {
+        let inner = self.inner.lock().unwrap();
+        match inner.deref() {
+            InnerRobt::Build { name, .. } => Some(name.clone().into()),
+            InnerRobt::Snapshot { name, .. } => Some(name.clone().into()),
+        }
+    }
+
     fn to_metadata(&mut self) -> Result<Vec<u8>> {
         let inner = self.inner.lock().unwrap();
         match inner.deref() {
@@ -380,9 +395,7 @@ where
     fn compact(self) -> Result<Self> {
         let inner = self.inner.lock().unwrap();
         match inner.deref() {
-            InnerRobt::Build {
-                dir, name, config, ..
-            } => unreachable!(),
+            InnerRobt::Build { .. } => unreachable!(),
             InnerRobt::Snapshot {
                 dir,
                 name,

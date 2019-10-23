@@ -32,6 +32,7 @@ use std::{
     borrow::Borrow,
     cmp::{Ord, Ordering},
     convert::TryInto,
+    ffi,
     fmt::Debug,
     marker, mem,
     ops::{Bound, Deref, DerefMut, RangeBounds},
@@ -381,6 +382,10 @@ where
 
     fn to_name(&self) -> String {
         self.name.clone()
+    }
+
+    fn to_file_name(&self) -> Option<ffi::OsString> {
+        None
     }
 
     fn to_metadata(&mut self) -> Result<Vec<u8>> {

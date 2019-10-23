@@ -177,7 +177,7 @@ where
     /// Open an existing index instance with predefined configuration.
     /// Typically called while bootstrapping an index from disk, and/or
     /// compacting them.
-    fn open(&self, dir: &ffi::OsStr, dir_entry: fs::DirEntry) -> Result<Self::I>;
+    fn open(&self, dir: &ffi::OsStr, master_file: Option<ffi::OsString>) -> Result<Self::I>;
 
     /// Factory name for identification purpose.
     fn to_type(&self) -> String;
@@ -200,6 +200,9 @@ where
 
     /// Return the name of the index.
     fn to_name(&self) -> String;
+
+    /// Applicable only to disk index, identifies the index's master file.
+    fn to_file_name(&self) -> Option<ffi::OsString>;
 
     /// Return the metadata from index that was previously committed.
     fn to_metadata(&mut self) -> Result<Vec<u8>>;

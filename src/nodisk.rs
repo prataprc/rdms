@@ -1,4 +1,4 @@
-use std::{borrow::Borrow, ffi, fs, marker, ops::RangeBounds};
+use std::{borrow::Borrow, ffi, marker, ops::RangeBounds};
 
 use crate::{
     core::{Diff, DiskIndexFactory, Entry, Footprint, Index, IndexIter, Reader},
@@ -25,7 +25,7 @@ where
         Ok(NoDisk::new())
     }
 
-    fn open(&self, _: &ffi::OsStr, _: fs::DirEntry) -> Result<NoDisk<K, V>> {
+    fn open(&self, _: &ffi::OsStr, _: Option<ffi::OsString>) -> Result<NoDisk<K, V>> {
         Ok(NoDisk::new())
     }
 
@@ -69,6 +69,10 @@ where
 
     fn to_name(&self) -> String {
         "no-disk mama !!".to_string()
+    }
+
+    fn to_file_name(&self) -> Option<ffi::OsString> {
+        None
     }
 
     fn to_metadata(&mut self) -> Result<Vec<u8>> {

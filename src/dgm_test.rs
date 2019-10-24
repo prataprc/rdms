@@ -11,6 +11,4 @@ fn test_name() {
 
     let name1: Name = (s, n).into();
     assert_eq!(name.0, name1.0);
-
-    assert_eq!(name1.next().0, "somename-0-dgmlevel-1".to_string());
 }

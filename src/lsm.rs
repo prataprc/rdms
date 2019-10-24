@@ -6,10 +6,12 @@ use crate::{
     error::Error,
 };
 
+#[allow(dead_code)] // TODO: remove if not required.
 pub(crate) type LsmGet<'a, K, V, Q> = Box<dyn FnMut(&Q) -> Result<Entry<K, V>> + 'a>;
 
 // ``x`` contains newer mutations than ``y``, get always fetches the latest
 // entry from the newest index.
+#[allow(dead_code)] // TODO: remove if not required.
 pub(crate) fn y_get<'a, 'b, K, V, Q>(
     mut x: LsmGet<'a, K, V, Q>,
     mut y: LsmGet<'a, K, V, Q>,
@@ -31,6 +33,7 @@ where
 // ``x`` contains newer mutations than ``y``.
 // TODO NOTE: flush_merge called by this function assumes that all
 // mutations held by each index are mutually exclusive.
+#[allow(dead_code)] // TODO: remove if not required.
 pub(crate) fn y_get_versions<'a, 'b, K, V, Q>(
     mut x: LsmGet<'a, K, V, Q>,
     mut y: LsmGet<'a, K, V, Q>,
@@ -224,6 +227,7 @@ where
     }
 }
 
+#[allow(dead_code)] // TODO: remove if not required.
 pub(crate) fn getter<'a, 'b, I, K, V, Q>(
     index: &'a mut I,
     versions: bool, // if true, use get_versions

@@ -5,8 +5,6 @@ use std::{
     sync::{self},
 };
 
-use log::info;
-
 use crate::{
     core::{Diff, DiskIndexFactory, Footprint, Index, IndexIter, PiecewiseScan},
     core::{Result, Serialize, WriteIndexFactory},
@@ -49,8 +47,7 @@ where
     name: String,
     pw_batch: usize,
 
-    mem: M::I,
-    disk: sync::Mutex<Option<D::I>>,
+    pair: sync::Mutex<Option<(M::I, D::I)>>,
 }
 
 impl<K, V, M, D> Backup<K, V, M, D>
@@ -74,9 +71,7 @@ where
             dir: dir.to_os_string(),
             name: name.to_string(),
             pw_batch: scans::SKIP_SCAN_BATCH_SIZE,
-
-            mem,
-            disk: sync::Mutex::new(Some(disk)),
+            pair: sync::Mutex::new(Some((mem, disk))),
         })
     }
 
@@ -109,8 +104,7 @@ where
                     name: name.to_string(),
                     pw_batch: scans::SKIP_SCAN_BATCH_SIZE,
 
-                    mem,
-                    disk: sync::Mutex::new(Some(disk)),
+                    pair: sync::Mutex::new(Some((mem, disk))),
                 })
             }
         }
@@ -129,12 +123,13 @@ where
     D: DiskIndexFactory<K, V>,
 {
     fn disk_footprint(&self) -> Result<isize> {
-        let disk = self.disk.lock().unwrap();
-        disk.as_ref().unwrap().footprint()
+        let pair = self.pair.lock().unwrap();
+        pair.as_ref().unwrap().1.footprint()
     }
 
     fn mem_footprint(&self) -> Result<isize> {
-        self.mem.footprint()
+        let pair = self.pair.lock().unwrap();
+        pair.as_ref().unwrap().0.footprint()
     }
 }
 
@@ -173,48 +168,57 @@ where
     }
 
     fn to_metadata(&mut self) -> Result<Vec<u8>> {
-        let mut disk = self.disk.lock().unwrap();
-        disk.as_mut().unwrap().to_metadata()
+        let mut pair = self.pair.lock().unwrap();
+        pair.as_mut().unwrap().1.to_metadata()
     }
 
     fn to_seqno(&mut self) -> u64 {
-        self.mem.to_seqno()
+        let pair = self.pair.lock().unwrap();
+        pair.as_mut().unwrap().0.to_seqno()
     }
 
     fn set_seqno(&mut self, seqno: u64) {
-        self.mem.set_seqno(seqno)
+        let pair = self.pair.lock().unwrap();
+        pair.as_mut().unwrap().0.set_seqno(seqno)
     }
 
     fn to_writer(&mut self) -> Result<Self::W> {
-        self.mem.to_writer()
+        let pair = self.pair.lock().unwrap();
+        pair.as_mut().unwrap().0.to_writer()
     }
 
     fn to_reader(&mut self) -> Result<Self::R> {
-        self.mem.to_reader()
+        let pair = self.pair.lock().unwrap();
+        pair.as_mut().unwrap().0.to_reader()
     }
 
-    fn commit(mut self, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<Self> {
+    fn commit(&self, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<Self> {
         {
-            let mut guard = self.disk.lock().unwrap();
-            let mut disk = guard.take().unwrap();
+            let mut pair = self.pair.lock().unwrap();
+            let (mem, mut disk) = pair.take().unwrap();
             let within = (
-                Bound::Included(self.mem.to_seqno()),
+                Bound::Included(pair.0.to_seqno()),
                 Bound::Excluded(disk.to_seqno()),
             );
-            let mut pw_iter = SkipScan::new(self.mem.to_reader()?, within);
+            let mut pw_iter = SkipScan::new(pair.0.to_reader()?, within);
             pw_iter.set_batch_size(self.pw_batch);
             let no_reverse = false;
             let iter = lsm::y_iter(iter, Box::new(pw_iter), no_reverse);
-            guard.get_or_insert(disk.commit(iter, meta)?);
+            pair.1.get_or_insert(disk.commit(iter, meta)?);
         }
-        Ok(self)
+        Ok(Backup {
+            dir: self.dir.clone(),
+            name: self.name.clone(),
+            pw_batch: self.pw_batch,
+            pair: sync::Mutex,
+        })
     }
 
-    fn compact(self) -> Result<Self> {
+    fn compact(&self) -> Result<Self> {
         {
-            let mut guard = self.disk.lock().unwrap();
-            let disk = guard.take().unwrap();
-            guard.get_or_insert(disk.compact()?);
+            let mut pair = self.disk.lock().unwrap();
+            let disk = pair.1.take().unwrap();
+            pair.1.get_or_insert(disk.compact()?);
         }
         Ok(self)
     }

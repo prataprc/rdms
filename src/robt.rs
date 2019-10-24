@@ -338,9 +338,9 @@ where
         Ok(Panic::new("robt"))
     }
 
-    fn commit(self, iter: IndexIter<K, V>, md: Vec<u8>) -> Result<Self> {
-        let inner = self.inner.lock().unwrap();
-        match inner.deref() {
+    fn commit(&mut self, iter: IndexIter<K, V>, md: Vec<u8>) -> Result<()> {
+        let mut inner = self.inner.lock().unwrap();
+        let new_inner = match inner.deref() {
             InnerRobt::Build {
                 dir, name, config, ..
             } => {
@@ -355,15 +355,14 @@ where
                     "flush commit to {}, stats ... \n{}", name, stats
                 );
 
-                let inner = InnerRobt::Snapshot {
+                InnerRobt::Snapshot {
                     dir: dir.clone(),
                     name: name.clone(),
                     footprint: snapshot.footprint()?,
                     meta: snapshot.meta.clone(),
                     config: snapshot.config.clone(),
                     stats,
-                };
-                Ok(Robt::new(inner))
+                }
             }
             InnerRobt::Snapshot {
                 dir, name, config, ..
@@ -380,22 +379,23 @@ where
                     "incremental commit to {}, stats ... \n{}", name, stats
                 );
 
-                let inner = InnerRobt::Snapshot {
+                InnerRobt::Snapshot {
                     dir: dir.clone(),
                     name: name.clone(),
                     footprint: snapshot.footprint()?,
                     meta: snapshot.meta.clone(),
                     config: snapshot.config.clone(),
                     stats: snapshot.to_stats()?,
-                };
-                Ok(Robt::new(inner))
+                }
             }
-        }
+        };
+        *inner = new_inner;
+        Ok(())
     }
 
-    fn compact(self) -> Result<Self> {
-        let inner = self.inner.lock().unwrap();
-        match inner.deref() {
+    fn compact(&mut self) -> Result<()> {
+        let mut inner = self.inner.lock().unwrap();
+        let new_inner = match inner.deref() {
             InnerRobt::Build { .. } => unreachable!(),
             InnerRobt::Snapshot {
                 dir,
@@ -424,17 +424,18 @@ where
                     "compacted to {}, stats ... \n{}", name, stats
                 );
 
-                let inner = InnerRobt::Snapshot {
+                InnerRobt::Snapshot {
                     dir: dir.clone(),
                     name: name.clone(),
                     footprint: snapshot.footprint()?,
                     meta: snapshot.meta.clone(),
                     config: snapshot.config.clone(),
                     stats,
-                };
-                Ok(Robt::new(inner))
+                }
             }
-        }
+        };
+        *inner = new_inner;
+        Ok(())
     }
 }
 

@@ -75,12 +75,12 @@ pub mod llrb;
 mod llrb_node;
 pub mod mvcc;
 // disk index
-pub mod backup;
+// TODO: pub mod backup;
 pub mod dgm;
 pub mod nodisk;
 pub mod robt;
 mod robt_entry;
 mod robt_index;
 
-mod rdms;
+pub mod rdms;
 pub use crate::rdms::Rdms;

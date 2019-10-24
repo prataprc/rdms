@@ -363,6 +363,8 @@ where
     D: DiskIndexFactory<K, V>,
 {
     fn cleanup_handles(&mut self) {
+        let _guard = self.levels.lock().unwrap();
+
         // cleanup dropped writer threads.
         let dropped: Vec<usize> = self
             .writers
@@ -637,12 +639,12 @@ where
         Ok(DgmReader::new(&self.name, arc_rs))
     }
 
-    fn commit(mut self, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<Self> {
+    fn commit(&mut self, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<()> {
         use Snapshot::{Active, Commit, Compact, Flush, Write};
 
         self.cleanup_handles();
 
-        let (level, disk, mut r_m1) = {
+        let (level, mut disk, mut r_m1) = {
             let mut levels = self.levels.lock().unwrap(); // lock with compact
             let d = Default::default();
 
@@ -673,7 +675,7 @@ where
 
         let no_reverse = false;
         let iter = lsm::y_iter(iter, r_m1.iter()?, no_reverse);
-        let disk = disk.commit(iter, meta)?;
+        disk.commit(iter, meta)?;
 
         // update the readers
         {
@@ -696,10 +698,10 @@ where
                 }
             }
         }
-        Ok(self)
+        Ok(())
     }
 
-    fn compact(mut self) -> Result<Self> {
+    fn compact(&mut self) -> Result<()> {
         use Snapshot::{Active, Commit, Compact, Flush, Write};
 
         self.cleanup_handles();
@@ -774,13 +776,19 @@ where
         };
 
         let disk = match (r1.as_mut(), r2.as_mut(), meta, disk) {
-            (None, None, None, None) => return Ok(self),
-            (None, None, None, Some(disk)) => disk.compact()?,
-            (Some(r1), Some(r2), Some(meta), Some(disk)) => {
+            (None, None, None, None) => {
+                return Ok(());
+            }
+            (None, None, None, Some(mut disk)) => {
+                disk.compact()?;
+                disk
+            }
+            (Some(r1), Some(r2), Some(meta), Some(mut disk)) => {
                 let no_reverse = false;
                 let (iter1, iter2) = (r1.1.iter()?, r2.1.iter()?);
                 let iter = lsm::y_iter_versions(iter1, iter2, no_reverse);
-                disk.commit(iter, meta)?
+                disk.commit(iter, meta)?;
+                disk
             }
             _ => unreachable!(),
         };
@@ -812,7 +820,7 @@ where
                 }
             }
         }
-        Ok(self)
+        Ok(())
     }
 }
 

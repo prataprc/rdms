@@ -97,12 +97,12 @@ where
         Ok(Panic::new("nodisk"))
     }
 
-    fn commit(self, _: IndexIter<K, V>, _: Vec<u8>) -> Result<Self> {
-        Ok(self)
+    fn commit(&mut self, _: IndexIter<K, V>, _: Vec<u8>) -> Result<()> {
+        Ok(())
     }
 
-    fn compact(self) -> Result<Self> {
-        Ok(self)
+    fn compact(&mut self) -> Result<()> {
+        Ok(())
     }
 }
 

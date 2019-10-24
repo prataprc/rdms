@@ -224,14 +224,19 @@ where
     /// indexes allow concurrent writers. Refer to index API for more details.
     fn to_writer(&mut self) -> Result<Self::W>;
 
-    /// Commit entries from iterator into the implementing index.
+    /// Commit entries from iterator into the implementing index. Though
+    /// it takes mutable reference, there can be concurrent compact() call.
+    /// It is upto the implementing type to synchronize the commit() and
+    /// compact() that can be concurrently called.
     /// TODO: Return number of entries commited to disk.
-    fn commit(self, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<Self>;
+    fn commit(&mut self, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<()>;
 
-    /// Commit entries from iterator into the implementing index and
-    /// compact the index.
+    /// Compact index to reduce disk amplification. Though
+    /// it takes mutable reference, there can be concurrent commit() call.
+    /// It is upto the implementing type to synchronize the commit() and
+    /// compact() that can be concurrently called.
     /// TODO: Return number of entries commited to disk.
-    fn compact(self) -> Result<Self>;
+    fn compact(&mut self) -> Result<()>;
 }
 
 /// Index read operations.

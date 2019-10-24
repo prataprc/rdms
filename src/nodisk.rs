@@ -4,6 +4,7 @@ use crate::{
     core::{Diff, DiskIndexFactory, Entry, Footprint, Index, IndexIter, Reader},
     core::{Result, Serialize, Writer},
     error::Error,
+    panic::Panic,
     types::EmptyIter,
 };
 
@@ -64,8 +65,8 @@ where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
 {
-    type R = NoDisk<K, V>;
-    type W = NoDisk<K, V>;
+    type R = Panic;
+    type W = Panic;
 
     fn to_name(&self) -> String {
         "no-disk mama !!".to_string()
@@ -88,11 +89,11 @@ where
     }
 
     fn to_reader(&mut self) -> Result<Self::R> {
-        Ok(NoDisk::new())
+        Ok(Panic::new("nodisk"))
     }
 
     fn to_writer(&mut self) -> Result<Self::W> {
-        Ok(NoDisk::new())
+        Ok(Panic::new("nodisk"))
     }
 
     fn commit(self, _: IndexIter<K, V>, _: Vec<u8>) -> Result<Self> {

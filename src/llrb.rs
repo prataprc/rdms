@@ -223,23 +223,6 @@ where
         }
     }
 
-    fn shallow_clone(&self) -> Box<Llrb<K, V>> {
-        Box::new(Llrb {
-            name: self.name.clone(),
-            lsm: self.lsm,
-            spin: self.spin,
-
-            root: None, // this is the shallow part
-            seqno: Default::default(),
-            n_count: Default::default(),
-            latch: RWSpinlock::new(),
-            key_footprint: Default::default(),
-            tree_footprint: Default::default(),
-            readers: Arc::new(0xC0FFEE),
-            writers: Arc::new(0xC0FFEE),
-        })
-    }
-
     pub fn clone(&self) -> Box<Llrb<K, V>> {
         Box::new(Llrb {
             name: self.name.clone(),

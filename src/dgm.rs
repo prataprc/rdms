@@ -13,19 +13,10 @@ use crate::{
     lsm,
     types::EmptyIter,
 };
-use log::{debug, info};
+use log::debug;
 
 #[derive(Clone)]
 struct Name(String);
-
-impl Name {
-    fn next(self) -> Name {
-        match From::from(self) {
-            Some((s, n)) => From::from((s, n + 1)),
-            None => unreachable!(),
-        }
-    }
-}
 
 impl From<(String, usize)> for Name {
     fn from((name, level): (String, usize)) -> Name {
@@ -138,16 +129,6 @@ where
     V: Clone + Diff + Footprint,
     I: Index<K, V>,
 {
-    fn to_disk(self) -> Option<I> {
-        use Snapshot::{Active, Commit, Compact, Flush, Write};
-
-        match self {
-            Commit(d) | Compact(d) | Active(d) => Some(d),
-            Write(_) | Flush(_) | Snapshot::None => None,
-            _ => unreachable!(),
-        }
-    }
-
     fn as_mut_disk(&mut self) -> Option<&mut I> {
         use Snapshot::{Active, Commit, Compact, Flush, Write};
 
@@ -442,7 +423,10 @@ where
 
         // shift memory snapshot into writers
         let m0 = self.shift_into_writers(m0)?;
-        levels.m1 = Some(mem::replace(&mut levels.m0, Default::default()));
+        levels.m1 = match mem::replace(&mut levels.m0, Default::default()) {
+            Snapshot::Write(m0) => Some(Snapshot::Flush(m0)),
+            _ => unreachable!(),
+        };
         mem::replace(&mut levels.m0, Snapshot::Write(m0));
 
         // update readers and unblock them one by one.
@@ -998,22 +982,31 @@ where
         R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        Ok(self.empty_iter()?)
+        let mut dgmi = DgmIter::new(self, self.get_readers()?)?;
+        let no_reverse = false;
 
-        //let mut dgmi = DgmIter::new(self, self.get_readers()?)?;
-        //let no_reverse = false;
+        for disk in dgmi.rs.r_disks.iter_mut().rev() {
+            let iter = unsafe {
+                let disk = disk as *mut <D::I as Index<K, V>>::R;
+                disk.as_mut().unwrap().range(range.clone())?
+            };
+            dgmi.iter = lsm::y_iter(iter, dgmi.iter, no_reverse);
+        }
 
-        //for reader in dgmi.readers.iter_mut() {
-        //    let iter = unsafe {
-        //        let reader = reader as *mut Dr<K, V, F>;
-        //        reader.as_mut().unwrap().range(range.clone())?
-        //    };
-        //    dgmi.iter = Some(
-        //        // fold with next level.
-        //        lsm::y_iter(iter, dgmi.iter.take().unwrap(), no_reverse),
-        //    );
-        //}
-        //Ok(Box::new(dgmi))
+        if let Some(m1) = &mut dgmi.rs.r_m1 {
+            let iter = unsafe {
+                let m1 = m1 as *mut <M::I as Index<K, V>>::R;
+                m1.as_mut().unwrap().range(range.clone())?
+            };
+            dgmi.iter = lsm::y_iter(iter, dgmi.iter, no_reverse);
+        }
+        let iter = unsafe {
+            let m0 = &mut dgmi.rs.r_m0 as *mut <M::I as Index<K, V>>::R;
+            m0.as_mut().unwrap().range(range.clone())?
+        };
+        dgmi.iter = lsm::y_iter(iter, dgmi.iter, no_reverse);
+
+        Ok(Box::new(dgmi))
     }
 
     fn reverse<'a, R, Q>(&'a mut self, range: R) -> Result<IndexIter<K, V>>
@@ -1022,21 +1015,31 @@ where
         R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        Ok(self.empty_iter()?)
+        let mut dgmi = DgmIter::new(self, self.get_readers()?)?;
+        let reverse = false;
 
-        //let mut dgmi = DgmIter::new(self, self.get_readers()?)?;
-        //let no_reverse = true;
-        //for reader in dgmi.readers.iter_mut() {
-        //    let iter = unsafe {
-        //        let reader = reader as *mut Dr<K, V, F>;
-        //        reader.as_mut().unwrap().reverse(range.clone())?
-        //    };
-        //    dgmi.iter = Some(
-        //        // fold with next level.
-        //        lsm::y_iter(iter, dgmi.iter.take().unwrap(), no_reverse),
-        //    );
-        //}
-        //Ok(Box::new(dgmi))
+        for disk in dgmi.rs.r_disks.iter_mut().rev() {
+            let iter = unsafe {
+                let disk = disk as *mut <D::I as Index<K, V>>::R;
+                disk.as_mut().unwrap().reverse(range.clone())?
+            };
+            dgmi.iter = lsm::y_iter(iter, dgmi.iter, reverse);
+        }
+
+        if let Some(m1) = &mut dgmi.rs.r_m1 {
+            let iter = unsafe {
+                let m1 = m1 as *mut <M::I as Index<K, V>>::R;
+                m1.as_mut().unwrap().reverse(range.clone())?
+            };
+            dgmi.iter = lsm::y_iter(iter, dgmi.iter, reverse);
+        }
+        let iter = unsafe {
+            let m0 = &mut dgmi.rs.r_m0 as *mut <M::I as Index<K, V>>::R;
+            m0.as_mut().unwrap().reverse(range.clone())?
+        };
+        dgmi.iter = lsm::y_iter(iter, dgmi.iter, reverse);
+
+        Ok(Box::new(dgmi))
     }
 
     fn get_with_versions<Q>(&mut self, key: &Q) -> Result<Entry<K, V>>
@@ -1085,21 +1088,31 @@ where
     }
 
     fn iter_with_versions(&mut self) -> Result<IndexIter<K, V>> {
-        Ok(self.empty_iter()?)
+        let mut dgmi = DgmIter::new(self, self.get_readers()?)?;
+        let no_reverse = false;
 
-        //let mut dgmi = DgmIter::new(self, self.get_readers()?)?;
-        //let no_reverse = false;
-        //for reader in dgmi.readers.iter_mut() {
-        //    let iter = unsafe {
-        //        let reader = reader as *mut Dr<K, V, F>;
-        //        reader.as_mut().unwrap().iter_with_versions()?
-        //    };
-        //    dgmi.iter = Some(
-        //        // fold with next level.
-        //        lsm::y_iter(iter, dgmi.iter.take().unwrap(), no_reverse),
-        //    );
-        //}
-        //Ok(Box::new(dgmi))
+        for disk in dgmi.rs.r_disks.iter_mut().rev() {
+            let iter = unsafe {
+                let disk = disk as *mut <D::I as Index<K, V>>::R;
+                disk.as_mut().unwrap().iter_with_versions()?
+            };
+            dgmi.iter = lsm::y_iter(iter, dgmi.iter, no_reverse);
+        }
+
+        if let Some(m1) = &mut dgmi.rs.r_m1 {
+            let iter = unsafe {
+                let m1 = m1 as *mut <M::I as Index<K, V>>::R;
+                m1.as_mut().unwrap().iter_with_versions()?
+            };
+            dgmi.iter = lsm::y_iter(iter, dgmi.iter, no_reverse);
+        }
+        let iter = unsafe {
+            let m0 = &mut dgmi.rs.r_m0 as *mut <M::I as Index<K, V>>::R;
+            m0.as_mut().unwrap().iter_with_versions()?
+        };
+        dgmi.iter = lsm::y_iter(iter, dgmi.iter, no_reverse);
+
+        Ok(Box::new(dgmi))
     }
 
     fn range_with_versions<'a, R, Q>(
@@ -1111,24 +1124,31 @@ where
         R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        Ok(self.empty_iter()?)
+        let mut dgmi = DgmIter::new(self, self.get_readers()?)?;
+        let no_reverse = false;
 
-        //let mut dgmi = DgmIter::new(self, self.get_readers()?)?;
-        //let no_reverse = false;
-        //for reader in dgmi.readers.iter_mut() {
-        //    let iter = unsafe {
-        //        let reader = reader as *mut Dr<K, V, F>;
-        //        reader
-        //            .as_mut()
-        //            .unwrap()
-        //            .range_with_versions(range.clone())?
-        //    };
-        //    dgmi.iter = Some(
-        //        // fold with next level.
-        //        lsm::y_iter(iter, dgmi.iter.take().unwrap(), no_reverse),
-        //    );
-        //}
-        //Ok(Box::new(dgmi))
+        for disk in dgmi.rs.r_disks.iter_mut().rev() {
+            let iter = unsafe {
+                let disk = disk as *mut <D::I as Index<K, V>>::R;
+                disk.as_mut().unwrap().range_with_versions(range.clone())?
+            };
+            dgmi.iter = lsm::y_iter(iter, dgmi.iter, no_reverse);
+        }
+
+        if let Some(m1) = &mut dgmi.rs.r_m1 {
+            let iter = unsafe {
+                let m1 = m1 as *mut <M::I as Index<K, V>>::R;
+                m1.as_mut().unwrap().range_with_versions(range.clone())?
+            };
+            dgmi.iter = lsm::y_iter(iter, dgmi.iter, no_reverse);
+        }
+        let iter = unsafe {
+            let m0 = &mut dgmi.rs.r_m0 as *mut <M::I as Index<K, V>>::R;
+            m0.as_mut().unwrap().range_with_versions(range.clone())?
+        };
+        dgmi.iter = lsm::y_iter(iter, dgmi.iter, no_reverse);
+
+        Ok(Box::new(dgmi))
     }
 
     fn reverse_with_versions<'a, R, Q>(
@@ -1140,24 +1160,33 @@ where
         R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        Ok(self.empty_iter()?)
+        let mut dgmi = DgmIter::new(self, self.get_readers()?)?;
+        let reverse = false;
 
-        //let mut dgmi = DgmIter::new(self, self.get_readers()?)?;
-        //let no_reverse = true;
-        //for reader in dgmi.readers.iter_mut() {
-        //    let iter = unsafe {
-        //        let reader = reader as *mut Dr<K, V, F>;
-        //        reader
-        //            .as_mut()
-        //            .unwrap()
-        //            .reverse_with_versions(range.clone())?
-        //    };
-        //    dgmi.iter = Some(
-        //        // fold with next level.
-        //        lsm::y_iter(iter, dgmi.iter.take().unwrap(), no_reverse),
-        //    );
-        //}
-        //Ok(Box::new(dgmi))
+        for disk in dgmi.rs.r_disks.iter_mut().rev() {
+            let iter = unsafe {
+                let disk = disk as *mut <D::I as Index<K, V>>::R;
+                disk.as_mut()
+                    .unwrap()
+                    .reverse_with_versions(range.clone())?
+            };
+            dgmi.iter = lsm::y_iter(iter, dgmi.iter, reverse);
+        }
+
+        if let Some(m1) = &mut dgmi.rs.r_m1 {
+            let iter = unsafe {
+                let m1 = m1 as *mut <M::I as Index<K, V>>::R;
+                m1.as_mut().unwrap().reverse_with_versions(range.clone())?
+            };
+            dgmi.iter = lsm::y_iter(iter, dgmi.iter, reverse);
+        }
+        let iter = unsafe {
+            let m0 = &mut dgmi.rs.r_m0 as *mut <M::I as Index<K, V>>::R;
+            m0.as_mut().unwrap().reverse_with_versions(range.clone())?
+        };
+        dgmi.iter = lsm::y_iter(iter, dgmi.iter, reverse);
+
+        Ok(Box::new(dgmi))
     }
 }
 
@@ -1168,7 +1197,7 @@ where
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
 {
-    dgmr: &'a DgmReader<K, V, M, D>,
+    _dgmr: &'a DgmReader<K, V, M, D>,
     rs: sync::MutexGuard<'a, Rs<K, V, M, D>>,
     iter: IndexIter<'a, K, V>,
 }
@@ -1184,13 +1213,11 @@ where
         dgmr: &'a DgmReader<K, V, M, D>,
         rs: sync::MutexGuard<'a, Rs<K, V, M, D>>,
     ) -> Result<DgmIter<'a, K, V, M, D>> {
-        let mut dgmi = DgmIter {
-            dgmr,
+        Ok(DgmIter {
+            _dgmr: dgmr,
             rs,
             iter: dgmr.empty_iter()?,
-        };
-        dgmi.rs.r_disks.reverse();
-        Ok(dgmi)
+        })
     }
 }
 

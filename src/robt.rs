@@ -59,7 +59,7 @@ use crate::{
     core::{Diff, DiskIndexFactory, Entry, Footprint, IndexIter, Reader, Result},
     core::{Index, Serialize, ToJson},
     error::Error,
-    nodisk::NoDisk,
+    panic::Panic,
     robt_entry::MEntry,
     robt_index::{MBlock, ZBlock},
     util,
@@ -274,7 +274,7 @@ where
     <V as Diff>::D: Serialize,
 {
     type R = Snapshot<K, V>;
-    type W = NoDisk<K, V>;
+    type W = Panic;
 
     fn to_name(&self) -> String {
         let inner = self.inner.lock().unwrap();
@@ -334,7 +334,7 @@ where
     }
 
     fn to_writer(&mut self) -> Result<Self::W> {
-        panic!("not supported")
+        Ok(Panic::new("robt"))
     }
 
     fn commit(self, iter: IndexIter<K, V>, md: Vec<u8>) -> Result<Self> {

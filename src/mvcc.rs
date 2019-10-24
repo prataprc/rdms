@@ -275,26 +275,6 @@ where
             .shift_snapshot(root_node, s.seqno, s.n_count, vec![]);
         cloned
     }
-
-    fn shallow_clone(&self) -> Box<Mvcc<K, V>> {
-        let n = self.multi_rw();
-        if n > Self::CONCUR_REF_COUNT {
-            panic!("cannot shallow-clone with active readers/writer {}", n);
-        }
-
-        Box::new(Mvcc {
-            name: self.name.clone(),
-            lsm: self.lsm,
-            spin: self.spin,
-
-            snapshot: OuterSnapshot::new(),
-            latch: RWSpinlock::new(),
-            key_footprint: AtomicIsize::new(self.key_footprint.load(SeqCst)),
-            tree_footprint: AtomicIsize::new(self.tree_footprint.load(SeqCst)),
-            readers: Arc::new(0xC0FFEE),
-            writers: Arc::new(0xC0FFEE),
-        })
-    }
 }
 
 /// Maintanence API.

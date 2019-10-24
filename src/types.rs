@@ -1,4 +1,4 @@
-use std::{convert::TryInto, marker};
+use std::{convert::TryInto, ffi, marker};
 
 use crate::{
     core::{Diff, Entry, Footprint, Result, Serialize},
@@ -42,6 +42,12 @@ impl Footprint for Empty {
     }
 }
 
+impl From<ffi::OsString> for Empty {
+    fn from(_: ffi::OsString) -> Empty {
+        Empty
+    }
+}
+
 //-------------------------------------------------------------------
 
 impl Diff for Vec<u8> {
@@ -75,14 +81,14 @@ impl Serialize for Vec<u8> {
 
     fn decode(&mut self, buf: &[u8]) -> Result<usize> {
         if buf.len() < 4 {
-            let msg = format!("bytes decode header {} < 4", buf.len());
+            let msg = format!("type-bytes decode header {} < 4", buf.len());
             return Err(Error::DecodeFail(msg));
         }
         let len: usize = u32::from_be_bytes(buf[..4].try_into().unwrap())
             .try_into()
             .unwrap();
         if buf.len() < (len + 4) {
-            let msg = format!("bytes decode payload {} < {}", buf.len(), len);
+            let msg = format!("type-bytes decode payload {} < {}", buf.len(), len);
             return Err(Error::DecodeFail(msg));
         }
         self.resize(len, 0);
@@ -128,7 +134,10 @@ impl Serialize for i32 {
             *self = i32::from_be_bytes(scratch);
             Ok(4)
         } else {
-            Err(Error::DecodeFail(format!("i32 encoded len {}", buf.len())))
+            Err(Error::DecodeFail(format!(
+                "type-i32 encoded len {}",
+                buf.len()
+            )))
         }
     }
 }
@@ -170,7 +179,10 @@ impl Serialize for i64 {
             *self = i64::from_be_bytes(scratch);
             Ok(8)
         } else {
-            Err(Error::DecodeFail(format!("i64 encoded len {}", buf.len())))
+            Err(Error::DecodeFail(format!(
+                "type-i64 encoded len {}",
+                buf.len()
+            )))
         }
     }
 }

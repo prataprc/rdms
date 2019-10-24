@@ -11,7 +11,7 @@ use crate::{
     core::{Result, Serialize, WriteIndexFactory, Writer},
     error::Error,
     lsm,
-    types::EmptyIter,
+    types::{Empty, EmptyIter},
 };
 use log::debug;
 
@@ -64,7 +64,7 @@ where
     Compact(I),
     // disk snapshot that is in active state, for either commit or compact.
     Active(I),
-    // empty slot
+    // empty slot, TODO: better to replace this with Option<Snapshot> ?
     None,
     // ignore
     _Phantom(marker::PhantomData<K>, marker::PhantomData<V>),
@@ -288,10 +288,11 @@ where
     ) -> Result<Dgm<K, V, M, D>> {
         let mut disks: [Snapshot<K, V, D::I>; NLEVELS] = Default::default();
 
+        let mut has_disk = false;
         for item in fs::read_dir(dir)? {
             let item = item?;
             let mf = item.file_name();
-            let (level, d) = match disk_factory.open(dir, Some(mf.clone())) {
+            let (level, d) = match disk_factory.open(dir, mf.clone().into()) {
                 Ok(index) => {
                     let dgmname = Name(index.to_name());
                     let sn: Option<(String, usize)> = dgmname.into();
@@ -316,7 +317,13 @@ where
                     continue;
                 }
             };
+            has_disk = true;
             disks[level].swap_with_newer(d);
+        }
+
+        if !has_disk {
+            // no active disk snapshots found, create a new instance.
+            return Self::new(dir, name, mem_factory, disk_factory);
         }
 
         let levels = Levels {
@@ -469,8 +476,8 @@ where
         use Snapshot::{Active, Commit, Compact, Flush, Write};
 
         if levels.is_commit_exhausted() {
-            let msg = format!("exhausted all levels !!");
-            return Err(Error::Dgm(msg));
+            let msg = format!("dgm: exhausted all levels !!");
+            return Err(Error::DiskIndexFail(msg));
         }
 
         let mf = levels.m0.footprint()? as f64;
@@ -567,14 +574,15 @@ where
 {
     type W = DgmWriter<K, V, <M::I as Index<K, V>>::W>;
     type R = DgmReader<K, V, M, D>;
+    type O = Empty;
 
     fn to_name(&self) -> String {
         self.name.clone()
     }
 
     // TODO: do we need to persist the disk-levels info in a master file ?
-    fn to_file_name(&self) -> Option<ffi::OsString> {
-        None
+    fn to_root(&self) -> Empty {
+        Empty
     }
 
     fn to_metadata(&mut self) -> Result<Vec<u8>> {
@@ -634,7 +642,7 @@ where
 
         self.cleanup_handles();
 
-        let (level, disk) = {
+        let (level, disk, mut r_m1) = {
             let mut levels = self.levels.lock().unwrap(); // lock with compact
             let d = Default::default();
 
@@ -649,16 +657,22 @@ where
                     self.disk_factory.new(&self.dir, &name.to_string())?
                 }
                 Active(disk) => {
-                    let master_file = disk.to_file_name();
+                    let root = disk.to_root();
                     levels.disks[level] = Snapshot::Commit(disk);
-                    self.disk_factory.open(&self.dir, master_file)?
+                    self.disk_factory.open(&self.dir, root)?
                 }
                 Write(_) | Flush(_) | Commit(_) | Compact(_) => unreachable!(),
                 _ => unreachable!(),
             };
-            (level, disk)
+            let r_m1 = match levels.m1.as_mut().unwrap() {
+                Flush(m) => m.to_reader()?,
+                _ => unreachable!(),
+            };
+            (level, disk, r_m1)
         };
 
+        let no_reverse = false;
+        let iter = lsm::y_iter(iter, r_m1.iter()?, no_reverse);
         let disk = disk.commit(iter, meta)?;
 
         // update the readers
@@ -705,9 +719,9 @@ where
                 let d: Snapshot<K, V, D::I> = Default::default();
                 let disk = match mem::replace(&mut levels.disks[level], d) {
                     Active(disk) => {
-                        let master_file = disk.to_file_name();
+                        let root = disk.to_root();
                         levels.disks[level] = Snapshot::Compact(disk);
-                        self.disk_factory.open(&self.dir, master_file)?
+                        self.disk_factory.open(&self.dir, root)?
                     }
                     _ => unreachable!(),
                 };
@@ -743,9 +757,9 @@ where
                         self.disk_factory.new(&self.dir, &name.0)?
                     }
                     Active(disk) => {
-                        let master_file = disk.to_file_name();
+                        let root = disk.to_root();
                         levels.disks[level] = Snapshot::Compact(disk);
-                        self.disk_factory.open(&self.dir, master_file)?
+                        self.disk_factory.open(&self.dir, root)?
                     }
                     _ => unreachable!(),
                 };

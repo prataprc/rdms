@@ -285,7 +285,13 @@ fn run_robt_llrb(name: &str, mut n_ops: u64, key_max: i64, repeat: usize, seed: 
         let b = Builder::initial(&dir, name, config.clone()).unwrap();
         let app_meta = "heloo world".to_string();
         match b.build(iter, app_meta.as_bytes().to_vec()) {
-            Err(Error::EmptyIterator) if refs.len() == 0 => continue,
+            Err(Error::DiskIndexFail(msg)) => {
+                if msg.contains("empty iterator") && refs.len() == 0 {
+                    continue;
+                } else {
+                    panic!("{:?}", Error::DiskIndexFail(msg));
+                }
+            }
             Err(err) => panic!("{:?}", err),
             _ => (),
         }

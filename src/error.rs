@@ -23,27 +23,12 @@ pub enum Error {
     /// * Requested entry's last modified sequence-number does not
     ///   match with specified CAS.
     InvalidCAS,
-    /// Fatal case, breaking one of the two LLRB rules.
-    ConsecutiveReds,
-    /// Fatal case, breaking one of the two LLRB rules. The String
-    /// component of this variant can be used for debugging. The
-    /// first parameter in the tuple gives the number of blacks
-    /// found on the left child, the second parameter gives for right
-    /// child.
-    UnbalancedBlacks(usize, usize),
-    /// Fatal case, index entries are not in sort-order. The two
-    /// keys are the mismatching items.
-    SortError(String, String),
-    /// Duplicated keys are not allowed in the index. Each and every
-    /// Key must be unique.
-    DuplicateKey(String),
-    /// Llrb and Mvcc index uses dirty node marker for newly
-    /// created nodes in its mutation path.
-    DirtyNode,
+    /// Index has failed.
+    MemIndexFail(String),
+    /// Index has failed.
+    DiskIndexFail(String),
     /// Supplied key is not found in the index.
     KeyNotFound,
-    /// Error converting one type to another type.
-    FailConversion(String),
     /// Expected a native value. TODO: hide this ?
     NotNativeValue,
     /// Expected a native delta. TODO: hide this ?
@@ -60,21 +45,22 @@ pub enum Error {
     PartialRead(String),
     /// Unable to write full buffer into file.
     PartialWrite(String),
+    /// Conversion error from ffi::OsString
     InvalidFile(String),
+    /// IO error from std::io
     IoError(io::Error),
+    /// Json processing error from jsondata package
     JsonError(jsondata::Error),
-    Dgm(String),
+    /// Thread has failed.
     ThreadFail(String),
-    EmptyIterator,
     /// On disk snapshot is invalid.
     InvalidSnapshot(String),
+    /// String conversion error from std::String, str::str
     Utf8Error(std::str::Utf8Error),
-    /// Inter-Process-Communication error
+    /// Inter-Process-Communication error from std::mpsc
     IPCFail(String),
     /// Invalid WAL
     InvalidWAL(String),
-    /// Invalid batch in WAL, write-ahead-log.
-    InvalidBatch(String),
     // Local error, means, given key is less than the entire data set.
     __LessThan,
     // z-block of btree has overflowed.
@@ -134,13 +120,11 @@ impl From<std::str::Utf8Error> for Error {
 
 impl PartialEq for Error {
     fn eq(&self, other: &Error) -> bool {
+        use Error::InvalidCAS;
         use Error::InvalidFile;
-        use Error::{ConsecutiveReds, DirtyNode, InvalidCAS};
 
         match (self, other) {
             (InvalidCAS, InvalidCAS) => true,
-            (ConsecutiveReds, ConsecutiveReds) => true,
-            (DirtyNode, DirtyNode) => true,
             (InvalidFile(s1), InvalidFile(s2)) => s1 == s2,
             _ => false,
         }

@@ -177,7 +177,7 @@ where
     /// Open an existing index instance with predefined configuration.
     /// Typically called while bootstrapping an index from disk, and/or
     /// compacting them.
-    fn open(&self, dir: &ffi::OsStr, master_file: Option<ffi::OsString>) -> Result<Self::I>;
+    fn open(&self, dir: &ffi::OsStr, root: <Self::I as Index<K, V>>::O) -> Result<Self::I>;
 
     /// Factory name for identification purpose.
     fn to_type(&self) -> String;
@@ -198,11 +198,14 @@ where
     /// A reader associated type, that are thread safe.
     type R: Reader<K, V>;
 
+    /// Root-file / root-block for index.
+    type O: From<ffi::OsString>;
+
     /// Return the name of the index.
     fn to_name(&self) -> String;
 
     /// Applicable only to disk index, identifies the index's master file.
-    fn to_file_name(&self) -> Option<ffi::OsString>;
+    fn to_root(&self) -> Self::O;
 
     /// Return the metadata from index that was previously committed.
     fn to_metadata(&mut self) -> Result<Vec<u8>>;
@@ -341,7 +344,7 @@ pub trait Serialize: Sized {
 
 /// PiecewiseScan trait implemented, typically by mem-only indexes,
 /// to construct a stable full-table scan.
-pub(crate) trait PiecewiseScan<K, V>
+pub trait PiecewiseScan<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff + From<<V as Diff>::D>,

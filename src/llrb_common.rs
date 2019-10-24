@@ -52,8 +52,14 @@ where
 {
     let red = is_red(node);
     match node {
-        Some(node) if node.dirty => Err(Error::DirtyNode),
-        Some(_node) if fromred && red => Err(Error::ConsecutiveReds),
+        Some(node) if node.dirty => {
+            // TODO: llrb has dirty node.
+            Err(Error::MemIndexFail("llrb has dirty node".to_string()))
+        }
+        Some(_node) if fromred && red => {
+            // TODO: llrb has dirty node.
+            Err(Error::MemIndexFail(format!("llrb has consecutive reds")))
+        }
         Some(node) => {
             // confirm sort order in the tree.
             let (left, right) = {
@@ -61,16 +67,22 @@ where
                 let right = node.as_right_deref();
                 if let Some(left) = left {
                     if left.as_key().ge(node.as_key()) {
-                        let left = format!("{:?}", left.as_key());
-                        let parent = format!("{:?}", node.as_key());
-                        return Err(Error::SortError(left, parent));
+                        /// Fatal case, index entries are not in sort-order.
+                        return Err(Error::MemIndexFail(format!(
+                            "llrb sort error left:{:?} parent:{:?}",
+                            left.as_key(),
+                            node.as_key()
+                        )));
                     }
                 }
                 if let Some(right) = right {
                     if right.as_key().le(node.as_key()) {
-                        let parent = format!("{:?}", node.as_key());
-                        let right = format!("{:?}", right.as_key());
-                        return Err(Error::SortError(parent, right));
+                        /// Fatal case, index entries are not in sort-order.
+                        return Err(Error::MemIndexFail(format!(
+                            "llrb sort error right:{:?} parent:{:?}",
+                            right.as_key(),
+                            node.as_key()
+                        )));
                     }
                 }
                 (left, right)
@@ -83,7 +95,10 @@ where
                 let l = validate_tree(left, red, blacks, depth + 1, depths)?;
                 let r = validate_tree(right, red, blacks, depth + 1, depths)?;
                 if l != r {
-                    return Err(Error::UnbalancedBlacks(l, r));
+                    return Err(Error::MemIndexFail(format!(
+                        "llrb has unbalacked blacks l:{}, r:{}",
+                        l, r
+                    )));
                 }
                 Ok(l)
             }

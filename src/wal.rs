@@ -1384,7 +1384,7 @@ where
     }
 
     fn decode_refer(&mut self, buf: &[u8], fpos: u64) -> Result<usize> {
-        util::check_remaining(buf, 56, "batch-refer-hdr")?;
+        util::check_remaining(buf, 56, "wal batch-refer-hdr")?;
         let length = Self::validate(buf)?;
         let start_index = u64::from_be_bytes(buf[32..40].try_into().unwrap());
         let last_index = u64::from_be_bytes(buf[40..48].try_into().unwrap());
@@ -1398,7 +1398,7 @@ where
     }
 
     fn decode_active(&mut self, buf: &[u8]) -> Result<usize> {
-        util::check_remaining(buf, 48, "batch-active-hdr")?;
+        util::check_remaining(buf, 48, "wal batch-active-hdr")?;
         let length = Self::validate(buf)?;
         let term = u64::from_be_bytes(buf[8..16].try_into().unwrap());
         let committed = u64::from_be_bytes(buf[16..24].try_into().unwrap());
@@ -1455,18 +1455,18 @@ where
     }
 
     fn decode_config(buf: &[u8]) -> Result<(Vec<String>, usize)> {
-        util::check_remaining(buf, 2, "batch-config")?;
+        util::check_remaining(buf, 2, "wal batch-config")?;
         let count = u16::from_be_bytes(buf[..2].try_into().unwrap());
         let mut config = Vec::with_capacity(count.try_into().unwrap());
         let mut n = 2;
 
         for _i in 0..count {
-            util::check_remaining(buf, n + 2, "batch-config")?;
+            util::check_remaining(buf, n + 2, "wal batch-config")?;
             let len = u16::from_be_bytes(buf[n..n + 2].try_into().unwrap());
             n += 2;
 
             let m = len as usize;
-            util::check_remaining(buf, n + m, "batch-config")?;
+            util::check_remaining(buf, n + m, "wal batch-config")?;
             let s = std::str::from_utf8(&buf[n..n + m])?;
             config.push(s.to_string());
             n += m;
@@ -1482,12 +1482,12 @@ where
     }
 
     fn decode_votedfor(buf: &[u8]) -> Result<(String, usize)> {
-        util::check_remaining(buf, 2, "batch-votedfor")?;
+        util::check_remaining(buf, 2, "wal batch-votedfor")?;
         let len = u16::from_be_bytes(buf[..2].try_into().unwrap());
         let n = 2;
 
         let len: usize = len.try_into().unwrap();
-        util::check_remaining(buf, n + len, "batch-votedfor")?;
+        util::check_remaining(buf, n + len, "wal batch-votedfor")?;
         Ok((std::str::from_utf8(&buf[n..n + len])?.to_string(), n + len))
     }
 
@@ -1658,7 +1658,7 @@ where
     }
 
     fn entry_type(buf: &[u8]) -> Result<EntryType> {
-        util::check_remaining(buf, 8, "entry-type")?;
+        util::check_remaining(buf, 8, "wal entry-type")?;
         let hdr1 = u64::from_be_bytes(buf[..8].try_into().unwrap());
         Ok((hdr1 & 0x00000000000000FF).into())
     }
@@ -1771,7 +1771,7 @@ where
         term: &mut u64,
         index: &mut u64,
     ) -> Result<usize> {
-        util::check_remaining(buf, 24, "entry-term-hdr")?;
+        util::check_remaining(buf, 24, "wal entry-term-hdr")?;
         *term = u64::from_be_bytes(buf[8..16].try_into().unwrap());
         *index = u64::from_be_bytes(buf[16..24].try_into().unwrap());
         Ok(24 + op.decode(&buf[24..])?)
@@ -1820,7 +1820,7 @@ where
         id: &mut u64,
         ceqno: &mut u64,
     ) -> Result<usize> {
-        util::check_remaining(buf, 40, "entry-client-hdr")?;
+        util::check_remaining(buf, 40, "wal entry-client-hdr")?;
         *term = u64::from_be_bytes(buf[8..16].try_into().unwrap());
         *index = u64::from_be_bytes(buf[16..24].try_into().unwrap());
         *id = u64::from_be_bytes(buf[24..32].try_into().unwrap());
@@ -1937,7 +1937,7 @@ where
     }
 
     fn op_type(buf: &[u8]) -> Result<OpType> {
-        util::check_remaining(buf, 8, "op-type")?;
+        util::check_remaining(buf, 8, "wal op-type")?;
         let hdr1 = u64::from_be_bytes(buf[..8].try_into().unwrap());
         Ok(((hdr1 >> 32) & 0x00FFFFFF).into())
     }
@@ -2036,7 +2036,7 @@ where
     fn decode_set(buf: &[u8], k: &mut K, v: &mut V) -> Result<usize> {
         let mut n = 16;
         let (klen, vlen) = {
-            util::check_remaining(buf, 16, "op-set-hdr")?;
+            util::check_remaining(buf, 16, "wal op-set-hdr")?;
             let hdr1 = u64::from_be_bytes(buf[..8].try_into().unwrap());
             let klen: usize = (hdr1 & 0xFFFFFFFF).try_into().unwrap();
             let vlen = u64::from_be_bytes(buf[8..16].try_into().unwrap());
@@ -2045,13 +2045,13 @@ where
         };
 
         n += {
-            util::check_remaining(buf, n + klen, "op-set-key")?;
+            util::check_remaining(buf, n + klen, "wal op-set-key")?;
             k.decode(&buf[n..n + klen])?;
             klen
         };
 
         n += {
-            util::check_remaining(buf, n + vlen, "op-set-value")?;
+            util::check_remaining(buf, n + vlen, "wal op-set-value")?;
             v.decode(&buf[n..n + vlen])?;
             vlen
         };
@@ -2110,7 +2110,7 @@ where
     ) -> Result<usize> {
         let mut n = 24;
         let (klen, vlen, cas_seqno) = {
-            util::check_remaining(buf, n, "op-setcas-hdr")?;
+            util::check_remaining(buf, n, "wal op-setcas-hdr")?;
             let hdr1 = u64::from_be_bytes(buf[..8].try_into().unwrap());
             let klen: usize = (hdr1 & 0xFFFFFFFF).try_into().unwrap();
             let vlen = u64::from_be_bytes(buf[8..16].try_into().unwrap());
@@ -2121,13 +2121,13 @@ where
         *cas = cas_seqno;
 
         n += {
-            util::check_remaining(buf, n + klen, "op-setcas-key")?;
+            util::check_remaining(buf, n + klen, "wal op-setcas-key")?;
             key.decode(&buf[n..n + klen])?;
             klen
         };
 
         n += {
-            util::check_remaining(buf, n + vlen, "op-setcas-value")?;
+            util::check_remaining(buf, n + vlen, "wal op-setcas-value")?;
             value.decode(&buf[n..n + vlen])?;
             vlen
         };
@@ -2168,13 +2168,13 @@ where
     fn decode_delete(buf: &[u8], key: &mut K) -> Result<usize> {
         let mut n = 8;
         let klen: usize = {
-            util::check_remaining(buf, n, "op-delete-hdr1")?;
+            util::check_remaining(buf, n, "wal op-delete-hdr1")?;
             let hdr1 = u64::from_be_bytes(buf[..n].try_into().unwrap());
             (hdr1 & 0xFFFFFFFF).try_into().unwrap()
         };
 
         n += {
-            util::check_remaining(buf, n + klen, "op-delete-key")?;
+            util::check_remaining(buf, n + klen, "wal op-delete-key")?;
             key.decode(&buf[n..n + klen])?;
             klen
         };

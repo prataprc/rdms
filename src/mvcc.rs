@@ -32,7 +32,6 @@ use std::{
     borrow::Borrow,
     cmp::{Ord, Ordering},
     convert::TryInto,
-    ffi,
     fmt::Debug,
     marker, mem,
     ops::{Bound, Deref, DerefMut, RangeBounds},
@@ -51,6 +50,7 @@ use crate::{
     llrb::Llrb,
     llrb_node::{LlrbDepth, Node, Stats},
     spinlock::{self, RWSpinlock},
+    types::Empty,
 };
 
 // TODO: Experiment with different atomic::Ordering to improve performance.
@@ -166,6 +166,38 @@ where
     }
 }
 
+impl<K, V> From<Llrb<K, V>> for Box<Mvcc<K, V>>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    fn from(llrb_index: Llrb<K, V>) -> Box<Mvcc<K, V>> {
+        let mut mvcc_index = if llrb_index.is_lsm() {
+            Mvcc::new_lsm(llrb_index.to_name())
+        } else {
+            Mvcc::new(llrb_index.to_name())
+        };
+        mvcc_index.set_spinlatch(llrb_index.to_spin());
+        mvcc_index
+            .snapshot
+            .n_nodes
+            .store(llrb_index.len() as isize, SeqCst);
+
+        let debris = llrb_index.squash();
+        mvcc_index.key_footprint.store(debris.key_footprint, SeqCst);
+        mvcc_index
+            .tree_footprint
+            .store(debris.tree_footprint, SeqCst);
+        mvcc_index.snapshot.shift_snapshot(
+            debris.root,
+            debris.seqno,
+            debris.n_count,
+            vec![], /*reclaim*/
+        );
+        mvcc_index
+    }
+}
+
 /// Construct new instance of Mvcc.
 impl<K, V> Mvcc<K, V>
 where
@@ -206,32 +238,6 @@ where
             readers: Arc::new(0xC0FFEE),
             writers: Arc::new(0xC0FFEE),
         })
-    }
-
-    pub fn from_llrb(llrb_index: Llrb<K, V>) -> Box<Mvcc<K, V>> {
-        let mut mvcc_index = if llrb_index.is_lsm() {
-            Mvcc::new_lsm(llrb_index.to_name())
-        } else {
-            Mvcc::new(llrb_index.to_name())
-        };
-        mvcc_index.set_spinlatch(llrb_index.to_spin());
-        mvcc_index
-            .snapshot
-            .n_nodes
-            .store(llrb_index.len() as isize, SeqCst);
-
-        let debris = llrb_index.squash();
-        mvcc_index.key_footprint.store(debris.key_footprint, SeqCst);
-        mvcc_index
-            .tree_footprint
-            .store(debris.tree_footprint, SeqCst);
-        mvcc_index.snapshot.shift_snapshot(
-            debris.root,
-            debris.seqno,
-            debris.n_count,
-            vec![], /*reclaim*/
-        );
-        mvcc_index
     }
 
     /// Configure behaviour of spin-latch. If `spin` is true, calling
@@ -359,13 +365,14 @@ where
 {
     type W = MvccWriter<K, V>;
     type R = MvccReader<K, V>;
+    type O = Empty;
 
     fn to_name(&self) -> String {
         self.name.clone()
     }
 
-    fn to_file_name(&self) -> Option<ffi::OsString> {
-        None
+    fn to_root(&self) -> Empty {
+        Empty
     }
 
     fn to_metadata(&mut self) -> Result<Vec<u8>> {

@@ -169,12 +169,12 @@ where
     fn open(
         &self,
         dir: &ffi::OsStr,
-        master_file: Option<ffi::OsString>, // master file name.
+        root: ffi::OsString, // master file name.
     ) -> Result<Robt<K, V>> {
-        let name = match Self::to_name(master_file.as_ref().unwrap()) {
+        let name = match Self::to_name(&root) {
             Some(name) => name,
             None => {
-                let msg = format!("not an robt index `{:?}`", master_file);
+                let msg = format!("not an robt index `{:?}`", root);
                 debug!(target: "robt-factory", "{}", msg);
                 return Err(Error::InvalidFile(msg));
             }
@@ -275,6 +275,7 @@ where
 {
     type R = Snapshot<K, V>;
     type W = Panic;
+    type O = ffi::OsString;
 
     fn to_name(&self) -> String {
         let inner = self.inner.lock().unwrap();
@@ -286,11 +287,11 @@ where
         parts.unwrap().0 // just the name as passed to new().
     }
 
-    fn to_file_name(&self) -> Option<ffi::OsString> {
+    fn to_root(&self) -> ffi::OsString {
         let inner = self.inner.lock().unwrap();
         match inner.deref() {
-            InnerRobt::Build { name, .. } => Some(name.clone().into()),
-            InnerRobt::Snapshot { name, .. } => Some(name.clone().into()),
+            InnerRobt::Build { name, .. } => name.clone().into(),
+            InnerRobt::Snapshot { name, .. } => name.clone().into(),
         }
     }
 
@@ -1260,7 +1261,8 @@ where
                 Err(err) => return Err(err),
             }
         } else {
-            return Err(Error::EmptyIterator);
+            let msg = "robt build with empty iteratory".to_string();
+            return Err(Error::DiskIndexFail(msg));
         }
 
         // flush final set of m-blocks

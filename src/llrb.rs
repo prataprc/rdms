@@ -44,6 +44,7 @@ use crate::{
     llrb_node::{LlrbDepth, Node, Stats},
     mvcc::Snapshot,
     spinlock::{self, RWSpinlock},
+    types::Empty,
 };
 
 include!("llrb_common.rs");
@@ -294,13 +295,14 @@ where
 {
     type W = LlrbWriter<K, V>;
     type R = LlrbReader<K, V>;
+    type O = Empty;
 
     fn to_name(&self) -> String {
         self.name.clone()
     }
 
-    fn to_file_name(&self) -> Option<ffi::OsString> {
-        None
+    fn to_root(&self) -> Empty {
+        Empty
     }
 
     fn to_metadata(&mut self) -> Result<Vec<u8>> {

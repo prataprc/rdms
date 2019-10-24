@@ -67,22 +67,20 @@ pub use crate::{
 
 // support modules
 mod lsm;
-mod scans;
+pub mod scans;
 pub mod wal;
 
 // mem index
 pub mod llrb;
 mod llrb_node;
-// mem index
 pub mod mvcc;
 // disk index
+pub mod backup;
 pub mod dgm;
-// disk index
+pub mod nodisk;
 pub mod robt;
 mod robt_entry;
 mod robt_index;
-// disk index
-pub mod nodisk;
 
 mod rdms;
 pub use crate::rdms::Rdms;

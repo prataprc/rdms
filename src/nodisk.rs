@@ -5,7 +5,7 @@ use crate::{
     core::{Result, Serialize, Writer},
     error::Error,
     panic::Panic,
-    types::EmptyIter,
+    types::{Empty, EmptyIter},
 };
 
 pub struct NoDiskFactory;
@@ -26,7 +26,7 @@ where
         Ok(NoDisk::new())
     }
 
-    fn open(&self, _: &ffi::OsStr, _: Option<ffi::OsString>) -> Result<NoDisk<K, V>> {
+    fn open(&self, _: &ffi::OsStr, _: Empty) -> Result<NoDisk<K, V>> {
         Ok(NoDisk::new())
     }
 
@@ -67,13 +67,14 @@ where
 {
     type R = Panic;
     type W = Panic;
+    type O = Empty;
 
     fn to_name(&self) -> String {
         "no-disk mama !!".to_string()
     }
 
-    fn to_file_name(&self) -> Option<ffi::OsString> {
-        None
+    fn to_root(&self) -> Empty {
+        Empty
     }
 
     fn to_metadata(&mut self) -> Result<Vec<u8>> {

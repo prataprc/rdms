@@ -11,6 +11,8 @@ use crate::core::{Diff, Entry, IndexIter, PiecewiseScan, Result, ScanEntry};
 
 // TODO: benchmark SkipScan and FilterScan and measure the difference.
 
+pub const SKIP_SCAN_BATCH_SIZE: usize = 1000;
+
 /// SkipScan can be used to stitch piece-wise scanning of LSM
 /// data-structure, only selecting mutations (and versions)
 /// that are within specified sequence-no range.
@@ -32,7 +34,7 @@ use crate::core::{Diff, Entry, IndexIter, PiecewiseScan, Result, ScanEntry};
 /// b. Data-structure must not suffer any delete/purge
 ///    operation until full-scan is completed.
 /// c. Data-structure must implement PiecewiseScan trait.
-pub(crate) struct SkipScan<R, K, V, G>
+pub struct SkipScan<R, K, V, G>
 where
     K: Clone + Ord,
     V: Clone + Diff + From<<V as Diff>::D>,
@@ -63,19 +65,17 @@ where
     G: Clone + RangeBounds<u64>,
     R: PiecewiseScan<K, V>,
 {
-    const BATCH_SIZE: usize = 1000;
-
-    pub(crate) fn new(reader: R, within: G) -> SkipScan<R, K, V, G> {
+    pub fn new(reader: R, within: G) -> SkipScan<R, K, V, G> {
         SkipScan {
             reader,
             within,
             from: Bound::Unbounded,
             iter: vec![].into_iter(),
-            batch_size: Self::BATCH_SIZE,
+            batch_size: SKIP_SCAN_BATCH_SIZE,
         }
     }
 
-    pub(crate) fn set_batch_size(&mut self, batch_size: usize) {
+    pub fn set_batch_size(&mut self, batch_size: usize) {
         self.batch_size = batch_size
     }
 

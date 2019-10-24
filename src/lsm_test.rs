@@ -120,7 +120,7 @@ fn test_lsm_get2() {
 
     assert!(llrb.validate().is_ok());
     let (n_ops, key_max) = random_ops_keys(seed, 200_000, 60_000);
-    let mut mvcc: Box<Mvcc<i64, i64>> = Mvcc::from_llrb(*llrb);
+    let mut mvcc: Box<Mvcc<i64, i64>> = (*llrb).into();
     random_mvcc(n_ops, key_max, seed, mvcc.as_mut(), &mut refi);
     println!("mvcc n_ops: {} key_max: {}", n_ops, key_max);
 
@@ -452,7 +452,7 @@ fn test_lsm_iter2() {
 
     assert!(llrb.validate().is_ok());
     let (n_ops, key_max) = random_ops_keys(seed, 200_000, 60_000);
-    let mut mvcc: Box<Mvcc<i64, i64>> = Mvcc::from_llrb(*llrb);
+    let mut mvcc: Box<Mvcc<i64, i64>> = (*llrb).into();
     random_mvcc(n_ops, key_max, seed, mvcc.as_mut(), &mut refi);
     println!("mvcc n_ops: {} key_max: {}", n_ops, key_max);
 

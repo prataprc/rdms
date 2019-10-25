@@ -1,15 +1,17 @@
 use std::{
-    ffi, fmt, fs,
+    ffi, fmt, marker,
     ops::Bound,
     result,
     sync::{self},
+    thread,
+    time::{Duration, SystemTime},
 };
 
 use crate::{
-    core::{Diff, DiskIndexFactory, Footprint, Index, IndexIter, PiecewiseScan},
-    core::{Result, Serialize, WriteIndexFactory},
+    core::{Diff, Footprint, Index, IndexIter, PiecewiseScan, Result},
     lsm,
     scans::{self, SkipScan},
+    sync::CCMu,
     types::Empty,
 };
 
@@ -39,107 +41,102 @@ impl fmt::Display for Name {
 pub struct Backup<K, V, M, D>
 where
     K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
-    M: WriteIndexFactory<K, V>,
-    D: DiskIndexFactory<K, V>,
+    V: Clone + Diff + Footprint + From<<V as Diff>::D>,
+    M: Index<K, V>,
+    D: Index<K, V>,
+    <M as Index<K, V>>::R: PiecewiseScan<K, V>,
 {
     dir: ffi::OsString,
     name: String,
+    compact_ratio: f64,
     pw_batch: usize,
 
-    pair: sync::Mutex<Option<(M::I, D::I)>>,
+    compact_mu: CCMu,
+    pair: sync::Mutex<(M, D)>,
+
+    _phantom_key: marker::PhantomData<K>,
+    _phantom_val: marker::PhantomData<V>,
 }
 
 impl<K, V, M, D> Backup<K, V, M, D>
 where
-    K: Clone + Ord + Serialize + Footprint,
-    V: Clone + Diff + Serialize + Footprint,
-    <V as Diff>::D: Serialize,
-    M: WriteIndexFactory<K, V>,
-    D: DiskIndexFactory<K, V>,
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint + From<<V as Diff>::D>,
+    M: Index<K, V>,
+    D: Index<K, V>,
+    <M as Index<K, V>>::R: PiecewiseScan<K, V>,
 {
+    /// Default threshold between usefull data in disk and total disk
+    /// footprint, below which disk backup shall be compacted.
+    pub const COMPACT_RATIO: f64 = 0.5;
+
     pub fn new(
         dir: &ffi::OsStr, // directory path
         name: &str,
-        mem_factory: M,
-        disk_factory: D,
+        mem: M,
+        disk: D,
     ) -> Result<Backup<K, V, M, D>> {
-        let mem = mem_factory.new(name)?;
-        let disk = disk_factory.new(dir, name)?;
-
         Ok(Backup {
             dir: dir.to_os_string(),
             name: name.to_string(),
+            compact_ratio: Self::COMPACT_RATIO,
             pw_batch: scans::SKIP_SCAN_BATCH_SIZE,
-            pair: sync::Mutex::new(Some((mem, disk))),
+
+            compact_mu: CCMu::uninit(),
+            pair: sync::Mutex::new((mem, disk)),
+
+            _phantom_key: marker::PhantomData,
+            _phantom_val: marker::PhantomData,
         })
-    }
-
-    pub fn open(
-        dir: &ffi::OsStr, // directory path
-        name: &str,
-        mem_factory: M,
-        disk_factory: D,
-    ) -> Result<Backup<K, V, M, D>> {
-        let mut items = fs::read_dir(dir)?;
-        let disk = loop {
-            match items.next() {
-                Some(item) => {
-                    let item = item?;
-                    let mf = item.file_name();
-                    let disk = disk_factory.open(dir, mf.clone().into())?;
-                    if disk.to_name() == name {
-                        break Some(disk);
-                    }
-                }
-                None => break None,
-            }
-        };
-        match disk {
-            None => Self::new(dir, name, mem_factory, disk_factory),
-            Some(disk) => {
-                let mem = mem_factory.new(name)?;
-                Ok(Backup {
-                    dir: dir.to_os_string(),
-                    name: name.to_string(),
-                    pw_batch: scans::SKIP_SCAN_BATCH_SIZE,
-
-                    pair: sync::Mutex::new(Some((mem, disk))),
-                })
-            }
-        }
     }
 
     pub fn set_pw_batch_size(&mut self, batch: usize) {
         self.pw_batch = batch
+    }
+
+    /// Set threshold between useful data in disk and total disk
+    /// footprint, below which disk backup shall be compacted.
+    pub fn set_compact_ratio(&mut self, ratio: f64) {
+        self.compact_ratio = ratio;
+    }
+
+    /// Set interval in time duration, for invoking disk compaction.
+    pub fn set_compact_interval(&mut self, interval: Duration) {
+        let ptr = unsafe {
+            // transmute self as void pointer.
+            Box::from_raw(self as *mut Backup<K, V, M, D> as *mut ffi::c_void)
+        };
+        self.compact_mu = CCMu::init_with_ptr(ptr);
+        let mu = CCMu::clone(&self.compact_mu);
+        thread::spawn(move || auto_compact::<K, V, M, D>(mu, interval));
     }
 }
 
 impl<K, V, M, D> Backup<K, V, M, D>
 where
     K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
-    M: WriteIndexFactory<K, V>,
-    D: DiskIndexFactory<K, V>,
+    V: Clone + Diff + Footprint + From<<V as Diff>::D>,
+    M: Index<K, V>,
+    D: Index<K, V>,
+    <M as Index<K, V>>::R: PiecewiseScan<K, V>,
 {
-    fn disk_footprint(&self) -> Result<isize> {
-        let pair = self.pair.lock().unwrap();
-        pair.as_ref().unwrap().1.footprint()
-    }
-
     fn mem_footprint(&self) -> Result<isize> {
         let pair = self.pair.lock().unwrap();
-        pair.as_ref().unwrap().0.footprint()
+        pair.0.footprint()
+    }
+    fn disk_footprint(&self) -> Result<isize> {
+        let pair = self.pair.lock().unwrap();
+        pair.1.footprint()
     }
 }
 
 impl<K, V, M, D> Footprint for Backup<K, V, M, D>
 where
-    K: Clone + Ord + Serialize + Footprint,
-    V: Clone + Diff + Serialize + Footprint + From<<V as Diff>::D>,
-    <V as Diff>::D: Serialize,
-    M: WriteIndexFactory<K, V>,
-    D: DiskIndexFactory<K, V>,
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint + From<<V as Diff>::D>,
+    M: Index<K, V>,
+    D: Index<K, V>,
+    <M as Index<K, V>>::R: PiecewiseScan<K, V>,
 {
     fn footprint(&self) -> Result<isize> {
         Ok(self.disk_footprint()? + self.mem_footprint()?)
@@ -148,15 +145,14 @@ where
 
 impl<K, V, M, D> Index<K, V> for Backup<K, V, M, D>
 where
-    K: Clone + Ord + Serialize + Footprint,
-    V: Clone + Diff + Serialize + Footprint + From<<V as Diff>::D>,
-    <V as Diff>::D: Serialize,
-    M: WriteIndexFactory<K, V>,
-    D: DiskIndexFactory<K, V>,
-    <M::I as Index<K, V>>::R: PiecewiseScan<K, V>,
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint + From<<V as Diff>::D>,
+    M: Index<K, V>,
+    D: Index<K, V>,
+    <M as Index<K, V>>::R: PiecewiseScan<K, V>,
 {
-    type W = <M::I as Index<K, V>>::W;
-    type R = <M::I as Index<K, V>>::R;
+    type W = M::W;
+    type R = M::R;
     type O = Empty;
 
     fn to_name(&self) -> String {
@@ -167,60 +163,77 @@ where
         Empty
     }
 
-    fn to_metadata(&mut self) -> Result<Vec<u8>> {
-        let mut pair = self.pair.lock().unwrap();
-        pair.as_mut().unwrap().1.to_metadata()
+    fn to_metadata(&self) -> Result<Vec<u8>> {
+        let pair = self.pair.lock().unwrap();
+        pair.1.to_metadata()
     }
 
-    fn to_seqno(&mut self) -> u64 {
+    fn to_seqno(&self) -> u64 {
         let pair = self.pair.lock().unwrap();
-        pair.as_mut().unwrap().0.to_seqno()
+        pair.0.to_seqno()
     }
 
     fn set_seqno(&mut self, seqno: u64) {
-        let pair = self.pair.lock().unwrap();
-        pair.as_mut().unwrap().0.set_seqno(seqno)
+        let mut pair = self.pair.lock().unwrap();
+        pair.0.set_seqno(seqno)
     }
 
     fn to_writer(&mut self) -> Result<Self::W> {
-        let pair = self.pair.lock().unwrap();
-        pair.as_mut().unwrap().0.to_writer()
+        let mut pair = self.pair.lock().unwrap();
+        pair.0.to_writer()
     }
 
     fn to_reader(&mut self) -> Result<Self::R> {
-        let pair = self.pair.lock().unwrap();
-        pair.as_mut().unwrap().0.to_reader()
+        let mut pair = self.pair.lock().unwrap();
+        pair.0.to_reader()
     }
 
-    fn commit(&self, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<Self> {
-        {
-            let mut pair = self.pair.lock().unwrap();
-            let (mem, mut disk) = pair.take().unwrap();
-            let within = (
-                Bound::Included(pair.0.to_seqno()),
-                Bound::Excluded(disk.to_seqno()),
-            );
-            let mut pw_iter = SkipScan::new(pair.0.to_reader()?, within);
-            pw_iter.set_batch_size(self.pw_batch);
-            let no_reverse = false;
-            let iter = lsm::y_iter(iter, Box::new(pw_iter), no_reverse);
-            pair.1.get_or_insert(disk.commit(iter, meta)?);
-        }
-        Ok(Backup {
-            dir: self.dir.clone(),
-            name: self.name.clone(),
-            pw_batch: self.pw_batch,
-            pair: sync::Mutex,
-        })
+    fn commit(&mut self, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<()> {
+        let mut pair = self.pair.lock().unwrap();
+
+        let within = (
+            Bound::Included(pair.0.to_seqno()),
+            Bound::Excluded(pair.1.to_seqno()),
+        );
+        let mut pw_scan = SkipScan::new(pair.0.to_reader()?, within);
+        pw_scan.set_batch_size(self.pw_batch);
+        let no_reverse = false;
+        let iter = lsm::y_iter(iter, Box::new(pw_scan), no_reverse);
+        pair.1.commit(iter, meta)
     }
 
-    fn compact(&self) -> Result<Self> {
-        {
-            let mut pair = self.disk.lock().unwrap();
-            let disk = pair.1.take().unwrap();
-            pair.1.get_or_insert(disk.compact()?);
+    fn compact(&mut self) -> Result<()> {
+        let mut pair = self.pair.lock().unwrap();
+        pair.1.compact()
+    }
+}
+
+fn auto_compact<K, V, M, D>(ccmu: CCMu, interval: Duration)
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint + From<<V as Diff>::D>,
+    M: Index<K, V>,
+    D: Index<K, V>,
+    <M as Index<K, V>>::R: PiecewiseScan<K, V>,
+{
+    let mut elapsed = Duration::new(0, 0);
+    loop {
+        if elapsed < interval {
+            thread::sleep(interval - elapsed);
         }
-        Ok(self)
+        let backup = match ccmu.start_op() {
+            (false, _) => break,
+            (true, ptr) => unsafe {
+                // unsafe type cast
+                (ptr as *mut Backup<K, V, M, D>).as_mut().unwrap()
+            },
+        };
+
+        let start = SystemTime::now();
+        backup.compact().unwrap(); // TODO: log error
+        elapsed = start.elapsed().ok().unwrap();
+
+        ccmu.fin_op()
     }
 }
 

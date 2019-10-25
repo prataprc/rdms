@@ -313,7 +313,7 @@ where
     fn to_seqno(&self) -> u64 {
         let inner = self.inner.lock().unwrap();
         match inner.deref() {
-            InnerRobt::Build { .. } => panic!("not reachable"),
+            InnerRobt::Build { .. } => 0,
             InnerRobt::Snapshot { stats, .. } => stats.seqno,
         }
     }
@@ -396,7 +396,15 @@ where
     fn compact(&mut self) -> Result<()> {
         let mut inner = self.inner.lock().unwrap();
         let new_inner = match inner.deref() {
-            InnerRobt::Build { .. } => unreachable!(),
+            InnerRobt::Build {
+                dir, name, config, ..
+            } => InnerRobt::Build {
+                dir: dir.clone(),
+                name: name.clone(),
+                config: config.clone(),
+                _phantom_key: marker::PhantomData,
+                _phantom_val: marker::PhantomData,
+            },
             InnerRobt::Snapshot {
                 dir,
                 name,

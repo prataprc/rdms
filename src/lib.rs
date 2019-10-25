@@ -77,7 +77,7 @@ pub mod llrb;
 mod llrb_node;
 pub mod mvcc;
 // disk index
-// TODO: pub mod backup;
+pub mod backup;
 pub mod dgm;
 pub mod nodisk;
 pub mod robt;

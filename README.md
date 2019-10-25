@@ -25,17 +25,6 @@ Key Value store
 * [ ] Decentralised version control for index entries.
 * [ ] Value, along with delta, can be stored in separate log files.
 
-Open design decisions
-=====================
-
-Given Rust's threading model, is it more efficient to en-force, using atomic
-primitives, that all write operations on MVCC index is deligated to single
-thread or is it more efficient to serialize write operations from multiple
-threads.
-
-Is it enough to use ``Relaxed`` [memory-ordering][memory-ordering] for
-AtomicPtr operations to manage MVCC Snapshots ?
-
-Add a feature for using jemalloc instead of using system allocator.
+TODO: Add a feature for using jemalloc instead of using system allocator.
 
 [memory-ordering]: https://doc.rust-lang.org/std/sync/atomic/enum.Ordering.html

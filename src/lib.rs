@@ -55,6 +55,7 @@ mod core;
 mod error;
 mod panic;
 mod spinlock;
+mod sync;
 mod sync_writer;
 mod types;
 mod util;

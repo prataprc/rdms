@@ -13,6 +13,7 @@ use crate::{
     core::{Result, Serialize, WriteIndexFactory, Writer},
     error::Error,
     lsm,
+    sync::CCMu,
     types::{Empty, EmptyIter},
 };
 use log::debug;
@@ -217,25 +218,6 @@ where
     r_disks: Vec<<D::I as Index<K, V>>::R>,
 }
 
-// TODO: implement Clone trait for this that mimics Arc::clone.
-struct CMu(mem::MaybeUninit<Arc<sync::Mutex<(bool, u32, Box<ffi::c_void>)>>>);
-
-impl CMu {
-    fn uninit() -> CMu {
-        CMu(mem::MaybeUninit::uninit())
-    }
-
-    fn init(val: Arc<sync::Mutex<(bool, u32, Box<ffi::c_void>)>>) -> CMu {
-        CMu(mem::MaybeUninit::new(val))
-    }
-}
-
-impl AsRef<sync::Mutex<(bool, u32, Box<ffi::c_void>)>> for CMu {
-    fn as_ref(&self) -> &sync::Mutex<(bool, u32, Box<ffi::c_void>)> {
-        unsafe { self.0.get_ref().as_ref() }
-    }
-}
-
 pub struct Dgm<K, V, M, D>
 where
     K: Clone + Ord + Footprint,
@@ -250,30 +232,10 @@ where
     mem_factory: M,
     disk_factory: D,
 
-    compact_mu: CMu,
+    compact_mu: CCMu,
     levels: sync::Mutex<Levels<K, V, M, D>>, // snapshots
     writers: Vec<Arc<sync::Mutex<<M::I as Index<K, V>>::W>>>,
     readers: Vec<Arc<sync::Mutex<Rs<K, V, M, D>>>>,
-}
-
-impl<K, V, M, D> Drop for Dgm<K, V, M, D>
-where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
-    M: WriteIndexFactory<K, V>,
-    D: DiskIndexFactory<K, V>,
-{
-    fn drop(&mut self) {
-        loop {
-            match self.compact_mu.as_ref().lock().unwrap().deref_mut() {
-                (dropped, n, _) if *n == 0 => {
-                    *dropped = true;
-                    break;
-                }
-                (_, _, _) => thread::sleep(Duration::from_secs(1)),
-            }
-        }
-    }
 }
 
 impl<K, V, M, D> Dgm<K, V, M, D>
@@ -319,7 +281,7 @@ where
             mem_factory,
             disk_factory,
 
-            compact_mu: CMu::uninit(),
+            compact_mu: CCMu::uninit(),
             levels: sync::Mutex::new(levels),
             writers: Default::default(),
             readers: Default::default(),
@@ -386,30 +348,36 @@ where
             mem_factory,
             disk_factory,
 
-            compact_mu: CMu::uninit(),
+            compact_mu: CCMu::uninit(),
             levels: sync::Mutex::new(levels),
             writers: Default::default(),
             readers: Default::default(),
         }))
     }
 
+    /// Set threshold between memory index footprint and the latest disk
+    /// index footprint, below which a newer level shall be created,
+    /// for commiting new entries.
     pub fn set_mem_ratio(&mut self, ratio: f64) {
         self.mem_ratio = ratio;
     }
 
+    /// Set threshold between a disk index footprint and the next-level disk
+    /// index footprint, above which the two levels shall be compacted
+    /// into a single index.
     pub fn set_disk_ratio(&mut self, ratio: f64) {
         self.disk_ratio = ratio;
     }
 
+    /// Set interval in time duration, for invoking disk compaction
+    /// between dgm disk-levels.
     pub fn set_compact_interval(&mut self, interval: Duration) {
-        let dgm_ptr = unsafe {
+        let ptr = unsafe {
             // transmute self as void pointer.
             Box::from_raw(self as *mut Dgm<K, V, M, D> as *mut ffi::c_void)
         };
-        let mu = Arc::new(sync::Mutex::new((false, 0, dgm_ptr)));
-        self.compact_mu = CMu::init(mu);
-
-        let mu = Arc::clone(unsafe { self.compact_mu.0.get_ref() });
+        self.compact_mu = CCMu::init_with_ptr(ptr);
+        let mu = CCMu::clone(&self.compact_mu);
         thread::spawn(move || auto_compact::<K, V, M, D>(mu, interval));
     }
 }
@@ -616,7 +584,6 @@ impl<K, V, M, D> Footprint for Dgm<K, V, M, D>
 where
     K: Clone + Ord + Serialize + Footprint,
     V: Clone + Diff + Serialize + Footprint + From<<V as Diff>::D>,
-    <V as Diff>::D: Serialize,
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
 {
@@ -1316,12 +1283,11 @@ where
     }
 }
 
-fn auto_compact<K, V, M, D>(
-    mu: Arc<sync::Mutex<(bool, u32, Box<ffi::c_void>)>>,
-    interval: Duration, // periodic cycle for compaction logic.
-) where
+fn auto_compact<K, V, M, D>(ccmu: CCMu, interval: Duration)
+where
     K: Clone + Ord + Serialize + Footprint,
     V: Clone + Diff + Serialize + Footprint + From<<V as Diff>::D>,
+    <V as Diff>::D: Serialize,
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
 {
@@ -1330,26 +1296,19 @@ fn auto_compact<K, V, M, D>(
         if elapsed < interval {
             thread::sleep(interval - elapsed);
         }
-        let dgm = match mu.lock().unwrap().deref_mut() {
-            (true, _, _) => break,
-            (false, n, dgm_ptr) => {
-                *n = *n + 1;
-                unsafe {
-                    // transmute void pointer to mutable reference into Dgm{}.
-                    let dgm_ptr = dgm_ptr.as_mut() as *mut ffi::c_void;
-                    (dgm_ptr as *mut Dgm<K, V, M, D>).as_mut().unwrap()
-                }
-            }
+        let dgm = match ccmu.start_op() {
+            (false, _) => break,
+            (true, ptr) => unsafe {
+                // unsafe type cast
+                (ptr as *mut Dgm<K, V, M, D>).as_mut().unwrap()
+            },
         };
+
         let start = SystemTime::now();
         dgm.compact().unwrap(); // TODO: log error using error!
-        match mu.lock().unwrap().deref_mut() {
-            (false, n, dgm_ptr) if *n > 0 => {
-                *n = *n - 1;
-            }
-            _ => unreachable!(),
-        };
         elapsed = start.elapsed().ok().unwrap();
+
+        ccmu.fin_op()
     }
 }
 

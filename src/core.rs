@@ -208,10 +208,10 @@ where
     fn to_root(&self) -> Self::O;
 
     /// Return the metadata from index that was previously committed.
-    fn to_metadata(&mut self) -> Result<Vec<u8>>;
+    fn to_metadata(&self) -> Result<Vec<u8>>;
 
     /// Return the current seqno tracked by this index.
-    fn to_seqno(&mut self) -> u64;
+    fn to_seqno(&self) -> u64;
 
     /// Application can set the start sequence number for this index.
     fn set_seqno(&mut self, seqno: u64);

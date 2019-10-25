@@ -43,6 +43,7 @@
 
 #![feature(bind_by_move_pattern_guards)]
 #![feature(drain_filter)]
+#![feature(maybe_uninit_ref)]
 
 #[cfg(unix)]
 extern crate libc;

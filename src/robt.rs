@@ -295,7 +295,7 @@ where
         }
     }
 
-    fn to_metadata(&mut self) -> Result<Vec<u8>> {
+    fn to_metadata(&self) -> Result<Vec<u8>> {
         let inner = self.inner.lock().unwrap();
         match inner.deref() {
             InnerRobt::Snapshot { meta, .. } => {
@@ -310,7 +310,7 @@ where
     }
 
     /// Return the current seqno tracked by this index.
-    fn to_seqno(&mut self) -> u64 {
+    fn to_seqno(&self) -> u64 {
         let inner = self.inner.lock().unwrap();
         match inner.deref() {
             InnerRobt::Build { .. } => panic!("not reachable"),

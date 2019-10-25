@@ -77,11 +77,11 @@ where
         Empty
     }
 
-    fn to_metadata(&mut self) -> Result<Vec<u8>> {
+    fn to_metadata(&self) -> Result<Vec<u8>> {
         Ok(vec![])
     }
 
-    fn to_seqno(&mut self) -> u64 {
+    fn to_seqno(&self) -> u64 {
         0
     }
 

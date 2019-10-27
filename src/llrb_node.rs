@@ -14,10 +14,10 @@ where
     V: Clone + Diff,
 {
     pub(crate) entry: Entry<K, V>,
-    pub(crate) black: bool,                    // store: black or red
-    pub(crate) dirty: bool,                    // new node in mvcc path
-    pub(crate) left: Option<Box<Node<K, V>>>,  // store: left child
-    pub(crate) right: Option<Box<Node<K, V>>>, // store: right child
+    pub(crate) black: bool,                           // store: black or red
+    pub(crate) dirty: bool,                           // new node in mvcc path
+    pub(crate) left: Option<(u64, Box<Node<K, V>>)>,  // store: left child
+    pub(crate) right: Option<(u64, Box<Node<K, V>>)>, // store: right child
 }
 
 impl<K, V> Footprint for Node<K, V>

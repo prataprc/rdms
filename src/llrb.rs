@@ -32,7 +32,7 @@ use std::{
     convert::TryInto,
     fmt::Debug,
     ops::{Bound, Deref, DerefMut, RangeBounds},
-    sync::Arc,
+    sync::{self, Arc},
     {ffi, marker, mem},
 };
 
@@ -46,6 +46,8 @@ use crate::{
     spinlock::{self, RWSpinlock},
     types::Empty,
 };
+
+// TODO: unit test case purging older entries.
 
 include!("llrb_common.rs");
 
@@ -104,6 +106,9 @@ where
     tree_footprint: isize,
     readers: Arc<u32>,
     writers: Arc<u32>,
+
+    purge_before: Arc<sync::Mutex<u64>>, // always <, not <=
+    purge_handle: Option<thread::JoinHandle<()>>,
 }
 
 impl<K, V> Drop for Llrb<K, V>
@@ -350,6 +355,31 @@ where
     }
 
     fn compact(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    fn tombstone_purge(&mut self, seqno: Bound<u64>) -> Result<()> {
+        let seqno = match seqno {
+            Bound::Included(seqno) => seqno - 1,
+            Bound::Excluded(seqno) => seqno,
+            Bound::Unbounded => unreachable!(),
+        };
+        {
+            let purge_before = self.purge_before.lock.unwrap();
+            *purge_before = seqno;
+        }
+        self.purge_handle = match self.purge_handle {
+            handle @ Some(_) => handle,
+            None => {
+                let index: Box<std::ffi::c_void> = unsafe {
+                    // transmute self as void pointer.
+                    let index = &mut **self as *mut Llrb<K, V>;
+                    Box::from_raw(index as *mut std::ffi::c_void)
+                };
+                let purge_mu = Arc::clone(&self.purge_before);
+                Some(thread::spawn(|| background_purger(index, purge_mu))),
+            }
+        };
         Ok(())
     }
 }
@@ -1521,6 +1551,15 @@ where
     {
         let index: &mut Llrb<K, V> = self.as_mut();
         index.delete_index(key, Some(seqno))
+    }
+}
+
+fn background_purger(index: Box<ffi::c_void>, purge_mu: Arc<sync::Mutex<u64>>) {
+    loop {
+        let seqno  =  {
+            let purge_before = purge_mu.lock().unwrap();
+            *purge_before
+        };
     }
 }
 

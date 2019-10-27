@@ -237,11 +237,6 @@ where
     /// compact() that can be concurrently called.
     /// TODO: Return number of entries commited to disk.
     fn compact(&mut self) -> Result<()>;
-
-    /// Purge all entries with sequence number before `purge`. Note that
-    /// the implementing index might defer the actual purge.
-    /// TODO: Return number of entries purged to disk.
-    fn tombstone_purge(&mut self, seqno: Bound<u64>) -> Result<()>;
 }
 
 /// Index read operations.

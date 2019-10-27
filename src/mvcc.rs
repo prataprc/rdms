@@ -54,7 +54,6 @@ use crate::{
 };
 
 // TODO: Experiment with different atomic::Ordering to improve performance.
-// TODO: unit test case purging older entries.
 
 const RECLAIM_CAP: usize = 128;
 

@@ -13,7 +13,7 @@ Code Review checklist
 * [ ] Reduce trait constraints for Type parameters on public APIs.
 * [ ] Public APIs can be as generic as possible. Check whether there
       is a scope for `AsRef` or `Borrow` constraints.
-* [ ] Document error variants.
+* [ ] Review/Document error variants, capture useful information in error msg.
 * [ ] Check for dangling links in rustdoc.
 * [ ] 80-column width.
 * [ ] Copyright and License notice.
@@ -23,6 +23,14 @@ Code Review checklist
 * [ ] Verify unreachable!() macro, try to replace them with Err(Error).
 * [ ] Avoid println!() macro in production code.
 * [ ] Document rdms::error::Error type and all its variants.
+* [ ] Review TODO comments in code.
+* [ ] Check for unwrap() calls. It can be security breach if unwrap
+  is called on values from external sources, outside the `rdms` library.
+* [ ] check fo ok() calls on Result type. It can be security breach if
+  errors are ignored.
+* [ ] Trim trait constraits for exported types, exported functions and
+  type/methods/functions defined in core.rs
+
 
 * Avoid panic!() in inner-level functions. If at all it is used, use
 them at the API level.

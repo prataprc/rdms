@@ -236,7 +236,3 @@ where
         ccmu.fin_op()
     }
 }
-
-#[cfg(test)]
-#[path = "dgm_test.rs"]
-mod dgm_test;

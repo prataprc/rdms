@@ -46,7 +46,7 @@ fn test_file_lock() {
     }
 
     // unlock as shared lock 2
-    fd2.unlock();
+    fd2.unlock().unwrap();
     match fd2.try_lock_exclusive() {
         Ok(_) => panic!("unexpected behaviour!!"),
         Err(err) if err.kind() == io::ErrorKind::WouldBlock => (),
@@ -59,12 +59,12 @@ fn test_file_lock() {
     }
 
     // unlock shared lock 1
-    fd1.unlock();
+    fd1.unlock().unwrap();
     match fd3.try_lock_exclusive() {
         Ok(_) => (),
         Err(err) => panic!("unexpected err: {:?}", err),
     }
-    fd3.unlock();
+    fd3.unlock().unwrap();
     match fd2.try_lock_exclusive() {
         Ok(_) => (),
         Err(err) => panic!("unexpected err: {:?}", err),
@@ -80,5 +80,5 @@ fn test_file_lock() {
         Err(err) => panic!("unexpected err: {:?}", err),
     }
 
-    fd2.unlock();
+    fd2.unlock().unwrap();
 }

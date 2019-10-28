@@ -1395,6 +1395,7 @@ impl Flusher {
                 None => {
                     let msg = format!("robt flush unknown error");
                     Err(Error::ThreadFail(msg))
+                }
             },
             Ok(Err(err)) => panic!("unreachable arm with err : {:?}", err),
         }
@@ -1412,7 +1413,7 @@ fn thread_flush(
         // println!("flusher {:?} {} {}", file, fpos, data.len());
         // fpos += data.len();
         let n = fd.write(&data)?;
-        let m = datal.len();
+        let m = data.len();
         if n != m {
             let msg = format!("robt flusher: {:?} {}/{}...", &file, m, n);
             fd.unlock()?; // <----- write un-lock

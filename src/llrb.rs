@@ -26,6 +26,8 @@
 //! [LSM mode]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
 //!
 
+use log::info;
+
 use std::{
     borrow::Borrow,
     cmp::{Ord, Ordering},

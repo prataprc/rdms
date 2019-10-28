@@ -61,20 +61,20 @@
 //!     +---------------+
 //! ```
 //!
-use std::convert::TryInto;
-use std::sync::atomic::AtomicU64;
+
+use lazy_static::lazy_static;
+
 use std::{
     borrow::Borrow,
     cmp,
     collections::HashMap,
+    convert::TryInto,
     ffi, fmt, fs,
     io::{self, Read, Seek, Write},
     mem, path, result,
-    sync::{mpsc, Arc},
+    sync::{atomic::AtomicU64, mpsc, Arc},
     thread, vec,
 };
-
-use lazy_static::lazy_static;
 
 use crate::{
     core::{Diff, Replay, Result, Serialize},

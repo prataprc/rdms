@@ -1,3 +1,5 @@
+use log::debug;
+
 use std::{
     borrow::Borrow,
     ffi, fmt, fs, marker, mem,
@@ -16,7 +18,6 @@ use crate::{
     sync::CCMu,
     types::{Empty, EmptyIter},
 };
-use log::debug;
 
 #[derive(Clone)]
 struct Name(String);

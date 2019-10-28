@@ -1,7 +1,6 @@
 use std::{borrow::Borrow, ops::RangeBounds};
 
-use crate::core::{Diff, Entry, Footprint, Result, Writer};
-use crate::core::{IndexIter, Reader};
+use crate::core::{Diff, Entry, Footprint, IndexIter, Reader, Result, Writer};
 
 pub struct Panic(String);
 

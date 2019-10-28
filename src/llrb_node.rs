@@ -1,7 +1,9 @@
 use std::{convert::TryInto, fmt, ops::Deref, result};
 
-use crate::core::{Diff, Entry, Footprint, Result, ToJson, Value};
-use crate::spinlock;
+use crate::{
+    core::{Diff, Entry, Footprint, Result, ToJson, Value},
+    spinlock,
+};
 
 #[allow(unused_imports)] // for documentation
 use crate::llrb::Llrb;

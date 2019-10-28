@@ -15,6 +15,8 @@ use std::{any, ffi, io, sync::mpsc};
 pub enum Error {
     /// API / function not supported
     NotSupported(String),
+    /// Supplied key is not found in the index.
+    KeyNotFound,
     /// Can be returned by set_cas() API when:
     /// * In non-lsm mode, requested entry is missing but specified
     ///   CAS is not ZERO. Note that this combination is an alias for
@@ -25,53 +27,54 @@ pub enum Error {
     /// * Requested entry's last modified sequence-number does not
     ///   match with specified CAS.
     InvalidCAS,
-    /// Index has failed.
-    MemIndexFail(String),
+    /// Key size, after serializing, has exceeded the configured,
+    /// (or hard coded) limit.
+    KeySizeExceeded(usize),
+    /// Value size, after serializing, has exceed the configured,
+    /// (or hard coded) limit.
+    ValueSizeExceeded(usize),
+    /// Value-diff size, after serializing, exceeds limit.
+    DiffSizeExceeded(usize),
+    /// Index has failed to meet the validation criteria. String
+    /// argument contains more details.
+    ValidationFail(String),
     /// Index has failed.
     DiskIndexFail(String),
-    /// Supplied key is not found in the index.
-    KeyNotFound,
     /// Expected a native value. TODO: hide this ?
     NotNativeValue,
     /// Expected a native delta. TODO: hide this ?
     NotNativeDelta,
-    /// Key size, after serializing, exceeds limit.
-    KeySizeExceeded(usize),
-    /// Value size, after serializing, exceeds limit.
-    ValueSizeExceeded(usize),
-    /// Value-diff size, after serializing, exceeds limit.
-    DiffSizeExceeded(usize),
     /// De-serialization failed.
     DecodeFail(String),
     /// Unable to read expected bytes from file.
     PartialRead(String),
     /// Unable to write full buffer into file.
     PartialWrite(String),
-    /// Conversion error from ffi::OsString
+    /// Returned by disk index or Wal that provide durability support.
     InvalidFile(String),
-    /// IO error from std::io
-    IoError(io::Error),
-    /// Json processing error from jsondata package
-    JsonError(jsondata::Error),
     /// Thread has failed.
     ThreadFail(String),
     /// On disk snapshot is invalid.
     InvalidSnapshot(String),
-    /// String conversion error from std::String, str::str
-    Utf8Error(std::str::Utf8Error),
     /// Inter-Process-Communication error from std::mpsc
     IPCFail(String),
     /// Invalid WAL
     InvalidWAL(String),
-    // Local error, means, given key is less than the entire data set.
+    /// IO error from std::io
+    IoError(io::Error),
+    /// Json processing error from jsondata package
+    JsonError(jsondata::Error),
+    /// String conversion error from std::String, str::str
+    Utf8Error(std::str::Utf8Error),
+    // internal error, given key is less than the entire data set.
     __LessThan,
-    // z-block of btree has overflowed.
+    // internal error, z-block of robt index has overflowed.
     __ZBlockOverflow(usize),
-    // m-block of btree has overflowed.
+    // inernal error, m-block of robt index has overflowed.
     __MBlockOverflow(usize),
-    // iteration exhausted in m-block entries.
+    // internal error, iteration exhausted in robt index's m-block entries.
     __MBlockExhausted(usize),
-    // iteration exhausted in z-block entries.
+    // internal error, iteration exhausted in robt index's z-block entries.
     __ZBlockExhausted(usize),
 }
 

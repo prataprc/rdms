@@ -54,11 +54,11 @@ where
     match node {
         Some(node) if node.dirty => {
             // TODO: llrb has dirty node.
-            Err(Error::MemIndexFail("llrb has dirty node".to_string()))
+            Err(Error::ValidationFail("llrb has dirty node".to_string()))
         }
         Some(_node) if fromred && red => {
             // TODO: llrb has dirty node.
-            Err(Error::MemIndexFail(format!("llrb has consecutive reds")))
+            Err(Error::ValidationFail(format!("llrb has consecutive reds")))
         }
         Some(node) => {
             // confirm sort order in the tree.
@@ -68,7 +68,7 @@ where
                 if let Some(left) = left {
                     if left.as_key().ge(node.as_key()) {
                         /// Fatal case, index entries are not in sort-order.
-                        return Err(Error::MemIndexFail(format!(
+                        return Err(Error::ValidationFail(format!(
                             "llrb sort error left:{:?} parent:{:?}",
                             left.as_key(),
                             node.as_key()
@@ -78,7 +78,7 @@ where
                 if let Some(right) = right {
                     if right.as_key().le(node.as_key()) {
                         /// Fatal case, index entries are not in sort-order.
-                        return Err(Error::MemIndexFail(format!(
+                        return Err(Error::ValidationFail(format!(
                             "llrb sort error right:{:?} parent:{:?}",
                             right.as_key(),
                             node.as_key()
@@ -95,7 +95,7 @@ where
                 let l = validate_tree(left, red, blacks, depth + 1, depths)?;
                 let r = validate_tree(right, red, blacks, depth + 1, depths)?;
                 if l != r {
-                    return Err(Error::MemIndexFail(format!(
+                    return Err(Error::ValidationFail(format!(
                         "llrb has unbalacked blacks l:{}, r:{}",
                         l, r
                     )));

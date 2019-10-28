@@ -134,10 +134,8 @@ impl Serialize for i32 {
             *self = i32::from_be_bytes(scratch);
             Ok(4)
         } else {
-            Err(Error::DecodeFail(format!(
-                "type-i32 encoded len {}",
-                buf.len()
-            )))
+            let msg = format!("type-i32 encoded len {}", buf.len());
+            Err(Error::DecodeFail(msg))
         }
     }
 }
@@ -179,10 +177,8 @@ impl Serialize for i64 {
             *self = i64::from_be_bytes(scratch);
             Ok(8)
         } else {
-            Err(Error::DecodeFail(format!(
-                "type-i64 encoded len {}",
-                buf.len()
-            )))
+            let msg = format!("type-i64 encoded len {}", buf.len());
+            Err(Error::DecodeFail(msg))
         }
     }
 }

@@ -39,7 +39,7 @@
 use fs2::FileExt;
 use jsondata::Json;
 use lazy_static::lazy_static;
-use log::{debug, info};
+use log::info;
 
 use std::{
     borrow::Borrow,
@@ -171,14 +171,10 @@ where
         dir: &ffi::OsStr,
         root: ffi::OsString, // master file name.
     ) -> Result<Robt<K, V>> {
-        let name = match Self::to_name(&root) {
-            Some(name) => name,
-            None => {
-                let msg = format!("not an robt index `{:?}`", root);
-                debug!(target: "robt-factory", "{}", msg);
-                return Err(Error::InvalidFile(msg));
-            }
-        };
+        let name = Self::to_name(&root).ok_or(Error::InvalidFile(format!(
+            "open robt {:?}/{:?}",
+            dir, root
+        )))?;
 
         info!(
             target: "robt-factory",
@@ -746,7 +742,7 @@ pub(crate) fn write_meta_items(
     if n == ln {
         Ok(n.try_into().unwrap())
     } else {
-        let msg = format!("write_meta_items: {:?} {}/{}...", &file, ln, n);
+        let msg = format!("robt write_meta_items: {:?} {}/{}...", &file, ln, n);
         Err(Error::PartialWrite(msg))
     }
 }
@@ -786,7 +782,7 @@ pub fn read_meta_items(
     let (x, y) = (z - n_marker, z);
     let marker = block[x..y].to_vec();
     if marker.ne(&ROOT_MARKER.as_slice()) {
-        let msg = format!("unexpected marker {:?}", marker);
+        let msg = format!("robt unexpected marker {:?}", marker);
         return Err(Error::InvalidSnapshot(msg));
     }
 
@@ -805,7 +801,7 @@ pub fn read_meta_items(
     let stats: Stats = stats.parse()?;
     let at = m - n - (stats.m_blocksize as u64);
     if at != root {
-        let msg = format!("expected root at {}, found {}", at, root);
+        let msg = format!("robt expected root at {}, found {}", at, root);
         Err(Error::InvalidSnapshot(msg))
     } else {
         Ok(meta_items)
@@ -1392,8 +1388,13 @@ impl Flusher {
             Ok(Ok(())) => Ok(()),
             Ok(Err(Error::PartialWrite(err))) => Err(Error::PartialWrite(err)),
             Err(err) => match err.downcast_ref::<String>() {
-                Some(msg) => Err(Error::ThreadFail(msg.to_string())),
-                None => Err(Error::ThreadFail("unknown error".to_string())),
+                Some(msg) => {
+                    let msg = format!("robt flush err: {}", msg);
+                    Err(Error::ThreadFail(msg))
+                }
+                None => {
+                    let msg = format!("robt flush unknown error");
+                    Err(Error::ThreadFail(msg))
             },
             Ok(Err(err)) => panic!("unreachable arm with err : {:?}", err),
         }
@@ -1411,8 +1412,9 @@ fn thread_flush(
         // println!("flusher {:?} {} {}", file, fpos, data.len());
         // fpos += data.len();
         let n = fd.write(&data)?;
-        if n != data.len() {
-            let msg = format!("flusher: {:?} {}/{}...", &file, data.len(), n);
+        let m = datal.len();
+        if n != m {
+            let msg = format!("robt flusher: {:?} {}/{}...", &file, m, n);
             fd.unlock()?; // <----- write un-lock
             return Err(Error::PartialWrite(msg));
         }
@@ -1469,7 +1471,7 @@ where
         let stats: Stats = if let MetaItem::Stats(stats) = &meta_items[2] {
             Ok(stats.parse()?)
         } else {
-            let msg = "snapshot statistics missing".to_string();
+            let msg = "robt snapshot statistics missing".to_string();
             Err(Error::InvalidSnapshot(msg))
         }?;
         let config: Config = stats.into();
@@ -1534,7 +1536,7 @@ where
         if let MetaItem::AppMetadata(data) = &self.meta[1] {
             Ok(data.clone())
         } else {
-            let msg = "snapshot app-metadata missing".to_string();
+            let msg = "robt snapshot app-metadata missing".to_string();
             Err(Error::InvalidSnapshot(msg))
         }
     }
@@ -1544,7 +1546,7 @@ where
         if let MetaItem::Stats(stats) = &self.meta[2] {
             Ok(stats.parse()?)
         } else {
-            let msg = "snapshot statistics missing".to_string();
+            let msg = "robt snapshot statistics missing".to_string();
             Err(Error::InvalidSnapshot(msg))
         }
     }
@@ -1554,7 +1556,9 @@ where
         if let MetaItem::Root(root) = self.meta[0] {
             Ok(root)
         } else {
-            Err(Error::InvalidSnapshot("snapshot root missing".to_string()))
+            Err(Error::InvalidSnapshot(
+                "robt snapshot root missing".to_string(),
+            ))
         }
     }
 

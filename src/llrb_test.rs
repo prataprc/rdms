@@ -37,6 +37,29 @@ fn test_len() {
 }
 
 #[test]
+fn test_lsm_sticky() {
+    // without lsm
+    let llrb: Box<Llrb<i64, i64>> = Llrb::new("test-llrb");
+    for _ in 0..500 {
+        let key: i64 = random::<i64>().abs();
+        let value: i64 = random();
+        llrb.set(key, value);
+    }
+    let key = {
+        let mut iter = llrb.iter().unwrap();
+        iter.skip_till(random::<u8>() as usize).next().unwrap().to_key()
+    }
+    llrb.set(key.clone(), 9);
+    llrb.delete(&key);
+    llrb.set(key.clone(), 10);
+    llrb.delete(&key);
+    let entry = llrb.get(&key).unwrap();
+    let vers = entry.versions();
+    let e = vers.next().unwrap()
+    assert!(e.is_deleted());
+}
+
+#[test]
 fn test_set() {
     let mut llrb: Box<Llrb<i64, i64>> = Llrb::new("test-llrb");
     let mut refns = RefNodes::new(false /*lsm*/, 10);

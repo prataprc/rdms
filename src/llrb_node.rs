@@ -159,6 +159,10 @@ where
         self.entry.as_key()
     }
 
+    pub(crate) fn to_key(&self) -> K {
+        self.entry.to_key()
+    }
+
     pub(crate) fn to_seqno(&self) -> u64 {
         self.entry.to_seqno()
     }

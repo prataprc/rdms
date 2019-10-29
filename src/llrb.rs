@@ -19,6 +19,10 @@
 //! while waiting to acquire the lock. Calling it with _false_ will have the
 //! calling thread to yield to OS scheduler while waiting to acquire the lock.
 //!
+//! *sticky*, is a shallow variant of lsm, applicable only when
+//! `lsm` option is disabled. For more information refer to [set_sticky]
+//! method.
+//!
 //! *seqno*, application can set the beginning sequence number before
 //! ingesting data into the index.
 //!
@@ -26,7 +30,7 @@
 //! [LSM mode]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
 //!
 
-use log::info;
+use log::{error, info};
 
 use std::{
     borrow::Borrow,
@@ -51,18 +55,52 @@ use crate::{
 
 include!("llrb_common.rs");
 
+/// LlrbFactory captures a set of configuration for creating new Llrb
+/// instances. By implementing `WriteIndexFactory` trait this can be
+/// used with other, more sophisticated, index implementations.
 pub struct LlrbFactory {
     lsm: bool,
+    sticky: bool,
     spin: bool,
 }
 
+/// Create a new factory with initial set of configuration. To know
+/// more about other configurations supported by the LlrbFactory refer
+/// to its ``set_``, methods.
+///
+/// * *lsm*, spawn Llrb instances in lsm mode, this will preserve the
+/// entire history of all write operations applied on the index.
+/// * *sticky*, is a shallow variant of lsm, applicable only when
+/// `lsm` option is disabled. For more information refer to [set_sticky]
+/// method.
 pub fn llrb_factory(lsm: bool) -> LlrbFactory {
-    LlrbFactory { lsm, spin: true }
+    LlrbFactory {
+        lsm,
+        sticky: false,
+        spin: true,
+    }
 }
 
 impl LlrbFactory {
-    pub fn set_spinlatch(&mut self, spin: bool) {
+    /// If spin is true, calling thread will spin while waiting for the
+    /// latch, otherwise, calling thead will be yielded to OS scheduler.
+    pub fn set_spinlatch(&mut self, spin: bool) -> &mut self {
         self.spin = spin;
+        self
+    }
+
+    /// Create all Llrb instances in sticky mode, refer to Llrb::set_sticky()
+    /// for more details.
+    pub fn set_sticky(&mut self, spin: bool) -> &mut self {
+        self.spin = spin;
+        self
+    }
+
+    fn to_config_string(&self) -> String {
+        format!(
+            "llrb = {{ lsm = {}, sticky = {}, spin = {} }}",
+            self.lsm, self.sticky, self.spin
+        )
     }
 }
 
@@ -78,11 +116,21 @@ where
     }
 
     fn new(&self, name: &str) -> Result<Self::I> {
-        if self.lsm {
-            Ok(Llrb::new_lsm(name))
+        info!(
+            target: "llrbfc",
+            "creating a new llrb instance {} with {}",
+            name, self.to_config_string()
+        );
+
+        let mut index = if self.lsm {
+            Llrb::new_lsm(name)
         } else {
-            Ok(Llrb::new(name))
-        }
+            let mut index = Llrb::new(name);
+            index.set_sticky(self.sticky);
+            index
+        };
+        index.set_spinlatch(self.spin);
+        Ok(index)
     }
 }
 
@@ -96,6 +144,7 @@ where
 {
     name: String,
     lsm: bool,
+    sticky: bool,
     spin: bool,
 
     root: Option<Box<Node<K, V>>>,
@@ -117,7 +166,12 @@ where
         self.root.take().map(drop_tree);
         let n = self.multi_rw();
         if n > Self::CONCUR_REF_COUNT {
-            panic!("Llrb dropped before read/write handles {}", n);
+            error!(
+                target: "llrb",
+                "Llrb {} dropped before read/write handles {}", self.name, n
+            );
+        } else {
+            info!(target: "llrb", "Llrb {} dropped ...", self.name);
         }
     }
 }
@@ -162,6 +216,7 @@ where
         Box::new(Llrb {
             name: name.as_ref().to_string(),
             lsm: false,
+            sticky: false,
             spin: true,
 
             root: None,
@@ -186,6 +241,7 @@ where
         Box::new(Llrb {
             name: name.as_ref().to_string(),
             lsm: true,
+            sticky: false,
             spin: true,
 
             root: None,
@@ -201,13 +257,30 @@ where
 
     /// Configure behaviour of spin-latch. If `spin` is true, calling
     /// thread shall spin until a latch is acquired or released, if false
-    /// calling thread will yield to scheduler.
-    pub fn set_spinlatch(&mut self, spin: bool) {
+    /// calling thread will yield to scheduler. Call this api, before
+    /// creating reader and/or writer handles.
+    pub fn set_spinlatch(&mut self, spin: bool) -> &mut self {
         let n = self.multi_rw();
         if n > Self::CONCUR_REF_COUNT {
             panic!("cannot configure Llrb with active readers/writers {}", n)
         }
         self.spin = spin;
+        self
+    }
+
+    /// Run this instance in sticky mode, which is like a shallow lsm.
+    /// In sticky mode, all entries once inserted into the index will
+    /// continue to live for the rest of the index life time. In
+    /// practical terms this means a delete operations won't remove
+    /// the entry from the index, instead the entry shall marked as
+    /// deleted and but its value shall be removed.
+    pub fn set_sticky(&mut self, sticky: bool) -> &mut self {
+        let n = self.multi_rw();
+        if n > Self::CONCUR_REF_COUNT {
+            panic!("cannot configure Llrb with active readers/writers {}", n)
+        }
+        self.sticky = sticky;
+        self
     }
 
     /// Squash this index and return the root and its book-keeping.
@@ -230,6 +303,7 @@ where
         Box::new(Llrb {
             name: self.name.clone(),
             lsm: self.lsm,
+            sticky: self.sticky,
             spin: self.spin,
 
             root: self.root.clone(),
@@ -493,8 +567,12 @@ where
 
         let key_footprint = key.to_owned().footprint().unwrap();
 
-        if self.lsm {
-            let res = Llrb::delete_lsm(self.root.take(), key, seqno);
+        if self.lsm || self.sticky {
+            let res = if self.lsm {
+                Llrb::delete_lsm(self.root.take(), key, seqno)
+            } else {
+                Llrb::delete_sticky(self.root.take(), key, seqno)
+            };
             self.root = res.node;
             self.root.as_mut().map(|r| r.set_black());
             self.seqno = seqno;
@@ -773,6 +851,61 @@ where
                         let size = node.delete(seqno).unwrap();
                         DeleteResult {
                             node: Some(Llrb::walkuprot_23(node)),
+                            old_entry: Some(entry),
+                            size,
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn delete_sticky<Q>(
+        node: Option<Box<Node<K, V>>>,
+        key: &Q,
+        seqno: u64, // seqno for this mutation
+    ) -> DeleteResult<K, V>
+    where
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
+    {
+        match node {
+            None => {
+                // insert and mark as delete
+                let mut node = Node::new_deleted(key.to_owned(), seqno);
+                node.dirty = false;
+                let size: isize = node.footprint().unwrap().try_into().unwrap();
+                DeleteResult {
+                    node: Some(node),
+                    old_entry: None,
+                    size,
+                }
+            }
+            Some(mut node) => {
+                node = Llrb::walkdown_rot23(node);
+                match node.as_key().borrow().cmp(&key) {
+                    Ordering::Greater => {
+                        let left = node.left.take();
+                        let mut r = Llrb::delete_sticky(left, key, seqno);
+                        node.left = r.node;
+                        r.node = Some(Llrb::walkuprot_23(node));
+                        r
+                    }
+                    Ordering::Less => {
+                        let right = node.right.take();
+                        let mut r = Llrb::delete_sticky(right, key, seqno);
+                        node.right = r.node;
+                        r.node = Some(Llrb::walkuprot_23(node));
+                        r
+                    }
+                    Ordering::Equal => {
+                        let (entry, size) = {
+                            // gather current entry's detail
+                            (node.entry.clone(), node.footprint().unwrap())
+                        };
+                        let size = node.footprint().unwrap() - size;
+                        DeleteResult {
+                            node: Some(Node::new_deleted(node.to_key(), seqno)),
                             old_entry: Some(entry),
                             size,
                         }

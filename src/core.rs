@@ -9,6 +9,9 @@ use std::{
 
 use crate::{error::Error, vlog};
 
+// TODO: track all footprint calls and handle the Result<> without using
+// a blind unwrap.
+
 /// Result returned by rdms functions and methods.
 pub type Result<T> = std::result::Result<T, Error>;
 

@@ -22,7 +22,6 @@ Code Review checklist
 * [ ] Verify panic!() macro, try to replace them with Err(Error).
 * [ ] Verify unreachable!() macro, try to replace them with Err(Error).
 * [ ] Avoid println!() macro in production code.
-* [ ] Document rdms::error::Error type and all its variants.
 * [ ] Review TODO comments in code.
 * [ ] Check for unwrap() calls. It can be security breach if unwrap
   is called on values from external sources, outside the `rdms` library.

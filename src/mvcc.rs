@@ -20,6 +20,10 @@
 //! while waiting to acquire the lock. Calling it with _false_ will have the
 //! calling thread to yield to OS scheduler while waiting to acquire the lock.
 //!
+//! *sticky*, is a shallow variant of lsm, applicable only when
+//! `lsm` option is disabled. For more information refer to [set_sticky]
+//! method.
+//!
 //! *seqno*, application can set the beginning sequence number before
 //! ingesting data into the index.
 //!
@@ -59,18 +63,52 @@ const RECLAIM_CAP: usize = 128;
 
 include!("llrb_common.rs");
 
+/// MvccFactory captures a set of configuration for creating new Mvcc
+/// instances. By implementing `WriteIndexFactory` trait this can be
+/// used with other, more sophisticated, index implementations.
 pub struct MvccFactory {
     lsm: bool,
+    sticky: bool,
     spin: bool,
 }
 
+/// Create a new factory with initial set of configuration. To know
+/// more about other configurations supported by the MvccFactory refer
+/// to its ``set_``, methods.
+///
+/// * *lsm*, spawn Mvcc instances in lsm mode, this will preserve the
+/// entire history of all write operations applied on the index.
+/// * *sticky*, is a shallow variant of lsm, applicable only when
+/// `lsm` option is disabled. For more information refer to [set_sticky]
+/// method.
 pub fn mvcc_factory(lsm: bool) -> MvccFactory {
-    MvccFactory { lsm, spin: true }
+    MvccFactory {
+        lsm,
+        sticky: false,
+        spin: true,
+    }
 }
 
 impl MvccFactory {
-    pub fn set_spinlatch(&mut self, spin: bool) {
+    /// If spin is true, calling thread will spin while waiting for the
+    /// latch, otherwise, calling thead will be yielded to OS scheduler.
+    pub fn set_spinlatch(&mut self, spin: bool) -> &mut self {
         self.spin = spin;
+        self
+    }
+
+    /// Create all Mvcc instances in sticky mode, refer to Mvcc::set_sticky()
+    /// for more details.
+    pub fn set_sticky(&mut self, sticky: bool) -> &mut self {
+        self.sticky = sticky;
+        self
+    }
+
+    fn to_config_string(&self) -> String {
+        format!(
+            "mvcc = {{ lsm = {}, sticky = {}, spin = {} }}",
+            self.lsm, self.sticky, self.spin
+        )
     }
 }
 
@@ -86,11 +124,21 @@ where
     }
 
     fn new(&self, name: &str) -> Result<Self::I> {
-        if self.lsm {
-            Ok(Mvcc::new_lsm(name))
+        info!(
+            target: "mvccfc",
+            "creating a new mvcc instance {} with {}",
+            name, self.to_config_string()
+        );
+
+        let mut index = if self.lsm {
+            Mvcc::new_lsm(name)
         } else {
-            Ok(Mvcc::new(name))
-        }
+            let mut index = Mvcc::new(name);
+            index.set_sticky(self.sticky)
+            index
+        };
+        index.set_spinlatch(self.psin)
+        Ok(index)
     }
 }
 
@@ -106,6 +154,7 @@ where
 {
     name: String,
     lsm: bool,
+    sticky: bool,
     spin: bool,
 
     snapshot: OuterSnapshot<K, V>,
@@ -125,7 +174,10 @@ where
         // validation check 1
         let n = self.multi_rw();
         if n > Self::CONCUR_REF_COUNT {
-            panic!("Mvcc dropped before read/write handles {}", n);
+            error!(
+                target: "mvcc",
+                "Mvcc {} dropped before read/write handles {}", self.name, n
+            );
         }
 
         // NOTE: Means all references to mvcc are gone and ownership is
@@ -163,6 +215,8 @@ where
         if n != 0 {
             panic!("leak or double free n_nodes:{}", n);
         }
+
+        info!(target: "mvcc", "Mvcc {} dropped ...", self.name);
     }
 }
 
@@ -211,6 +265,7 @@ where
         Box::new(Mvcc {
             name: name.as_ref().to_string(),
             lsm: false,
+            sticky: false,
             spin: true,
 
             snapshot: OuterSnapshot::new(),
@@ -229,6 +284,7 @@ where
         Box::new(Mvcc {
             name: name.as_ref().to_string(),
             lsm: true,
+            sticky: false,
             spin: true,
 
             snapshot: OuterSnapshot::new(),
@@ -242,14 +298,30 @@ where
 
     /// Configure behaviour of spin-latch. If `spin` is true, calling
     /// thread shall spin until a latch is acquired or released, if false
-    /// calling thread will yield to scheduler.
-    pub fn set_spinlatch(&mut self, spin: bool) {
+    /// calling thread will yield to scheduler. Call this api, before
+    /// creating reader and/or writer handles.
+    pub fn set_spinlatch(&mut self, spin: bool) -> &mut self {
         let n = self.multi_rw();
         if n > Self::CONCUR_REF_COUNT {
             panic!("cannot configure Mvcc with active readers/writer {}", n);
         }
-
         self.spin = spin;
+        self
+    }
+
+    /// Run this instance in sticky mode, which is like a shallow lsm.
+    /// In sticky mode, all entries once inserted into the index will
+    /// continue to live for the rest of the index life time. In
+    /// practical terms this means a delete operations won't remove
+    /// the entry from the index, instead the entry shall marked as
+    /// deleted and but its value shall be removed.
+    pub fn set_sticky(&mut self, sticky: bool) -> &mut self{
+        let n = self.multi_rw();
+        if n > Self::CONCUR_REF_COUNT {
+            panic!("cannot configure Mvcc with active readers/writers {}", n)
+        }
+        self.sticky = sticky;
+        self
     }
 
     pub fn clone(&self) -> Box<Mvcc<K, V>> {
@@ -261,6 +333,7 @@ where
         let cloned = Box::new(Mvcc {
             name: self.name.clone(),
             lsm: self.lsm,
+            sticky: self.sticky,
             spin: self.spin,
 
             snapshot: OuterSnapshot::new(),
@@ -566,7 +639,7 @@ where
         let mut n_count = snapshot.n_count;
         let root = snapshot.root_duplicate();
         let mut reclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
-        let (seqno, root, old_entry) = if self.lsm {
+        let (seqno, root, old_entry) = if self.lsm || self.sticky {
             let s = match self.delete_lsm(root, key, seqno, &mut reclm) {
                 DeleteResult {
                     node: Some(mut root),

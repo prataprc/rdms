@@ -640,7 +640,12 @@ where
         let root = snapshot.root_duplicate();
         let mut reclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
         let (seqno, root, old_entry) = if self.lsm || self.sticky {
-            let s = match self.delete_lsm(root, key, seqno, &mut reclm) {
+            let res = if self.lsm {
+                self.delete_lsm(root, key, seqno, &mut reclm)
+            } else {
+                self.delete_sticky(root, key, seqno, &mut reclm)
+            };
+            let s = match res {
                 DeleteResult {
                     node: Some(mut root),
                     new_node,
@@ -967,6 +972,68 @@ where
                 let size = new_node.delete(seqno).unwrap();
                 new_node.dirty = true;
                 let n = new_node.duplicate();
+                (new_node, Some(n), Some(old_entry), size)
+            }
+        };
+
+        Box::leak(node);
+        DeleteResult {
+            node: Some(self.walkuprot_23(new_node, reclaim)),
+            new_node: n,
+            old_entry: entry,
+            size,
+        }
+    }
+
+    fn delete_sticky<Q>(
+        &self,
+        node: Option<Box<Node<K, V>>>,
+        key: &Q,
+        seqno: u64,
+        reclaim: &mut Vec<Box<Node<K, V>>>,
+    ) -> DeleteResult<K, V>
+    where
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
+    {
+        if node.is_none() {
+            let mut node = self.node_new_deleted(key.to_owned(), seqno);
+            node.dirty = false;
+            let n = node.duplicate();
+            let size: isize = node.footprint().unwrap().try_into().unwrap();
+            return DeleteResult {
+                node: Some(node),
+                new_node: Some(n),
+                old_entry: None,
+                size,
+            };
+        }
+
+        let node = node.unwrap();
+        let (new_node, n, entry, size) = match node.as_key().borrow().cmp(&key) {
+            Ordering::Greater => {
+                let mut new_node = self.node_mvcc_clone(&node, reclaim, false);
+                let left = new_node.left.take();
+                let r = self.delete_lsm(left, key, seqno, reclaim);
+                new_node.left = r.node;
+                (new_node, r.new_node, r.old_entry, r.size)
+            }
+            Ordering::Less => {
+                let mut new_node = self.node_mvcc_clone(&node, reclaim, false);
+                let right = new_node.right.take();
+                let r = self.delete_lsm(right, key, seqno, reclaim);
+                new_node.right = r.node;
+                (new_node, r.new_node, r.old_entry, r.size)
+            }
+            Ordering::Equal => {
+                let (old_entry, size) = {
+                    // gather current entry's detail
+                    node.entry.clone(), node.footprint().unwrap()
+                };
+                let mut new_node = Node::new_deleted(node.to_key(), seqno);
+                new_node.dirty = true;
+                let n = new_node.duplicate();
+                let size = new_node.footprint().unwrap() - size;
                 (new_node, Some(n), Some(old_entry), size)
             }
         };

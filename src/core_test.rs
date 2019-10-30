@@ -124,7 +124,7 @@ fn test_entry_new_lsm() {
     assert!(vers.next().is_none());
 
     // testcase3 delete
-    entry1.delete(1002);
+    entry1.delete(1002).unwrap();
     // verify latest entry
     assert_eq!(entry1.as_deltas().len(), 2);
     verify_latest(&entry1, 100, None, 1002, true);

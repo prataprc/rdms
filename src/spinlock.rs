@@ -183,17 +183,24 @@ pub struct Stats {
 
 impl fmt::Display for Stats {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(f, "{{ value = {:X}, ", self.value)?;
-        write!(f, "read_locks = {}, ", self.read_locks)?;
-        write!(f, "write_locks = {}, ", self.write_locks)?;
-        write!(f, "conflicts = {} }}", self.conflicts)
+        write!(
+            f,
+            concat!(
+                "{{ value = {:X}, read_locks = {}, ",
+                "write_locks = {}, conflicts = {} }}",
+            ),
+            self.value, self.read_locks, self.write_locks, self.conflicts,
+        )
     }
 }
 
 impl ToJson for Stats {
     fn to_json(&self) -> String {
         format!(
-            r#"{{ "value": {:X}, "read_locks": {}, "write_locks": {}, "conflicts": {} }}"#,
+            concat!(
+                r#"{{ "value": {:X}, "read_locks": {}, "#,
+                r#""write_locks": {}, "conflicts": {} }}"#,
+            ),
             self.value, self.read_locks, self.write_locks, self.conflicts
         )
     }

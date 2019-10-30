@@ -38,10 +38,11 @@ use std::{
     borrow::Borrow,
     cmp::{Ord, Ordering},
     convert::TryInto,
-    ffi,
+    ffi, fmt,
     fmt::Debug,
     marker, mem,
     ops::{Bound, Deref, DerefMut, RangeBounds},
+    result,
     sync::{
         atomic::{AtomicIsize, AtomicPtr, AtomicUsize, Ordering::SeqCst},
         mpsc, Arc,
@@ -50,12 +51,12 @@ use std::{
 };
 
 use crate::{
-    core::Writer,
     core::{Diff, Entry, Footprint, Index, IndexIter, PiecewiseScan, Reader},
     core::{Result, ScanEntry, ScanIter, Value, WalWriter, WriteIndexFactory},
+    core::{ToJson, Writer},
     error::Error,
     llrb::Llrb,
-    llrb_node::{LlrbDepth, Node, Stats},
+    llrb_node::{LlrbDepth, Node},
     spinlock::{self, RWSpinlock},
     types::Empty,
 };
@@ -389,7 +390,7 @@ where
     /// Return quickly with basic statisics, only entries() method is valid
     /// with this statisics.
     pub fn to_stats(&self) -> Stats {
-        Stats::new_mvcc_partial(
+        Stats::new_partial(
             &self.name,
             self.len(),
             mem::size_of::<Node<K, V>>(),
@@ -1397,7 +1398,7 @@ where
             return Err(Error::ValidationFail(msg));
         }
 
-        Ok(Stats::new_mvcc_full(
+        Ok(Stats::new_full(
             &self.name,
             arc_mvcc.n_count,
             std::mem::size_of::<Node<K, V>>(),
@@ -2161,6 +2162,98 @@ where
     {
         let index: &mut Mvcc<K, V> = self.as_mut();
         index.delete_index(key, Some(seqno))
+    }
+}
+
+/// Statistics for [`Mvcc`] tree.
+pub struct Stats {
+    name: String,
+    entries: usize,
+    node_size: usize,
+    rw_latch: spinlock::Stats,
+    snapshot_latch: spinlock::Stats,
+    blacks: Option<usize>,
+    depths: Option<LlrbDepth>,
+}
+
+impl Stats {
+    pub(crate) fn new_partial(
+        name: &str,
+        entries: usize,
+        node_size: usize,
+        rw_latch: spinlock::Stats,
+        snapshot_latch: spinlock::Stats,
+    ) -> Stats {
+        Stats {
+            name: name.to_string(),
+            entries,
+            node_size,
+            rw_latch,
+            snapshot_latch,
+            blacks: None,
+            depths: None,
+        }
+    }
+
+    pub(crate) fn new_full(
+        name: &str,
+        entries: usize,
+        node_size: usize,
+        rw_latch: spinlock::Stats,
+        snapshot_latch: spinlock::Stats,
+        blacks: usize,
+        depths: LlrbDepth,
+    ) -> Stats {
+        Stats {
+            name: name.to_string(),
+            entries,
+            node_size,
+            rw_latch,
+            snapshot_latch,
+            blacks: Some(blacks),
+            depths: Some(depths),
+        }
+    }
+}
+
+impl fmt::Display for Stats {
+    fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
+        let none = "none".to_string();
+        let b = self.blacks.as_ref().map_or(none.clone(), |x| x.to_string());
+        let d = self.depths.as_ref().map_or(none.clone(), |x| x.to_string());
+        write!(f, r#"mvcc.name = {}\n"#, self.name)?;
+        write!(
+            f,
+            r#"mvcc = {{ entries={}, node_size={}, blacks={} }}"#,
+            self.entries, self.node_size, b,
+        )?;
+        write!(f, "mvcc.rw_latch = {}\n", self.rw_latch)?;
+        write!(f, "mvcc.snap_latch = {}\n", self.snapshot_latch)?;
+        write!(f, "mvcc.depths = {}\n", d)
+    }
+}
+
+impl ToJson for Stats {
+    fn to_json(&self) -> String {
+        let null = "null".to_string();
+        let rw_l = self.rw_latch.to_json();
+        let snap_l = self.snapshot_latch.to_json();
+        format!(
+            concat!(
+                r#"{{ ""mvcc": {{ "name": {}, "entries": {:X}, ",
+                r#""node_size": {}, "rw_latch": {}, "#,
+                r#""snap_latch": {}, "blacks": {}, "depths": {} }} }}"#,
+            ),
+            self.name,
+            self.entries,
+            self.node_size,
+            rw_l,
+            snap_l,
+            self.blacks
+                .as_ref()
+                .map_or(null.clone(), |x| format!("{}", x)),
+            self.depths.as_ref().map_or(null.clone(), |x| x.to_json()),
+        )
     }
 }
 

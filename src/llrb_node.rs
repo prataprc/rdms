@@ -1,9 +1,6 @@
 use std::{convert::TryInto, fmt, ops::Deref, result};
 
-use crate::{
-    core::{Diff, Entry, Footprint, Result, ToJson, Value},
-    spinlock,
-};
+use crate::core::{Diff, Entry, Footprint, Result, ToJson, Value};
 
 #[allow(unused_imports)] // for documentation
 use crate::llrb::Llrb;
@@ -218,208 +215,6 @@ where
     }
 }
 
-/// Statistics for [`Llrb`] and [`Mvcc`] tree.
-pub enum Stats {
-    /// full statisics via [`Llrb::validate`] method.
-    Llrb {
-        name: String,
-        entries: usize,
-        node_size: usize,
-        rw_latch: spinlock::Stats,
-        blacks: Option<usize>,
-        depths: Option<LlrbDepth>,
-    },
-    /// partial but quick statistics via [`Llrb::stats`] method.
-    Mvcc {
-        name: String,
-        entries: usize,
-        node_size: usize,
-        rw_latch: spinlock::Stats,
-        snapshot_latch: spinlock::Stats,
-        blacks: Option<usize>,
-        depths: Option<LlrbDepth>,
-    },
-}
-
-impl Stats {
-    pub(crate) fn new_llrb_partial(
-        name: &str,
-        entries: usize,
-        node_size: usize,
-        rw_latch: spinlock::Stats,
-    ) -> Stats {
-        Stats::Llrb {
-            name: name.to_string(),
-            entries,
-            node_size,
-            rw_latch,
-            blacks: None,
-            depths: None,
-        }
-    }
-
-    pub(crate) fn new_llrb_full(
-        name: &str,
-        entries: usize,
-        node_size: usize,
-        rw_latch: spinlock::Stats,
-        blacks: usize,
-        depths: LlrbDepth,
-    ) -> Stats {
-        Stats::Llrb {
-            name: name.to_string(),
-            entries,
-            node_size,
-            rw_latch,
-            blacks: Some(blacks),
-            depths: Some(depths),
-        }
-    }
-
-    pub(crate) fn new_mvcc_partial(
-        name: &str,
-        entries: usize,
-        node_size: usize,
-        rw_latch: spinlock::Stats,
-        snapshot_latch: spinlock::Stats,
-    ) -> Stats {
-        Stats::Mvcc {
-            name: name.to_string(),
-            entries,
-            node_size,
-            rw_latch,
-            snapshot_latch,
-            blacks: None,
-            depths: None,
-        }
-    }
-
-    pub(crate) fn new_mvcc_full(
-        name: &str,
-        entries: usize,
-        node_size: usize,
-        rw_latch: spinlock::Stats,
-        snapshot_latch: spinlock::Stats,
-        blacks: usize,
-        depths: LlrbDepth,
-    ) -> Stats {
-        Stats::Mvcc {
-            name: name.to_string(),
-            entries,
-            node_size,
-            rw_latch,
-            snapshot_latch,
-            blacks: Some(blacks),
-            depths: Some(depths),
-        }
-    }
-}
-
-impl fmt::Display for Stats {
-    fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
-        let none = "none".to_string();
-        match self {
-            Stats::Llrb {
-                name,
-                entries,
-                node_size,
-                rw_latch,
-                blacks,
-                depths,
-            } => {
-                let b = blacks.as_ref().map_or(none.clone(), |x| x.to_string());
-                let d = depths.as_ref().map_or(none.clone(), |x| x.to_string());
-                write!(f, r#"llrb.name = {}\n"#, name)?;
-                write!(
-                    f,
-                    r#"llrb = {{ entries={}, node_size={}, blacks={} }}"#,
-                    entries, node_size, b,
-                )?;
-                write!(f, "llrb.rw_latch = {}\n", rw_latch)?;
-                write!(f, "llrb.depths = {}\n", d)
-            }
-            Stats::Mvcc {
-                name,
-                entries,
-                node_size,
-                rw_latch,
-                snapshot_latch,
-                blacks,
-                depths,
-            } => {
-                let b = blacks.as_ref().map_or(none.clone(), |x| x.to_string());
-                let d = depths.as_ref().map_or(none.clone(), |x| x.to_string());
-                write!(f, r#"mvcc.name = {}\n"#, name)?;
-                write!(
-                    f,
-                    r#"mvcc = {{ entries={}, node_size={}, blacks={} }}"#,
-                    entries, node_size, b,
-                )?;
-                write!(f, "mvcc.rw_latch = {}\n", rw_latch)?;
-                write!(f, "mvcc.snap_latch = {}\n", snapshot_latch)?;
-                write!(f, "mvcc.depths = {}\n", d)
-            }
-        }
-    }
-}
-
-impl ToJson for Stats {
-    fn to_json(&self) -> String {
-        let null = "null".to_string();
-        match self {
-            Stats::Llrb {
-                name,
-                entries,
-                node_size,
-                rw_latch,
-                blacks,
-                depths,
-            } => {
-                let l_stats = rw_latch.to_json();
-                format!(
-                    concat!(
-                        r#"{{ ""llrb": {{ "name": {}, "entries": {:X}, ",
-                        r#""node_size": {}, "#,
-                        r#""rw_latch": {}, "blacks": {}, "depths": {} }} }}"#,
-                    ),
-                    name,
-                    entries,
-                    node_size,
-                    l_stats,
-                    blacks.as_ref().map_or(null.clone(), |x| format!("{}", x)),
-                    depths.as_ref().map_or(null.clone(), |x| x.to_json()),
-                )
-            }
-            Stats::Mvcc {
-                name,
-                entries,
-                node_size,
-                rw_latch,
-                snapshot_latch,
-                blacks,
-                depths,
-            } => {
-                let rw_l = rw_latch.to_json();
-                let snap_l = snapshot_latch.to_json();
-                format!(
-                    concat!(
-                        r#"{{ ""mvcc": {{ "name": {}, "entries": {:X}, ",
-                        r#""node_size": {}, "rw_latch": {}, "#,
-                        r#""snap_latch": {}, "blacks": {}, "depths": {} }} }}"#,
-                    ),
-                    name,
-                    entries,
-                    node_size,
-                    rw_l,
-                    snap_l,
-                    blacks.as_ref().map_or(null.clone(), |x| format!("{}", x)),
-                    depths.as_ref().map_or(null.clone(), |x| x.to_json()),
-                )
-            }
-        }
-    }
-}
-
 // TODO: test cases for Depth.
 
 /// LlrbDepth calculates minimum, maximum, average and percentile of
@@ -490,9 +285,14 @@ impl fmt::Display for LlrbDepth {
             .collect();
         let depth = props.join(", ");
 
-        write!(f, "{{ samples = {}, ", self.samples)?;
-        write!(f, "min = {}, mean = {}, max = {}, ", m, n, x)?;
-        write!(f, "percentiles = {{ {} }} }}", depth)
+        write!(
+            f,
+            concat!(
+                "{{ samples={}, min={}, mean={}, max={}, ",
+                "percentiles={{ {} }} }}"
+            ),
+            self.samples, m, n, x, depth
+        )
     }
 }
 

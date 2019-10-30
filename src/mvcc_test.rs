@@ -30,21 +30,21 @@ fn test_len() {
 
 #[test]
 fn test_lsm_sticky() {
-    let MISSING_KEY = 0x123456789;
+    let missing_key = 0x123456789;
     let populate = |index: &mut Mvcc<i64, i64>| -> i64 {
         for _ in 0..500 {
             let key: i64 = random::<i64>().abs();
             let value: i64 = random();
-            index.set(key, value);
+            index.set(key, value).unwrap();
         }
         let iter = index.iter().unwrap();
         let e = iter.skip(random::<u8>() as usize).next().unwrap();
         let key = e.unwrap().to_key();
-        index.set(key.clone(), 9);
-        index.delete(&key);
-        index.set(key.clone(), 10);
-        index.delete(&key);
-        index.delete(&MISSING_KEY);
+        index.set(key.clone(), 9).unwrap();
+        index.delete(&key).unwrap();
+        index.set(key.clone(), 10).unwrap();
+        index.delete(&key).unwrap();
+        index.delete(&missing_key).ok();
         key
     };
 
@@ -56,7 +56,7 @@ fn test_lsm_sticky() {
         Err(err) => panic!("unexpected {:?}", err),
         Ok(e) => panic!("unexpected {}", e.to_seqno()),
     };
-    match index.get(&MISSING_KEY) {
+    match index.get(&missing_key) {
         Err(Error::KeyNotFound) => (),
         Err(err) => panic!("unexpected {:?}", err),
         Ok(e) => panic!("unexpected {}", e.to_seqno()),
@@ -79,7 +79,7 @@ fn test_lsm_sticky() {
             assert_eq!(es[0].to_seqno(), 504);
         }
     };
-    match index.get(&MISSING_KEY) {
+    match index.get(&missing_key) {
         Err(Error::KeyNotFound) => (),
         Err(err) => panic!("unexpected {:?}", err),
         Ok(e) => {
@@ -117,7 +117,7 @@ fn test_lsm_sticky() {
             assert_eq!(es[0].to_seqno(), 504);
         }
     };
-    match index.get(&MISSING_KEY) {
+    match index.get(&missing_key) {
         Err(Error::KeyNotFound) => (),
         Err(err) => panic!("unexpected {:?}", err),
         Ok(e) => {

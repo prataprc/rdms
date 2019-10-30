@@ -413,6 +413,16 @@ where
         Node::new_deleted(key, seqno)
     }
 
+    fn node_sd_clone(
+        &self,
+        node: &Node<K, V>, // source node
+        seqno: u64,
+        reclaim: &mut Vec<Box<Node<K, V>>>,
+    ) -> Box<Node<K, V>> {
+        self.snapshot.n_nodes.fetch_add(1, SeqCst);
+        node.sticky_delete_clone(seqno, reclaim)
+    }
+
     fn node_mvcc_clone(
         &self,
         node: &Node<K, V>, // source node
@@ -1035,7 +1045,7 @@ where
                     // gather current entry's detail
                     (node.entry.clone(), node.footprint().unwrap())
                 };
-                let mut new_node = self.node_node_deleted(node.to_key(), seqno);
+                let mut new_node = self.node_sd_clone(&node, seqno, reclaim);
                 new_node.dirty = true;
                 let n = new_node.duplicate();
                 let size = new_node.footprint().unwrap() - size;

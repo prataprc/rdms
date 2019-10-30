@@ -38,6 +38,7 @@ fn test_len() {
 
 #[test]
 fn test_lsm_sticky() {
+    let MISSING_KEY = 0x123456789;
     let populate = |index: &mut Llrb<i64, i64>| -> i64 {
         for _ in 0..500 {
             let key: i64 = random::<i64>().abs();
@@ -51,6 +52,7 @@ fn test_lsm_sticky() {
         index.delete(&key);
         index.set(key.clone(), 10);
         index.delete(&key);
+        index.delete(&MISSING_KEY);
         key
     };
 
@@ -58,6 +60,11 @@ fn test_lsm_sticky() {
     let mut index: Box<Llrb<i64, i64>> = Llrb::new("test-llrb");
     let key = populate(&mut index);
     match index.get(&key) {
+        Err(Error::KeyNotFound) => (),
+        Err(err) => panic!("unexpected {:?}", err),
+        Ok(e) => panic!("unexpected {}", e.to_seqno()),
+    };
+    match index.get(&MISSING_KEY) {
         Err(Error::KeyNotFound) => (),
         Err(err) => panic!("unexpected {:?}", err),
         Ok(e) => panic!("unexpected {}", e.to_seqno()),
@@ -78,6 +85,19 @@ fn test_lsm_sticky() {
             assert_eq!(es.len(), 1);
             assert_eq!(es[0].is_deleted(), true);
             assert_eq!(es[0].to_seqno(), 504);
+        }
+    };
+    match index.get(&MISSING_KEY) {
+        Err(Error::KeyNotFound) => (),
+        Err(err) => panic!("unexpected {:?}", err),
+        Ok(e) => {
+            assert_eq!(e.is_deleted(), true);
+            assert_eq!(e.to_seqno(), 505);
+
+            let es: Vec<Entry<i64, i64>> = e.versions().collect();
+            assert_eq!(es.len(), 1);
+            assert_eq!(es[0].is_deleted(), true);
+            assert_eq!(es[0].to_seqno(), 505);
         }
     };
 
@@ -105,7 +125,21 @@ fn test_lsm_sticky() {
             assert_eq!(es[0].to_seqno(), 504);
         }
     };
-    assert!(llrb.validate().is_ok());
+    match index.get(&MISSING_KEY) {
+        Err(Error::KeyNotFound) => (),
+        Err(err) => panic!("unexpected {:?}", err),
+        Ok(e) => {
+            assert_eq!(e.is_deleted(), true);
+            assert_eq!(e.to_seqno(), 505);
+
+            let es: Vec<Entry<i64, i64>> = e.versions().collect();
+            assert_eq!(es.len(), 1);
+            assert_eq!(es[0].is_deleted(), true);
+            assert_eq!(es[0].to_seqno(), 505);
+        }
+    };
+
+    assert!(index.validate().is_ok());
 }
 
 #[test]
@@ -412,7 +446,7 @@ fn test_range() {
     }
 }
 
-//TODO: enable this test case once type_str is implemented.
+//TODO: enable this test case once str/String is added to types.rs.
 //#[test]
 //fn test_range_str() {
 //    let mut llrb: Box<Llrb<&str, i64>> = Llrb::new("test-llrb");

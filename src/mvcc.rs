@@ -1019,14 +1019,14 @@ where
             Ordering::Greater => {
                 let mut new_node = self.node_mvcc_clone(&node, reclaim, false);
                 let left = new_node.left.take();
-                let r = self.delete_lsm(left, key, seqno, reclaim);
+                let r = self.delete_sticky(left, key, seqno, reclaim);
                 new_node.left = r.node;
                 (new_node, r.new_node, r.old_entry, r.size)
             }
             Ordering::Less => {
                 let mut new_node = self.node_mvcc_clone(&node, reclaim, false);
                 let right = new_node.right.take();
-                let r = self.delete_lsm(right, key, seqno, reclaim);
+                let r = self.delete_sticky(right, key, seqno, reclaim);
                 new_node.right = r.node;
                 (new_node, r.new_node, r.old_entry, r.size)
             }
@@ -1035,7 +1035,7 @@ where
                     // gather current entry's detail
                     (node.entry.clone(), node.footprint().unwrap())
                 };
-                let mut new_node = Node::new_deleted(node.to_key(), seqno);
+                let mut new_node = self.node_node_deleted(node.to_key(), seqno);
                 new_node.dirty = true;
                 let n = new_node.duplicate();
                 let size = new_node.footprint().unwrap() - size;

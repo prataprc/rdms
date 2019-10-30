@@ -105,6 +105,7 @@ fn test_lsm_sticky() {
             assert_eq!(es[0].to_seqno(), 504);
         }
     };
+    assert!(llrb.validate().is_ok());
 }
 
 #[test]

@@ -29,6 +29,77 @@ fn test_len() {
 }
 
 #[test]
+fn test_lsm_sticky() {
+    let populate = |index: &mut Mvcc<i64, i64>| -> i64 {
+        for _ in 0..500 {
+            let key: i64 = random::<i64>().abs();
+            let value: i64 = random();
+            index.set(key, value);
+        }
+        let iter = index.iter().unwrap();
+        let e = iter.skip(random::<u8>() as usize).next().unwrap();
+        let key = e.unwrap().to_key();
+        index.set(key.clone(), 9);
+        index.delete(&key);
+        index.set(key.clone(), 10);
+        index.delete(&key);
+        key
+    };
+
+    // without lsm
+    let mut index: Box<Mvcc<i64, i64>> = Mvcc::new("test-mvcc");
+    let key = populate(&mut index);
+    match index.get(&key) {
+        Err(Error::KeyNotFound) => (),
+        Err(err) => panic!("unexpected {:?}", err),
+        Ok(e) => panic!("unexpected {}", e.to_seqno()),
+    };
+
+    // without lsm, with sticky
+    let mut index: Box<Mvcc<i64, i64>> = Mvcc::new("test-mvcc");
+    index.set_sticky(true);
+    let key = populate(&mut index);
+    match index.get(&key) {
+        Err(Error::KeyNotFound) => (),
+        Err(err) => panic!("unexpected {:?}", err),
+        Ok(e) => {
+            assert_eq!(e.is_deleted(), true);
+            assert_eq!(e.to_seqno(), 504);
+
+            let es: Vec<Entry<i64, i64>> = e.versions().collect();
+            assert_eq!(es.len(), 1);
+            assert_eq!(es[0].is_deleted(), true);
+            assert_eq!(es[0].to_seqno(), 504);
+        }
+    };
+
+    // with lsm
+    let mut index: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc");
+    index.set_sticky(true);
+    let key = populate(&mut index);
+    match index.get(&key) {
+        Err(Error::KeyNotFound) => (),
+        Err(err) => panic!("unexpected {:?}", err),
+        Ok(e) => {
+            assert_eq!(e.is_deleted(), true);
+            assert_eq!(e.to_seqno(), 504);
+
+            let es: Vec<Entry<i64, i64>> = e.versions().collect();
+            assert_eq!(es.len(), 5);
+            let seqnos: Vec<u64> = es.iter().map(|e| e.to_seqno()).collect();
+            let dels: Vec<bool> = es.iter().map(|e| e.is_deleted()).collect();
+            let values: Vec<i64> = es.iter().filter_map(|e| e.to_native_value()).collect();
+
+            assert_eq!(&seqnos[..4], &[504, 503, 502, 501]);
+            assert_eq!(dels, &[true, false, true, false, false]);
+            assert_eq!(&values[..2], &[10, 9]);
+            assert_eq!(es[0].is_deleted(), true);
+            assert_eq!(es[0].to_seqno(), 504);
+        }
+    };
+}
+
+#[test]
 fn test_set() {
     let mut mvcc: Box<Mvcc<i64, i64>> = Mvcc::new("test-mvcc");
     let mut refns = RefNodes::new(false /*lsm*/, 10);

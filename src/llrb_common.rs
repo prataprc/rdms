@@ -1,3 +1,5 @@
+const MAX_TREE_DEPTH: usize = 100;
+
 #[inline]
 fn is_red<K, V>(node: Option<&Node<K, V>>) -> bool
 where

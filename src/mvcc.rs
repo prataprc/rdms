@@ -32,10 +32,13 @@
 //! [LSM mode]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
 //!
 
+use log::{error, info};
+
 use std::{
     borrow::Borrow,
     cmp::{Ord, Ordering},
     convert::TryInto,
+    ffi,
     fmt::Debug,
     marker, mem,
     ops::{Bound, Deref, DerefMut, RangeBounds},
@@ -92,14 +95,14 @@ pub fn mvcc_factory(lsm: bool) -> MvccFactory {
 impl MvccFactory {
     /// If spin is true, calling thread will spin while waiting for the
     /// latch, otherwise, calling thead will be yielded to OS scheduler.
-    pub fn set_spinlatch(&mut self, spin: bool) -> &mut self {
+    pub fn set_spinlatch(&mut self, spin: bool) -> &mut Self {
         self.spin = spin;
         self
     }
 
     /// Create all Mvcc instances in sticky mode, refer to Mvcc::set_sticky()
     /// for more details.
-    pub fn set_sticky(&mut self, sticky: bool) -> &mut self {
+    pub fn set_sticky(&mut self, sticky: bool) -> &mut Self {
         self.sticky = sticky;
         self
     }
@@ -134,10 +137,10 @@ where
             Mvcc::new_lsm(name)
         } else {
             let mut index = Mvcc::new(name);
-            index.set_sticky(self.sticky)
+            index.set_sticky(self.sticky);
             index
         };
-        index.set_spinlatch(self.psin)
+        index.set_spinlatch(self.spin);
         Ok(index)
     }
 }
@@ -300,7 +303,7 @@ where
     /// thread shall spin until a latch is acquired or released, if false
     /// calling thread will yield to scheduler. Call this api, before
     /// creating reader and/or writer handles.
-    pub fn set_spinlatch(&mut self, spin: bool) -> &mut self {
+    pub fn set_spinlatch(&mut self, spin: bool) -> &mut Self {
         let n = self.multi_rw();
         if n > Self::CONCUR_REF_COUNT {
             panic!("cannot configure Mvcc with active readers/writer {}", n);
@@ -315,7 +318,7 @@ where
     /// practical terms this means a delete operations won't remove
     /// the entry from the index, instead the entry shall marked as
     /// deleted and but its value shall be removed.
-    pub fn set_sticky(&mut self, sticky: bool) -> &mut self{
+    pub fn set_sticky(&mut self, sticky: bool) -> &mut Self {
         let n = self.multi_rw();
         if n > Self::CONCUR_REF_COUNT {
             panic!("cannot configure Mvcc with active readers/writers {}", n)
@@ -470,21 +473,23 @@ where
 
     /// Lockless concurrent readers are supported
     fn to_reader(&mut self) -> Result<Self::R> {
-        let index: Box<std::ffi::c_void> = unsafe {
+        let index: Box<ffi::c_void> = unsafe {
             // transmute self as void pointer.
-            Box::from_raw(&mut **self as *mut Mvcc<K, V> as *mut std::ffi::c_void)
+            Box::from_raw(&mut **self as *mut Mvcc<K, V> as *mut ffi::c_void)
         };
-        Ok(MvccReader::<K, V>::new(index))
+        let reader = Arc::clone(&self.readers);
+        Ok(MvccReader::<K, V>::new(index, reader))
     }
 
     /// Create a new writer handle. Multiple writers uses spin-lock to
     /// serialize write operation.
     fn to_writer(&mut self) -> Result<Self::W> {
-        let index: Box<std::ffi::c_void> = unsafe {
+        let index: Box<ffi::c_void> = unsafe {
             // transmute self as void pointer.
-            Box::from_raw(&mut **self as *mut Mvcc<K, V> as *mut std::ffi::c_void)
+            Box::from_raw(&mut **self as *mut Mvcc<K, V> as *mut ffi::c_void)
         };
-        Ok(MvccWriter::<K, V>::new(index))
+        let writer = Arc::clone(&self.writers);
+        Ok(MvccWriter::<K, V>::new(index, writer))
     }
 
     // TODO: figure out a way to merge `iter` into Mvcc
@@ -1028,7 +1033,7 @@ where
             Ordering::Equal => {
                 let (old_entry, size) = {
                     // gather current entry's detail
-                    node.entry.clone(), node.footprint().unwrap()
+                    (node.entry.clone(), node.footprint().unwrap())
                 };
                 let mut new_node = Node::new_deleted(node.to_key(), seqno);
                 new_node.dirty = true;
@@ -1371,14 +1376,15 @@ where
         let mut depths: LlrbDepth = Default::default();
 
         if red {
-            panic!("LLRB violation: Root node is alway black: {}", self.name);
+            let msg = format!("Mvcc Root node must be black: {}", self.name);
+            return Err(Error::ValidationFail(msg));
         }
 
         let blacks = validate_tree(root, red, blacks, depth, &mut depths)?;
 
-        if depths.to_max() > 100 {
-            // TODO: avoid magic numbers
-            panic!("LLRB depth has exceeded limit: {}", depths.to_max());
+        if depths.to_max() > MAX_TREE_DEPTH {
+            let msg = format!("Mvcc tree exceeds max_depth {}", depths.to_max());
+            return Err(Error::ValidationFail(msg));
         }
 
         Ok(Stats::new_mvcc_full(
@@ -1813,7 +1819,9 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    index: Option<Box<std::ffi::c_void>>, // Box<Mvcc<K, V>>
+    _refn: Arc<u32>,
+    id: usize,
+    index: Option<Box<ffi::c_void>>, // Box<Mvcc<K, V>>
     phantom_key: marker::PhantomData<K>,
     phantom_val: marker::PhantomData<V>,
 }
@@ -1823,12 +1831,22 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    fn new(index: Box<std::ffi::c_void>) -> MvccReader<K, V> {
-        MvccReader {
+    fn new(index: Box<ffi::c_void>, _refn: Arc<u32>) -> MvccReader<K, V> {
+        let id = Arc::strong_count(&_refn);
+        let mut r = MvccReader {
+            _refn,
+            id,
             index: Some(index),
             phantom_key: marker::PhantomData,
             phantom_val: marker::PhantomData,
-        }
+        };
+
+        let index: &mut Mvcc<K, V> = r.as_mut();
+        info!(
+            target: "mvcc",
+            "creating a new reader {} for {}", id, index.name
+        );
+        r
     }
 }
 
@@ -1838,6 +1856,10 @@ where
     V: Clone + Diff,
 {
     fn drop(&mut self) {
+        let id = self.id;
+        let index: &mut Mvcc<K, V> = self.as_mut();
+        info!(target: "mvcc", "dropping reader {} for {}", id, index.name);
+
         // leak this index, it is only a reference
         Box::leak(self.index.take().unwrap());
     }
@@ -1852,7 +1874,7 @@ where
         unsafe {
             // transmute void pointer to mutable reference into index.
             let index_ptr = self.index.as_mut().unwrap().as_mut();
-            let index_ptr = index_ptr as *mut std::ffi::c_void;
+            let index_ptr = index_ptr as *mut ffi::c_void;
             (index_ptr as *mut Mvcc<K, V>).as_mut().unwrap()
         }
     }
@@ -1965,9 +1987,35 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    index: Option<Box<std::ffi::c_void>>,
+    _refn: Arc<u32>,
+    id: usize,
+    index: Option<Box<ffi::c_void>>,
     phantom_key: marker::PhantomData<K>,
     phantom_val: marker::PhantomData<V>,
+}
+
+impl<K, V> MvccWriter<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    fn new(index: Box<ffi::c_void>, _refn: Arc<u32>) -> MvccWriter<K, V> {
+        let id = Arc::strong_count(&_refn);
+        let mut w = MvccWriter {
+            _refn,
+            id,
+            index: Some(index),
+            phantom_key: marker::PhantomData,
+            phantom_val: marker::PhantomData,
+        };
+
+        let index: &mut Mvcc<K, V> = w.as_mut();
+        info!(
+            target: "mvcc",
+            "creating a new writer {} for {}", id, index.name
+        );
+        w
+    }
 }
 
 impl<K, V> Drop for MvccWriter<K, V>
@@ -1976,6 +2024,10 @@ where
     V: Clone + Diff,
 {
     fn drop(&mut self) {
+        let id = self.id;
+        let index: &mut Mvcc<K, V> = self.as_mut();
+        info!(target: "mvcc", "dropping writer {} for {}", id, index.name);
+
         // leak this index, it is only a reference
         Box::leak(self.index.take().unwrap());
     }
@@ -1990,22 +2042,8 @@ where
         unsafe {
             // transmute void pointer to mutable reference into index.
             let index_ptr = self.index.as_mut().unwrap().as_mut();
-            let index_ptr = index_ptr as *mut std::ffi::c_void;
+            let index_ptr = index_ptr as *mut ffi::c_void;
             (index_ptr as *mut Mvcc<K, V>).as_mut().unwrap()
-        }
-    }
-}
-
-impl<K, V> MvccWriter<K, V>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-{
-    fn new(index: Box<std::ffi::c_void>) -> MvccWriter<K, V> {
-        MvccWriter {
-            index: Some(index),
-            phantom_key: marker::PhantomData,
-            phantom_val: marker::PhantomData,
         }
     }
 }

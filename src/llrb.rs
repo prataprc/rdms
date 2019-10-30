@@ -84,14 +84,14 @@ pub fn llrb_factory(lsm: bool) -> LlrbFactory {
 impl LlrbFactory {
     /// If spin is true, calling thread will spin while waiting for the
     /// latch, otherwise, calling thead will be yielded to OS scheduler.
-    pub fn set_spinlatch(&mut self, spin: bool) -> &mut self {
+    pub fn set_spinlatch(&mut self, spin: bool) -> &mut Self {
         self.spin = spin;
         self
     }
 
     /// Create all Llrb instances in sticky mode, refer to Llrb::set_sticky()
     /// for more details.
-    pub fn set_sticky(&mut self, spin: bool) -> &mut self {
+    pub fn set_sticky(&mut self, spin: bool) -> &mut Self {
         self.spin = spin;
         self
     }
@@ -259,7 +259,7 @@ where
     /// thread shall spin until a latch is acquired or released, if false
     /// calling thread will yield to scheduler. Call this api, before
     /// creating reader and/or writer handles.
-    pub fn set_spinlatch(&mut self, spin: bool) -> &mut self {
+    pub fn set_spinlatch(&mut self, spin: bool) -> &mut Self {
         let n = self.multi_rw();
         if n > Self::CONCUR_REF_COUNT {
             panic!("cannot configure Llrb with active readers/writers {}", n)
@@ -274,7 +274,7 @@ where
     /// practical terms this means a delete operations won't remove
     /// the entry from the index, instead the entry shall marked as
     /// deleted and but its value shall be removed.
-    pub fn set_sticky(&mut self, sticky: bool) -> &mut self {
+    pub fn set_sticky(&mut self, sticky: bool) -> &mut Self {
         let n = self.multi_rw();
         if n > Self::CONCUR_REF_COUNT {
             panic!("cannot configure Llrb with active readers/writers {}", n)
@@ -1201,14 +1201,15 @@ where
         let mut depths: LlrbDepth = Default::default();
 
         if red {
-            panic!("LLRB violation: Root node is alway black: {}", self.name);
+            let msg = format!("Llrb Root node must be black: {}", self.name);
+            return Err(Error::ValidationFail(msg));
         }
 
         let blacks = validate_tree(root, red, blacks, depth, &mut depths)?;
 
-        if depths.to_max() > 100 {
-            // TODO: avoid magic numbers
-            panic!("LLRB depth has exceeded limit: {}", depths.to_max());
+        if depths.to_max() > MAX_TREE_DEPTH {
+            let msg = format!("Llrb tree exceeds max_depth {}", depths.to_max());
+            return Err(Error::ValidationFail(msg));
         }
 
         Ok(Stats::new_llrb_full(
@@ -1352,6 +1353,7 @@ where
     V: Clone + Diff,
 {
     _refn: Arc<u32>,
+    id: usize,
     index: Option<Box<ffi::c_void>>, // Box<Llrb<K, V>>
     phantom_key: marker::PhantomData<K>,
     phantom_val: marker::PhantomData<V>,
@@ -1363,12 +1365,21 @@ where
     V: Clone + Diff,
 {
     fn new(index: Box<ffi::c_void>, _refn: Arc<u32>) -> LlrbReader<K, V> {
-        LlrbReader {
+        let id = Arc::strong_count(&_refn);
+        let mut r = LlrbReader {
             _refn,
+            id,
             index: Some(index),
             phantom_key: marker::PhantomData,
             phantom_val: marker::PhantomData,
-        }
+        };
+
+        let index: &mut Llrb<K, V> = r.as_mut();
+        info!(
+            target: "llrb",
+            "creating a new reader {} for {}", id, index.name
+        );
+        r
     }
 }
 
@@ -1378,6 +1389,10 @@ where
     V: Clone + Diff,
 {
     fn drop(&mut self) {
+        let id = self.id;
+        let index: &mut Llrb<K, V> = self.as_mut();
+        info!(target: "llrb", "dropping reader {} for {}", id, index.name);
+
         // leak this index, it is only a reference
         Box::leak(self.index.take().unwrap());
     }
@@ -1506,9 +1521,34 @@ where
     V: Clone + Diff,
 {
     _refn: Arc<u32>,
+    id: usize,
     index: Option<Box<ffi::c_void>>,
     phantom_key: marker::PhantomData<K>,
     phantom_val: marker::PhantomData<V>,
+}
+
+impl<K, V> LlrbWriter<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    fn new(index: Box<ffi::c_void>, _refn: Arc<u32>) -> LlrbWriter<K, V> {
+        let id = Arc::strong_count(&_refn);
+        let mut w = LlrbWriter {
+            _refn,
+            id,
+            index: Some(index),
+            phantom_key: marker::PhantomData,
+            phantom_val: marker::PhantomData,
+        };
+
+        let index: &mut Llrb<K, V> = w.as_mut();
+        info!(
+            target: "llrb",
+            "creating a new writer {} for {}", id, index.name
+        );
+        w
+    }
 }
 
 impl<K, V> Drop for LlrbWriter<K, V>
@@ -1517,6 +1557,10 @@ where
     V: Clone + Diff,
 {
     fn drop(&mut self) {
+        let id = self.id;
+        let index: &mut Llrb<K, V> = self.as_mut();
+        info!(target: "llrb", "dropping writer {} for {}", id, index.name);
+
         // leak this index, it is only a reference
         Box::leak(self.index.take().unwrap());
     }
@@ -1533,21 +1577,6 @@ where
             let index_ptr = self.index.as_mut().unwrap().as_mut();
             let index_ptr = index_ptr as *mut ffi::c_void;
             (index_ptr as *mut Llrb<K, V>).as_mut().unwrap()
-        }
-    }
-}
-
-impl<K, V> LlrbWriter<K, V>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-{
-    fn new(index: Box<ffi::c_void>, _refn: Arc<u32>) -> LlrbWriter<K, V> {
-        LlrbWriter {
-            _refn,
-            index: Some(index),
-            phantom_key: marker::PhantomData,
-            phantom_val: marker::PhantomData,
         }
     }
 }

@@ -174,6 +174,7 @@ impl<'a> Drop for Writer<'a> {
     }
 }
 
+#[derive(Default)]
 pub struct Stats {
     value: u64,
     read_locks: u64,

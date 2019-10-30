@@ -353,12 +353,13 @@ where
     /// Return quickly with basic statisics, only entries() method is valid
     /// with this statisics.
     pub fn to_stats(&self) -> Stats {
-        Stats::new_partial(
-            &self.name,
-            self.len(),
-            mem::size_of::<Node<K, V>>(),
-            self.latch.to_stats(),
-        )
+        let mut stats = Stats::new(&self.name);
+        stats.entries = self.len();
+        stats.node_size = mem::size_of::<Node<K, V>>();
+        stats.key_footprint = self.key_footprint;
+        stats.tree_footprint = self.tree_footprint;
+        stats.rw_latch = self.latch.to_stats();
+        stats
     }
 
     pub(crate) fn to_spin(&self) -> bool {
@@ -1214,14 +1215,15 @@ where
             return Err(Error::ValidationFail(msg));
         }
 
-        Ok(Stats::new_full(
-            &self.name,
-            self.n_count,
-            mem::size_of::<Node<K, V>>(),
-            self.latch.to_stats(),
-            blacks,
-            depths,
-        ))
+        let mut stats = Stats::new(&self.name);
+        stats.entries = self.len();
+        stats.node_size = mem::size_of::<Node<K, V>>();
+        stats.key_footprint = self.key_footprint;
+        stats.tree_footprint = self.tree_footprint;
+        stats.rw_latch = self.latch.to_stats();
+        stats.blacks = Some(blacks);
+        stats.depths = Some(depths);
+        Ok(stats)
     }
 }
 
@@ -1695,43 +1697,24 @@ pub struct Stats {
     name: String,
     entries: usize,
     node_size: usize,
+    key_footprint: isize,
+    tree_footprint: isize,
     rw_latch: spinlock::Stats,
     blacks: Option<usize>,
     depths: Option<LlrbDepth>,
 }
 
 impl Stats {
-    pub(crate) fn new_partial(
-        name: &str,
-        entries: usize,
-        node_size: usize,
-        rw_latch: spinlock::Stats,
-    ) -> Stats {
+    pub(crate) fn new(name: &str) -> Stats {
         Stats {
             name: name.to_string(),
-            entries,
-            node_size,
-            rw_latch,
+            entries: Default::default(),
+            node_size: Default::default(),
+            key_footprint: Default::default(),
+            tree_footprint: Default::default(),
+            rw_latch: Default::default(),
             blacks: Default::default(),
             depths: Default::default(),
-        }
-    }
-
-    pub(crate) fn new_full(
-        name: &str,
-        entries: usize,
-        node_size: usize,
-        rw_latch: spinlock::Stats,
-        blacks: usize,
-        depths: LlrbDepth,
-    ) -> Stats {
-        Stats {
-            name: name.to_string(),
-            entries,
-            node_size,
-            rw_latch,
-            blacks: Some(blacks),
-            depths: Some(depths),
         }
     }
 }
@@ -1747,6 +1730,11 @@ impl fmt::Display for Stats {
             r#"llrb = {{ entries={}, node_size={}, blacks={} }}\n"#,
             self.entries, self.node_size, b,
         )?;
+        write!(
+            f,
+            r#"llrb = {{ key_footprint={}, tree_footprint={} }}\n"#,
+            self.key_footprint, self.tree_footprint,
+        )?;
         write!(f, "llrb.rw_latch = {}\n", self.rw_latch)?;
         write!(f, "llrb.depths = {}\n", d)
     }
@@ -1759,11 +1747,14 @@ impl ToJson for Stats {
         format!(
             concat!(
                 r#"{{ ""llrb": {{ "name": {}, "entries": {:X}, ",
+                r#""key_footprint": {}, "tree_footprint": {}, "#,
                 r#""node_size": {}, "#,
                 r#""rw_latch": {}, "blacks": {}, "depths": {} }} }}"#,
             ),
             self.name,
             self.entries,
+            self.key_footprint,
+            self.tree_footprint,
             self.node_size,
             l_stats,
             self.blacks

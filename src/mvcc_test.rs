@@ -135,6 +135,50 @@ fn test_lsm_sticky() {
 }
 
 #[test]
+fn test_n_deleted() {
+    let missing_key = 0x123456789;
+    let populate = |index: &mut Mvcc<i64, i64>| {
+        for _ in 0..500 {
+            let key: i64 = random::<i64>().abs();
+            let value: i64 = random();
+            index.set(key, value).unwrap();
+        }
+        let keys = {
+            let mut keys = vec![];
+            for _ in 0..100 {
+                let iter = index.iter().unwrap();
+                let e = iter.skip(random::<u8>() as usize).next().unwrap();
+                keys.push(e.unwrap().to_key());
+            }
+            keys
+        };
+        for key in keys.iter() {
+            index.delete(key).unwrap();
+        }
+        index.delete(&missing_key);
+    };
+
+    // without lsm
+    let mut index: Box<Mvcc<i64, i64>> = Mvcc::new("test-mvcc");
+    populate(&mut index);
+    assert_eq!(index.to_stats().n_deleted, 0);
+
+    // without lsm, with sticky
+    let mut index: Box<Mvcc<i64, i64>> = Mvcc::new("test-mvcc");
+    index.set_sticky(true);
+    populate(&mut index);
+    assert_eq!(index.to_stats().n_deleted, 101);
+
+    // with lsm
+    let mut index: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc");
+    index.set_sticky(true);
+    populate(&mut index);
+    assert_eq!(index.to_stats().n_deleted, 101);
+
+    assert!(index.validate().is_ok());
+}
+
+#[test]
 fn test_set() {
     let mut mvcc: Box<Mvcc<i64, i64>> = Mvcc::new("test-mvcc");
     let mut refns = RefNodes::new(false /*lsm*/, 10);

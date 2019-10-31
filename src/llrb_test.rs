@@ -116,7 +116,11 @@ fn test_lsm_sticky() {
             assert_eq!(es.len(), 5);
             let seqnos: Vec<u64> = es.iter().map(|e| e.to_seqno()).collect();
             let dels: Vec<bool> = es.iter().map(|e| e.is_deleted()).collect();
-            let values: Vec<i64> = es.iter().filter_map(|e| e.to_native_value()).collect();
+            let values: Vec<i64> = es
+                // filter out values from versions
+                .iter()
+                .filter_map(|e| e.to_native_value())
+                .collect();
 
             assert_eq!(&seqnos[..4], &[504, 503, 502, 501]);
             assert_eq!(dels, &[true, false, true, false, false]);
@@ -138,6 +142,50 @@ fn test_lsm_sticky() {
             assert_eq!(es[0].to_seqno(), 505);
         }
     };
+
+    assert!(index.validate().is_ok());
+}
+
+#[test]
+fn test_n_deleted() {
+    let missing_key = 0x123456789;
+    let populate = |index: &mut Llrb<i64, i64>| {
+        for _ in 0..500 {
+            let key: i64 = random::<i64>().abs();
+            let value: i64 = random();
+            index.set(key, value).unwrap();
+        }
+        let keys = {
+            let mut keys = vec![];
+            for _ in 0..100 {
+                let iter = index.iter().unwrap();
+                let e = iter.skip(random::<u8>() as usize).next().unwrap();
+                keys.push(e.unwrap().to_key());
+            }
+            keys
+        };
+        for key in keys.iter() {
+            index.delete(key).unwrap();
+        }
+        index.delete(&missing_key);
+    };
+
+    // without lsm
+    let mut index: Box<Llrb<i64, i64>> = Llrb::new("test-llrb");
+    populate(&mut index);
+    assert_eq!(index.to_stats().n_deleted, 0);
+
+    // without lsm, with sticky
+    let mut index: Box<Llrb<i64, i64>> = Llrb::new("test-llrb");
+    index.set_sticky(true);
+    populate(&mut index);
+    assert_eq!(index.to_stats().n_deleted, 101);
+
+    // with lsm
+    let mut index: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
+    index.set_sticky(true);
+    populate(&mut index);
+    assert_eq!(index.to_stats().n_deleted, 101);
 
     assert!(index.validate().is_ok());
 }

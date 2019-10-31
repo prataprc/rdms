@@ -395,7 +395,7 @@ where
     pub fn to_stats(&self) -> Stats {
         let mut stats = Stats::new(&self.name);
         stats.entries = self.len();
-        stats.node_size = mem::size_of::<Node<K, V>>();
+        stats.n_deleted = self.n_deleted();
         stats.key_footprint = self.key_footprint.load(SeqCst);
         stats.tree_footprint = self.key_footprint.load(SeqCst);
         stats.rw_latch = self.latch.to_stats();
@@ -405,6 +405,11 @@ where
 
     fn multi_rw(&self) -> usize {
         Arc::strong_count(&self.readers) + Arc::strong_count(&self.writers)
+    }
+
+    #[inline]
+    fn n_deleted(&self) -> usize {
+        OuterSnapshot::clone(&self.snapshot).n_deleted
     }
 }
 
@@ -1420,6 +1425,7 @@ where
 
         let mut stats = Stats::new(&self.name);
         stats.entries = self.len();
+        stats.n_deleted = self.n_deleted();
         stats.node_size = mem::size_of::<Node<K, V>>();
         stats.key_footprint = self.key_footprint.load(SeqCst);
         stats.tree_footprint = self.key_footprint.load(SeqCst);
@@ -2195,6 +2201,7 @@ where
 pub struct Stats {
     name: String,
     entries: usize,
+    n_deleted: usize,
     node_size: usize,
     key_footprint: isize,
     tree_footprint: isize,
@@ -2209,6 +2216,7 @@ impl Stats {
         Stats {
             name: name.to_string(),
             entries: Default::default(),
+            n_deleted: Default::default(),
             node_size: Default::default(),
             key_footprint: Default::default(),
             tree_footprint: Default::default(),

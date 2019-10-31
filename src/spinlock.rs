@@ -56,7 +56,7 @@ use crate::core::ToJson;
 /// b. latch flag, bit 62.
 /// c. lock flag, bit 63.
 ///
-pub(crate) struct RWSpinlock {
+pub struct RWSpinlock {
     value: AtomicU64,
     read_locks: AtomicU64,
     write_locks: AtomicU64,
@@ -70,7 +70,7 @@ impl RWSpinlock {
     const READERS_FLAG: u64 = 0x3FFFFFFFFFFFFFFF;
 
     /// Create a new RWSpinlock
-    pub(crate) fn new() -> RWSpinlock {
+    pub fn new() -> RWSpinlock {
         RWSpinlock {
             value: AtomicU64::new(0),
             read_locks: AtomicU64::new(0),
@@ -81,7 +81,7 @@ impl RWSpinlock {
 
     /// Acquire latch for read permission. If ``spin`` is false, calling
     /// thread will yield to scheduler before re-trying the latch.
-    pub(crate) fn acquire_read(&self, spin: bool) -> Reader {
+    pub fn acquire_read(&self, spin: bool) -> Reader {
         loop {
             let c = self.value.load(SeqCst);
             if (c & Self::LATCH_LOCK_FLAG) == 0 {
@@ -101,7 +101,7 @@ impl RWSpinlock {
 
     /// Acquire latch for write permission. If ``spin`` is false, calling
     /// thread will yield to scheduler before re-trying the latch.
-    pub(crate) fn acquire_write(&self, spin: bool) -> Writer {
+    pub fn acquire_write(&self, spin: bool) -> Writer {
         // acquire latch
         loop {
             let c = self.value.load(SeqCst);
@@ -138,7 +138,7 @@ impl RWSpinlock {
         }
     }
 
-    pub(crate) fn to_stats(&self) -> Stats {
+    pub fn to_stats(&self) -> Stats {
         Stats {
             value: self.value.load(SeqCst),
             read_locks: self.read_locks.load(SeqCst),
@@ -148,7 +148,7 @@ impl RWSpinlock {
     }
 }
 
-pub(crate) struct Reader<'a> {
+pub struct Reader<'a> {
     door: &'a RWSpinlock,
 }
 
@@ -158,7 +158,7 @@ impl<'a> Drop for Reader<'a> {
     }
 }
 
-pub(crate) struct Writer<'a> {
+pub struct Writer<'a> {
     door: &'a RWSpinlock,
 }
 

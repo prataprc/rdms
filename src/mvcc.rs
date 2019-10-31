@@ -2233,15 +2233,15 @@ impl fmt::Display for Stats {
         let none = "none".to_string();
         let b = self.blacks.as_ref().map_or(none.clone(), |x| x.to_string());
         let d = self.depths.as_ref().map_or(none.clone(), |x| x.to_string());
-        write!(f, r#"mvcc.name = {}\n"#, self.name)?;
+        write!(f, "mvcc.name = {}\n", self.name)?;
         write!(
             f,
-            r#"mvcc = {{ entries={}, node_size={}, blacks={} }}"#,
+            "mvcc = {{ entries={}, node_size={}, blacks={} }}\n",
             self.entries, self.node_size, b,
         )?;
         write!(
             f,
-            r#"mvcc = {{ key_footprint={}, tree_footprint={} }}"#,
+            "mvcc = {{ key_footprint={}, tree_footprint={} }}\n",
             self.entries, self.node_size,
         )?;
         write!(f, "mvcc.rw_latch = {}\n", self.rw_latch)?;

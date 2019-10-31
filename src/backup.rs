@@ -75,8 +75,8 @@ where
         name: &str,
         mem: M,
         disk: D,
-    ) -> Result<Backup<K, V, M, D>> {
-        Ok(Backup {
+    ) -> Result<Box<Backup<K, V, M, D>>> {
+        let mut ix = Box::new(Backup {
             dir: dir.to_os_string(),
             name: name.to_string(),
             compact_ratio: Self::COMPACT_RATIO,
@@ -87,7 +87,13 @@ where
 
             _phantom_key: marker::PhantomData,
             _phantom_val: marker::PhantomData,
-        })
+        });
+        let ptr = unsafe {
+            // transmute self as void pointer.
+            Box::from_raw(&mut *ix as *mut Backup<K, V, M, D> as *mut ffi::c_void)
+        };
+        ix.compact_mu = CCMu::init_with_ptr(ptr);
+        Ok(ix)
     }
 
     pub fn set_pw_batch_size(&mut self, batch: usize) {
@@ -102,11 +108,6 @@ where
 
     /// Set interval in time duration, for invoking disk compaction.
     pub fn set_compact_interval(&mut self, interval: Duration) {
-        let ptr = unsafe {
-            // transmute self as void pointer.
-            Box::from_raw(self as *mut Backup<K, V, M, D> as *mut ffi::c_void)
-        };
-        self.compact_mu = CCMu::init_with_ptr(ptr);
         let mu = CCMu::clone(&self.compact_mu);
         thread::spawn(move || auto_compact::<K, V, M, D>(mu, interval));
     }
@@ -217,22 +218,22 @@ where
     <M as Index<K, V>>::R: PiecewiseScan<K, V>,
 {
     let mut elapsed = Duration::new(0, 0);
+    let initial_count = ccmu.strong_count();
     loop {
         if elapsed < interval {
             thread::sleep(interval - elapsed);
         }
-        let backup = match ccmu.start_op() {
-            (false, _) => break,
-            (true, ptr) => unsafe {
-                // unsafe type cast
-                (ptr as *mut Backup<K, V, M, D>).as_mut().unwrap()
-            },
-        };
+        if ccmu.strong_count() < initial_count {
+            break; // cascading quit.
+        }
 
         let start = SystemTime::now();
+        let backup = unsafe {
+            (ccmu.get_ptr() as *mut Backup<K, V, M, D>)
+                .as_mut()
+                .unwrap()
+        };
         backup.compact().unwrap(); // TODO: log error
         elapsed = start.elapsed().ok().unwrap();
-
-        ccmu.fin_op()
     }
 }

@@ -1,21 +1,18 @@
 use std::{
-    ffi, marker, thread,
+    ffi, fmt, marker, thread,
     time::{Duration, SystemTime},
 };
 
 use crate::{
     core::{Diff, Footprint, Index, IndexIter, Result},
+    llrb, mvcc,
     sync::CCMu,
     types::EmptyIter,
 };
 
-/// Default commit interval, in seconds, for auto-commit.
+/// Default commit interval, in seconds. Refer to set_commit_interval()
+/// method for more detail.
 pub const COMMIT_INTERVAL: usize = 30 * 60; // 30 minutes
-
-/// Default compact interval, in seconds, for auto-compact.
-/// If initialized to ZERO, then auto-compact is disabled and
-/// applications are expected to manually call the compact() method.
-pub const COMPACT_INTERVAL: usize = 120 * 60; // 2 hours
 
 /// Index keys and corresponding values. Check module documentation for
 /// the full set of features.
@@ -39,27 +36,29 @@ where
     V: Clone + Diff + Footprint,
     I: Index<K, V>,
 {
-    pub fn new<S>(name: S, index: I) -> Result<Rdms<K, V, I>>
+    pub fn new<S>(name: S, index: I) -> Result<Box<Rdms<K, V, I>>>
     where
         S: AsRef<str>,
     {
-        Ok(Rdms {
+        let mut index = Box::new(Rdms {
             name: name.as_ref().to_string(),
 
             commit_mu: CCMu::uninit(),
             index,
             _key: marker::PhantomData,
             _value: marker::PhantomData,
-        })
-    }
-
-    // Set interval in time duration, for invoking auto commit.
-    pub fn set_commit_interval(&mut self, interval: Duration) {
+        });
         let ptr = unsafe {
             // transmute self as void pointer.
-            Box::from_raw(self as *mut Rdms<K, V, I> as *mut ffi::c_void)
+            Box::from_raw(&mut *index as *mut Rdms<K, V, I> as *mut ffi::c_void)
         };
-        self.commit_mu = CCMu::init_with_ptr(ptr);
+        index.commit_mu = CCMu::init_with_ptr(ptr);
+        Ok(index)
+    }
+
+    /// Set interval in time duration, for invoking auto commit.
+    /// Calling this method will spawn an auto compaction thread.
+    pub fn set_commit_interval(&mut self, interval: Duration) {
         let mu = CCMu::clone(&self.commit_mu);
         thread::spawn(move || auto_commit::<K, V, I>(mu, interval));
     }
@@ -104,6 +103,26 @@ where
     }
 }
 
+impl<K, V> Rdms<K, V, Box<llrb::Llrb<K, V>>>
+where
+    K: Clone + Ord + Footprint + fmt::Debug,
+    V: Clone + Diff + Footprint,
+{
+    pub fn validate(&self) -> Result<llrb::Stats> {
+        (&*self.index).validate()
+    }
+}
+
+impl<K, V> Rdms<K, V, Box<mvcc::Mvcc<K, V>>>
+where
+    K: Clone + Ord + Footprint + fmt::Debug,
+    V: Clone + Diff + Footprint,
+{
+    pub fn validate(&self) -> Result<mvcc::Stats> {
+        (&*self.index).validate()
+    }
+}
+
 fn auto_commit<K, V, I>(ccmu: CCMu, interval: Duration)
 where
     K: Clone + Ord + Footprint,
@@ -114,27 +133,26 @@ where
     let phantom_val: marker::PhantomData<V> = marker::PhantomData;
 
     let mut elapsed = Duration::new(0, 0);
+    let initial_count = ccmu.strong_count();
     loop {
         if elapsed < interval {
             thread::sleep(interval - elapsed);
         }
-        let rdms = match ccmu.start_op() {
-            (false, _) => break,
-            (true, ptr) => unsafe {
-                // unsafe type cast
-                (ptr as *mut Rdms<K, V, I>).as_mut().unwrap()
-            },
-        };
+        if ccmu.strong_count() < initial_count {
+            break; // cascading quit.
+        }
 
         let start = SystemTime::now();
+        let rdms = unsafe {
+            // unsafe
+            (ccmu.get_ptr() as *mut Rdms<K, V, I>).as_mut().unwrap()
+        };
         let iter = Box::new(EmptyIter {
             _phantom_key: &phantom_key,
             _phantom_val: &phantom_val,
         });
         let meta = vec![];
-        rdms.commit(iter, meta).unwrap(); // TODO: log error
+        rdms.commit(iter, meta).unwrap();
         elapsed = start.elapsed().ok().unwrap();
-
-        ccmu.fin_op()
     }
 }

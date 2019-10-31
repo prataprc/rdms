@@ -219,6 +219,21 @@ where
     r_disks: Vec<<D::I as Index<K, V>>::R>,
 }
 
+/// Default threshold between memory index footprint and
+/// the latest disk index footprint, below which a newer level
+/// shall be created, for commiting new entries.
+pub const MEM_RATIO: f64 = 0.5;
+
+/// Default threshold between a disk index footprint and
+/// the next-level disk index footprint, above which the two
+/// levels shall be compacted into a single index.
+pub const DISK_RATIO: f64 = 0.5;
+
+/// Default interval in time duration, for invoking disk compaction
+/// between dgm disk-levels. Refer to Dgm::set_compact_interval() method
+/// for more detail.
+pub const COMPACT_INTERVAL: Duration = Duration::from_secs(1800);
+
 pub struct Dgm<K, V, M, D>
 where
     K: Clone + Ord + Footprint,
@@ -247,18 +262,6 @@ where
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
 {
-    /// Default threshold between memory index footprint and
-    /// the latest disk index footprint, below which a newer level
-    /// shall be created, for commiting new entries.
-    pub const MEM_RATIO: f64 = 0.5;
-    /// Default threshold between a disk index footprint and
-    /// the next-level disk index footprint, above which the two
-    /// levels shall be compacted into a single index.
-    pub const DISK_RATIO: f64 = 0.5;
-    /// Default interval in time duration, for invoking disk compaction
-    /// between dgm disk-levels.
-    pub const COMPACT_INTERVAL: Duration = Duration::from_secs(1800);
-
     pub fn new(
         dir: &ffi::OsStr, // directory path
         name: &str,
@@ -274,11 +277,11 @@ where
             disks: Default::default(),
         };
 
-        Ok(Box::new(Dgm {
+        let mut index = Box::new(Dgm {
             dir: dir.to_os_string(),
             name: name.to_string(),
-            mem_ratio: Self::MEM_RATIO,
-            disk_ratio: Self::DISK_RATIO,
+            mem_ratio: MEM_RATIO,
+            disk_ratio: DISK_RATIO,
             mem_factory,
             disk_factory,
 
@@ -286,7 +289,13 @@ where
             levels: sync::Mutex::new(levels),
             writers: Default::default(),
             readers: Default::default(),
-        }))
+        });
+        let ptr = unsafe {
+            // transmute self as void pointer.
+            Box::from_raw(&mut *index as *mut Dgm<K, V, M, D> as *mut ffi::c_void)
+        };
+        index.compact_mu = CCMu::init_with_ptr(ptr);
+        Ok(index)
     }
 
     pub fn open(
@@ -344,8 +353,8 @@ where
         Ok(Box::new(Dgm {
             dir: dir.to_os_string(),
             name: name.to_string(),
-            mem_ratio: Self::MEM_RATIO,
-            disk_ratio: Self::DISK_RATIO,
+            mem_ratio: MEM_RATIO,
+            disk_ratio: DISK_RATIO,
             mem_factory,
             disk_factory,
 
@@ -371,13 +380,9 @@ where
     }
 
     /// Set interval in time duration, for invoking disk compaction
-    /// between dgm disk-levels.
+    /// between dgm disk-levels. Calling this method will spawn an auto
+    /// compaction thread.
     pub fn set_compact_interval(&mut self, interval: Duration) {
-        let ptr = unsafe {
-            // transmute self as void pointer.
-            Box::from_raw(self as *mut Dgm<K, V, M, D> as *mut ffi::c_void)
-        };
-        self.compact_mu = CCMu::init_with_ptr(ptr);
         let mu = CCMu::clone(&self.compact_mu);
         thread::spawn(move || auto_compact::<K, V, M, D>(mu, interval));
     }
@@ -1293,23 +1298,22 @@ where
     D: DiskIndexFactory<K, V>,
 {
     let mut elapsed = Duration::new(0, 0);
+    let initial_count = ccmu.strong_count();
     loop {
         if elapsed < interval {
             thread::sleep(interval - elapsed);
         }
-        let dgm = match ccmu.start_op() {
-            (false, _) => break,
-            (true, ptr) => unsafe {
-                // unsafe type cast
-                (ptr as *mut Dgm<K, V, M, D>).as_mut().unwrap()
-            },
-        };
+        if ccmu.strong_count() < initial_count {
+            break; // cascading quit.
+        }
 
         let start = SystemTime::now();
+        let dgm = unsafe {
+            // unsafe
+            (ccmu.get_ptr() as *mut Dgm<K, V, M, D>).as_mut().unwrap()
+        };
         dgm.compact().unwrap(); // TODO: log error using error!
         elapsed = start.elapsed().ok().unwrap();
-
-        ccmu.fin_op()
     }
 }
 

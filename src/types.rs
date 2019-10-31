@@ -50,6 +50,43 @@ impl From<ffi::OsString> for Empty {
 
 //-------------------------------------------------------------------
 
+// TODO: implement test case for this.
+impl Diff for [u8; 20] {
+    type D = [u8; 20];
+
+    /// D = C - P
+    fn diff(&self, old: &Self) -> Self::D {
+        old.clone()
+    }
+
+    /// P = C - D
+    fn merge(&self, delta: &Self::D) -> Self {
+        delta.clone()
+    }
+}
+
+impl Serialize for [u8; 20] {
+    fn encode(&self, buf: &mut Vec<u8>) -> usize {
+        let m = buf.len();
+        buf.resize(20, 0);
+        buf[m..].copy_from_slice(self);
+        20
+    }
+
+    fn decode(&mut self, buf: &[u8]) -> Result<usize> {
+        self.copy_from_slice(buf);
+        Ok(20)
+    }
+}
+
+impl Footprint for [u8; 20] {
+    fn footprint(&self) -> Result<isize> {
+        Ok(20)
+    }
+}
+
+//-------------------------------------------------------------------
+
 impl Diff for Vec<u8> {
     type D = Vec<u8>;
 

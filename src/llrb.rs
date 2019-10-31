@@ -151,7 +151,8 @@ where
 
     root: Option<Box<Node<K, V>>>,
     seqno: u64,
-    n_count: usize,
+    n_count: usize,   // number entries index.
+    n_deleted: usize, // number of entries marked deleted.
     latch: RWSpinlock,
     key_footprint: isize,
     tree_footprint: isize,
@@ -200,6 +201,7 @@ where
     pub(crate) root: Option<Box<Node<K, V>>>,
     pub(crate) seqno: u64,
     pub(crate) n_count: usize,
+    pub(crate) n_deleted: usize,
     pub(crate) key_footprint: isize,
     pub(crate) tree_footprint: isize,
 }
@@ -224,6 +226,7 @@ where
             root: None,
             seqno: Default::default(),
             n_count: Default::default(),
+            n_deleted: Default::default(),
             latch: RWSpinlock::new(),
             key_footprint: Default::default(),
             tree_footprint: Default::default(),
@@ -249,6 +252,7 @@ where
             root: None,
             seqno: Default::default(),
             n_count: Default::default(),
+            n_deleted: Default::default(),
             latch: RWSpinlock::new(),
             key_footprint: Default::default(),
             tree_footprint: Default::default(),
@@ -296,6 +300,7 @@ where
             root: self.root.take(),
             seqno: self.seqno,
             n_count: self.n_count,
+            n_deleted: self.n_deleted,
             key_footprint: self.key_footprint,
             tree_footprint: self.tree_footprint,
         }
@@ -311,6 +316,7 @@ where
             root: self.root.clone(),
             seqno: self.seqno,
             n_count: self.n_count,
+            n_deleted: self.n_deleted,
             latch: RWSpinlock::new(),
             key_footprint: self.key_footprint,
             tree_footprint: self.tree_footprint,
@@ -336,6 +342,12 @@ where
         self.lsm
     }
 
+    /// Return whether this index is in sticky mode.
+    #[inline]
+    pub fn is_sticky(&self) -> bool {
+        self.sticky
+    }
+
     /// Return number of entries in this index.
     #[inline]
     pub fn len(&self) -> usize {
@@ -355,6 +367,7 @@ where
     pub fn to_stats(&self) -> Stats {
         let mut stats = Stats::new(&self.name);
         stats.entries = self.len();
+        stats.n_deleted = self.n_deleted;
         stats.node_size = mem::size_of::<Node<K, V>>();
         stats.key_footprint = self.key_footprint;
         stats.tree_footprint = self.tree_footprint;
@@ -580,6 +593,7 @@ where
             self.root.as_mut().map(|r| r.set_black());
             self.seqno = seqno;
             self.tree_footprint += res.size;
+            self.n_deleted += 1;
 
             return match res.old_entry {
                 None => {
@@ -1217,6 +1231,7 @@ where
 
         let mut stats = Stats::new(&self.name);
         stats.entries = self.len();
+        stats.n_deleted = self.n_deleted;
         stats.node_size = mem::size_of::<Node<K, V>>();
         stats.key_footprint = self.key_footprint;
         stats.tree_footprint = self.tree_footprint;
@@ -1696,6 +1711,7 @@ where
 pub struct Stats {
     name: String,
     entries: usize,
+    n_deleted: usize,
     node_size: usize,
     key_footprint: isize,
     tree_footprint: isize,
@@ -1709,6 +1725,7 @@ impl Stats {
         Stats {
             name: name.to_string(),
             entries: Default::default(),
+            n_deleted: Default::default(),
             node_size: Default::default(),
             key_footprint: Default::default(),
             tree_footprint: Default::default(),
@@ -1724,19 +1741,19 @@ impl fmt::Display for Stats {
         let none = "none".to_string();
         let b = self.blacks.as_ref().map_or(none.clone(), |x| x.to_string());
         let d = self.depths.as_ref().map_or(none.clone(), |x| x.to_string());
-        write!(f, r#"llrb.name = {}\n"#, self.name)?;
+        write!(f, "llrb.name = {}\n", self.name)?;
         write!(
             f,
-            r#"llrb = {{ entries={}, node_size={}, blacks={} }}\n"#,
-            self.entries, self.node_size, b,
+            "llrb = {{ entries={}, n_deleted={}, node_size={}, blacks={} }}\n",
+            self.entries, self.n_deleted, self.node_size, b,
         )?;
         write!(
             f,
-            r#"llrb = {{ key_footprint={}, tree_footprint={} }}\n"#,
+            "llrb = {{ key_footprint={}, tree_footprint={} }}\n",
             self.key_footprint, self.tree_footprint,
         )?;
         write!(f, "llrb.rw_latch = {}\n", self.rw_latch)?;
-        write!(f, "llrb.depths = {}\n", d)
+        write!(f, "llrb.depths = {}", d)
     }
 }
 
@@ -1746,13 +1763,14 @@ impl ToJson for Stats {
         let l_stats = self.rw_latch.to_json();
         format!(
             concat!(
-                r#"{{ ""llrb": {{ "name": {}, "entries": {:X}, ",
+                r#"{{ ""llrb": {{ "name": {}, "entries": {:X}, "n_deleted": {}",
                 r#""key_footprint": {}, "tree_footprint": {}, "#,
                 r#""node_size": {}, "#,
                 r#""rw_latch": {}, "blacks": {}, "depths": {} }} }}"#,
             ),
             self.name,
             self.entries,
+            self.n_deleted,
             self.key_footprint,
             self.tree_footprint,
             self.node_size,

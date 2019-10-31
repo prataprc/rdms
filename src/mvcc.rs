@@ -233,7 +233,9 @@ where
         let mut mvcc_index = if llrb_index.is_lsm() {
             Mvcc::new_lsm(llrb_index.to_name())
         } else {
-            Mvcc::new(llrb_index.to_name())
+            let mut index = Mvcc::new(llrb_index.to_name());
+            index.set_sticky(llrb_index.is_sticky());
+            index
         };
         mvcc_index.set_spinlatch(llrb_index.to_spin());
         mvcc_index
@@ -250,6 +252,7 @@ where
             debris.root,
             debris.seqno,
             debris.n_count,
+            debris.n_deleted,
             vec![], /*reclaim*/
         );
         mvcc_index
@@ -355,7 +358,7 @@ where
         };
         cloned
             .snapshot
-            .shift_snapshot(root_node, s.seqno, s.n_count, vec![]);
+            .shift_snapshot(root_node, s.seqno, s.n_count, s.n_deleted, vec![]);
         cloned
     }
 }
@@ -477,10 +480,10 @@ where
             panic!("cannot configure Mvcc with active readers/writer {}", n);
         }
 
-        let snapshot = OuterSnapshot::clone(&self.snapshot);
-        let root = snapshot.root_duplicate();
+        let s = OuterSnapshot::clone(&self.snapshot);
+        let root = s.root_duplicate();
         self.snapshot
-            .shift_snapshot(root, seqno, snapshot.n_count, vec![]);
+            .shift_snapshot(root, seqno, s.n_count, s.n_deleted, vec![]);
     }
 
     /// Lockless concurrent readers are supported
@@ -563,8 +566,14 @@ where
                 self.tree_footprint.fetch_add(size, SeqCst);
                 n.dirty = false;
                 Box::leak(n);
-                self.snapshot
-                    .shift_snapshot(Some(root), seqno, n_count, reclm);
+                self.snapshot.shift_snapshot(
+                    // new snapshot
+                    Some(root),
+                    seqno,
+                    n_count,
+                    snapshot.n_deleted,
+                    reclm,
+                );
                 (Some(seqno), Ok(old_entry))
             }
             _ => unreachable!(),
@@ -628,8 +637,14 @@ where
         }
 
         // TODO: can we optimize this for no-op cases (err cases) ?
-        self.snapshot
-            .shift_snapshot(Some(root), seqno, n_count, rclm);
+        self.snapshot.shift_snapshot(
+            // new snapshot
+            Some(root),
+            seqno,
+            n_count,
+            snapshot.n_deleted,
+            rclm,
+        );
 
         (Some(seqno), entry)
     }
@@ -654,6 +669,7 @@ where
         let key_footprint = key.to_owned().footprint().unwrap();
 
         let mut n_count = snapshot.n_count;
+        let mut n_deleted = snapshot.n_deleted;
         let root = snapshot.root_duplicate();
         let mut reclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
         let (seqno, root, old_entry) = if self.lsm || self.sticky {
@@ -662,6 +678,8 @@ where
             } else {
                 self.delete_sticky(root, key, seqno, &mut reclm)
             };
+            n_deleted += 1;
+
             let s = match res {
                 DeleteResult {
                     node: Some(mut root),
@@ -715,7 +733,8 @@ where
             (seqno, res.node, res.old_entry)
         };
 
-        self.snapshot.shift_snapshot(root, seqno, n_count, reclm);
+        self.snapshot
+            .shift_snapshot(root, seqno, n_count, n_deleted, reclm);
         (Some(seqno), Ok(old_entry))
     }
 }
@@ -1645,6 +1664,7 @@ where
         root: Option<Box<Node<K, V>>>,
         seqno: u64,
         n_count: usize,
+        n_deleted: usize,
         reclaim: Vec<Box<Node<K, V>>>,
     ) {
         // :/ sometimes when a reader holds a snapshot for a long time
@@ -1685,6 +1705,7 @@ where
         next_m.reclaim = Some(reclaim);
         next_m.seqno = seqno;
         next_m.n_count = n_count;
+        next_m.n_deleted = n_deleted;
         let n_nodes = Arc::clone(&self.n_nodes);
         next_m.next = Some(Arc::new(*Snapshot::new(None, n_nodes, m)));
 
@@ -1715,8 +1736,9 @@ where
 {
     root: Option<Box<Node<K, V>>>,
     reclaim: Option<Vec<Box<Node<K, V>>>>,
-    seqno: u64,     // starts from 0 and incr for every mutation.
-    n_count: usize, // number of entries in the tree.
+    seqno: u64,       // starts from 0 and incr for every mutation.
+    n_count: usize,   // number of entries in the tree.
+    n_deleted: usize, // number of entries marked deleted.
     n_nodes: Arc<AtomicIsize>,
     n_active: Arc<AtomicUsize>,
     next: Option<Arc<Snapshot<K, V>>>,
@@ -1740,6 +1762,7 @@ where
             reclaim: Default::default(),
             seqno: Default::default(),
             n_count: Default::default(),
+            n_deleted: Default::default(),
             next,
             n_nodes,
             n_active,
@@ -1819,6 +1842,7 @@ where
             reclaim: Default::default(),
             seqno: Default::default(),
             n_count: Default::default(),
+            n_deleted: Default::default(),
             next: Default::default(),
             n_nodes: Default::default(),
             n_active: Default::default(),

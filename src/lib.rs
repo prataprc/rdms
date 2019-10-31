@@ -54,7 +54,7 @@ extern crate winapi;
 mod core;
 mod error;
 mod panic;
-mod spinlock;
+pub mod spinlock;
 mod sync;
 mod sync_writer;
 mod types;

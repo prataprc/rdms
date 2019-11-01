@@ -163,8 +163,10 @@ where
 
     snapshot: OuterSnapshot<K, V>,
     latch: RWSpinlock,
-    key_footprint: AtomicIsize,
-    tree_footprint: AtomicIsize,
+    key_footprint: isize,
+    tree_footprint: isize,
+    n_deleted: usize,
+    n_reclaimed: usize,
     readers: Arc<u32>,
     writers: Arc<u32>,
 }
@@ -244,15 +246,13 @@ where
             .store(llrb_index.len() as isize, SeqCst);
 
         let debris = llrb_index.squash();
-        mvcc_index.key_footprint.store(debris.key_footprint, SeqCst);
-        mvcc_index
-            .tree_footprint
-            .store(debris.tree_footprint, SeqCst);
+        mvcc_index.key_footprint = debris.key_footprint;
+        mvcc_index.tree_footprint = debris.tree_footprint;
+        mvcc_index.n_deleted = debris.n_deleted;
         mvcc_index.snapshot.shift_snapshot(
             debris.root,
             debris.seqno,
             debris.n_count,
-            debris.n_deleted,
             vec![], /*reclaim*/
         );
         mvcc_index
@@ -277,8 +277,10 @@ where
 
             snapshot: OuterSnapshot::new(),
             latch: RWSpinlock::new(),
-            key_footprint: AtomicIsize::new(0),
-            tree_footprint: AtomicIsize::new(0),
+            key_footprint: Default::default(),
+            tree_footprint: Default::default(),
+            n_deleted: Default::default(),
+            n_reclaimed: Default::default(),
             readers: Arc::new(0xC0FFEE),
             writers: Arc::new(0xC0FFEE),
         })
@@ -296,8 +298,10 @@ where
 
             snapshot: OuterSnapshot::new(),
             latch: RWSpinlock::new(),
-            key_footprint: AtomicIsize::new(0),
-            tree_footprint: AtomicIsize::new(0),
+            key_footprint: Default::default(),
+            tree_footprint: Default::default(),
+            n_deleted: Default::default(),
+            n_reclaimed: Default::default(),
             readers: Arc::new(0xC0FFEE),
             writers: Arc::new(0xC0FFEE),
         })
@@ -345,8 +349,10 @@ where
 
             snapshot: OuterSnapshot::new(),
             latch: RWSpinlock::new(),
-            key_footprint: AtomicIsize::new(self.key_footprint.load(SeqCst)),
-            tree_footprint: AtomicIsize::new(self.tree_footprint.load(SeqCst)),
+            key_footprint: self.key_footprint,
+            tree_footprint: self.tree_footprint,
+            n_deleted: self.n_deleted,
+            n_reclaimed: Default::default(),
             readers: Arc::new(0xC0FFEE),
             writers: Arc::new(0xC0FFEE),
         });
@@ -358,7 +364,7 @@ where
         };
         cloned
             .snapshot
-            .shift_snapshot(root_node, s.seqno, s.n_count, s.n_deleted, vec![]);
+            .shift_snapshot(root_node, s.seqno, s.n_count, vec![]);
         cloned
     }
 }
@@ -393,11 +399,14 @@ where
     /// Return quickly with basic statisics, only entries() method is valid
     /// with this statisics.
     pub fn to_stats(&self) -> Stats {
+        let _r = self.latch.acquire_read(true /*spin*/);
+
         let mut stats = Stats::new(&self.name);
         stats.entries = self.len();
-        stats.n_deleted = self.n_deleted();
-        stats.key_footprint = self.key_footprint.load(SeqCst);
-        stats.tree_footprint = self.key_footprint.load(SeqCst);
+        stats.key_footprint = self.key_footprint;
+        stats.tree_footprint = self.tree_footprint;
+        stats.n_deleted = self.n_deleted;
+        stats.n_reclaimed = self.n_reclaimed;
         stats.rw_latch = self.latch.to_stats();
         stats.snapshot_latch = self.snapshot.ulatch.to_stats();
         stats
@@ -405,11 +414,6 @@ where
 
     fn multi_rw(&self) -> usize {
         Arc::strong_count(&self.readers) + Arc::strong_count(&self.writers)
-    }
-
-    #[inline]
-    fn n_deleted(&self) -> usize {
-        OuterSnapshot::clone(&self.snapshot).n_deleted
     }
 }
 
@@ -487,8 +491,7 @@ where
 
         let s = OuterSnapshot::clone(&self.snapshot);
         let root = s.root_duplicate();
-        self.snapshot
-            .shift_snapshot(root, seqno, s.n_count, s.n_deleted, vec![]);
+        self.snapshot.shift_snapshot(root, seqno, s.n_count, vec![]);
     }
 
     /// Lockless concurrent readers are supported
@@ -528,7 +531,9 @@ where
     V: Clone + Diff,
 {
     fn footprint(&self) -> Result<isize> {
-        Ok(self.tree_footprint.load(SeqCst))
+        let _r = self.latch.acquire_read(true /*spin*/);
+
+        Ok(self.tree_footprint)
     }
 }
 
@@ -544,8 +549,8 @@ where
         seqno: Option<u64>, // seqno for this mutation
     ) -> (Option<u64>, Result<Option<Entry<K, V>>>) {
         let _w = self.latch.acquire_write(self.spin);
-        let snapshot: &Arc<Snapshot<K, V>> = self.snapshot.as_ref();
 
+        let snapshot: &Arc<Snapshot<K, V>> = self.snapshot.as_ref();
         let seqno = match seqno {
             Some(seqno) => seqno,
             None => snapshot.seqno + 1,
@@ -555,8 +560,8 @@ where
 
         let mut n_count = snapshot.n_count;
         let root = snapshot.root_duplicate();
-        let mut reclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
-        match self.upsert(root, new_entry, self.lsm, &mut reclm) {
+        let mut rclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
+        match self.upsert(root, new_entry, self.lsm, &mut rclm) {
             UpsertResult {
                 node: Some(mut root),
                 new_node: Some(mut n),
@@ -566,18 +571,18 @@ where
                 root.set_black();
                 if old_entry.is_none() {
                     n_count += 1;
-                    self.key_footprint.fetch_add(key_footprint, SeqCst);
+                    self.key_footprint += key_footprint;
                 }
-                self.tree_footprint.fetch_add(size, SeqCst);
+                self.tree_footprint += size;
                 n.dirty = false;
                 Box::leak(n);
+                self.n_reclaimed += rclm.len();
                 self.snapshot.shift_snapshot(
                     // new snapshot
                     Some(root),
                     seqno,
                     n_count,
-                    snapshot.n_deleted,
-                    reclm,
+                    rclm,
                 );
                 (Some(seqno), Ok(old_entry))
             }
@@ -593,6 +598,7 @@ where
         seqno: Option<u64>, // seqno for this mutation
     ) -> (Option<u64>, Result<Option<Entry<K, V>>>) {
         let _w = self.latch.acquire_write(self.spin);
+
         let snapshot: &Arc<Snapshot<K, V>> = self.snapshot.as_ref();
 
         let seqno = match seqno {
@@ -617,10 +623,10 @@ where
             } => {
                 root.set_black();
                 if old_entry.is_none() {
-                    self.key_footprint.fetch_add(key_footprint, SeqCst);
+                    self.key_footprint += key_footprint;
                     n_count += 1
                 }
-                self.tree_footprint.fetch_add(size, SeqCst);
+                self.tree_footprint += size;
                 (seqno, root, new_node, Ok(old_entry))
             }
             UpsertCasResult {
@@ -642,12 +648,12 @@ where
         }
 
         // TODO: can we optimize this for no-op cases (err cases) ?
+        self.n_reclaimed += rclm.len();
         self.snapshot.shift_snapshot(
             // new snapshot
             Some(root),
             seqno,
             n_count,
-            snapshot.n_deleted,
             rclm,
         );
 
@@ -665,8 +671,8 @@ where
         Q: ToOwned<Owned = K> + Ord + ?Sized,
     {
         let _w = self.latch.acquire_write(self.spin);
-        let snapshot: &Arc<Snapshot<K, V>> = self.snapshot.as_ref();
 
+        let snapshot: &Arc<Snapshot<K, V>> = self.snapshot.as_ref();
         let seqno = match seqno {
             Some(seqno) => seqno,
             None => snapshot.seqno + 1,
@@ -674,16 +680,15 @@ where
         let key_footprint = key.to_owned().footprint().unwrap();
 
         let mut n_count = snapshot.n_count;
-        let mut n_deleted = snapshot.n_deleted;
         let root = snapshot.root_duplicate();
-        let mut reclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
+        let mut rclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
         let (seqno, root, old_entry) = if self.lsm || self.sticky {
             let res = if self.lsm {
-                self.delete_lsm(root, key, seqno, &mut reclm)
+                self.delete_lsm(root, key, seqno, &mut rclm)
             } else {
-                self.delete_sticky(root, key, seqno, &mut reclm)
+                self.delete_sticky(root, key, seqno, &mut rclm)
             };
-            n_deleted += 1;
+            self.n_deleted += 1;
 
             let s = match res {
                 DeleteResult {
@@ -704,11 +709,11 @@ where
             };
             let (root, new_node, old_entry, size) = s;
 
-            self.tree_footprint.fetch_add(size, SeqCst);
+            self.tree_footprint += size;
             // println!("delete {:?}", entry.as_ref().map(|e| e.is_deleted()));
             match &old_entry {
                 None => {
-                    self.key_footprint.fetch_add(key_footprint, SeqCst);
+                    self.key_footprint += key_footprint;
                     n_count += 1;
                 }
                 _ => (),
@@ -720,7 +725,7 @@ where
             (seqno, root, old_entry)
         } else {
             // in non-lsm mode remove the entry from the tree.
-            let res = match self.do_delete(root, key, &mut reclm) {
+            let res = match self.do_delete(root, key, &mut rclm) {
                 res @ DeleteResult { node: None, .. } => res,
                 mut res => {
                     res.node.as_mut().map(|node| node.set_black());
@@ -728,8 +733,8 @@ where
                 }
             };
             let seqno = if res.old_entry.is_some() {
-                self.key_footprint.fetch_add(key_footprint, SeqCst);
-                self.tree_footprint.fetch_add(res.size, SeqCst);
+                self.key_footprint += key_footprint;
+                self.tree_footprint += res.size;
                 n_count -= 1;
                 seqno
             } else {
@@ -738,8 +743,8 @@ where
             (seqno, res.node, res.old_entry)
         };
 
-        self.snapshot
-            .shift_snapshot(root, seqno, n_count, n_deleted, reclm);
+        self.n_reclaimed += rclm.len();
+        self.snapshot.shift_snapshot(root, seqno, n_count, rclm);
         (Some(seqno), Ok(old_entry))
     }
 }
@@ -1425,10 +1430,11 @@ where
 
         let mut stats = Stats::new(&self.name);
         stats.entries = self.len();
-        stats.n_deleted = self.n_deleted();
+        stats.key_footprint = self.key_footprint;
+        stats.tree_footprint = self.tree_footprint;
+        stats.n_deleted = self.n_deleted;
+        stats.n_reclaimed = self.n_reclaimed;
         stats.node_size = mem::size_of::<Node<K, V>>();
-        stats.key_footprint = self.key_footprint.load(SeqCst);
-        stats.tree_footprint = self.key_footprint.load(SeqCst);
         stats.rw_latch = self.latch.to_stats();
         stats.snapshot_latch = self.snapshot.ulatch.to_stats();
         stats.blacks = Some(blacks);
@@ -1670,7 +1676,6 @@ where
         root: Option<Box<Node<K, V>>>,
         seqno: u64,
         n_count: usize,
-        n_deleted: usize,
         reclaim: Vec<Box<Node<K, V>>>,
     ) {
         // :/ sometimes when a reader holds a snapshot for a long time
@@ -1711,7 +1716,6 @@ where
         next_m.reclaim = Some(reclaim);
         next_m.seqno = seqno;
         next_m.n_count = n_count;
-        next_m.n_deleted = n_deleted;
         let n_nodes = Arc::clone(&self.n_nodes);
         next_m.next = Some(Arc::new(*Snapshot::new(None, n_nodes, m)));
 
@@ -1742,9 +1746,8 @@ where
 {
     root: Option<Box<Node<K, V>>>,
     reclaim: Option<Vec<Box<Node<K, V>>>>,
-    seqno: u64,       // starts from 0 and incr for every mutation.
-    n_count: usize,   // number of entries in the tree.
-    n_deleted: usize, // number of entries marked deleted.
+    seqno: u64,     // starts from 0 and incr for every mutation.
+    n_count: usize, // number of entries in the tree.
     n_nodes: Arc<AtomicIsize>,
     n_active: Arc<AtomicUsize>,
     next: Option<Arc<Snapshot<K, V>>>,
@@ -1768,7 +1771,6 @@ where
             reclaim: Default::default(),
             seqno: Default::default(),
             n_count: Default::default(),
-            n_deleted: Default::default(),
             next,
             n_nodes,
             n_active,
@@ -1848,7 +1850,6 @@ where
             reclaim: Default::default(),
             seqno: Default::default(),
             n_count: Default::default(),
-            n_deleted: Default::default(),
             next: Default::default(),
             n_nodes: Default::default(),
             n_active: Default::default(),
@@ -2202,6 +2203,7 @@ pub struct Stats {
     name: String,
     entries: usize,
     n_deleted: usize,
+    n_reclaimed: usize,
     node_size: usize,
     key_footprint: isize,
     tree_footprint: isize,
@@ -2217,6 +2219,7 @@ impl Stats {
             name: name.to_string(),
             entries: Default::default(),
             n_deleted: Default::default(),
+            n_reclaimed: Default::default(),
             node_size: Default::default(),
             key_footprint: Default::default(),
             tree_footprint: Default::default(),
@@ -2236,13 +2239,13 @@ impl fmt::Display for Stats {
         write!(f, "mvcc.name = {}\n", self.name)?;
         write!(
             f,
-            "mvcc = {{ entries={}, node_size={}, blacks={} }}\n",
-            self.entries, self.node_size, b,
+            "mvcc = {{ entries={}, n_deleted={} node_size={}, blacks={} }}\n",
+            self.entries, self.n_deleted, self.node_size, b,
         )?;
         write!(
             f,
-            "mvcc = {{ key_footprint={}, tree_footprint={} }}\n",
-            self.entries, self.node_size,
+            "mvcc = {{ n_reclaimed={}, key_footprint={}, tree_footprint={} }}\n",
+            self.n_reclaimed, self.key_footprint, self.tree_footprint,
         )?;
         write!(f, "mvcc.rw_latch = {}\n", self.rw_latch)?;
         write!(f, "mvcc.snap_latch = {}\n", self.snapshot_latch)?;
@@ -2257,13 +2260,16 @@ impl ToJson for Stats {
         let snap_l = self.snapshot_latch.to_json();
         format!(
             concat!(
-                r#"{{ ""mvcc": {{ "name": {}, "entries": {:X}, ",
+                r#"{{ ""mvcc": {{ "name": {}, "entries": {:X}, "#,
+                r#""n_deleted": {}, "n_reclaimed": {}, "#,
                 r#""key_footprint": {}, "tree_footprint": {}, "#,
                 r#""node_size": {}, "rw_latch": {}, "#,
                 r#""snap_latch": {}, "blacks": {}, "depths": {} }} }}"#,
             ),
             self.name,
             self.entries,
+            self.n_deleted,
+            self.n_reclaimed,
             self.key_footprint,
             self.tree_footprint,
             self.node_size,

@@ -44,10 +44,9 @@ use std::{
     ops::{Bound, Deref, DerefMut, RangeBounds},
     result,
     sync::{
-        atomic::{AtomicIsize, AtomicPtr, AtomicUsize, Ordering::SeqCst},
+        atomic::{AtomicIsize, AtomicUsize, Ordering::SeqCst},
         mpsc, Arc,
     },
-    thread,
 };
 
 use crate::{
@@ -197,12 +196,13 @@ where
         // `root` field, so we have to get past that and drop it here.
         // TODO: move this logic to OuterSnapshot::Drop
         {
-            let mut curr_s: Box<Arc<Snapshot<K,V>>> = // current snapshot
-                unsafe { Box::from_raw(self.snapshot.inner.load(SeqCst)) };
-            let snapshot = Arc::get_mut(&mut *curr_s).unwrap();
-            // println!("drop mvcc {:p} {:p}", self, snapshot);
-
-            let n = match snapshot.root.take() {
+            let snapm = Arc::get_mut(
+                // get the only reference.
+                self.snapshot.inner.load(SeqCst) as &mut Arc<Snapshot<K, V>>,
+            )
+            .unwrap();
+            // println!("drop mvcc {:p} {:p}", self, snapm);
+            let n = match snapm.root.take() {
                 Some(root) => drop_tree(root),
                 None => 0,
             };
@@ -600,7 +600,6 @@ where
         let _w = self.latch.acquire_write(self.spin);
 
         let snapshot: &Arc<Snapshot<K, V>> = self.snapshot.as_ref();
-
         let seqno = match seqno {
             Some(seqno) => seqno,
             None => snapshot.seqno + 1,
@@ -1627,16 +1626,6 @@ where
     n_active: Arc<AtomicUsize>,
 }
 
-impl<K, V> AsRef<Arc<Snapshot<K, V>>> for OuterSnapshot<K, V>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-{
-    fn as_ref(&self) -> &Arc<Snapshot<K, V>> {
-        unsafe { self.inner.load(SeqCst).as_ref().unwrap() }
-    }
-}
-
 impl<K, V> OuterSnapshot<K, V>
 where
     K: Clone + Ord,
@@ -1644,31 +1633,25 @@ where
 {
     // create the first snapshot and a placeholder `next` snapshot for Mvcc.
     fn new() -> OuterSnapshot<K, V> {
-        let n_active = Arc::new(AtomicUsize::new(2));
-        let m = Arc::clone(&n_active);
+        let n_active = Arc::new(AtomicUsize::new(1));
         let n = Arc::clone(&n_active);
         let n_nodes = Arc::new(AtomicIsize::new(0));
 
-        let next_snapshot: Option<Arc<Snapshot<K,V>>> = // dummy next snapshot
-            Some(Arc::new(*Snapshot::new(None, Arc::clone(&n_nodes), m)));
-        let curr_snapshot: Box<Snapshot<K, V>> = // current snapshot
-            Snapshot::new(next_snapshot, Arc::clone(&n_nodes), n);
+        let curr_snapshot: Snapshot<K, V> = // current snapshot
+            Snapshot::new(None, Arc::clone(&n_nodes), n);
 
-        let arc: Box<Arc<Snapshot<K, V>>> = Box::new(Arc::new(*curr_snapshot));
         OuterSnapshot {
             ulatch: RWSpinlock::new(),
-            inner: AtomicPtr::new(Box::leak(arc)),
+            inner: AtomicPtr::new(Arc::new(curr_snapshot)),
             n_nodes,
             n_active,
         }
     }
 
     // similar to Arc::clone for AtomicPtr<Arc<Snapshot<K,V>>>
+    #[inline]
     fn clone(this: &OuterSnapshot<K, V>) -> Arc<Snapshot<K, V>> {
-        let _r = this.ulatch.acquire_read(true /*spin*/);
-        let inner_snap: &Arc<Snapshot<K,V>> =  // from heap
-            unsafe { this.inner.load(SeqCst).as_ref().unwrap() };
-        Arc::clone(inner_snap)
+        Arc::clone(this.inner.load(SeqCst) as &Arc<Snapshot<K, V>>)
     }
 
     fn shift_snapshot(
@@ -1683,6 +1666,7 @@ where
         // mutations. And when the "long-reader" releases the snapshot
         // the entire chain of snapshots could be dropped by recusively,
         // leading to stackoverflow :\.
+
         loop {
             if self.n_active.load(SeqCst) < 1000 {
                 // TODO: no magic number
@@ -1692,37 +1676,33 @@ where
             }
         }
 
-        let _w = self.ulatch.acquire_write(true /*spin*/);
-        let m = Arc::clone(&self.n_active);
-
         // * curr_s points to next_s, and currently the only reference to next_s.
         // * curr_s gets dropped, but there can be readers holding a reference.
         // * before curr_s gets dropped next_s is cloned, leaked, stored.
 
-        let curr_s: Box<Arc<Snapshot<K,V>>> = // current snapshot
-            unsafe { Box::from_raw(self.inner.load(SeqCst)) };
-        let curr_r: &Snapshot<K, V> = curr_s.as_ref().as_ref();
+        println!("a");
+        {
+            let inner: &mut Snapshot<K, V> = unsafe {
+                (self.as_ref().as_ref() as *const Snapshot<K, V> as *mut Snapshot<K, V>)
+                    .as_mut()
+                    .unwrap()
+            };
+            inner.next = match inner.next.take() {
+                None => None,
+                Some(next) => Self::free_snapshot(next),
+            };
+        }
+        let curr_s = Arc::clone(self);
+        println!("b");
 
-        let curr_m: &mut Snapshot<K, V> = unsafe {
-            (curr_r as *const Snapshot<K,V> // safe extract
-            as *mut Snapshot<K,V>)
-                .as_mut()
-                .unwrap()
-        };
-        // next snapshot mutable reference.
-        let next_m = Arc::get_mut(curr_m.next.as_mut().unwrap()).unwrap();
         // populate the next snapshot.
-        next_m.root = root;
-        next_m.reclaim = Some(reclaim);
-        next_m.seqno = seqno;
-        next_m.n_count = n_count;
         let n_nodes = Arc::clone(&self.n_nodes);
-        next_m.next = Some(Arc::new(*Snapshot::new(None, n_nodes, m)));
-
-        let next_s: Box<Arc<Snapshot<K, V>>> = Box::new(Arc::clone(
-            // clone a Arc reference of next snapshot and make it current
-            curr_r.next.as_ref().unwrap(),
-        ));
+        let m = Arc::clone(&self.n_active);
+        let mut next_s = Snapshot::new(Some(curr_s), n_nodes, m);
+        next_s.root = root;
+        next_s.reclaim = Some(reclaim);
+        next_s.seqno = seqno;
+        next_s.n_count = n_count;
 
         // let x = Arc::strong_count(curr_s.as_ref());
         // let y = Arc::strong_count(next_s.as_ref());
@@ -1734,8 +1714,33 @@ where
         //    y
         //);
         self.n_active.fetch_add(1, SeqCst);
+        self.inner = Arc::new(next_s);
+    }
 
-        self.inner.store(Box::leak(next_s), SeqCst);
+    fn free_snapshot(mut snap: Arc<Snapshot<K, V>>) -> Option<Arc<Snapshot<K, V>>> {
+        match Arc::get_mut(&mut snap) {
+            None => Some(snap),
+            Some(snap_m) => match snap_m.next.take() {
+                None => None,
+                Some(next) => match Self::free_snapshot(next) {
+                    None => None,
+                    Some(next) => {
+                        snap_m.next = Some(next);
+                        Some(snap)
+                    }
+                },
+            },
+        }
+    }
+}
+
+impl<K, V> AsRef<Arc<Snapshot<K,V>> for OuterSnapshot<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    fn as_ref(&self) -> &Arc<Snapshot<K,V>> {
+        (self.inner.load(SeqCst) as *const Arc<Snapshot<K,V>>).as_ref().unwrap()
     }
 }
 
@@ -1764,9 +1769,9 @@ where
         next: Option<Arc<Snapshot<K, V>>>,
         n_nodes: Arc<AtomicIsize>,
         n_active: Arc<AtomicUsize>,
-    ) -> Box<Snapshot<K, V>> {
+    ) -> Snapshot<K, V> {
         // println!("new mvcc-root {:p}", snapshot);
-        Box::new(Snapshot {
+        Snapshot {
             root: Default::default(),
             reclaim: Default::default(),
             seqno: Default::default(),
@@ -1774,7 +1779,7 @@ where
             next,
             n_nodes,
             n_active,
-        })
+        }
     }
 
     fn root_duplicate(&self) -> Option<Box<Node<K, V>>> {
@@ -1809,6 +1814,9 @@ where
                 self.n_nodes
                     .as_ref()
                     .fetch_sub(reclaim.len().try_into().unwrap(), SeqCst);
+                // reclaim.into_iter().for_each(|n| {
+                //     Box::leak(n);
+                // });
             }
             _ => (),
         };

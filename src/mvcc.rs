@@ -1644,15 +1644,12 @@ where
 {
     // create the first snapshot and a placeholder `next` snapshot for Mvcc.
     fn new() -> OuterSnapshot<K, V> {
-        let n_active = Arc::new(AtomicUsize::new(2));
-        let m = Arc::clone(&n_active);
+        let n_active = Arc::new(AtomicUsize::new(1));
         let n = Arc::clone(&n_active);
         let n_nodes = Arc::new(AtomicIsize::new(0));
 
-        let next_snapshot: Option<Arc<Snapshot<K,V>>> = // dummy next snapshot
-            Some(Arc::new(*Snapshot::new(None, Arc::clone(&n_nodes), m)));
         let curr_snapshot: Box<Snapshot<K, V>> = // current snapshot
-            Snapshot::new(next_snapshot, Arc::clone(&n_nodes), n);
+            Snapshot::new(None, Arc::clone(&n_nodes), n);
 
         let arc: Box<Arc<Snapshot<K, V>>> = Box::new(Arc::new(*curr_snapshot));
         OuterSnapshot {
@@ -1683,7 +1680,20 @@ where
         // mutations. And when the "long-reader" releases the snapshot
         // the entire chain of snapshots could be dropped by recusively,
         // leading to stackoverflow :\.
+
+        let curr_s_1: Box<Arc<Snapshot<K,V>>> = // current snapshot, drop later
+            unsafe { Box::from_raw(self.inner.load(SeqCst)) };
+
         loop {
+            let curr_m: &mut Snapshot<K, V> = unsafe {
+                let ptr = curr_s_1.as_ref().as_ref() as *const Snapshot<K, V>;
+                (ptr as *mut Snapshot<K, V>).as_mut().unwrap()
+            };
+            curr_m.next = match curr_m.next.take() {
+                None => None,
+                Some(next) => Self::try_free_snapshot(next),
+            };
+
             if self.n_active.load(SeqCst) < 1000 {
                 // TODO: no magic number
                 break;
@@ -1692,39 +1702,21 @@ where
             }
         }
 
-        let _w = self.ulatch.acquire_write(true /*spin*/);
+        let curr_s_2: Option<Arc<Snapshot<K,V>>> = // another copy
+            Some(Arc::clone(curr_s_1.as_ref()));
         let m = Arc::clone(&self.n_active);
+        let mut next_s: Box<Snapshot<K, V>> = // new snapshot
+            Snapshot::new(curr_s_2, Arc::clone(&self.n_nodes), m);
 
-        // * curr_s points to next_s, and currently the only reference to next_s.
-        // * curr_s gets dropped, but there can be readers holding a reference.
-        // * before curr_s gets dropped next_s is cloned, leaked, stored.
-
-        let curr_s: Box<Arc<Snapshot<K,V>>> = // current snapshot
-            unsafe { Box::from_raw(self.inner.load(SeqCst)) };
-        let curr_r: &Snapshot<K, V> = curr_s.as_ref().as_ref();
-
-        let curr_m: &mut Snapshot<K, V> = unsafe {
-            (curr_r as *const Snapshot<K,V> // safe extract
-            as *mut Snapshot<K,V>)
-                .as_mut()
-                .unwrap()
-        };
-        // next snapshot mutable reference.
-        let next_m = Arc::get_mut(curr_m.next.as_mut().unwrap()).unwrap();
         // populate the next snapshot.
-        next_m.root = root;
-        next_m.reclaim = Some(reclaim);
-        next_m.seqno = seqno;
-        next_m.n_count = n_count;
-        let n_nodes = Arc::clone(&self.n_nodes);
-        next_m.next = Some(Arc::new(*Snapshot::new(None, n_nodes, m)));
+        next_s.root = root;
+        next_s.reclaim = Some(reclaim);
+        next_s.seqno = seqno;
+        next_s.n_count = n_count;
 
-        let next_s: Box<Arc<Snapshot<K, V>>> = Box::new(Arc::clone(
-            // clone a Arc reference of next snapshot and make it current
-            curr_r.next.as_ref().unwrap(),
-        ));
+        let next_s: Box<Arc<Snapshot<K, V>>> = Box::new(Arc::new(*next_s));
 
-        // let x = Arc::strong_count(curr_s.as_ref());
+        // let x = Arc::strong_count(curr_s_1.as_ref());
         // let y = Arc::strong_count(next_s.as_ref());
         //println!(
         //    "shiftsnap {:p} {:p} {} {} ",
@@ -1735,7 +1727,26 @@ where
         //);
         self.n_active.fetch_add(1, SeqCst);
 
+        let _w = self.ulatch.acquire_write(true /*spin*/);
         self.inner.store(Box::leak(next_s), SeqCst);
+    }
+
+    fn try_free_snapshot(
+        mut snap: Arc<Snapshot<K, V>>, // current.next.take().unwrap()
+    ) -> Option<Arc<Snapshot<K, V>>> {
+        match Arc::get_mut(&mut snap) {
+            None => Some(snap),
+            Some(snap_m) => match snap_m.next.take() {
+                None => None,
+                Some(next) => match Self::try_free_snapshot(next) {
+                    None => None,
+                    Some(next) => {
+                        snap_m.next = Some(next);
+                        Some(snap)
+                    }
+                },
+            },
+        }
     }
 }
 

@@ -1709,15 +1709,15 @@ where
 
 /// Statistics for [`Llrb`] tree.
 pub struct Stats {
-    name: String,
-    entries: usize,
-    n_deleted: usize,
-    node_size: usize,
-    key_footprint: isize,
-    tree_footprint: isize,
-    rw_latch: spinlock::Stats,
-    blacks: Option<usize>,
-    depths: Option<LlrbDepth>,
+    pub name: String,
+    pub entries: usize,
+    pub n_deleted: usize,
+    pub node_size: usize,
+    pub key_footprint: isize,
+    pub tree_footprint: isize,
+    pub rw_latch: spinlock::Stats,
+    pub blacks: Option<usize>,
+    pub depths: Option<LlrbDepth>,
 }
 
 impl Stats {

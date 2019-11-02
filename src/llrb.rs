@@ -486,6 +486,7 @@ where
             let value = Value::new_upsert_value(value, seqno);
             Entry::new(key, value)
         };
+
         // !("set_index, root {}", self.root.is_some());
         match Llrb::upsert(self.root.take(), new_entry, self.lsm) {
             UpsertResult {
@@ -494,14 +495,21 @@ where
                 size,
             } => {
                 // println!("set_index, result {}", size);
+                match &old_entry {
+                    None => {
+                        self.n_count += 1;
+                        self.key_footprint += key_footprint;
+                    }
+                    Some(oe) if oe.is_deleted() && (self.lsm || self.sticky) => {
+                        self.n_deleted -= 1;
+                    }
+                    _ => (),
+                }
+                self.tree_footprint += size;
+
                 root.set_black();
                 self.root = Some(root);
-                if old_entry.is_none() {
-                    self.n_count += 1;
-                    self.key_footprint += key_footprint;
-                }
                 self.seqno = seqno;
-                self.tree_footprint += size;
                 (Some(seqno), Ok(old_entry))
             }
             _ => panic!("set: impossible case, call programmer"),
@@ -549,14 +557,21 @@ where
                 size,
                 err: None,
             } => {
+                match &old_entry {
+                    None => {
+                        self.n_count += 1;
+                        self.key_footprint += key_footprint;
+                    }
+                    Some(oe) if oe.is_deleted() && (self.lsm || self.sticky) => {
+                        self.n_deleted -= 1;
+                    }
+                    _ => (),
+                }
+                self.tree_footprint += size;
+
+                self.seqno = seqno;
                 root.set_black();
                 self.root = Some(root);
-                if old_entry.is_none() {
-                    self.n_count += 1;
-                    self.key_footprint += key_footprint;
-                }
-                self.seqno = seqno;
-                self.tree_footprint += size;
                 (Some(seqno), Ok(old_entry))
             }
             _ => panic!("set_cas: impossible case, call programmer"),
@@ -593,15 +608,20 @@ where
             self.root.as_mut().map(|r| r.set_black());
             self.seqno = seqno;
             self.tree_footprint += res.size;
-            self.n_deleted += 1;
 
             return match res.old_entry {
                 None => {
                     self.key_footprint += key_footprint;
                     self.n_count += 1;
+                    self.n_deleted += 1;
                     (Some(seqno), Ok(None))
                 }
-                Some(entry) => (Some(seqno), Ok(Some(entry))),
+                Some(entry) => {
+                    if !entry.is_deleted() {
+                        self.n_deleted += 1;
+                    }
+                    (Some(seqno), Ok(Some(entry)))
+                }
             };
         } else {
             // in non-lsm mode remove the entry from the tree.
@@ -1213,7 +1233,7 @@ where
         let _latch = self.latch.acquire_read(self.spin);
 
         let root = self.root.as_ref().map(Deref::deref);
-        let (red, blacks, depth) = (is_red(root), 0, 0);
+        let (red, depth) = (is_red(root), 0);
         let mut depths: LlrbDepth = Default::default();
 
         if red {
@@ -1221,7 +1241,12 @@ where
             return Err(Error::ValidationFail(msg));
         }
 
-        let blacks = validate_tree(root, red, blacks, depth, &mut depths)?;
+        let ss = (0, 0);
+        let ss = validate_tree(root, red, ss, depth, &mut depths)?;
+        if ss.1 != self.n_deleted {
+            let msg = format!("Llrb n_delete {} != {}", ss.1, self.n_deleted);
+            return Err(Error::ValidationFail(msg));
+        }
 
         if depths.to_max() > MAX_TREE_DEPTH {
             let msg = format!("Llrb tree exceeds max_depth {}", depths.to_max());
@@ -1235,7 +1260,7 @@ where
         stats.key_footprint = self.key_footprint;
         stats.tree_footprint = self.tree_footprint;
         stats.rw_latch = self.latch.to_stats();
-        stats.blacks = Some(blacks);
+        stats.blacks = Some(ss.0);
         stats.depths = Some(depths);
         Ok(stats)
     }

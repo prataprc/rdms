@@ -44,72 +44,81 @@ where
 fn validate_tree<K, V>(
     node: Option<&Node<K, V>>,
     fromred: bool,
-    mut blacks: usize,
+    mut ss: (usize, usize),
     depth: usize,
     depths: &mut LlrbDepth,
-) -> Result<usize>
+) -> Result<(usize, usize)>
 where
     K: Ord + Clone + Debug,
     V: Clone + Diff,
 {
     let red = is_red(node);
-    match node {
+    let node = match node {
         Some(node) if node.dirty => {
-            // TODO: llrb has dirty node.
-            Err(Error::ValidationFail("llrb has dirty node".to_string()))
+            let msg = "llrb has dirty node".to_string();
+            return Err(Error::ValidationFail(msg));
         }
         Some(_node) if fromred && red => {
-            // TODO: llrb has dirty node.
-            Err(Error::ValidationFail(format!("llrb has consecutive reds")))
+            let msg = "llrb has consecutive reds".to_string();
+            return Err(Error::ValidationFail(msg));
         }
-        Some(node) => {
-            // confirm sort order in the tree.
-            let (left, right) = {
-                let left = node.as_left_deref();
-                let right = node.as_right_deref();
-                if let Some(left) = left {
-                    if left.as_key().ge(node.as_key()) {
-                        /// Fatal case, index entries are not in sort-order.
-                        return Err(Error::ValidationFail(format!(
-                            "llrb sort error left:{:?} parent:{:?}",
-                            left.as_key(),
-                            node.as_key()
-                        )));
-                    }
-                }
-                if let Some(right) = right {
-                    if right.as_key().le(node.as_key()) {
-                        /// Fatal case, index entries are not in sort-order.
-                        return Err(Error::ValidationFail(format!(
-                            "llrb sort error right:{:?} parent:{:?}",
-                            right.as_key(),
-                            node.as_key()
-                        )));
-                    }
-                }
-                (left, right)
-            };
-
-            {
-                if !red {
-                    blacks += 1;
-                }
-                let l = validate_tree(left, red, blacks, depth + 1, depths)?;
-                let r = validate_tree(right, red, blacks, depth + 1, depths)?;
-                if l != r {
-                    return Err(Error::ValidationFail(format!(
-                        "llrb has unbalacked blacks l:{}, r:{}",
-                        l, r
-                    )));
-                }
-                Ok(l)
-            }
-        }
+        Some(node) => node,
         None => {
             depths.sample(depth);
-            Ok(blacks)
+            return Ok(ss);
+        }
+    };
+
+    // confirm sort order in the tree.
+    let (left, right) = {
+        let left = node.as_left_deref();
+        let right = node.as_right_deref();
+        if let Some(left) = left {
+            if left.as_key().ge(node.as_key()) {
+                /// Fatal case, index entries are not in sort-order.
+                return Err(Error::ValidationFail(format!(
+                    "llrb sort error left:{:?} parent:{:?}",
+                    left.as_key(),
+                    node.as_key()
+                )));
+            }
+        }
+        if let Some(right) = right {
+            if right.as_key().le(node.as_key()) {
+                /// Fatal case, index entries are not in sort-order.
+                return Err(Error::ValidationFail(format!(
+                    "llrb sort error right:{:?} parent:{:?}",
+                    right.as_key(),
+                    node.as_key()
+                )));
+            }
+        }
+        (left, right)
+    };
+
+    if !red {
+        ss.0 += 1;
+    }
+    let mut ss_l = validate_tree(left, red, ss.clone(), depth + 1, depths)?;
+    let ss_r = validate_tree(right, red, ss.clone(), depth + 1, depths)?;
+
+    {
+        if ss_l.0 != ss_r.0 {
+            return Err(Error::ValidationFail(format!(
+                "llrb has unbalacked blacks l:{}, r:{}",
+                ss_l.0, ss_r.0
+            )));
         }
     }
+    {
+        ss_l.1 = if node.is_deleted() {
+            1 + ss_l.1 + ss_r.1
+        } else {
+            ss_l.1 + ss_r.1
+        };
+    }
+
+    Ok(ss_l)
 }
 
 /// Full table scan type for both [Llrb] and [Mvcc] index.

@@ -558,15 +558,22 @@ where
                 old_entry,
                 size,
             } => {
-                root.set_black();
-                if old_entry.is_none() {
-                    n_count += 1;
-                    self.key_footprint += key_footprint;
+                match &old_entry {
+                    None => {
+                        n_count += 1;
+                        self.key_footprint += key_footprint;
+                    }
+                    Some(oe) if oe.is_deleted() && (self.lsm || self.sticky) => {
+                        self.n_deleted -= 1;
+                    }
+                    _ => (),
                 }
+                self.n_reclaimed += rclm.len();
                 self.tree_footprint += size;
+
+                root.set_black();
                 n.dirty = false;
                 Box::leak(n);
-                self.n_reclaimed += rclm.len();
                 self.snapshot.shift_snapshot(
                     // new snapshot
                     Some(root),
@@ -574,10 +581,6 @@ where
                     n_count,
                     rclm,
                 );
-                match &old_entry {
-                    Some(oe) if oe.is_deleted() => self.n_deleted -= 1,
-                    _ => (),
-                }
                 (Some(seqno), Ok(old_entry))
             }
             _ => unreachable!(),
@@ -615,12 +618,19 @@ where
                 err: None,
                 size,
             } => {
-                root.set_black();
-                if old_entry.is_none() {
-                    self.key_footprint += key_footprint;
-                    n_count += 1
+                match &old_entry {
+                    None => {
+                        self.key_footprint += key_footprint;
+                        n_count += 1;
+                    }
+                    Some(oe) if oe.is_deleted() && (self.lsm || self.sticky) => {
+                        self.n_deleted -= 1;
+                    }
+                    _ => (),
                 }
                 self.tree_footprint += size;
+
+                root.set_black();
                 (seqno, root, new_node, Ok(old_entry))
             }
             UpsertCasResult {
@@ -682,7 +692,6 @@ where
             } else {
                 self.delete_sticky(root, key, seqno, &mut rclm)
             };
-            self.n_deleted += 1;
 
             let s = match res {
                 DeleteResult {
@@ -709,7 +718,9 @@ where
                 None => {
                     self.key_footprint += key_footprint;
                     n_count += 1;
+                    self.n_deleted += 1;
                 }
+                Some(entry) if !entry.is_deleted() => self.n_deleted += 1,
                 _ => (),
             }
             if let Some(mut n) = new_node {
@@ -1406,7 +1417,7 @@ where
         let arc_mvcc = OuterSnapshot::clone(&self.snapshot);
 
         let root = arc_mvcc.as_root();
-        let (red, blacks, depth) = (is_red(root), 0, 0);
+        let (red, depth) = (is_red(root), 0);
         let mut depths: LlrbDepth = Default::default();
 
         if red {
@@ -1414,7 +1425,12 @@ where
             return Err(Error::ValidationFail(msg));
         }
 
-        let blacks = validate_tree(root, red, blacks, depth, &mut depths)?;
+        let ss = (0, 0); // (blacks, n_deleted);
+        let ss = validate_tree(root, red, ss, depth, &mut depths)?;
+        if ss.1 != self.n_deleted {
+            let msg = format!("Llrb n_delete {} != {}", ss.1, self.n_deleted);
+            return Err(Error::ValidationFail(msg));
+        }
 
         if depths.to_max() > MAX_TREE_DEPTH {
             let msg = format!("Mvcc tree exceeds max_depth {}", depths.to_max());
@@ -1430,7 +1446,7 @@ where
         stats.node_size = mem::size_of::<Node<K, V>>();
         stats.rw_latch = self.latch.to_stats();
         stats.snapshot_latch = self.snapshot.ulatch.to_stats();
-        stats.blacks = Some(blacks);
+        stats.blacks = Some(ss.0);
         stats.depths = Some(depths);
         Ok(stats)
     }

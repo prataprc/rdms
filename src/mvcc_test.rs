@@ -163,18 +163,7 @@ fn test_n_deleted() {
     populate(&mut index);
     assert_eq!(index.to_stats().n_deleted, 0);
 
-    // without lsm, with sticky
-    let mut index: Box<Mvcc<i64, i64>> = Mvcc::new("test-mvcc");
-    index.set_sticky(true);
-    populate(&mut index);
-    assert_eq!(index.to_stats().n_deleted, 101);
-
-    // with lsm
-    let mut index: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc");
-    index.set_sticky(true);
-    populate(&mut index);
-    assert_eq!(index.to_stats().n_deleted, 101);
-
+    // validate will make sure the that n_deleted count is correct.
     assert!(index.validate().is_ok());
 }
 

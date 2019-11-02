@@ -916,13 +916,12 @@ where
                         r
                     }
                     Ordering::Equal => {
-                        let (entry, size) = {
-                            // gather current entry's detail
-                            (node.entry.clone(), node.footprint().unwrap())
-                        };
-                        let size = node.footprint().unwrap() - size;
+                        let cutoff = Bound::Included(node.to_seqno());
+                        let entry = node.entry.clone();
+                        let size = node.delete(seqno).unwrap();
+                        node.entry = node.entry.clone().purge(cutoff).unwrap();
                         DeleteResult {
-                            node: Some(Node::new_deleted(node.to_key(), seqno)),
+                            node: Some(Llrb::walkuprot_23(node)),
                             old_entry: Some(entry),
                             size,
                         }

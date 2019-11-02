@@ -427,16 +427,6 @@ where
         Node::new_deleted(key, seqno)
     }
 
-    fn node_sd_clone(
-        &self,
-        node: &Node<K, V>, // source node
-        seqno: u64,
-        reclaim: &mut Vec<Box<Node<K, V>>>,
-    ) -> Box<Node<K, V>> {
-        self.snapshot.n_nodes.fetch_add(1, SeqCst);
-        node.sticky_delete_clone(seqno, reclaim)
-    }
-
     fn node_mvcc_clone(
         &self,
         node: &Node<K, V>, // source node
@@ -1076,14 +1066,13 @@ where
                 (new_node, r.new_node, r.old_entry, r.size)
             }
             Ordering::Equal => {
-                let (old_entry, size) = {
-                    // gather current entry's detail
-                    (node.entry.clone(), node.footprint().unwrap())
-                };
-                let mut new_node = self.node_sd_clone(&node, seqno, reclaim);
+                let cutoff = Bound::Included(node.to_seqno());
+                let mut new_node = self.node_mvcc_clone(&node, reclaim, true);
+                let old_entry = node.entry.clone();
+                let size = new_node.delete(seqno).unwrap();
                 new_node.dirty = true;
+                new_node.entry = new_node.entry.clone().purge(cutoff).unwrap();
                 let n = new_node.duplicate();
-                let size = new_node.footprint().unwrap() - size;
                 (new_node, Some(n), Some(old_entry), size)
             }
         };

@@ -39,6 +39,7 @@
 //!
 
 use std::{
+    convert::TryInto,
     fmt,
     sync::atomic::{AtomicU64, Ordering::SeqCst},
     thread,
@@ -141,9 +142,9 @@ impl RWSpinlock {
     pub fn to_stats(&self) -> Stats {
         Stats {
             value: self.value.load(SeqCst),
-            read_locks: self.read_locks.load(SeqCst),
-            write_locks: self.write_locks.load(SeqCst),
-            conflicts: self.conflicts.load(SeqCst),
+            read_locks: self.read_locks.load(SeqCst).try_into().unwrap(),
+            write_locks: self.write_locks.load(SeqCst).try_into().unwrap(),
+            conflicts: self.conflicts.load(SeqCst).try_into().unwrap(),
         }
     }
 }
@@ -176,10 +177,10 @@ impl<'a> Drop for Writer<'a> {
 
 #[derive(Default)]
 pub struct Stats {
-    value: u64,
-    read_locks: u64,
-    write_locks: u64,
-    conflicts: u64,
+    pub value: u64,
+    pub read_locks: usize,
+    pub write_locks: usize,
+    pub conflicts: usize,
 }
 
 impl fmt::Display for Stats {

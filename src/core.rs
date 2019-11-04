@@ -2,7 +2,7 @@ use std::{
     borrow::Borrow,
     convert::TryInto,
     ffi, fs,
-    mem::{self, ManuallyDrop},
+    mem::ManuallyDrop,
     ops::{Bound, RangeBounds},
     sync::atomic::{AtomicBool, Ordering::SeqCst},
 };
@@ -419,12 +419,10 @@ where
     V: Clone + Diff,
 {
     fn footprint(&self) -> Result<isize> {
-        let mut footprint: isize = mem::size_of::<Delta<V>>().try_into().unwrap();
-        footprint += match &self.data {
+        Ok(match &self.data {
             InnerDelta::U { delta, .. } => delta.footprint()?,
             InnerDelta::D { .. } => 0,
-        };
-        Ok(footprint)
+        })
     }
 }
 
@@ -650,12 +648,16 @@ where
     V: Clone + Diff + Footprint,
 {
     fn footprint(&self) -> Result<isize> {
-        let mut fp: isize = mem::size_of::<Value<V>>().try_into().unwrap();
-        fp += match self {
-            Value::U { value, .. } => value.footprint()?,
+        use std::mem::size_of;
+
+        Ok(match self {
+            Value::U { value, .. } => {
+                // TODO: measure the isize to usize conversion cost ??
+                let size: isize = size_of::<V>().try_into().unwrap();
+                size + value.footprint()?
+            }
             Value::D { .. } => 0,
-        };
-        Ok(fp)
+        })
     }
 }
 
@@ -768,12 +770,12 @@ where
         Ok(size.try_into().unwrap())
     }
 
-    // DELETE operation, only in lsm-mode.
+    // DELETE operation, only in lsm-mode or sticky mode.
     pub(crate) fn delete(&mut self, seqno: u64) -> Result<isize> {
-        let delta_size = match &self.value {
+        match &self.value {
             Value::D { seqno } => {
+                // insert a delete delta
                 self.deltas.insert(0, Delta::new_delete(*seqno));
-                0
             }
             Value::U { value, seqno, .. } if !value.is_reference() => {
                 let delta = {
@@ -781,17 +783,17 @@ where
                     let d: <V as Diff>::D = From::from(value);
                     vlog::Delta::new_native(d)
                 };
-                let size = delta.footprint()?;
                 self.deltas.insert(0, Delta::new_upsert(delta, *seqno));
-                size
             }
             Value::U { .. } => unreachable!(),
         };
         let size = self.value.footprint()?;
         self.value = Value::new_delete(seqno);
-        Ok((size + delta_size - self.value.footprint()?)
-            .try_into()
-            .unwrap())
+        Ok(
+            (size - self.value.footprint()? + self.deltas[0].footprint()?)
+                .try_into()
+                .unwrap(),
+        )
     }
 }
 
@@ -1074,8 +1076,10 @@ where
 {
     /// Return the previous versions of this entry as Deltas.
     fn footprint(&self) -> Result<isize> {
-        let mut fp: isize = mem::size_of::<Entry<K, V>>().try_into().unwrap();
-        fp += self.value.footprint()?;
+        let mut fp = self.key.footprint()?;
+        if !self.is_deleted() {
+            fp += self.value.footprint()?;
+        }
         for delta in self.deltas.iter() {
             fp += delta.footprint()?;
         }

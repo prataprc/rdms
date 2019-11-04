@@ -81,7 +81,7 @@ impl Serialize for [u8; 20] {
 
 impl Footprint for [u8; 20] {
     fn footprint(&self) -> Result<isize> {
-        Ok(20)
+        Ok(0)
     }
 }
 
@@ -136,7 +136,8 @@ impl Serialize for Vec<u8> {
 
 impl Footprint for Vec<u8> {
     fn footprint(&self) -> Result<isize> {
-        Ok(self.capacity().try_into().unwrap())
+        let payload: isize = self.capacity().try_into().unwrap();
+        Ok(payload)
     }
 }
 

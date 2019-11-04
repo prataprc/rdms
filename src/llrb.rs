@@ -602,7 +602,14 @@ where
             let res = if self.lsm {
                 Llrb::delete_lsm(self.root.take(), key, seqno)
             } else {
-                Llrb::delete_sticky(self.root.take(), key, seqno)
+                let res = Llrb::delete_sticky(self.root.take(), key, seqno);
+                // TODO: verify entry.purge() logic, can be removed once
+                // this code is total - frozen.
+                match &res.old_entry {
+                    Some(oe) => assert_eq!(oe.as_deltas().len(), 0),
+                    _ => (),
+                }
+                res
             };
             self.root = res.node;
             self.root.as_mut().map(|r| r.set_black());

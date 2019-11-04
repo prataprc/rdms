@@ -70,24 +70,6 @@ where
         new_node
     }
 
-    // mvcc_clone + new_deleted
-    pub(crate) fn sticky_delete_clone(
-        &self,
-        deleted: u64,
-        reclaim: &mut Vec<Box<Node<K, V>>>,
-    ) -> Box<Node<K, V>> {
-        let new_node = Box::new(Node {
-            entry: Entry::new(self.to_key(), Value::new_delete(deleted)),
-            black: self.black,
-            dirty: self.dirty,
-            left: self.left.as_ref().map(|n| n.duplicate()),
-            right: self.right.as_ref().map(|n| n.duplicate()),
-        });
-        //println!("new node {:p}", node);
-        reclaim.push(self.duplicate());
-        new_node
-    }
-
     // remove this node from the tree without dropping the children.
     pub(crate) fn mvcc_detach(&mut self) {
         self.left.take().map(Box::leak);
@@ -174,6 +156,7 @@ where
         self.entry.as_key()
     }
 
+    #[allow(dead_code)] // TODO: remove if not required.
     pub(crate) fn to_key(&self) -> K {
         self.entry.to_key()
     }

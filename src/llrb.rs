@@ -943,10 +943,12 @@ where
                         r
                     }
                     Ordering::Equal => {
+                        let mut size = node.footprint().unwrap(); // TODO
                         let cutoff = Bound::Included(node.to_seqno());
                         let entry = node.entry.clone();
-                        let size = node.delete(seqno).unwrap();
+                        node.delete(seqno).unwrap();
                         node.entry = node.entry.clone().purge(cutoff).unwrap();
+                        size = node.footprint().unwrap() - size; // TODO
                         DeleteResult {
                             node: Some(Llrb::walkuprot_23(node)),
                             old_entry: Some(entry),
@@ -1001,7 +1003,7 @@ where
                 return DeleteResult {
                     node: None,
                     old_entry: Some(node.entry.clone()),
-                    size: node.footprint().unwrap(),
+                    size: -node.footprint().unwrap(),
                 };
             }
 
@@ -1027,7 +1029,7 @@ where
                 DeleteResult {
                     node: Some(Llrb::fixup(newnode)),
                     old_entry: Some(node.entry.clone()),
-                    size,
+                    size: -size,
                 }
             } else {
                 let mut r = Llrb::do_delete(node.right.take(), key);

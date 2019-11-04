@@ -1077,12 +1077,14 @@ where
                 (new_node, r.new_node, r.old_entry, r.size)
             }
             Ordering::Equal => {
+                let mut size = node.footprint().unwrap(); // TODO
                 let cutoff = Bound::Included(node.to_seqno());
                 let mut new_node = self.node_mvcc_clone(&node, reclaim, true);
                 let old_entry = node.entry.clone();
-                let size = new_node.delete(seqno).unwrap();
+                new_node.delete(seqno).unwrap();
                 new_node.dirty = true;
                 new_node.entry = new_node.entry.clone().purge(cutoff).unwrap();
+                size = new_node.footprint().unwrap() - size; // TODO
                 let n = new_node.duplicate();
                 (new_node, Some(n), Some(old_entry), size)
             }
@@ -1153,7 +1155,7 @@ where
                     node: None,
                     new_node: None,
                     old_entry: Some(newnd.entry.clone()),
-                    size,
+                    size: -size,
                 };
             }
 
@@ -1181,7 +1183,7 @@ where
                     node: Some(self.fixup(newnode, reclaim)),
                     new_node: None,
                     old_entry: Some(entry),
-                    size,
+                    size: -size,
                 }
             } else {
                 let mut r = self.do_delete(newnd.right.take(), key, reclaim);

@@ -27,7 +27,7 @@ where
     fn footprint(&self) -> Result<isize> {
         use std::mem::size_of;
 
-        let size = size_of::<Node<K, V>>() - size_of::<Entry<K, V>>();
+        let size = size_of::<Node<K, V>>();
         let overhead: isize = size.try_into().unwrap();
         Ok(overhead + self.entry.footprint()?)
     }
@@ -109,7 +109,7 @@ where
         self.entry.prepend_version(entry, lsm)
     }
 
-    // DELETE operation, back to back delete shall collapse
+    // DELETE operation, only in lsm or sticky mode.
     #[inline]
     pub(crate) fn delete(&mut self, seqno: u64) -> Result<isize> {
         self.entry.delete(seqno)

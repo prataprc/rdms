@@ -192,7 +192,7 @@ where
 pub struct IterPWScan<'a, K, V>
 where
     K: Ord + Clone,
-    V: Clone + Diff + From<<V as Diff>::D>,
+    V: Clone + Diff,
 {
     _latch: Option<spinlock::Reader<'a>>,
     _arc: Arc<Snapshot<K, V>>, // only used for ref-count-ing MVCC-snapshot.
@@ -204,7 +204,7 @@ where
 impl<'a, K, V> Iterator for IterPWScan<'a, K, V>
 where
     K: Ord + Clone,
-    V: Clone + Diff + From<<V as Diff>::D>,
+    V: Clone + Diff,
 {
     type Item = Result<ScanEntry<K, V>>;
 

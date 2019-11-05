@@ -257,7 +257,7 @@ where
 impl<K, V, M, D> Dgm<K, V, M, D>
 where
     K: Clone + Ord + Serialize + Footprint,
-    V: Clone + Diff + Serialize + Footprint + From<<V as Diff>::D>,
+    V: Clone + Diff + Serialize + Footprint,
     <V as Diff>::D: Serialize,
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
@@ -589,7 +589,7 @@ where
 impl<K, V, M, D> Footprint for Dgm<K, V, M, D>
 where
     K: Clone + Ord + Serialize + Footprint,
-    V: Clone + Diff + Serialize + Footprint + From<<V as Diff>::D>,
+    V: Clone + Diff + Serialize + Footprint,
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
 {
@@ -601,7 +601,7 @@ where
 impl<K, V, M, D> Index<K, V> for Dgm<K, V, M, D>
 where
     K: Clone + Ord + Serialize + Footprint,
-    V: Clone + Diff + Serialize + Footprint + From<<V as Diff>::D>,
+    V: Clone + Diff + Serialize + Footprint,
     <V as Diff>::D: Serialize,
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
@@ -964,7 +964,7 @@ where
 impl<K, V, M, D> Reader<K, V> for DgmReader<K, V, M, D>
 where
     K: Clone + Ord + Serialize + Footprint,
-    V: Clone + Diff + Serialize + From<<V as Diff>::D> + Footprint,
+    V: Clone + Diff + Serialize + Footprint,
     <V as Diff>::D: Serialize,
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
@@ -1292,7 +1292,7 @@ where
 fn auto_compact<K, V, M, D>(ccmu: CCMu, interval: Duration)
 where
     K: Clone + Ord + Serialize + Footprint,
-    V: Clone + Diff + Serialize + Footprint + From<<V as Diff>::D>,
+    V: Clone + Diff + Serialize + Footprint,
     <V as Diff>::D: Serialize,
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,

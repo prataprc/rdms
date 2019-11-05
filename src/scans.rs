@@ -37,7 +37,7 @@ pub const SKIP_SCAN_BATCH_SIZE: usize = 1000;
 pub struct SkipScan<R, K, V, G>
 where
     K: Clone + Ord,
-    V: Clone + Diff + From<<V as Diff>::D>,
+    V: Clone + Diff,
     G: Clone + RangeBounds<u64>,
     R: PiecewiseScan<K, V>,
 {
@@ -61,7 +61,7 @@ where
 impl<R, K, V, G> SkipScan<R, K, V, G>
 where
     K: Clone + Ord,
-    V: Clone + Diff + From<<V as Diff>::D>,
+    V: Clone + Diff,
     G: Clone + RangeBounds<u64>,
     R: PiecewiseScan<K, V>,
 {
@@ -115,7 +115,7 @@ where
 impl<R, K, V, G> Iterator for SkipScan<R, K, V, G>
 where
     K: Clone + Ord,
-    V: Clone + Diff + From<<V as Diff>::D>,
+    V: Clone + Diff,
     G: Clone + RangeBounds<u64>,
     R: PiecewiseScan<K, V>,
 {
@@ -159,7 +159,7 @@ where
 pub struct FilterScan<'a, K, V>
 where
     K: 'a + Clone + Ord,
-    V: 'a + Clone + Diff + From<<V as Diff>::D>,
+    V: 'a + Clone + Diff,
 {
     iter: IndexIter<'a, K, V>,
     start: Bound<u64>,
@@ -169,7 +169,7 @@ where
 impl<'a, K, V> FilterScan<'a, K, V>
 where
     K: 'a + Clone + Ord,
-    V: 'a + Clone + Diff + From<<V as Diff>::D>,
+    V: 'a + Clone + Diff,
 {
     pub fn new<R>(iter: IndexIter<'a, K, V>, within: R) -> FilterScan<'a, K, V>
     where
@@ -192,7 +192,7 @@ where
 impl<'a, K, V> Iterator for FilterScan<'a, K, V>
 where
     K: 'a + Clone + Ord,
-    V: 'a + Clone + Diff + From<<V as Diff>::D>,
+    V: 'a + Clone + Diff,
 {
     type Item = Result<Entry<K, V>>;
 

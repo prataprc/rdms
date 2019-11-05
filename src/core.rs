@@ -2,7 +2,7 @@ use std::{
     borrow::Borrow,
     convert::TryInto,
     ffi, fs,
-    mem::ManuallyDrop,
+    mem::{self, ManuallyDrop},
     ops::{Bound, RangeBounds},
     sync::atomic::{AtomicBool, Ordering::SeqCst},
 };
@@ -39,7 +39,7 @@ pub(crate) type ScanIter<'a, K, V> = Box<dyn Iterator<Item = Result<ScanEntry<K,
 ///
 /// [Rdms]: crate::Rdms
 ///
-pub trait Diff: Sized {
+pub trait Diff: Sized + From<<Self as Diff>::D> {
     type D: Clone + From<Self> + Into<Self> + Footprint;
 
     /// Return the delta between two consecutive versions of a value.
@@ -354,7 +354,7 @@ pub trait Serialize: Sized {
 pub trait PiecewiseScan<K, V>
 where
     K: Clone + Ord,
-    V: Clone + Diff + From<<V as Diff>::D>,
+    V: Clone + Diff,
 {
     /// Return an iterator over entries that meet following properties
     /// * Only entries greater than range.start_bound().
@@ -676,6 +676,20 @@ where
     deltas: Vec<Delta<V>>,
 }
 
+impl<K, V> Default for Entry<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    fn default() -> Entry<K, V> {
+        Entry {
+            key: unsafe { mem::zeroed() },
+            value: Value::D { seqno: 0 },
+            deltas: Default::default(),
+        }
+    }
+}
+
 // Entry construction methods.
 impl<K, V> Entry<K, V>
 where
@@ -831,7 +845,7 @@ where
 impl<K, V> Entry<K, V>
 where
     K: Clone + Ord,
-    V: Clone + Diff + From<<V as Diff>::D>,
+    V: Clone + Diff,
 {
     // Pick all versions whose seqno is within the specified range.
     // Note that, by rdms-design only memory-indexes ingesting new
@@ -913,7 +927,7 @@ where
 impl<K, V> Entry<K, V>
 where
     K: Clone + Ord,
-    V: Clone + Diff + From<<V as Diff>::D> + Footprint,
+    V: Clone + Diff + Footprint,
 {
     // Merge two version chain for same key. This can happen between
     // two entries from two index, where one of them is a newer snapshot
@@ -1090,7 +1104,7 @@ where
 pub struct VersionIter<K, V>
 where
     K: Clone + Ord,
-    V: Clone + Diff + From<<V as Diff>::D>,
+    V: Clone + Diff,
 {
     key: K,
     entry: Option<Entry<K, V>>,
@@ -1101,7 +1115,7 @@ where
 impl<K, V> Iterator for VersionIter<K, V>
 where
     K: Clone + Ord,
-    V: Clone + Diff + From<<V as Diff>::D>,
+    V: Clone + Diff,
 {
     type Item = Entry<K, V>;
 
@@ -1140,7 +1154,7 @@ where
 
 fn next_value<V>(value: Option<V>, delta: InnerDelta<V>) -> (Value<V>, Option<V>)
 where
-    V: Clone + Diff + From<<V as Diff>::D>,
+    V: Clone + Diff,
 {
     match (value, delta) {
         (None, InnerDelta::D { seqno }) => {

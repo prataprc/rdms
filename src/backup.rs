@@ -41,7 +41,7 @@ impl fmt::Display for Name {
 pub struct Backup<K, V, M, D>
 where
     K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint + From<<V as Diff>::D>,
+    V: Clone + Diff + Footprint,
     M: Index<K, V>,
     D: Index<K, V>,
     <M as Index<K, V>>::R: PiecewiseScan<K, V>,
@@ -61,7 +61,7 @@ where
 impl<K, V, M, D> Backup<K, V, M, D>
 where
     K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint + From<<V as Diff>::D>,
+    V: Clone + Diff + Footprint,
     M: Index<K, V>,
     D: Index<K, V>,
     <M as Index<K, V>>::R: PiecewiseScan<K, V>,
@@ -116,7 +116,7 @@ where
 impl<K, V, M, D> Backup<K, V, M, D>
 where
     K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint + From<<V as Diff>::D>,
+    V: Clone + Diff + Footprint,
     M: Index<K, V>,
     D: Index<K, V>,
     <M as Index<K, V>>::R: PiecewiseScan<K, V>,
@@ -134,7 +134,7 @@ where
 impl<K, V, M, D> Footprint for Backup<K, V, M, D>
 where
     K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint + From<<V as Diff>::D>,
+    V: Clone + Diff + Footprint,
     M: Index<K, V>,
     D: Index<K, V>,
     <M as Index<K, V>>::R: PiecewiseScan<K, V>,
@@ -147,7 +147,7 @@ where
 impl<K, V, M, D> Index<K, V> for Backup<K, V, M, D>
 where
     K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint + From<<V as Diff>::D>,
+    V: Clone + Diff + Footprint,
     M: Index<K, V>,
     D: Index<K, V>,
     <M as Index<K, V>>::R: PiecewiseScan<K, V>,
@@ -212,7 +212,7 @@ where
 fn auto_compact<K, V, M, D>(ccmu: CCMu, interval: Duration)
 where
     K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint + From<<V as Diff>::D>,
+    V: Clone + Diff + Footprint,
     M: Index<K, V>,
     D: Index<K, V>,
     <M as Index<K, V>>::R: PiecewiseScan<K, V>,

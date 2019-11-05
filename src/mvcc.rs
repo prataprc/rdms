@@ -1351,7 +1351,7 @@ where
 impl<K, V> PiecewiseScan<K, V> for Mvcc<K, V>
 where
     K: Clone + Ord,
-    V: Clone + Diff + From<<V as Diff>::D>,
+    V: Clone + Diff,
 {
     /// Return an iterator over entries that meet following properties
     /// * Only entries greater than range.start_bound().
@@ -2032,7 +2032,7 @@ where
 impl<K, V> PiecewiseScan<K, V> for MvccReader<K, V>
 where
     K: Clone + Ord,
-    V: Clone + Diff + From<<V as Diff>::D>,
+    V: Clone + Diff,
 {
     /// Return an iterator over entries that meet following properties
     /// * Only entries greater than range.start_bound().

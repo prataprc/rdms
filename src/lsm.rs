@@ -31,7 +31,7 @@ where
 }
 
 // ``x`` contains newer mutations than ``y``.
-// TODO NOTE: flush_merge called by this function assumes that all
+// TODO NOTE: xmerge called by this function assumes that all
 // mutations held by each index are mutually exclusive.
 #[allow(dead_code)] // TODO: remove if not required.
 pub(crate) fn y_get_versions<'a, 'b, K, V, Q>(
@@ -46,7 +46,7 @@ where
     Box::new(move |key: &Q| -> Result<Entry<K, V>> {
         match y(key) {
             Ok(y_entry) => match x(key) {
-                Ok(x_entry) => Ok(x_entry.flush_merge(y_entry)),
+                Ok(x_entry) => Ok(x_entry.xmerge(y_entry)),
                 Err(Error::KeyNotFound) => Ok(y_entry),
                 res => res,
             },
@@ -204,11 +204,11 @@ where
                         Some(Ok(ye))
                     }
                     cmp::Ordering::Equal => {
-                        // TODO NOTE: flush_merge assumes that all mutations
+                        // TODO NOTE: xmerge assumes that all mutations
                         // held by each index are mutually exclusive.
                         self.x_entry = self.x.next();
                         self.y_entry = self.y.next();
-                        Some(Ok(xe.flush_merge(ye)))
+                        Some(Ok(xe.xmerge(ye)))
                     }
                 }
             }

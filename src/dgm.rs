@@ -1111,7 +1111,7 @@ where
         let mut entry = match &mut rs.r_m1 {
             Some(m1) => match m1.get_with_versions(key) {
                 Ok(m1_entry) => match m0_entry {
-                    Some(m0_entry) => Some(m0_entry.flush_merge(m1_entry)),
+                    Some(m0_entry) => Some(m0_entry.xmerge(m1_entry)),
                     None => Some(m1_entry),
                 },
                 Err(Error::KeyNotFound) => m0_entry,
@@ -1126,7 +1126,7 @@ where
                 None => break entry,
                 Some(r) => match r.get_with_versions(key) {
                     Ok(e) => match entry {
-                        Some(entry) => Some(entry.flush_merge(e)),
+                        Some(entry) => Some(entry.xmerge(e)),
                         None => Some(e),
                     },
                     Err(Error::KeyNotFound) => entry,

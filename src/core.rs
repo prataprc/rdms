@@ -915,11 +915,11 @@ where
     K: Clone + Ord,
     V: Clone + Diff + From<<V as Diff>::D> + Footprint,
 {
-    // Merge two version chain for same entry. This can happen between
-    // two entries from memory-index and disk-index, or disk-index and
-    // disk-index. In either case it is expected that all versions of
+    // Merge two version chain for same key. This can happen between
+    // two entries from two index, where one of them is a newer snapshot
+    // of the same index. In any case it is expected that all versions of
     // one entry shall either be greater than all versions of the other entry.
-    pub(crate) fn flush_merge(self, entry: Entry<K, V>) -> Entry<K, V> {
+    pub(crate) fn xmerge(self, entry: Entry<K, V>) -> Entry<K, V> {
         // `a` is newer than `b`, and all versions in a and b are mutually
         // exclusive in seqno ordering.
         let (a, mut b) = if self.to_seqno() > entry.to_seqno() {
@@ -931,9 +931,9 @@ where
         };
 
         // TODO remove this validation logic once rdms is fully stable.
-        a.validate_flush_merge(&b);
+        a.validate_xmerge(&b);
         for ne in a.versions().collect::<Vec<Entry<K, V>>>().into_iter().rev() {
-            // println!("flush_merge {} {}", ne.to_seqno(), ne.is_deleted());
+            // println!("xmerge {} {}", ne.to_seqno(), ne.is_deleted());
             // TODO: is it okay to ignore the result-err here ?
             b.prepend_version(ne, true /* lsm */).ok();
         }
@@ -941,7 +941,7 @@ where
     }
 
     // `self` is newer than `entr`
-    fn validate_flush_merge(&self, entr: &Entry<K, V>) {
+    fn validate_xmerge(&self, entr: &Entry<K, V>) {
         // validate ordering
         let mut seqnos = vec![self.to_seqno()];
         self.deltas.iter().for_each(|d| seqnos.push(d.to_seqno()));
@@ -951,7 +951,7 @@ where
             .into_iter()
             .zip(seqnos[1..].into_iter())
             .any(|(a, b)| a <= b);
-        // println!("validate_flush_merge1 {} {:?}", fail, seqnos);
+        // println!("validate_xmerge {} {:?}", fail, seqnos);
         // validate self contains all native value and deltas.
         fail = fail || self.value.is_reference();
         fail = fail || self.deltas.iter().any(|d| d.is_reference());

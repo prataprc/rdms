@@ -3,7 +3,7 @@ use log::debug;
 use std::{
     borrow::Borrow,
     ffi, fmt, fs, marker, mem,
-    ops::{DerefMut, RangeBounds},
+    ops::{Bound, DerefMut, RangeBounds},
     result,
     sync::{self, Arc},
     thread,
@@ -671,7 +671,7 @@ where
         Ok(DgmReader::new(&self.name, arc_rs))
     }
 
-    fn commit(&mut self, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<()> {
+    fn commit(&mut self, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<isize> {
         use Snapshot::{Active, Commit, Compact, Flush, Write};
 
         self.cleanup_handles();
@@ -730,10 +730,10 @@ where
                 }
             }
         }
-        Ok(())
+        Ok(0)
     }
 
-    fn compact(&mut self) -> Result<()> {
+    fn compact(&mut self, _cutoff: Bound<u64>) -> Result<isize> {
         use Snapshot::{Active, Commit, Compact, Flush, Write};
 
         self.cleanup_handles();
@@ -809,10 +809,10 @@ where
 
         let disk = match (r1.as_mut(), r2.as_mut(), meta, disk) {
             (None, None, None, None) => {
-                return Ok(());
+                return Ok(0);
             }
             (None, None, None, Some(mut disk)) => {
-                disk.compact()?;
+                disk.compact(_cutoff)?;
                 disk
             }
             (Some(r1), Some(r2), Some(meta), Some(mut disk)) => {
@@ -852,7 +852,7 @@ where
                 }
             }
         }
-        Ok(())
+        Ok(0)
     }
 }
 
@@ -1312,7 +1312,7 @@ where
             // unsafe
             (ccmu.get_ptr() as *mut Dgm<K, V, M, D>).as_mut().unwrap()
         };
-        dgm.compact().unwrap(); // TODO: log error using error!
+        dgm.compact(Bound::Unbounded).unwrap(); // TODO: log error using error!
         elapsed = start.elapsed().ok().unwrap();
     }
 }

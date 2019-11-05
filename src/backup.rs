@@ -189,7 +189,7 @@ where
         pair.0.to_reader()
     }
 
-    fn commit(&mut self, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<()> {
+    fn commit(&mut self, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<isize> {
         let mut pair = self.pair.lock().unwrap();
 
         let within = (
@@ -203,9 +203,9 @@ where
         pair.1.commit(iter, meta)
     }
 
-    fn compact(&mut self) -> Result<()> {
+    fn compact(&mut self, cutoff: Bound<u64>) -> Result<isize> {
         let mut pair = self.pair.lock().unwrap();
-        pair.1.compact()
+        pair.1.compact(cutoff)
     }
 }
 
@@ -233,7 +233,7 @@ where
                 .as_mut()
                 .unwrap()
         };
-        backup.compact().unwrap(); // TODO: log error
+        backup.compact(Bound::Unbounded).unwrap(); // TODO: log error
         elapsed = start.elapsed().ok().unwrap();
     }
 }

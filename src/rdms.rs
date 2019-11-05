@@ -1,5 +1,7 @@
 use std::{
-    ffi, fmt, marker, thread,
+    ffi, fmt, marker,
+    ops::Bound,
+    thread,
     time::{Duration, SystemTime},
 };
 
@@ -94,12 +96,12 @@ where
         self.index.to_writer()
     }
 
-    pub fn commit(&mut self, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<()> {
+    pub fn commit(&mut self, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<isize> {
         self.index.commit(iter, meta)
     }
 
-    pub fn compact(&mut self) -> Result<()> {
-        self.index.compact()
+    pub fn compact(&mut self, cutoff: Bound<u64>) -> Result<isize> {
+        self.index.compact(cutoff)
     }
 }
 

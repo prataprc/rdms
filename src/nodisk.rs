@@ -1,4 +1,8 @@
-use std::{borrow::Borrow, ffi, marker, ops::RangeBounds};
+use std::{
+    borrow::Borrow,
+    ffi, marker,
+    ops::{Bound, RangeBounds},
+};
 
 use crate::{
     core::{Diff, DiskIndexFactory, Entry, Footprint, Index, IndexIter, Reader},
@@ -97,12 +101,12 @@ where
         Ok(Panic::new("nodisk"))
     }
 
-    fn commit(&mut self, _: IndexIter<K, V>, _: Vec<u8>) -> Result<()> {
-        Ok(())
+    fn commit(&mut self, _: IndexIter<K, V>, _: Vec<u8>) -> Result<isize> {
+        Ok(0)
     }
 
-    fn compact(&mut self) -> Result<()> {
-        Ok(())
+    fn compact(&mut self, _: Bound<u64>) -> Result<isize> {
+        Ok(0)
     }
 }
 

@@ -436,13 +436,12 @@ where
         Ok(LlrbWriter::<K, V>::new(index, writer))
     }
 
-    // TODO: figure out a way to merge `iter` into Llrb
-    fn commit(&mut self, _: IndexIter<K, V>, _: Vec<u8>) -> Result<()> {
-        Ok(())
+    fn commit(&mut self, _: IndexIter<K, V>, _: Vec<u8>) -> Result<isize> {
+        Ok(0)
     }
 
-    fn compact(&mut self) -> Result<()> {
-        Ok(())
+    fn compact(&mut self, _: Bound<u64>) -> Result<isize> {
+        Ok(0)
     }
 }
 

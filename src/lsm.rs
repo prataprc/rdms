@@ -39,7 +39,7 @@ pub(crate) fn y_get_versions<'a, 'b, K, V, Q>(
     mut y: LsmGet<'a, K, V, Q>,
 ) -> LsmGet<'a, K, V, Q>
 where
-    K: 'static + Clone + Ord + Borrow<Q>,
+    K: 'static + Clone + Ord + Footprint + Borrow<Q>,
     V: 'static + Clone + Diff + Footprint,
     Q: 'a + 'b + Ord + ?Sized,
 {
@@ -83,7 +83,7 @@ pub(crate) fn y_iter_versions<'a, K, V>(
     reverse: bool,
 ) -> IndexIter<'a, K, V>
 where
-    K: 'a + Clone + Ord,
+    K: 'a + Clone + Ord + Footprint,
     V: 'a + Clone + Diff + Footprint,
 {
     let x_entry = x.next();
@@ -177,7 +177,7 @@ where
 
 impl<'a, K, V> Iterator for YIterVersions<'a, K, V>
 where
-    K: 'a + Clone + Ord,
+    K: 'a + Clone + Ord + Footprint,
     V: 'a + Clone + Diff + Footprint,
 {
     type Item = Result<Entry<K, V>>;

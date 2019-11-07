@@ -418,10 +418,14 @@ where
     V: Clone + Diff,
 {
     fn footprint(&self) -> Result<isize> {
-        Ok(match &self.data {
-            InnerDelta::U { delta, .. } => delta.footprint()?,
-            InnerDelta::D { .. } => 0,
-        })
+        use std::mem::size_of;
+
+        let fp: isize = size_of::<Delta<V>>().try_into().unwrap();
+        Ok(fp
+            + match &self.data {
+                InnerDelta::U { delta, .. } => delta.footprint()?,
+                InnerDelta::D { .. } => 0,
+            })
     }
 }
 
@@ -724,7 +728,7 @@ where
 // write/update methods.
 impl<K, V> Entry<K, V>
 where
-    K: Clone + Ord,
+    K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
 {
     // Corresponds to CREATE and UPDATE operations also the latest version,
@@ -785,6 +789,7 @@ where
 
     // DELETE operation, only in lsm-mode or sticky mode.
     pub(crate) fn delete(&mut self, seqno: u64) -> Result<isize> {
+        let size = self.footprint()?;
         match &self.value {
             Value::D { seqno } => {
                 // insert a delete delta
@@ -800,13 +805,8 @@ where
             }
             Value::U { .. } => unreachable!(),
         };
-        let size = self.value.footprint()?;
         self.value = Value::new_delete(seqno);
-        Ok(
-            (size - self.value.footprint()? + self.deltas[0].footprint()?)
-                .try_into()
-                .unwrap(),
-        )
+        Ok((self.footprint()? - size).try_into().unwrap())
     }
 }
 
@@ -926,7 +926,7 @@ where
 
 impl<K, V> Entry<K, V>
 where
-    K: Clone + Ord,
+    K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
 {
     // Merge two version chain for same key. This can happen between

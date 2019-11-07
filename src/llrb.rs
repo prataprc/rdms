@@ -30,11 +30,11 @@
 //! [LSM mode]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
 //!
 
-use log::{error, info};
+use log::{error, info, warn};
 
 use std::{
     borrow::Borrow,
-    cmp::{Ord, Ordering},
+    cmp::{self, Ord, Ordering},
     convert::TryInto,
     ffi, fmt,
     fmt::Debug,
@@ -120,7 +120,7 @@ where
     fn new(&self, name: &str) -> Result<Self::I> {
         info!(
             target: "llrbfc",
-            "creating a new llrb instance {} with {}",
+            "creating a new llrb instance {} with config {}",
             name, self.to_config_string()
         );
 
@@ -170,11 +170,12 @@ where
         let n = self.multi_rw();
         if n > Self::CONCUR_REF_COUNT {
             error!(
-                target: "llrb",
-                "Llrb {} dropped before read/write handles {}", self.name, n
+                target: "llrb  ",
+                "for index {}, dropped before read/write handles {}",
+                self.name, n
             );
         } else {
-            info!(target: "llrb", "Llrb {} dropped ...", self.name);
+            info!(target: "llrb  ", "for index {}, dropped ...", self.name);
         }
     }
 }
@@ -436,11 +437,32 @@ where
         Ok(LlrbWriter::<K, V>::new(index, writer))
     }
 
-    fn commit(&mut self, _: IndexIter<K, V>, _: Vec<u8>) -> Result<isize> {
-        Ok(0)
+    fn commit(&mut self, iter: IndexIter<K, V>, m: Vec<u8>) -> Result<usize> {
+        if m.len() > 0 {
+            warn!(
+                target: "llrb  ",
+                "for index {}, commit ignore metadata of len {}",
+                self.name, m.len()
+            );
+        }
+
+        let count = {
+            let mut count = 0;
+            for entry in iter {
+                self.set_index_entry(entry?)?;
+                count += 1;
+            }
+            count
+        };
+
+        info!(
+            target: "llrb  ",
+            "for index {}, committed {} items", self.name, count
+        );
+        Ok(count.try_into().unwrap())
     }
 
-    fn compact(&mut self, _: Bound<u64>) -> Result<isize> {
+    fn compact(&mut self, _: Bound<u64>) -> Result<usize> {
         Ok(0)
     }
 }
@@ -454,6 +476,37 @@ where
         let _latch = self.latch.acquire_read(self.spin);
         Ok(self.tree_footprint)
     }
+}
+
+struct UpsertResult<K, V>
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+{
+    node: Option<Box<Node<K, V>>>,
+    old_entry: Option<Entry<K, V>>,
+    size: isize, // differencen in footprint
+}
+
+struct UpsertCasResult<K, V>
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+{
+    node: Option<Box<Node<K, V>>>,
+    old_entry: Option<Entry<K, V>>,
+    size: isize, // difference in footprint
+    err: Option<Error>,
+}
+
+struct DeleteResult<K, V>
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+{
+    node: Option<Box<Node<K, V>>>,
+    old_entry: Option<Entry<K, V>>,
+    size: isize, // difference in footprint
 }
 
 /// Create/Update/Delete operations on Llrb index.
@@ -700,37 +753,6 @@ where
     }
 }
 
-struct UpsertResult<K, V>
-where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
-{
-    node: Option<Box<Node<K, V>>>,
-    old_entry: Option<Entry<K, V>>,
-    size: isize, // differencen in footprint
-}
-
-struct UpsertCasResult<K, V>
-where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
-{
-    node: Option<Box<Node<K, V>>>,
-    old_entry: Option<Entry<K, V>>,
-    size: isize, // difference in footprint
-    err: Option<Error>,
-}
-
-struct DeleteResult<K, V>
-where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
-{
-    node: Option<Box<Node<K, V>>>,
-    old_entry: Option<Entry<K, V>>,
-    size: isize, // difference in footprint
-}
-
 /// Create/Update/Delete operations on Llrb index.
 impl<K, V> Llrb<K, V>
 where
@@ -768,6 +790,21 @@ where
                         r.node = Some(Llrb::walkuprot_23(node));
                         r
                     }
+                    Ordering::Equal if lsm => {
+                        let size = node.footprint().unwrap(); // TODO
+                        let (old_entry, entry) = {
+                            let d = Default::default();
+                            let entry = mem::replace(&mut node.entry, d);
+                            (Some(entry.clone()), entry)
+                        };
+                        node.entry = entry.xmerge(nentry);
+                        let size = node.footprint().unwrap() - size;
+                        UpsertResult {
+                            node: Some(Llrb::walkuprot_23(node)),
+                            old_entry,
+                            size,
+                        }
+                    }
                     Ordering::Equal => {
                         let old_entry = Some(node.entry.clone());
                         let size = node.prepend_version(nentry, lsm).unwrap();
@@ -794,7 +831,7 @@ where
                     node: None,
                     old_entry: None,
                     size: 0,
-                    err: Some(Error::InvalidCAS),
+                    err: Some(Error::InvalidCAS(0)),
                 };
             }
             None => {
@@ -828,14 +865,15 @@ where
                 r
             }
             Ordering::Equal => {
-                let p = node.is_deleted() && cas != 0 && cas != node.to_seqno();
-                let p = p || (!node.is_deleted() && cas != node.to_seqno());
+                let seqno = node.to_seqno();
+                let p = node.is_deleted() && cas != 0 && cas != seqno;
+                let p = p || (!node.is_deleted() && cas != seqno);
                 if p {
                     UpsertCasResult {
                         node: Some(Llrb::walkuprot_23(node)),
                         old_entry: None,
                         size: 0,
-                        err: Some(Error::InvalidCAS),
+                        err: Some(Error::InvalidCAS(seqno)),
                     }
                 } else {
                     let old_entry = Some(node.entry.clone());
@@ -1059,6 +1097,67 @@ where
     }
 }
 
+/// Create/Update/Delete operations on Llrb index.
+impl<K, V> Llrb<K, V>
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+{
+    fn set_index_entry(&mut self, entry: Entry<K, V>) -> Result<Option<Entry<K, V>>> {
+        let _latch = self.latch.acquire_write(self.spin);
+
+        let key_footprint = entry.as_key().footprint().unwrap();
+        let (seqno, deleted) = (entry.to_seqno(), entry.is_deleted());
+        match Llrb::upsert(self.root.take(), entry, self.lsm) {
+            UpsertResult {
+                node: Some(mut root),
+                old_entry,
+                size,
+            } => {
+                // println!("set_index_entry, result {}", size);
+                match &old_entry {
+                    None => {
+                        self.n_count += 1;
+                        self.key_footprint += key_footprint;
+                        if deleted {
+                            self.n_deleted += 1;
+                        }
+                    }
+                    Some(oe) => match (oe.is_deleted(), deleted) {
+                        (true, false) => self.n_deleted -= 1,
+                        (false, true) => self.n_deleted += 1,
+                        _ => (),
+                    },
+                }
+                self.tree_footprint += size;
+
+                root.set_black();
+                self.root = Some(root);
+                self.seqno = cmp::max(self.seqno, seqno);
+                Ok(old_entry)
+            }
+            _ => panic!("set: impossible case, call programmer"),
+        }
+    }
+
+    fn delete_index_entry(&mut self, key: K) {
+        let _latch = self.latch.acquire_write(self.spin);
+
+        // in non-lsm mode remove the entry from the tree.
+        let res = match Llrb::do_delete(self.root.take(), key.borrow()) {
+            res @ DeleteResult { node: None, .. } => res,
+            mut res => {
+                res.node.as_mut().map(|node| node.set_black());
+                res
+            }
+        };
+        self.root = res.node;
+        self.key_footprint -= key.footprint().unwrap();
+        self.tree_footprint += res.size;
+        self.n_count -= 1;
+    }
+}
+
 /// Read operations on Llrb index.
 impl<K, V> Reader<K, V> for Llrb<K, V>
 where
@@ -1180,7 +1279,7 @@ where
 impl<K, V> PiecewiseScan<K, V> for Llrb<K, V>
 where
     K: Clone + Ord,
-    V: Clone + Diff + From<<V as Diff>::D>,
+    V: Clone + Diff,
 {
     /// Return an iterator over entries that meet following properties
     /// * Only entries greater than from bound,
@@ -1252,7 +1351,7 @@ where
         let ss = (0, 0);
         let ss = validate_tree(root, red, ss, depth, &mut depths)?;
         if ss.1 != self.n_deleted {
-            let msg = format!("Llrb n_delete {} != {}", ss.1, self.n_deleted);
+            let msg = format!("Llrb n_deleted {} != {}", ss.1, self.n_deleted);
             return Err(Error::ValidationFail(msg));
         }
 
@@ -1427,8 +1526,8 @@ where
 
         let index: &mut Llrb<K, V> = r.as_mut();
         info!(
-            target: "llrb",
-            "creating a new reader {} for {}", id, index.name
+            target: "llrb  ",
+            "for index {}, creating a new reader {} ...", index.name, id,
         );
         r
     }
@@ -1442,7 +1541,10 @@ where
     fn drop(&mut self) {
         let id = self.id;
         let index: &mut Llrb<K, V> = self.as_mut();
-        info!(target: "llrb", "dropping reader {} for {}", id, index.name);
+        info!(
+            target: "llrb  ",
+            "for index {}, dropping reader {}", index.name, id
+        );
 
         // leak this index, it is only a reference
         Box::leak(self.index.take().unwrap());
@@ -1551,7 +1653,7 @@ where
 impl<K, V> PiecewiseScan<K, V> for LlrbReader<K, V>
 where
     K: Clone + Ord,
-    V: Clone + Diff + From<<V as Diff>::D>,
+    V: Clone + Diff,
 {
     /// Return an iterator over entries that meet following properties
     /// * Only entries greater than from bound,
@@ -1595,8 +1697,8 @@ where
 
         let index: &mut Llrb<K, V> = w.as_mut();
         info!(
-            target: "llrb",
-            "creating a new writer {} for {}", id, index.name
+            target: "llrb  ",
+            "for index {}, creating a new writer {}", index.name, id
         );
         w
     }
@@ -1610,7 +1712,10 @@ where
     fn drop(&mut self) {
         let id = self.id;
         let index: &mut Llrb<K, V> = self.as_mut();
-        info!(target: "llrb", "dropping writer {} for {}", id, index.name);
+        info!(
+            target: "llrb  ",
+            "for index {}, dropping writer {}", index.name, id
+        );
 
         // leak this index, it is only a reference
         Box::leak(self.index.take().unwrap());

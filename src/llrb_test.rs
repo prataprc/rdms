@@ -1,6 +1,6 @@
 // TODO: write test case for iter_within for Llrb and Mvcc index.
 
-use rand::prelude::random;
+use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
 
 use std::ops::Bound;
 
@@ -256,31 +256,31 @@ fn test_cas_lsm() {
 
     // repeated mutations on same key
 
-    let entry = llrb.set_cas(0, 200, 8).ok().unwrap();
+    let entry = llrb.set_cas(0, 200, 8).unwrap();
     let refn = refns.set_cas(0, 200, 8);
     check_node(entry, refn);
 
-    let entry = llrb.set_cas(5, 200, 5).ok().unwrap();
+    let entry = llrb.set_cas(5, 200, 5).unwrap();
     let refn = refns.set_cas(5, 200, 5);
     check_node(entry, refn);
 
-    let entry = llrb.set_cas(6, 200, 4).ok().unwrap();
+    let entry = llrb.set_cas(6, 200, 4).unwrap();
     let refn = refns.set_cas(6, 200, 4);
     check_node(entry, refn);
 
-    let entry = llrb.set_cas(9, 200, 9).ok().unwrap();
+    let entry = llrb.set_cas(9, 200, 9).unwrap();
     let refn = refns.set_cas(9, 200, 9);
     check_node(entry, refn);
 
-    let entry = llrb.set_cas(0, 300, 11).ok().unwrap();
+    let entry = llrb.set_cas(0, 300, 11).unwrap();
     let refn = refns.set_cas(0, 300, 11);
     check_node(entry, refn);
 
-    let entry = llrb.set_cas(5, 300, 12).ok().unwrap();
+    let entry = llrb.set_cas(5, 300, 12).unwrap();
     let refn = refns.set_cas(5, 300, 12);
     check_node(entry, refn);
 
-    let entry = llrb.set_cas(9, 300, 14).ok().unwrap();
+    let entry = llrb.set_cas(9, 300, 14).unwrap();
     let refn = refns.set_cas(9, 300, 14);
     check_node(entry, refn);
 
@@ -288,9 +288,9 @@ fn test_cas_lsm() {
     assert!(llrb.set_cas(10, 100, 0).ok().unwrap().is_none());
     assert!(refns.set_cas(10, 100, 0).is_none());
     // error create
-    assert!(llrb.set_cas(10, 100, 0).err() == Some(Error::InvalidCAS));
+    assert_eq!(llrb.set_cas(10, 100, 0).err(), Some(Error::InvalidCAS(18)));
     // error insert
-    assert!(llrb.set_cas(9, 400, 14).err() == Some(Error::InvalidCAS));
+    assert_eq!(llrb.set_cas(9, 400, 14).err(), Some(Error::InvalidCAS(17)));
 
     assert_eq!(llrb.len(), 11);
     assert!(llrb.validate().is_ok());
@@ -870,4 +870,161 @@ fn test_pw_scan() {
     }
 
     assert!(llrb.validate().is_ok());
+}
+
+#[test]
+fn test_commit1() {
+    let mut index1: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-index1");
+    let mut index2: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-index2");
+    let mut rindex: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-ref-index");
+
+    let iter = index2.iter().unwrap();
+    let committed = index1.commit(iter, vec![]).unwrap();
+
+    assert_eq!(committed, index1.len());
+    merge_check(index1.as_mut(), rindex.as_mut());
+}
+
+#[test]
+fn test_commit2() {
+    let mut index1: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-index1");
+    let mut index2: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-index2");
+    let mut rindex: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-ref-index");
+
+    index2.set(100, 200).unwrap();
+    rindex.set(100, 200).unwrap();
+
+    let iter = index2.iter().unwrap();
+    let committed = index1.commit(iter, vec![]).unwrap();
+
+    assert_eq!(committed, index1.len());
+    merge_check(index1.as_mut(), rindex.as_mut());
+}
+
+#[test]
+fn test_commit3() {
+    let seed: u128 = random();
+    // let seed: u128 = 137122643011174645787755929141427491522;
+    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    println!("seed {}", seed);
+
+    for _i in 0..100 {
+        let lsm: bool = rng.gen();
+        let sticky: bool = lsm || true;
+
+        let (mut index1, mut index2, mut rindex) = if lsm {
+            (
+                Llrb::<i64, i64>::new_lsm("test-index1"),
+                Llrb::<i64, i64>::new_lsm("test-index2"),
+                Llrb::<i64, i64>::new_lsm("test-ref-index"),
+            )
+        } else {
+            (
+                Llrb::<i64, i64>::new("test-index1"),
+                Llrb::<i64, i64>::new("test-index2"),
+                Llrb::<i64, i64>::new("test-ref-index"),
+            )
+        };
+        index1.set_sticky(sticky);
+        index2.set_sticky(sticky);
+        rindex.set_sticky(sticky);
+        //  println!("index-config: lsm:{} sticky:{}", lsm, sticky);
+
+        let n_ops = rng.gen::<usize>() % 1000;
+        for _ in 0..n_ops {
+            let key: i64 = rng.gen::<i64>().abs() % (n_ops as i64 * 3);
+            let value: i64 = rng.gen();
+            let op: i64 = (rng.gen::<i64>() % 2).abs();
+            //  println!("target k:{} v:{} {}", key, value, op);
+            match op {
+                0 => {
+                    index1.set(key, value).unwrap();
+                    rindex.set(key, value).unwrap();
+                }
+                1 => {
+                    index1.delete(&key).unwrap();
+                    rindex.delete(&key).unwrap();
+                }
+                op => panic!("unreachable {}", op),
+            };
+        }
+        index2.set_seqno(index1.to_seqno());
+
+        let n_ops = rng.gen::<usize>() % 1000;
+        for _ in 0..n_ops {
+            let key: i64 = rng.gen::<i64>().abs() % (n_ops as i64 * 3);
+            let value: i64 = rng.gen();
+            let op: i64 = (rng.gen::<i64>() % 2).abs();
+            //  println!("commit k:{} v:{} {}", key, value, op);
+            match op {
+                0 => {
+                    index2.set(key, value).unwrap();
+                    rindex.set(key, value).unwrap();
+                }
+                1 => {
+                    index2.delete(&key).unwrap();
+                    rindex.delete(&key).unwrap();
+                }
+                op => panic!("unreachable {}", op),
+            };
+        }
+
+        let iter = index2.iter().unwrap();
+        let committed = index1.commit(iter, vec![]).unwrap();
+        assert_eq!(committed, index2.len());
+
+        merge_check(index1.as_mut(), rindex.as_mut());
+    }
+}
+
+fn merge_check(index: &mut Llrb<i64, i64>, rindex: &mut Llrb<i64, i64>) {
+    // verify root index
+    assert_eq!(index.seqno, rindex.seqno);
+    assert_eq!(index.n_count, rindex.n_count);
+    assert_eq!(index.n_deleted, rindex.n_deleted);
+    assert_eq!(index.key_footprint, rindex.key_footprint);
+    assert_eq!(index.tree_footprint, rindex.tree_footprint);
+
+    // verify each entry
+    let mut iter = index.iter().unwrap();
+    let mut refiter = rindex.iter().unwrap();
+    loop {
+        let entry = iter.next().transpose().unwrap();
+        let refentry = refiter.next().transpose().unwrap();
+        let (entry, refentry) = match (entry, refentry) {
+            (Some(entry), Some(refentry)) => (entry, refentry),
+            (None, None) => break,
+            _ => unreachable!(),
+        };
+        assert_eq!(entry.to_key(), refentry.to_key());
+        let key = entry.to_key();
+        assert_eq!(entry.to_seqno(), refentry.to_seqno(), "key {}", key);
+        assert_eq!(entry.is_deleted(), refentry.is_deleted(), "key {}", key);
+        assert_eq!(
+            entry.to_native_value(),
+            refentry.to_native_value(),
+            "key {}",
+            key
+        );
+
+        let mut di = entry.as_deltas().iter();
+        let mut ri = refentry.as_deltas().iter();
+        loop {
+            let (delta, refdelta) = (di.next(), ri.next());
+            let (delta, refdelta) = match (delta, refdelta) {
+                (Some(delta), Some(refdelta)) => (delta, refdelta),
+                (None, None) => break,
+                _ => unreachable!(),
+            };
+            assert_eq!(delta.to_seqno(), refdelta.to_seqno(), "key {}", key);
+            assert_eq!(delta.to_diff(), refdelta.to_diff(), "key {}", key);
+            assert_eq!(delta.is_deleted(), refdelta.is_deleted(), "key {}", key);
+            assert_eq!(
+                delta.to_seqno_state(),
+                refdelta.to_seqno_state(),
+                "key {}",
+                key
+            );
+        }
+    }
 }

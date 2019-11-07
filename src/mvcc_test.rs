@@ -273,9 +273,9 @@ fn test_cas_lsm() {
     assert!(mvcc.set_cas(10, 100, 0).ok().unwrap().is_none());
     assert!(refns.set_cas(10, 100, 0).is_none());
     // error create
-    assert!(mvcc.set_cas(10, 100, 0).err() == Some(Error::InvalidCAS));
+    assert_eq!(mvcc.set_cas(10, 100, 0).err(), Some(Error::InvalidCAS(18)));
     // error insert
-    assert!(mvcc.set_cas(9, 400, 14).err() == Some(Error::InvalidCAS));
+    assert_eq!(mvcc.set_cas(9, 400, 14).err(), Some(Error::InvalidCAS(17)));
 
     assert_eq!(mvcc.len(), 11);
     assert!(mvcc.validate().is_ok());

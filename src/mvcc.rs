@@ -505,11 +505,11 @@ where
         Ok(MvccWriter::<K, V>::new(index, writer))
     }
 
-    fn commit(&mut self, _: IndexIter<K, V>, _: Vec<u8>) -> Result<isize> {
+    fn commit(&mut self, _: IndexIter<K, V>, _: Vec<u8>) -> Result<usize> {
         Ok(0)
     }
 
-    fn compact(&mut self, _: Bound<u64>) -> Result<isize> {
+    fn compact(&mut self, _: Bound<u64>) -> Result<usize> {
         Ok(0)
     }
 }
@@ -908,7 +908,7 @@ where
                 new_node: None,
                 old_entry: None,
                 size: 0,
-                err: Some(Error::InvalidCAS),
+                err: Some(Error::InvalidCAS(0)),
             };
         } else if node.is_none() {
             let node: Box<Node<K, V>> = self.node_from_entry(nentry);
@@ -946,7 +946,7 @@ where
                 new_node: None,
                 old_entry: None,
                 size: 0,
-                err: Some(Error::InvalidCAS),
+                err: Some(Error::InvalidCAS(node.to_seqno())),
             }
         } else if !node.is_deleted() && cas != node.to_seqno() {
             let newnd = self.node_mvcc_clone(&node, reclaim, true);
@@ -955,7 +955,7 @@ where
                 new_node: None,
                 old_entry: None,
                 size: 0,
-                err: Some(Error::InvalidCAS),
+                err: Some(Error::InvalidCAS(node.to_seqno())),
             }
         } else {
             let mut newnd = self.node_mvcc_clone(&node, reclaim, true);
@@ -1429,7 +1429,7 @@ where
         let ss = (0, 0); // (blacks, n_deleted);
         let ss = validate_tree(root, red, ss, depth, &mut depths)?;
         if ss.1 != self.n_deleted {
-            let msg = format!("Llrb n_delete {} != {}", ss.1, self.n_deleted);
+            let msg = format!("Mvcc n_deleted {} != {}", ss.1, self.n_deleted);
             return Err(Error::ValidationFail(msg));
         }
 

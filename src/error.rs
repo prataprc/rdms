@@ -26,7 +26,7 @@ pub enum Error {
     ///   last modified sequence-number.
     /// * Requested entry's last modified sequence-number does not
     ///   match with specified CAS.
-    InvalidCAS,
+    InvalidCAS(u64),
     /// Key size, after serializing, has exceeded the configured,
     /// (or hard coded) limit.
     KeySizeExceeded(usize),
@@ -129,7 +129,7 @@ impl PartialEq for Error {
         use Error::InvalidFile;
 
         match (self, other) {
-            (InvalidCAS, InvalidCAS) => true,
+            (InvalidCAS(x), InvalidCAS(y)) => x == y,
             (InvalidFile(s1), InvalidFile(s2)) => s1 == s2,
             _ => false,
         }

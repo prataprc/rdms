@@ -671,7 +671,7 @@ where
         Ok(DgmReader::new(&self.name, arc_rs))
     }
 
-    fn commit(&mut self, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<isize> {
+    fn commit(&mut self, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<usize> {
         use Snapshot::{Active, Commit, Compact, Flush, Write};
 
         self.cleanup_handles();
@@ -733,7 +733,7 @@ where
         Ok(0)
     }
 
-    fn compact(&mut self, _cutoff: Bound<u64>) -> Result<isize> {
+    fn compact(&mut self, _cutoff: Bound<u64>) -> Result<usize> {
         use Snapshot::{Active, Commit, Compact, Flush, Write};
 
         self.cleanup_handles();

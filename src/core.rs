@@ -231,14 +231,14 @@ where
     /// reference, there can be concurrent compact() call. It is upto the
     /// implementing type to synchronize the concurrent commit() and compact()
     /// calls.
-    fn commit(&mut self, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<isize>;
+    fn commit(&mut self, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<usize>;
 
     /// Compact index to reduce index-footprint. Though it takes mutable
     /// reference, there can be concurrent commit() call. It is upto the
     /// implementing type to synchronize the concurrent commit() and
     /// compact() calls. All entries whose mutation versions are below the
     /// `cutoff` bound can be purged permenantly.
-    fn compact(&mut self, cutoff: Bound<u64>) -> Result<isize>;
+    fn compact(&mut self, cutoff: Bound<u64>) -> Result<usize>;
 }
 
 /// Index read operations.

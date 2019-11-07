@@ -334,7 +334,7 @@ where
         Ok(Panic::new("robt"))
     }
 
-    fn commit(&mut self, iter: IndexIter<K, V>, md: Vec<u8>) -> Result<isize> {
+    fn commit(&mut self, iter: IndexIter<K, V>, md: Vec<u8>) -> Result<usize> {
         let mut inner = self.inner.lock().unwrap();
         let new_inner = match inner.deref() {
             InnerRobt::Build {
@@ -389,7 +389,7 @@ where
         Ok(0)
     }
 
-    fn compact(&mut self, _cutoff: Bound<u64>) -> Result<isize> {
+    fn compact(&mut self, _cutoff: Bound<u64>) -> Result<usize> {
         let mut inner = self.inner.lock().unwrap();
         let new_inner = match inner.deref() {
             InnerRobt::Build {

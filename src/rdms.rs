@@ -96,11 +96,11 @@ where
         self.index.to_writer()
     }
 
-    pub fn commit(&mut self, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<isize> {
+    pub fn commit(&mut self, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<usize> {
         self.index.commit(iter, meta)
     }
 
-    pub fn compact(&mut self, cutoff: Bound<u64>) -> Result<isize> {
+    pub fn compact(&mut self, cutoff: Bound<u64>) -> Result<usize> {
         self.index.compact(cutoff)
     }
 }

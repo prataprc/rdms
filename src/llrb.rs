@@ -447,9 +447,11 @@ where
         }
 
         let count = {
+            let _latch = self.latch.acquire_write(self.spin);
+
             let mut count = 0;
             for entry in iter {
-                self.set_index_entry(entry?)?;
+                self.set_index_entry(entry?);
                 count += 1;
             }
             count
@@ -462,8 +464,26 @@ where
         Ok(count.try_into().unwrap())
     }
 
-    fn compact(&mut self, _: Bound<u64>) -> Result<usize> {
-        Ok(0)
+    fn compact(&mut self, cutoff: Bound<u64>) -> Result<usize> {
+        let mut low = Bound::Unbounded;
+        let mut count = 0;
+        loop {
+            let _latch = self.latch.acquire_write(self.spin);
+
+            let mut dels = vec![];
+            let limit = 10_000; // TODO: no magic number
+            let root = self.root.as_mut().map(DerefMut::deref_mut);
+            match Llrb::<K, V>::compact_loop(root, low, cutoff, &mut dels, limit) {
+                (_, limit) if limit > 0 => break Ok(count + (10_000 - limit)),
+                (Some(lw), _) => {
+                    dels.into_iter()
+                        .for_each(|key| self.delete_index_entry(key));
+                    low = Bound::Excluded(lw);
+                }
+                _ => unreachable!(),
+            }
+            count += limit;
+        }
     }
 }
 
@@ -1103,12 +1123,15 @@ where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
 {
-    fn set_index_entry(&mut self, entry: Entry<K, V>) -> Result<Option<Entry<K, V>>> {
-        let _latch = self.latch.acquire_write(self.spin);
+    fn set_index_entry(&self, entry: Entry<K, V>) {
+        let mself = unsafe {
+            // caller hold a write latch.
+            (self as *const Self as *mut Self).as_mut().unwrap()
+        };
 
         let key_footprint = entry.as_key().footprint().unwrap();
         let (seqno, deleted) = (entry.to_seqno(), entry.is_deleted());
-        match Llrb::upsert(self.root.take(), entry, self.lsm) {
+        match Llrb::upsert(mself.root.take(), entry, mself.lsm) {
             UpsertResult {
                 node: Some(mut root),
                 old_entry,
@@ -1117,44 +1140,118 @@ where
                 // println!("set_index_entry, result {}", size);
                 match &old_entry {
                     None => {
-                        self.n_count += 1;
-                        self.key_footprint += key_footprint;
+                        mself.n_count += 1;
+                        mself.key_footprint += key_footprint;
                         if deleted {
-                            self.n_deleted += 1;
+                            mself.n_deleted += 1;
                         }
                     }
                     Some(oe) => match (oe.is_deleted(), deleted) {
-                        (true, false) => self.n_deleted -= 1,
-                        (false, true) => self.n_deleted += 1,
+                        (true, false) => mself.n_deleted -= 1,
+                        (false, true) => mself.n_deleted += 1,
                         _ => (),
                     },
                 }
-                self.tree_footprint += size;
+                mself.tree_footprint += size;
 
                 root.set_black();
-                self.root = Some(root);
-                self.seqno = cmp::max(self.seqno, seqno);
-                Ok(old_entry)
+                mself.root = Some(root);
+                mself.seqno = cmp::max(mself.seqno, seqno);
             }
             _ => panic!("set: impossible case, call programmer"),
         }
     }
 
-    fn delete_index_entry(&mut self, key: K) {
-        let _latch = self.latch.acquire_write(self.spin);
+    fn compact_loop(
+        node: Option<&mut Node<K, V>>,
+        low: Bound<K>,
+        cutoff: Bound<u64>,
+        dels: &mut Vec<K>,
+        limit: usize,
+    ) -> (Option<K>, usize) {
+        use std::ops::Bound::{Excluded, Unbounded};
+
+        match (node, low) {
+            (None, _) => (None, limit),
+            // find the starting point
+            (Some(node), Excluded(key)) => match key.cmp(node.as_key()) {
+                Ordering::Less => match Self::compact_loop(
+                    node.as_left_deref_mut(),
+                    Excluded(key),
+                    cutoff,
+                    dels,
+                    limit,
+                ) {
+                    (seen, limit) if limit == 0 => (seen, limit),
+                    (_, limit) => {
+                        Self::compact_entry(node, cutoff, dels);
+                        match Self::compact_loop(
+                            node.as_right_deref_mut(),
+                            Unbounded,
+                            cutoff,
+                            dels,
+                            limit - 1,
+                        ) {
+                            (None, limit) => (Some(node.to_key()), limit),
+                            res => res,
+                        }
+                    }
+                },
+                _ => Self::compact_loop(
+                    node.as_right_deref_mut(),
+                    Excluded(key),
+                    cutoff,
+                    dels,
+                    limit,
+                ),
+            },
+            (Some(node), Unbounded) => {
+                match Self::compact_loop(node.as_left_deref_mut(), Unbounded, cutoff, dels, limit) {
+                    (seen, limit) if limit == 0 => (seen, limit),
+                    (_, limit) => {
+                        Self::compact_entry(node, cutoff, dels);
+                        match Self::compact_loop(
+                            node.as_right_deref_mut(),
+                            Unbounded,
+                            cutoff,
+                            dels,
+                            limit - 1,
+                        ) {
+                            (None, limit) => (Some(node.to_key()), limit),
+                            res => res,
+                        }
+                    }
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn compact_entry(node: &mut Node<K, V>, cutoff: Bound<u64>, dels: &mut Vec<K>) {
+        match node.entry.clone().purge(cutoff) {
+            None => dels.push(node.entry.to_key()),
+            Some(entry) => node.entry = entry,
+        }
+    }
+
+    fn delete_index_entry(&self, key: K) {
+        let mself = unsafe {
+            // caller hold a write latch.
+            (self as *const Self as *mut Self).as_mut().unwrap()
+        };
 
         // in non-lsm mode remove the entry from the tree.
-        let res = match Llrb::do_delete(self.root.take(), key.borrow()) {
+        let res = match Llrb::do_delete(mself.root.take(), key.borrow()) {
             res @ DeleteResult { node: None, .. } => res,
             mut res => {
                 res.node.as_mut().map(|node| node.set_black());
                 res
             }
         };
-        self.root = res.node;
-        self.key_footprint -= key.footprint().unwrap();
-        self.tree_footprint += res.size;
-        self.n_count -= 1;
+        mself.root = res.node;
+        mself.key_footprint -= key.footprint().unwrap();
+        mself.tree_footprint += res.size;
+        mself.n_count -= 1;
     }
 }
 

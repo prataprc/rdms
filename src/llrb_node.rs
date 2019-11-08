@@ -1,4 +1,9 @@
-use std::{convert::TryInto, fmt, ops::Deref, result};
+use std::{
+    convert::TryInto,
+    fmt,
+    ops::{Deref, DerefMut},
+    result,
+};
 
 use crate::core::{Diff, Entry, Footprint, Result, ToJson, Value};
 
@@ -145,6 +150,16 @@ where
     #[inline]
     pub(crate) fn as_right_deref(&self) -> Option<&Node<K, V>> {
         self.right.as_ref().map(Deref::deref)
+    }
+
+    #[inline]
+    pub(crate) fn as_left_deref_mut(&mut self) -> Option<&mut Node<K, V>> {
+        self.left.as_mut().map(DerefMut::deref_mut)
+    }
+
+    #[inline]
+    pub(crate) fn as_right_deref_mut(&mut self) -> Option<&mut Node<K, V>> {
+        self.right.as_mut().map(DerefMut::deref_mut)
     }
 
     #[inline]

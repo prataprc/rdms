@@ -71,9 +71,7 @@ where
 
     // confirm sort order in the tree.
     let (left, right) = {
-        let left = node.as_left_deref();
-        let right = node.as_right_deref();
-        if let Some(left) = left {
+        if let Some(left) = node.as_left_deref() {
             if left.as_key().ge(node.as_key()) {
                 /// Fatal case, index entries are not in sort-order.
                 return Err(Error::ValidationFail(format!(
@@ -83,7 +81,7 @@ where
                 )));
             }
         }
-        if let Some(right) = right {
+        if let Some(right) = node.as_right_deref() {
             if right.as_key().le(node.as_key()) {
                 /// Fatal case, index entries are not in sort-order.
                 return Err(Error::ValidationFail(format!(
@@ -93,7 +91,7 @@ where
                 )));
             }
         }
-        (left, right)
+        (node.as_left_deref(), node.as_right_deref())
     };
 
     if !red {
@@ -149,15 +147,11 @@ where
         loop {
             let mut paths = match self.paths.take() {
                 Some(paths) => paths,
-                None => {
-                    break None;
-                }
+                None => break None,
             };
 
             match paths.pop() {
-                None => {
-                    break None;
-                }
+                None => break None,
                 Some(mut path) => match (path.flag, path.nref) {
                     (IFlag::Left, nref) => {
                         self.paths = {

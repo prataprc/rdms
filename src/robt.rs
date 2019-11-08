@@ -128,14 +128,10 @@ impl RobtFactory {
     // b. must have the robt naming convention, refer `Name` type for details.
     fn to_name(file_name: &ffi::OsStr) -> Option<Name> {
         let stem = match path::Path::new(file_name).extension() {
-            Some(ext) if ext.to_str() == Some("indx") => {
-                // ignore the dir-path and the extension, just the file-stem
-                path::Path::new(file_name).file_stem()
-            }
+            Some(ext) if ext.to_str() == Some("indx") => path::Path::new(file_name).file_stem(),
             Some(_) | None => None,
         }?;
-        let stem = stem.to_str()?.to_string();
-        let parts: Option<(String, usize)> = Name(stem).into();
+        let parts: Option<(String, usize)> = Name(stem.to_str()?.to_string()).into();
         Some(parts?.into())
     }
 }
@@ -166,11 +162,7 @@ where
         Ok(Robt::new(inner))
     }
 
-    fn open(
-        &self,
-        dir: &ffi::OsStr,
-        root: ffi::OsString, // master file name.
-    ) -> Result<Robt<K, V>> {
+    fn open(&self, dir: &ffi::OsStr, root: ffi::OsString) -> Result<Robt<K, V>> {
         let name = Self::to_name(&root).ok_or(Error::InvalidFile(format!(
             "open robt {:?}/{:?}",
             dir, root

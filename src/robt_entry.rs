@@ -160,11 +160,7 @@ where
     const UPSERT_FLAG: u64 = 0x1000000000000000;
     const DLEN_MASK: u64 = 0x0FFFFFFFFFFFFFFF;
 
-    fn encode(
-        delta: &core::Delta<V>,
-        leaf: &mut Vec<u8>, // leaf output buffer
-        blob: &mut Vec<u8>, // block output buffer
-    ) -> Result<usize> {
+    fn encode(delta: &core::Delta<V>, leaf: &mut Vec<u8>, blob: &mut Vec<u8>) -> Result<usize> {
         match delta.as_ref() {
             core::InnerDelta::U { delta, seqno } => {
                 let mpos: u64 = blob.len().try_into().unwrap();
@@ -302,19 +298,16 @@ where
     const NDELTA_MASK: u64 = 0xFFFFFFFF;
     const KLEN_SHIFT: u64 = 32;
 
-    pub(crate) fn encode_l(
-        entry: &core::Entry<K, V>, // input
-        leaf: &mut Vec<u8>,        // output
-    ) -> Result<ZEntry<K, V>> {
+    pub(crate) fn encode_l(entry: &core::Entry<K, V>, leaf: &mut Vec<u8>) -> Result<ZEntry<K, V>> {
         let (n_deltas, is_vlog) = (0_usize, false);
         let (k, v) = Self::encode_leaf1(entry, n_deltas, is_vlog, leaf)?;
         Ok(ZEntry::EncL { k, v })
     }
 
     pub(crate) fn encode_ld(
-        entry: &core::Entry<K, V>, // input
-        leaf: &mut Vec<u8>,        // output
-        blob: &mut Vec<u8>,        // output
+        entry: &core::Entry<K, V>,
+        leaf: &mut Vec<u8>,
+        blob: &mut Vec<u8>,
     ) -> Result<ZEntry<K, V>> {
         let m = leaf.len();
         let (n_deltas, is_vlog) = (entry.to_delta_count(), false);
@@ -331,9 +324,9 @@ where
     }
 
     pub(crate) fn encode_lv(
-        entry: &core::Entry<K, V>, // input
-        leaf: &mut Vec<u8>,        // output
-        blob: &mut Vec<u8>,        // output
+        entry: &core::Entry<K, V>,
+        leaf: &mut Vec<u8>,
+        blob: &mut Vec<u8>,
     ) -> Result<ZEntry<K, V>> {
         let (n_deltas, is_vlog) = (0_usize, true);
         let (x, k, v) = Self::encode_leaf2(entry, n_deltas, is_vlog, leaf, blob)?;
@@ -341,9 +334,9 @@ where
     }
 
     pub(crate) fn encode_lvd(
-        entry: &core::Entry<K, V>, // input
-        leaf: &mut Vec<u8>,        // output
-        blob: &mut Vec<u8>,        // output
+        entry: &core::Entry<K, V>,
+        leaf: &mut Vec<u8>,
+        blob: &mut Vec<u8>,
     ) -> Result<ZEntry<K, V>> {
         let m = leaf.len();
         let (n_deltas, is_vlog) = (entry.to_delta_count(), true);
@@ -362,10 +355,10 @@ where
     }
 
     fn encode_leaf1(
-        entry: &core::Entry<K, V>, // input
-        n_deltas: usize,           // input
-        is_vlog: bool,             // input
-        leaf: &mut Vec<u8>,        // output
+        entry: &core::Entry<K, V>,
+        n_deltas: usize,
+        is_vlog: bool,
+        leaf: &mut Vec<u8>,
     ) -> Result<(usize, usize)> {
         // adjust space for header.
         let m = leaf.len();
@@ -381,11 +374,11 @@ where
     }
 
     fn encode_leaf2(
-        entry: &core::Entry<K, V>, // input
-        n_deltas: usize,           // input
-        is_vlog: bool,             // input
-        leaf: &mut Vec<u8>,        // output
-        blob: &mut Vec<u8>,        // output
+        entry: &core::Entry<K, V>,
+        n_deltas: usize,
+        is_vlog: bool,
+        leaf: &mut Vec<u8>,
+        blob: &mut Vec<u8>,
     ) -> Result<(usize, usize, usize)> {
         // adjust space for header.
         let m = leaf.len();
@@ -447,8 +440,8 @@ where
     }
 
     fn encode_value_leaf(
-        entry: &core::Entry<K, V>, // input
-        buf: &mut Vec<u8>,         // output
+        entry: &core::Entry<K, V>,
+        buf: &mut Vec<u8>,
     ) -> Result<(usize, bool, u64)> {
         match entry.as_value() {
             core::Value::U { value, seqno, .. } => {
@@ -460,8 +453,8 @@ where
     }
 
     fn encode_value_vlog(
-        entry: &core::Entry<K, V>, // input
-        buf: &mut Vec<u8>,         // output
+        entry: &core::Entry<K, V>,
+        buf: &mut Vec<u8>,
     ) -> Result<(usize, bool, u64)> {
         match entry.as_value() {
             core::Value::U { value, seqno, .. } => {
@@ -473,9 +466,9 @@ where
     }
 
     fn encode_deltas(
-        entry: &core::Entry<K, V>, // input
-        leaf: &mut Vec<u8>,        // output
-        blob: &mut Vec<u8>,        // output
+        entry: &core::Entry<K, V>,
+        leaf: &mut Vec<u8>,
+        blob: &mut Vec<u8>,
     ) -> Result<usize> {
         let mut n = 0_usize;
         for delta in entry.as_deltas() {

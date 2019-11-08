@@ -226,12 +226,7 @@ where
 
     // optimized version of find() for mblock. if key is less than the dataset
     // immediately returns with failure.
-    pub(crate) fn get<Q>(
-        &self,
-        key: &Q,
-        from: Bound<usize>, // unbounded
-        to: Bound<usize>,   // unbounded
-    ) -> Result<MEntry<K>>
+    pub(crate) fn get<Q>(&self, key: &Q, from: Bound<usize>, to: Bound<usize>) -> Result<MEntry<K>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -260,12 +255,7 @@ where
         }
     }
 
-    pub(crate) fn find<Q>(
-        &self,
-        key: &Q,
-        from: Bound<usize>, // begins as unbounded
-        to: Bound<usize>,   // begins as unbounded
-    ) -> Result<MEntry<K>>
+    pub(crate) fn find<Q>(&self, key: &Q, from: Bound<usize>, to: Bound<usize>) -> Result<MEntry<K>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -324,8 +314,9 @@ where
         };
         if index < count {
             let idx = index * 4;
-            let offset = offsets[idx..idx + 4].try_into().unwrap();
-            let offset: usize = u32::from_be_bytes(offset).try_into().unwrap();
+            let offset: usize = u32::from_be_bytes(offsets[idx..idx + 4].try_into().unwrap())
+                .try_into()
+                .unwrap();
             Ok(MEntry::decode_entry(&block[offset..], index))
         } else {
             Err(Error::__MBlockExhausted(index))
@@ -344,8 +335,9 @@ where
         };
         if index < count {
             let idx = index * 4;
-            let offset = offsets[idx..idx + 4].try_into().unwrap();
-            let offset: usize = u32::from_be_bytes(offset).try_into().unwrap();
+            let offset: usize = u32::from_be_bytes(offsets[idx..idx + 4].try_into().unwrap())
+                .try_into()
+                .unwrap();
             MEntry::decode_key(&block[offset..])
         } else {
             Err(Error::__MBlockExhausted(index))
@@ -461,11 +453,7 @@ where
         }
     }
 
-    pub(crate) fn insert(
-        &mut self,
-        entry: &core::Entry<K, V>,
-        stats: &mut Stats, // update build statistics
-    ) -> Result<u64> {
+    pub(crate) fn insert(&mut self, entry: &core::Entry<K, V>, stats: &mut Stats) -> Result<u64> {
         use crate::robt_entry::ZEntry as DZ;
 
         match self {
@@ -556,11 +544,7 @@ where
         }
     }
 
-    pub(crate) fn flush(
-        &mut self,
-        x: &mut Flusher,         // flush to index file
-        y: Option<&mut Flusher>, // flush to optional vlog file
-    ) -> Result<()> {
+    pub(crate) fn flush(&mut self, x: &mut Flusher, y: Option<&mut Flusher>) -> Result<()> {
         match self {
             ZBlock::Encode { leaf, blob, .. } => {
                 x.send(leaf.clone())?;
@@ -589,7 +573,7 @@ where
     pub(crate) fn new_decode(
         fd: &mut fs::File,
         fpos: u64,
-        config: &Config, // open from configuration
+        config: &Config,
     ) -> Result<ZBlock<K, V>> {
         let n: u64 = config.z_blocksize.try_into().unwrap();
         let block = util::read_buffer(fd, fpos, n, "reading zblock")?;
@@ -665,11 +649,7 @@ where
         }
     }
 
-    pub fn to_entry(
-        // fetch (index, entry)
-        &self,
-        index: usize,
-    ) -> Result<(usize, core::Entry<K, V>)> {
+    pub fn to_entry(&self, index: usize) -> Result<(usize, core::Entry<K, V>)> {
         let (block, count, offsets) = match self {
             ZBlock::Decode {
                 block,
@@ -682,8 +662,9 @@ where
 
         if index < count {
             let idx = index * 4;
-            let offset = offsets[idx..idx + 4].try_into().unwrap();
-            let offset: usize = u32::from_be_bytes(offset).try_into().unwrap();
+            let offset: usize = u32::from_be_bytes(offsets[idx..idx + 4].try_into().unwrap())
+                .try_into()
+                .unwrap();
             let entry = &block[offset..];
             Ok((index, ZEntry::decode_entry(entry)?))
         } else {
@@ -697,8 +678,9 @@ where
             ZBlock::Encode { .. } => unreachable!(),
         };
         let idx = index * 4;
-        let offset = offsets[idx..idx + 4].try_into().unwrap();
-        let offset: usize = u32::from_be_bytes(offset).try_into().unwrap();
+        let offset: usize = u32::from_be_bytes(offsets[idx..idx + 4].try_into().unwrap())
+            .try_into()
+            .unwrap();
         let entry = &block[offset..];
         ZEntry::<K, V>::decode_key(entry)
     }

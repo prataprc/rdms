@@ -228,10 +228,7 @@ where
 }
 
 #[allow(dead_code)] // TODO: remove if not required.
-pub(crate) fn getter<'a, 'b, I, K, V, Q>(
-    index: &'a mut I,
-    versions: bool, // if true, use get_versions
-) -> LsmGet<'a, K, V, Q>
+pub(crate) fn getter<'a, 'b, I, K, V, Q>(index: &'a mut I, versions: bool) -> LsmGet<'a, K, V, Q>
 where
     K: Clone + Ord + Borrow<Q>,
     V: Clone + Diff,
@@ -239,10 +236,7 @@ where
     I: Reader<K, V>,
 {
     if versions {
-        Box::new(move |key: &Q| -> Result<Entry<K, V>> {
-            // get with previous versions
-            index.get_with_versions(key)
-        })
+        Box::new(move |key: &Q| -> Result<Entry<K, V>> { index.get_with_versions(key) })
     } else {
         Box::new(move |key: &Q| -> Result<Entry<K, V>> { index.get(key) })
     }

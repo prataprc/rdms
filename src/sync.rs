@@ -18,9 +18,8 @@ impl CCMu {
     }
 
     pub(crate) fn clone(mu: &CCMu) -> CCMu {
-        let arc_ref = unsafe { mu.inner.get_ref() };
         CCMu {
-            inner: mem::MaybeUninit::new(Arc::clone(arc_ref)),
+            inner: mem::MaybeUninit::new(Arc::clone(unsafe { mu.inner.get_ref() })),
         }
     }
 

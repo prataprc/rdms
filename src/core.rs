@@ -83,7 +83,7 @@ where
         &mut self,
         key: K,
         value: V,
-        index: u64, // seqno for this mutation
+        index: u64,
     ) -> (Option<u64>, Result<Option<Entry<K, V>>>);
 
     /// Set {key, value} in index if an older entry exists with the
@@ -114,7 +114,7 @@ where
     fn delete_index<Q>(
         &mut self,
         key: &Q,
-        index: u64, // seqno for this mutation
+        index: u64,
     ) -> (Option<u64>, Result<Option<Entry<K, V>>>)
     where
         K: Borrow<Q>,
@@ -128,21 +128,10 @@ where
     V: Clone + Diff,
 {
     /// Replay set operation on index.
-    fn set_index(
-        &mut self,
-        key: K,
-        value: V,
-        index: u64, // replay seqno
-    ) -> Result<Entry<K, V>>;
+    fn set_index(&mut self, key: K, value: V, index: u64) -> Result<Entry<K, V>>;
 
     /// Replay set-cas operation on index.
-    fn set_cas_index(
-        &mut self,
-        key: K,
-        value: V,
-        cas: u64,
-        index: u64, // replay seqno
-    ) -> Result<Entry<K, V>>;
+    fn set_cas_index(&mut self, key: K, value: V, cas: u64, index: u64) -> Result<Entry<K, V>>;
 
     /// Replay delete operation on index.
     fn delete_index(&mut self, key: K, index: u64) -> Result<Entry<K, V>>;
@@ -562,11 +551,7 @@ where
         match self {
             Value::U {
                 value, is_reclaim, ..
-            } => {
-                if is_reclaim.load(SeqCst) {
-                    unsafe { ManuallyDrop::drop(value) };
-                }
-            }
+            } if is_reclaim.load(SeqCst) => unsafe { ManuallyDrop::drop(value) },
             _ => (),
         }
     }
@@ -585,9 +570,8 @@ where
     }
 
     pub(crate) fn new_upsert_value(value: V, seqno: u64) -> Value<V> {
-        let value = Box::new(vlog::Value::new_native(value));
         Value::U {
-            value: ManuallyDrop::new(value),
+            value: ManuallyDrop::new(Box::new(vlog::Value::new_native(value))),
             is_reclaim: AtomicBool::new(true),
             seqno,
         }
@@ -761,16 +745,15 @@ where
                 // compute delta
                 match &nentry.value {
                     Value::D { .. } => {
-                        let value = value.to_native_value().unwrap();
-                        let diff: <V as Diff>::D = From::from(value);
-                        let dlt = vlog::Delta::new_native(diff);
-                        Delta::new_upsert(dlt, *seqno)
+                        let diff: <V as Diff>::D = From::from(value.to_native_value().unwrap());
+                        Delta::new_upsert(vlog::Delta::new_native(diff), *seqno)
                     }
                     Value::U { value: nvalue, .. } => {
-                        let value = value.to_native_value().unwrap();
-                        let dff = nvalue.to_native_value().unwrap().diff(&value);
-                        let dlt = vlog::Delta::new_native(dff);
-                        Delta::new_upsert(dlt, *seqno)
+                        let dff = nvalue
+                            .to_native_value()
+                            .unwrap()
+                            .diff(&value.to_native_value().unwrap());
+                        Delta::new_upsert(vlog::Delta::new_native(dff), *seqno)
                     }
                 }
             }
@@ -797,8 +780,7 @@ where
             }
             Value::U { value, seqno, .. } if !value.is_reference() => {
                 let delta = {
-                    let value = value.to_native_value().unwrap();
-                    let d: <V as Diff>::D = From::from(value);
+                    let d: <V as Diff>::D = From::from(value.to_native_value().unwrap());
                     vlog::Delta::new_native(d)
                 };
                 self.deltas.insert(0, Delta::new_upsert(delta, *seqno));
@@ -889,8 +871,7 @@ where
         let mut entry = self.clone();
         let mut iter = entry.deltas.drain(..);
         while let Some(delta) = iter.next() {
-            let value = entry.value.to_native_value();
-            let (value, _) = next_value(value, delta.data);
+            let (value, _) = next_value(entry.value.to_native_value(), delta.data);
             entry.value = value;
             let seqno = entry.value.to_seqno();
             let done = match nb {
@@ -983,17 +964,16 @@ where
     <V as Diff>::D: Serialize,
 {
     pub(crate) fn fetch_value(&mut self, fd: &mut fs::File) -> Result<()> {
-        match &self.value {
+        Ok(match &self.value {
             Value::U { value, seqno, .. } => match value.to_reference() {
                 Some((fpos, len, _seqno)) => {
-                    let value = Box::new(vlog::fetch_value(fpos, len, fd)?);
-                    self.value = Value::new_upsert(value, *seqno);
-                    Ok(())
+                    self.value =
+                        Value::new_upsert(Box::new(vlog::fetch_value(fpos, len, fd)?), *seqno);
                 }
-                _ => Ok(()),
+                _ => (),
             },
-            _ => Ok(()),
-        }
+            _ => (),
+        })
     }
 
     pub(crate) fn fetch_deltas(&mut self, fd: &mut fs::File) -> Result<()> {
@@ -1003,8 +983,7 @@ where
                     delta: vlog::Delta::Reference { fpos, length, .. },
                     seqno,
                 } => {
-                    let d = vlog::fetch_delta(fpos, length, fd)?;
-                    *delta = Delta::new_upsert(d, seqno);
+                    *delta = Delta::new_upsert(vlog::fetch_delta(fpos, length, fd)?, seqno);
                 }
                 _ => (),
             }
@@ -1168,15 +1147,13 @@ where
         (None, InnerDelta::U { delta, seqno }) => {
             // previous entry was a delete.
             let nv: V = From::from(delta.into_native_delta().unwrap());
-            let v = Box::new(vlog::Value::new_native(nv.clone()));
-            let value = Value::new_upsert(v, seqno);
+            let value = Value::new_upsert(Box::new(vlog::Value::new_native(nv.clone())), seqno);
             (value, Some(nv))
         }
         (Some(curval), InnerDelta::U { delta, seqno }) => {
             // this and previous entry are create/update.
             let nv = curval.merge(&delta.into_native_delta().unwrap());
-            let v = Box::new(vlog::Value::new_native(nv.clone()));
-            let value = Value::new_upsert(v, seqno);
+            let value = Value::new_upsert(Box::new(vlog::Value::new_native(nv.clone())), seqno);
             (value, Some(nv))
         }
     }

@@ -80,9 +80,8 @@ where
     }
 
     fn refill(&mut self) -> Refill<K, V> {
-        let from = self.from.clone();
         let mut entries: Vec<Result<Entry<K, V>>> = vec![];
-        match self.reader.pw_scan(from, self.within.clone()) {
+        match self.reader.pw_scan(self.from.clone(), self.within.clone()) {
             Ok(niter) => {
                 let mut niter = niter.enumerate();
                 loop {
@@ -200,8 +199,7 @@ where
         loop {
             match self.iter.next() {
                 Some(Ok(entry)) => {
-                    let (start, end) = (self.start.clone(), self.end.clone());
-                    match entry.filter_within(start, end) {
+                    match entry.filter_within(self.start.clone(), self.end.clone()) {
                         Some(entry) => break Some(Ok(entry)),
                         None => (),
                     }

@@ -60,7 +60,7 @@ where
     // unsafe clone for MVCC CoW
     pub(crate) fn mvcc_clone(
         &self,
-        reclaim: &mut Vec<Box<Node<K, V>>>, /* reclaim */
+        reclaim: &mut Vec<Box<Node<K, V>>>,
         copyval: bool,
     ) -> Box<Node<K, V>> {
         let new_node = Box::new(Node {
@@ -106,11 +106,7 @@ where
 {
     // prepend operation, equivalent to SET / INSERT / UPDATE
     // return the different in footprint for this node
-    pub(crate) fn prepend_version(
-        &mut self,
-        entry: Entry<K, V>,
-        lsm: bool, /* will preseve old mutations*/
-    ) -> Result<isize> {
+    pub(crate) fn prepend_version(&mut self, entry: Entry<K, V>, lsm: bool) -> Result<isize> {
         self.entry.prepend_version(entry, lsm)
     }
 

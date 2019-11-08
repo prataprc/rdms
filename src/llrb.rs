@@ -545,7 +545,7 @@ where
         &mut self,
         key: K,
         value: V,
-        seqno: Option<u64>, // seqno for this mutation
+        seqno: Option<u64>,
     ) -> (Option<u64>, Result<Option<Entry<K, V>>>) {
         let _latch = self.latch.acquire_write(self.spin);
         let seqno = match seqno {
@@ -871,15 +871,13 @@ where
         node = Llrb::walkdown_rot23(node);
         match node.as_key().cmp(nentry.as_key()) {
             Ordering::Greater => {
-                let left = node.left.take();
-                let mut r = Llrb::upsert_cas(left, nentry, cas, lsm);
+                let mut r = Llrb::upsert_cas(node.left.take(), nentry, cas, lsm);
                 node.left = r.node;
                 r.node = Some(Llrb::walkuprot_23(node));
                 r
             }
             Ordering::Less => {
-                let right = node.right.take();
-                let mut r = Llrb::upsert_cas(right, nentry, cas, lsm);
+                let mut r = Llrb::upsert_cas(node.right.take(), nentry, cas, lsm);
                 node.right = r.node;
                 r.node = Some(Llrb::walkuprot_23(node));
                 r
@@ -934,15 +932,13 @@ where
                 node = Llrb::walkdown_rot23(node);
                 match node.as_key().borrow().cmp(&key) {
                     Ordering::Greater => {
-                        let left = node.left.take();
-                        let mut r = Llrb::delete_lsm(left, key, seqno);
+                        let mut r = Llrb::delete_lsm(node.left.take(), key, seqno);
                         node.left = r.node;
                         r.node = Some(Llrb::walkuprot_23(node));
                         r
                     }
                     Ordering::Less => {
-                        let right = node.right.take();
-                        let mut r = Llrb::delete_lsm(right, key, seqno);
+                        let mut r = Llrb::delete_lsm(node.right.take(), key, seqno);
                         node.right = r.node;
                         r.node = Some(Llrb::walkuprot_23(node));
                         r
@@ -986,25 +982,26 @@ where
                 node = Llrb::walkdown_rot23(node);
                 match node.as_key().borrow().cmp(&key) {
                     Ordering::Greater => {
-                        let left = node.left.take();
-                        let mut r = Llrb::delete_sticky(left, key, seqno);
+                        let mut r = Llrb::delete_sticky(node.left.take(), key, seqno);
                         node.left = r.node;
                         r.node = Some(Llrb::walkuprot_23(node));
                         r
                     }
                     Ordering::Less => {
-                        let right = node.right.take();
-                        let mut r = Llrb::delete_sticky(right, key, seqno);
+                        let mut r = Llrb::delete_sticky(node.right.take(), key, seqno);
                         node.right = r.node;
                         r.node = Some(Llrb::walkuprot_23(node));
                         r
                     }
                     Ordering::Equal => {
                         let mut size = node.footprint().unwrap(); // TODO
-                        let cutoff = Bound::Included(node.to_seqno());
                         let entry = node.entry.clone();
                         node.delete(seqno).unwrap();
-                        node.entry = node.entry.clone().purge(cutoff).unwrap();
+                        node.entry = node
+                            .entry
+                            .clone()
+                            .purge(Bound::Included(entry.to_seqno()))
+                            .unwrap();
                         size = node.footprint().unwrap() - size; // TODO
                         DeleteResult {
                             node: Some(Llrb::walkuprot_23(node)),

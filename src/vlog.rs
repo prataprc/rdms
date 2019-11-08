@@ -89,10 +89,7 @@ where
     V: Serialize,
 {
     // Return the size of header + payload.
-    pub(crate) fn encode(&self, buf: &mut Vec<u8>) -> Result<usize>
-    where
-        V: Serialize,
-    {
+    pub(crate) fn encode(&self, buf: &mut Vec<u8>) -> Result<usize> {
         match self {
             Value::Native { value } => {
                 let m = buf.len();
@@ -117,10 +114,7 @@ where
     }
 
     // not meant for disk serialization, only value is encoded.
-    pub(crate) fn encode_local(&self, buf: &mut Vec<u8>) -> Result<usize>
-    where
-        V: Serialize,
-    {
+    pub(crate) fn encode_local(&self, buf: &mut Vec<u8>) -> Result<usize> {
         match self {
             Value::Native { value } => {
                 let vlen = value.encode(buf);
@@ -219,12 +213,9 @@ where
 impl<V> Delta<V>
 where
     V: Diff,
+    <V as Diff>::D: Serialize,
 {
-    pub(crate) fn encode(&self, buf: &mut Vec<u8>) -> Result<usize>
-    where
-        V: Diff,
-        <V as Diff>::D: Serialize,
-    {
+    pub(crate) fn encode(&self, buf: &mut Vec<u8>) -> Result<usize> {
         match self {
             Delta::Native { diff } => {
                 let m = buf.len();

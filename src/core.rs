@@ -70,8 +70,8 @@ pub trait Footprint {
 /// Index write operations.
 pub trait WalWriter<K, V>
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
+    K: Clone + Ord,
+    V: Clone + Diff,
 {
     /// Set {key, value} in index. Return older entry if present.
     /// Return the seqno (index) for this mutation and older entry
@@ -140,8 +140,8 @@ where
 /// Factory trait to create new in-memory index snapshot.
 pub trait WriteIndexFactory<K, V>
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
+    K: Clone + Ord,
+    V: Clone + Diff,
 {
     type I: Index<K, V>;
 
@@ -156,8 +156,8 @@ where
 /// Factory trait to create new on-disk index snapshot.
 pub trait DiskIndexFactory<K, V>
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
+    K: Clone + Ord,
+    V: Clone + Diff,
 {
     type I: Index<K, V>;
 
@@ -179,10 +179,10 @@ where
 /// index types shall implement all the traits/constraints and methods
 /// by Index.
 ///
-pub trait Index<K, V>: Sized + Footprint
+pub trait Index<K, V>: Sized
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
+    K: Clone + Ord,
+    V: Clone + Diff,
 {
     /// A writer associated type, that can ingest key-value pairs.
     type W: Writer<K, V>;
@@ -294,8 +294,8 @@ where
 /// Index write operations.
 pub trait Writer<K, V>
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
+    K: Clone + Ord,
+    V: Clone + Diff,
 {
     /// Set {key, value} in index. Return older entry if present.
     /// Return the older entry if present. If operation was invalid or
@@ -507,10 +507,7 @@ where
     }
 }
 
-pub(crate) enum Value<V>
-where
-    V: Clone + Diff,
-{
+pub(crate) enum Value<V> {
     U {
         value: ManuallyDrop<Box<vlog::Value<V>>>,
         is_reclaim: AtomicBool,
@@ -523,7 +520,7 @@ where
 
 impl<V> Clone for Value<V>
 where
-    V: Clone + Diff,
+    V: Clone,
 {
     fn clone(&self) -> Value<V> {
         match self {
@@ -541,10 +538,7 @@ where
     }
 }
 
-impl<V> Drop for Value<V>
-where
-    V: Clone + Diff,
-{
+impl<V> Drop for Value<V> {
     fn drop(&mut self) {
         // if is_reclaim is false, then it is a mvcc-clone. so don't touch
         // the value.
@@ -559,7 +553,7 @@ where
 
 impl<V> Value<V>
 where
-    V: Clone + Diff,
+    V: Clone,
 {
     pub(crate) fn new_upsert(v: Box<vlog::Value<V>>, seqno: u64) -> Value<V> {
         Value::U {
@@ -632,7 +626,7 @@ where
 
 impl<V> Footprint for Value<V>
 where
-    V: Clone + Diff + Footprint,
+    V: Footprint,
 {
     fn footprint(&self) -> Result<isize> {
         use std::mem::size_of;

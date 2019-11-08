@@ -365,8 +365,8 @@ where
 
 pub(crate) enum ZBlock<K, V>
 where
-    K: Clone + Ord + Serialize,
-    V: Clone + Diff + Serialize,
+    K: Ord + Serialize,
+    V: Diff + Serialize,
     <V as Diff>::D: Serialize,
 {
     Encode {

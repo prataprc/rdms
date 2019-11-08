@@ -40,12 +40,7 @@ pub(crate) fn open_file_r(file: &ffi::OsStr) -> Result<fs::File> {
 }
 
 // TODO: can we convert this into a macro ???
-pub(crate) fn read_buffer(
-    fd: &mut fs::File,
-    fpos: u64, // position to read from.
-    n: u64,    // bytes to read.
-    msg: &str, // failure message.
-) -> Result<Vec<u8>> {
+pub(crate) fn read_buffer(fd: &mut fs::File, fpos: u64, n: u64, msg: &str) -> Result<Vec<u8>> {
     fd.seek(io::SeekFrom::Start(fpos))?;
 
     let mut buf = {

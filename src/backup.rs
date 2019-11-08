@@ -40,11 +40,10 @@ impl fmt::Display for Name {
 
 pub struct Backup<K, V, M, D>
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
+    K: Clone + Ord,
+    V: Clone + Diff,
     M: Index<K, V>,
     D: Index<K, V>,
-    <M as Index<K, V>>::R: PiecewiseScan<K, V>,
 {
     dir: ffi::OsString,
     name: String,
@@ -60,8 +59,8 @@ where
 
 impl<K, V, M, D> Backup<K, V, M, D>
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
+    K: Clone + Ord,
+    V: Clone + Diff,
     M: Index<K, V>,
     D: Index<K, V>,
     <M as Index<K, V>>::R: PiecewiseScan<K, V>,
@@ -117,9 +116,8 @@ impl<K, V, M, D> Backup<K, V, M, D>
 where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
-    M: Index<K, V>,
-    D: Index<K, V>,
-    <M as Index<K, V>>::R: PiecewiseScan<K, V>,
+    M: Index<K, V> + Footprint,
+    D: Index<K, V> + Footprint,
 {
     fn mem_footprint(&self) -> Result<isize> {
         let pair = self.pair.lock().unwrap();
@@ -135,9 +133,8 @@ impl<K, V, M, D> Footprint for Backup<K, V, M, D>
 where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
-    M: Index<K, V>,
-    D: Index<K, V>,
-    <M as Index<K, V>>::R: PiecewiseScan<K, V>,
+    M: Index<K, V> + Footprint,
+    D: Index<K, V> + Footprint,
 {
     fn footprint(&self) -> Result<isize> {
         Ok(self.disk_footprint()? + self.mem_footprint()?)
@@ -146,8 +143,8 @@ where
 
 impl<K, V, M, D> Index<K, V> for Backup<K, V, M, D>
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
+    K: Clone + Ord,
+    V: Clone + Diff,
     M: Index<K, V>,
     D: Index<K, V>,
     <M as Index<K, V>>::R: PiecewiseScan<K, V>,
@@ -211,8 +208,8 @@ where
 
 fn auto_compact<K, V, M, D>(ccmu: CCMu, interval: Duration)
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
+    K: Clone + Ord,
+    V: Clone + Diff,
     M: Index<K, V>,
     D: Index<K, V>,
     <M as Index<K, V>>::R: PiecewiseScan<K, V>,

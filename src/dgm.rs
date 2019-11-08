@@ -54,8 +54,8 @@ pub const NLEVELS: usize = 16;
 
 enum Snapshot<K, V, I>
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
+    K: Clone + Ord,
+    V: Clone + Diff,
     I: Index<K, V>,
 {
     // memory snapshot that handles all the write operation.
@@ -76,8 +76,8 @@ where
 
 impl<K, V, I> Default for Snapshot<K, V, I>
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
+    K: Clone + Ord,
+    V: Clone + Diff,
     I: Index<K, V>,
 {
     fn default() -> Snapshot<K, V, I> {
@@ -87,8 +87,8 @@ where
 
 impl<K, V, I> fmt::Display for Snapshot<K, V, I>
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
+    K: Clone + Ord,
+    V: Clone + Diff,
     I: Index<K, V>,
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
@@ -110,7 +110,7 @@ impl<K, V, I> Footprint for Snapshot<K, V, I>
 where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
-    I: Index<K, V>,
+    I: Index<K, V> + Footprint,
 {
     fn footprint(&self) -> Result<isize> {
         use Snapshot::{Active, Commit, Compact, Flush, Write};
@@ -129,8 +129,8 @@ where
 
 impl<K, V, I> Snapshot<K, V, I>
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
+    K: Clone + Ord,
+    V: Clone + Diff,
     I: Index<K, V>,
 {
     fn as_mut_disk(&mut self) -> Option<&mut I> {
@@ -177,8 +177,8 @@ where
 #[derive(Default)]
 struct Levels<K, V, M, D>
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
+    K: Clone + Ord,
+    V: Clone + Diff,
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
 {
@@ -189,8 +189,8 @@ where
 
 impl<K, V, M, D> Levels<K, V, M, D>
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
+    K: Clone + Ord,
+    V: Clone + Diff,
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
 {
@@ -209,8 +209,8 @@ where
 // type alias to reader associated type for each snapshot (aka disk-index)
 struct Rs<K, V, M, D>
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
+    K: Clone + Ord,
+    V: Clone + Diff,
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
 {
@@ -236,8 +236,8 @@ pub const COMPACT_INTERVAL: Duration = Duration::from_secs(1800);
 
 pub struct Dgm<K, V, M, D>
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
+    K: Clone + Ord,
+    V: Clone + Diff,
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
 {
@@ -261,6 +261,8 @@ where
     <V as Diff>::D: Serialize,
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
+    M::I: Footprint,
+    D::I: Footprint,
 {
     pub fn new(
         dir: &ffi::OsStr, // directory path
@@ -394,7 +396,28 @@ where
     V: Clone + Diff + Footprint,
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
+    M::I: Footprint,
+    D::I: Footprint,
 {
+    fn disk_footprint(&self) -> Result<isize> {
+        let levels = self.levels.lock().unwrap();
+
+        let mut footprint: isize = Default::default();
+        for disk in levels.disks.iter() {
+            footprint += disk.footprint()?;
+        }
+        Ok(footprint)
+    }
+
+    fn mem_footprint(&self) -> Result<isize> {
+        let levels = self.levels.lock().unwrap();
+        Ok(levels.m0.footprint()?
+            + match &levels.m1 {
+                None => 0,
+                Some(m) => m.footprint()?,
+            })
+    }
+
     fn cleanup_handles(&mut self) {
         let _guard = self.levels.lock().unwrap();
 
@@ -488,25 +511,6 @@ where
         Ok(())
     }
 
-    fn disk_footprint(&self) -> Result<isize> {
-        let levels = self.levels.lock().unwrap();
-
-        let mut footprint: isize = Default::default();
-        for disk in levels.disks.iter() {
-            footprint += disk.footprint()?;
-        }
-        Ok(footprint)
-    }
-
-    fn mem_footprint(&self) -> Result<isize> {
-        let levels = self.levels.lock().unwrap();
-        Ok(levels.m0.footprint()?
-            + match &levels.m1 {
-                None => 0,
-                Some(m) => m.footprint()?,
-            })
-    }
-
     fn commit_level(&self, levels: &mut Levels<K, V, M, D>) -> Result<usize> {
         use Snapshot::{Active, Commit, Compact, Flush, Write};
 
@@ -588,10 +592,12 @@ where
 
 impl<K, V, M, D> Footprint for Dgm<K, V, M, D>
 where
-    K: Clone + Ord + Serialize + Footprint,
-    V: Clone + Diff + Serialize + Footprint,
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
+    M::I: Footprint,
+    D::I: Footprint,
 {
     fn footprint(&self) -> Result<isize> {
         Ok(self.disk_footprint()? + self.mem_footprint()?)
@@ -605,6 +611,8 @@ where
     <V as Diff>::D: Serialize,
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
+    M::I: Footprint,
+    D::I: Footprint,
 {
     type W = DgmWriter<K, V, <M::I as Index<K, V>>::W>;
     type R = DgmReader<K, V, M, D>;
@@ -858,8 +866,8 @@ where
 
 pub struct DgmWriter<K, V, W>
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
+    K: Clone + Ord,
+    V: Clone + Diff,
     W: Writer<K, V>,
 {
     name: String,
@@ -870,8 +878,8 @@ where
 
 impl<K, V, W> DgmWriter<K, V, W>
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
+    K: Clone + Ord,
+    V: Clone + Diff,
     W: Writer<K, V>,
 {
     fn new(name: &str, w: Arc<sync::Mutex<W>>) -> DgmWriter<K, V, W> {
@@ -886,8 +894,8 @@ where
 
 impl<K, V, W> Writer<K, V> for DgmWriter<K, V, W>
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
+    K: Clone + Ord,
+    V: Clone + Diff,
     W: Writer<K, V>,
 {
     fn set(&mut self, key: K, value: V) -> Result<Option<Entry<K, V>>> {
@@ -912,8 +920,8 @@ where
 
 pub struct DgmReader<K, V, M, D>
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
+    K: Clone + Ord,
+    V: Clone + Diff,
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
 {
@@ -925,8 +933,8 @@ where
 
 impl<K, V, M, D> DgmReader<K, V, M, D>
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
+    K: Clone + Ord,
+    V: Clone + Diff,
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
 {
@@ -1246,8 +1254,8 @@ where
 
 struct DgmIter<'a, K, V, M, D>
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
+    K: Clone + Ord,
+    V: Clone + Diff,
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
 {
@@ -1258,8 +1266,8 @@ where
 
 impl<'a, K, V, M, D> DgmIter<'a, K, V, M, D>
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
+    K: Clone + Ord,
+    V: Clone + Diff,
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
 {
@@ -1277,8 +1285,8 @@ where
 
 impl<'a, K, V, M, D> Iterator for DgmIter<'a, K, V, M, D>
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
+    K: Clone + Ord,
+    V: Clone + Diff,
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
 {
@@ -1296,6 +1304,8 @@ where
     <V as Diff>::D: Serialize,
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
+    M::I: Footprint,
+    D::I: Footprint,
 {
     let mut elapsed = Duration::new(0, 0);
     let initial_count = ccmu.strong_count();

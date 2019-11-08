@@ -467,14 +467,15 @@ where
     fn compact(&mut self, cutoff: Bound<u64>) -> Result<usize> {
         let mut low = Bound::Unbounded;
         let mut count = 0;
+        const LIMIT: usize = 10_000; // TODO: no magic number
         loop {
             let _latch = self.latch.acquire_write(self.spin);
 
             let mut dels = vec![];
-            let limit = 10_000; // TODO: no magic number
+            let limit = LIMIT;
             let root = self.root.as_mut().map(DerefMut::deref_mut);
             match Llrb::<K, V>::compact_loop(root, low, cutoff, &mut dels, limit) {
-                (_, limit) if limit > 0 => break Ok(count + (10_000 - limit)),
+                (_, limit) if limit > 0 => break Ok(count + (LIMIT - limit)),
                 (Some(lw), _) => {
                     dels.into_iter()
                         .for_each(|key| self.delete_index_entry(key));
@@ -482,7 +483,7 @@ where
                 }
                 _ => unreachable!(),
             }
-            count += limit;
+            count += LIMIT;
         }
     }
 }
@@ -500,8 +501,8 @@ where
 
 struct UpsertResult<K, V>
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
+    K: Clone + Ord,
+    V: Clone + Diff,
 {
     node: Option<Box<Node<K, V>>>,
     old_entry: Option<Entry<K, V>>,
@@ -510,8 +511,8 @@ where
 
 struct UpsertCasResult<K, V>
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
+    K: Clone + Ord,
+    V: Clone + Diff,
 {
     node: Option<Box<Node<K, V>>>,
     old_entry: Option<Entry<K, V>>,
@@ -521,8 +522,8 @@ where
 
 struct DeleteResult<K, V>
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
+    K: Clone + Ord,
+    V: Clone + Diff,
 {
     node: Option<Box<Node<K, V>>>,
     old_entry: Option<Entry<K, V>>,
@@ -1249,6 +1250,10 @@ where
         mself.key_footprint -= key.footprint().unwrap();
         mself.tree_footprint += res.size;
         mself.n_count -= 1;
+        match res.old_entry {
+            Some(oe) if oe.is_deleted() => mself.n_deleted -= 1,
+            _ => (),
+        }
     }
 }
 

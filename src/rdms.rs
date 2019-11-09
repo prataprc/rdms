@@ -7,7 +7,6 @@ use std::{
 
 use crate::{
     core::{Diff, Footprint, Index, IndexIter, Result, Validate},
-    llrb, mvcc,
     sync::CCMu,
     types::EmptyIter,
 };
@@ -105,25 +104,27 @@ where
     }
 }
 
-impl<K, V> Rdms<K, V, Box<llrb::Llrb<K, V>>>
+impl<K, V, T, I> Validate<T> for Box<Rdms<K, V, I>>
 where
     K: Clone + Ord + Footprint + fmt::Debug,
     V: Clone + Diff + Footprint,
+    I: Index<K, V> + Validate<T>,
+    T: fmt::Display,
 {
-    pub fn validate(&self) -> Result<llrb::Stats> {
-        (&*self.index).validate()
+    fn validate(&self) -> Result<T> {
+        self.index.validate()
     }
 }
 
-impl<K, V> Rdms<K, V, Box<mvcc::Mvcc<K, V>>>
-where
-    K: Clone + Ord + Footprint + fmt::Debug,
-    V: Clone + Diff + Footprint,
-{
-    pub fn validate(&self) -> Result<mvcc::Stats> {
-        (&*self.index).validate()
-    }
-}
+//impl<K, V> Rdms<K, V, Box<mvcc::Mvcc<K, V>>>
+//where
+//    K: Clone + Ord + Footprint + fmt::Debug,
+//    V: Clone + Diff + Footprint,
+//{
+//    pub fn validate(&self) -> Result<mvcc::Stats> {
+//        (&*self.index).validate()
+//    }
+//}
 
 fn auto_commit<K, V, I>(ccmu: CCMu, interval: Duration)
 where

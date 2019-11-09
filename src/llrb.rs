@@ -1423,7 +1423,7 @@ where
 }
 
 /// Deep walk validate of Llrb index.
-impl<K, V> Validate<Stats> for Llrb<K, V>
+impl<K, V> Validate<Stats> for Box<Llrb<K, V>>
 where
     K: Clone + Ord + Debug,
     V: Clone + Diff,

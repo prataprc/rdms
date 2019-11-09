@@ -53,7 +53,7 @@ use std::{
 use crate::{
     core::{Diff, Entry, Footprint, Index, IndexIter, PiecewiseScan, Reader},
     core::{Result, ScanEntry, ScanIter, Value, WalWriter, WriteIndexFactory},
-    core::{ToJson, Writer},
+    core::{ToJson, Validate, Writer},
     error::Error,
     llrb::Llrb,
     llrb_node::{LlrbDepth, Node},
@@ -1402,7 +1402,7 @@ where
 /// Deep walk validate of Mvcc index. Note that in addition to normal
 /// contraints to type parameter `K`, K-type shall also implement
 /// `Debug` trait.
-impl<K, V> Mvcc<K, V>
+impl<K, V> Validate<Stats> for Box<Mvcc<K, V>>
 where
     K: Clone + Ord + Debug,
     V: Clone + Diff,
@@ -1414,7 +1414,7 @@ where
     ///
     /// Additionally return full statistics on the tree. Refer to [`Stats`]
     /// for more information.
-    pub fn validate(&self) -> Result<Stats> {
+    fn validate(&self) -> Result<Stats> {
         let arc_mvcc = OuterSnapshot::clone(&self.snapshot);
 
         let root = arc_mvcc.as_root();

@@ -62,7 +62,7 @@ mod util;
 mod vlog;
 pub use crate::{
     core::{Diff, Entry, Footprint, Index, IndexIter, Reader, Replay, Result},
-    core::{Serialize, VersionIter, Writer},
+    core::{Serialize, Validate, VersionIter, Writer},
     error::Error,
     types::Empty,
 };

@@ -3,7 +3,7 @@ use rand::prelude::random;
 use std::ops::Bound;
 
 use crate::{
-    core::{Index, Reader, Writer},
+    core::{Index, Reader, Validate, Writer},
     error::Error,
     mvcc::Mvcc,
     scans::SkipScan,

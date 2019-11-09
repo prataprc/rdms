@@ -6,7 +6,7 @@ use std::ops::Bound;
 
 use super::*;
 use crate::{
-    core::{Index, Reader, Writer},
+    core::{Index, Reader, Validate, Writer},
     error::Error,
     llrb::Llrb,
     scans::SkipScan,

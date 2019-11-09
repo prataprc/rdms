@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::{
-    core::{Diff, Footprint, Index, IndexIter, Result},
+    core::{Diff, Footprint, Index, IndexIter, Result, Validate},
     llrb, mvcc,
     sync::CCMu,
     types::EmptyIter,

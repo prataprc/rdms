@@ -47,7 +47,7 @@ use std::{
 use crate::{
     core::{Diff, Entry, Footprint, Index, IndexIter, PiecewiseScan, Reader},
     core::{Result, ScanEntry, ScanIter, Value, WalWriter, WriteIndexFactory},
-    core::{ToJson, Writer},
+    core::{ToJson, Validate, Writer},
     error::Error,
     llrb_node::{LlrbDepth, Node},
     mvcc::Snapshot,
@@ -1423,7 +1423,7 @@ where
 }
 
 /// Deep walk validate of Llrb index.
-impl<K, V> Llrb<K, V>
+impl<K, V> Validate<Stats> for Llrb<K, V>
 where
     K: Clone + Ord + Debug,
     V: Clone + Diff,
@@ -1435,7 +1435,7 @@ where
     ///
     /// Additionally return full statistics on the tree. Refer to [`Stats`]
     /// for more information.
-    pub fn validate(&self) -> Result<Stats> {
+    fn validate(&self) -> Result<Stats> {
         let _latch = self.latch.acquire_read(self.spin);
 
         let root = self.root.as_ref().map(Deref::deref);

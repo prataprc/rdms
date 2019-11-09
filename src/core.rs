@@ -1,7 +1,7 @@
 use std::{
     borrow::Borrow,
     convert::TryInto,
-    ffi, fs,
+    ffi, fmt, fs,
     mem::{self, ManuallyDrop},
     ops::{Bound, RangeBounds},
     sync::atomic::{AtomicBool, Ordering::SeqCst},
@@ -228,6 +228,12 @@ where
     /// compact() calls. All entries whose mutation versions are below the
     /// `cutoff` bound can be purged permenantly.
     fn compact(&mut self, cutoff: Bound<u64>) -> Result<usize>;
+}
+
+/// Validate trait that can be called on an index instance to self
+/// validate itself.
+pub trait Validate<T: fmt::Display> {
+    fn validate(&self) -> Result<T>;
 }
 
 /// Index read operations.

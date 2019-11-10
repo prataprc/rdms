@@ -390,6 +390,61 @@ where
     type R = LlrbReader<K, V>;
     type O = Empty;
 
+    #[inline]
+    fn to_name(&self) -> String {
+        self.as_ref().to_name()
+    }
+
+    #[inline]
+    fn to_root(&self) -> Empty {
+        self.as_ref().to_root()
+    }
+
+    #[inline]
+    fn to_metadata(&self) -> Result<Vec<u8>> {
+        self.as_ref().to_metadata()
+    }
+
+    #[inline]
+    fn to_seqno(&self) -> u64 {
+        self.as_ref().to_seqno()
+    }
+
+    #[inline]
+    fn set_seqno(&mut self, seqno: u64) {
+        self.as_mut().set_seqno(seqno)
+    }
+
+    /// Create a new reader handle, for multi-threading.
+    /// Llrb uses spin-lock to coordinate between readers and writers.
+    fn to_reader(&mut self) -> Result<Self::R> {
+        self.as_mut().to_reader()
+    }
+
+    /// Create a new writer handle, for multi-threading.
+    /// Llrb uses spin-lock to coordinate between readers and writers.
+    fn to_writer(&mut self) -> Result<Self::W> {
+        self.as_mut().to_writer()
+    }
+
+    fn commit(&mut self, iter: IndexIter<K, V>, m: Vec<u8>) -> Result<usize> {
+        self.as_mut().commit(iter, m)
+    }
+
+    fn compact(&mut self, cutoff: Bound<u64>) -> Result<usize> {
+        self.as_mut().compact(cutoff)
+    }
+}
+
+impl<K, V> Index<K, V> for Llrb<K, V>
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+{
+    type W = LlrbWriter<K, V>;
+    type R = LlrbReader<K, V>;
+    type O = Empty;
+
     fn to_name(&self) -> String {
         self.name.clone()
     }
@@ -420,7 +475,7 @@ where
     fn to_reader(&mut self) -> Result<Self::R> {
         let index = unsafe {
             // transmute self as void pointer.
-            Box::from_raw(&mut **self as *mut Llrb<K, V> as *mut ffi::c_void)
+            Box::from_raw(self as *mut Llrb<K, V> as *mut ffi::c_void)
         };
         let reader = Arc::clone(&self.readers);
         Ok(LlrbReader::<K, V>::new(index, reader))
@@ -431,7 +486,7 @@ where
     fn to_writer(&mut self) -> Result<Self::W> {
         let index = unsafe {
             // transmute self as void pointer.
-            Box::from_raw(&mut **self as *mut Llrb<K, V> as *mut ffi::c_void)
+            Box::from_raw(self as *mut Llrb<K, V> as *mut ffi::c_void)
         };
         let writer = Arc::clone(&self.writers);
         Ok(LlrbWriter::<K, V>::new(index, writer))
@@ -467,20 +522,26 @@ where
     fn compact(&mut self, cutoff: Bound<u64>) -> Result<usize> {
         let mut low = Bound::Unbounded;
         let mut count = 0;
-        const LIMIT: usize = 10_000; // TODO: no magic number
+        const LIMIT: usize = 1_000; // TODO: no magic number
         loop {
             let _latch = self.latch.acquire_write(self.spin);
 
             let mut dels = vec![];
             let limit = LIMIT;
             let root = self.root.as_mut().map(DerefMut::deref_mut);
-            match Llrb::<K, V>::compact_loop(root, low, cutoff, &mut dels, limit) {
+            let res = Llrb::<K, V>::compact_loop(
+                root,
+                low,
+                cutoff,
+                &mut dels,
+                &mut self.tree_footprint,
+                limit,
+            );
+            dels.into_iter()
+                .for_each(|key| self.delete_index_entry(key));
+            match res {
                 (_, limit) if limit > 0 => break Ok(count + (LIMIT - limit)),
-                (Some(lw), _) => {
-                    dels.into_iter()
-                        .for_each(|key| self.delete_index_entry(key));
-                    low = Bound::Excluded(lw);
-                }
+                (Some(lw), _) => low = Bound::Excluded(lw),
                 _ => unreachable!(),
             }
             count += LIMIT;
@@ -489,6 +550,16 @@ where
 }
 
 impl<K, V> Footprint for Box<Llrb<K, V>>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    fn footprint(&self) -> Result<isize> {
+        self.as_ref().footprint()
+    }
+}
+
+impl<K, V> Footprint for Llrb<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff,
@@ -1165,6 +1236,7 @@ where
         low: Bound<K>,
         cutoff: Bound<u64>,
         dels: &mut Vec<K>,
+        tree_footprint: &mut isize,
         limit: usize,
     ) -> (Option<K>, usize) {
         use std::ops::Bound::{Excluded, Unbounded};
@@ -1178,16 +1250,18 @@ where
                     Excluded(key),
                     cutoff,
                     dels,
+                    tree_footprint,
                     limit,
                 ) {
                     (seen, limit) if limit == 0 => (seen, limit),
                     (_, limit) => {
-                        Self::compact_entry(node, cutoff, dels);
+                        *tree_footprint += Self::compact_entry(node, cutoff, dels);
                         match Self::compact_loop(
                             node.as_right_deref_mut(),
                             Unbounded,
                             cutoff,
                             dels,
+                            tree_footprint,
                             limit - 1,
                         ) {
                             (None, limit) => (Some(node.to_key()), limit),
@@ -1200,19 +1274,28 @@ where
                     Excluded(key),
                     cutoff,
                     dels,
+                    tree_footprint,
                     limit,
                 ),
             },
             (Some(node), Unbounded) => {
-                match Self::compact_loop(node.as_left_deref_mut(), Unbounded, cutoff, dels, limit) {
+                match Self::compact_loop(
+                    node.as_left_deref_mut(),
+                    Unbounded,
+                    cutoff,
+                    dels,
+                    tree_footprint,
+                    limit,
+                ) {
                     (seen, limit) if limit == 0 => (seen, limit),
                     (_, limit) => {
-                        Self::compact_entry(node, cutoff, dels);
+                        *tree_footprint += Self::compact_entry(node, cutoff, dels);
                         match Self::compact_loop(
                             node.as_right_deref_mut(),
                             Unbounded,
                             cutoff,
                             dels,
+                            tree_footprint,
                             limit - 1,
                         ) {
                             (None, limit) => (Some(node.to_key()), limit),
@@ -1225,10 +1308,17 @@ where
         }
     }
 
-    fn compact_entry(node: &mut Node<K, V>, cutoff: Bound<u64>, dels: &mut Vec<K>) {
+    fn compact_entry(node: &mut Node<K, V>, cutoff: Bound<u64>, dels: &mut Vec<K>) -> isize {
+        let size = node.entry.footprint().unwrap();
         match node.entry.clone().purge(cutoff) {
-            None => dels.push(node.entry.to_key()),
-            Some(entry) => node.entry = entry,
+            None => {
+                dels.push(node.entry.to_key());
+                0
+            }
+            Some(entry) => {
+                node.entry = entry;
+                node.entry.footprint().unwrap() - size
+            }
         }
     }
 
@@ -1422,8 +1512,18 @@ where
     }
 }
 
-/// Deep walk validate of Llrb index.
 impl<K, V> Validate<Stats> for Box<Llrb<K, V>>
+where
+    K: Clone + Ord + Debug,
+    V: Clone + Diff,
+{
+    fn validate(&self) -> Result<Stats> {
+        self.as_ref().validate()
+    }
+}
+
+/// Deep walk validate of Llrb index.
+impl<K, V> Validate<Stats> for Llrb<K, V>
 where
     K: Clone + Ord + Debug,
     V: Clone + Diff,

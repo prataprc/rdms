@@ -457,6 +457,61 @@ where
     type R = MvccReader<K, V>;
     type O = Empty;
 
+    #[inline]
+    fn to_name(&self) -> String {
+        self.as_ref().to_name()
+    }
+
+    #[inline]
+    fn to_root(&self) -> Empty {
+        self.as_ref().to_root()
+    }
+
+    #[inline]
+    fn to_metadata(&self) -> Result<Vec<u8>> {
+        self.as_ref().to_metadata()
+    }
+
+    #[inline]
+    fn to_seqno(&self) -> u64 {
+        self.as_ref().to_seqno()
+    }
+
+    #[inline]
+    fn set_seqno(&mut self, seqno: u64) {
+        self.as_mut().set_seqno(seqno)
+    }
+
+    /// Create a new reader handle, for multi-threading.
+    /// Llrb uses spin-lock to coordinate between readers and writers.
+    fn to_reader(&mut self) -> Result<Self::R> {
+        self.as_mut().to_reader()
+    }
+
+    /// Create a new writer handle, for multi-threading.
+    /// Llrb uses spin-lock to coordinate between readers and writers.
+    fn to_writer(&mut self) -> Result<Self::W> {
+        self.as_mut().to_writer()
+    }
+
+    fn commit(&mut self, iter: IndexIter<K, V>, m: Vec<u8>) -> Result<usize> {
+        self.as_mut().commit(iter, m)
+    }
+
+    fn compact(&mut self, cutoff: Bound<u64>) -> Result<usize> {
+        self.as_mut().compact(cutoff)
+    }
+}
+
+impl<K, V> Index<K, V> for Mvcc<K, V>
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+{
+    type W = MvccWriter<K, V>;
+    type R = MvccReader<K, V>;
+    type O = Empty;
+
     fn to_name(&self) -> String {
         self.name.clone()
     }
@@ -488,7 +543,7 @@ where
     fn to_reader(&mut self) -> Result<Self::R> {
         let index: Box<ffi::c_void> = unsafe {
             // transmute self as void pointer.
-            Box::from_raw(&mut **self as *mut Mvcc<K, V> as *mut ffi::c_void)
+            Box::from_raw(self as *mut Mvcc<K, V> as *mut ffi::c_void)
         };
         let reader = Arc::clone(&self.readers);
         Ok(MvccReader::<K, V>::new(index, reader))
@@ -499,7 +554,7 @@ where
     fn to_writer(&mut self) -> Result<Self::W> {
         let index: Box<ffi::c_void> = unsafe {
             // transmute self as void pointer.
-            Box::from_raw(&mut **self as *mut Mvcc<K, V> as *mut ffi::c_void)
+            Box::from_raw(self as *mut Mvcc<K, V> as *mut ffi::c_void)
         };
         let writer = Arc::clone(&self.writers);
         Ok(MvccWriter::<K, V>::new(index, writer))
@@ -515,6 +570,16 @@ where
 }
 
 impl<K, V> Footprint for Box<Mvcc<K, V>>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    fn footprint(&self) -> Result<isize> {
+        self.as_ref().footprint()
+    }
+}
+
+impl<K, V> Footprint for Mvcc<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff,
@@ -1399,10 +1464,20 @@ where
     }
 }
 
+impl<K, V> Validate<Stats> for Box<Mvcc<K, V>>
+where
+    K: Clone + Ord + Debug,
+    V: Clone + Diff,
+{
+    fn validate(&self) -> Result<Stats> {
+        self.as_ref().validate()
+    }
+}
+
 /// Deep walk validate of Mvcc index. Note that in addition to normal
 /// contraints to type parameter `K`, K-type shall also implement
 /// `Debug` trait.
-impl<K, V> Validate<Stats> for Box<Mvcc<K, V>>
+impl<K, V> Validate<Stats> for Mvcc<K, V>
 where
     K: Clone + Ord + Debug,
     V: Clone + Diff,

@@ -539,16 +539,15 @@ impl Config {
     }
 
     /// Persist values in a separate file, called value-log file. To persist
-    /// values along with leaf node, pass `vlog_file` as None.
-    pub fn set_value_log(&mut self, file: Option<ffi::OsString>) -> &mut Self {
+    /// values along with leaf node, pass `ok` as false.
+    pub fn set_value_log(&mut self, file: Option<ffi::OsString>, ok: bool) -> &mut Self {
         match file {
             Some(vlog_file) => {
                 self.value_in_vlog = true;
                 self.vlog_file = Some(vlog_file);
             }
-            None => {
-                self.value_in_vlog = false;
-            }
+            None if ok => self.value_in_vlog = true,
+            None => self.value_in_vlog = false,
         }
         self
     }

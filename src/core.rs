@@ -19,7 +19,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub type IndexIter<'a, K, V> = Box<dyn Iterator<Item = Result<Entry<K, V>>> + 'a>;
 
 /// Type alias to trait-objects iterating, piece-wise, over [`Index`].
-pub(crate) type ScanIter<'a, K, V> = Box<dyn Iterator<Item = Result<ScanEntry<K, V>>> + 'a>;
+pub type ScanIter<'a, K, V> = Box<dyn Iterator<Item = Result<ScanEntry<K, V>>> + 'a>;
 
 /// Trait for diffable values.
 ///

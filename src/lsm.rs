@@ -57,7 +57,7 @@ where
 }
 
 // ``x`` contains newer mutations than ``y``
-pub(crate) fn y_iter<'a, K, V>(
+pub fn y_iter<'a, K, V>(
     mut x: IndexIter<'a, K, V>, // newer
     mut y: IndexIter<'a, K, V>, // older
     reverse: bool,
@@ -77,7 +77,7 @@ where
     })
 }
 
-pub(crate) fn y_iter_versions<'a, K, V>(
+pub fn y_iter_versions<'a, K, V>(
     mut x: IndexIter<'a, K, V>, // newer
     mut y: IndexIter<'a, K, V>, // older
     reverse: bool,

@@ -45,30 +45,19 @@
 #![feature(drain_filter)]
 #![feature(maybe_uninit_ref)]
 
-#[cfg(unix)]
-extern crate libc;
-#[cfg(windows)]
-extern crate winapi;
-
 // core modules
-mod core;
-mod error;
+pub mod core;
+pub mod error;
 mod panic;
 pub mod spinlock;
-mod sync;
+pub mod sync;
 mod sync_writer;
-mod types;
+pub mod types;
 mod util;
 mod vlog;
-pub use crate::{
-    core::{Diff, Entry, Footprint, Index, IndexIter, Reader, Replay, Result},
-    core::{Serialize, Validate, VersionIter, Writer},
-    error::Error,
-    types::Empty,
-};
 
 // support modules
-mod lsm;
+pub mod lsm;
 pub mod scans;
 pub mod wal;
 
@@ -77,7 +66,6 @@ pub mod llrb;
 mod llrb_node;
 pub mod mvcc;
 // disk index
-pub mod backup;
 pub mod dgm;
 pub mod nodisk;
 pub mod robt;

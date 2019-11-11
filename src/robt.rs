@@ -114,6 +114,12 @@ impl fmt::Display for Name {
     }
 }
 
+impl fmt::Debug for Name {
+    fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
+        write!(f, "{:?}", self.0)
+    }
+}
+
 pub fn robt_factory(config: Config) -> RobtFactory {
     RobtFactory { config }
 }
@@ -146,9 +152,8 @@ where
 
     fn new(&self, dir: &ffi::OsStr, name: &str) -> Result<Robt<K, V>> {
         info!(
-            target: "robt-factory",
-            "new disk index at {:?}/{} with configuration ...\n{}",
-            dir, name, self.config
+            target: "robtfc",
+            "{:?}, new index at {:?}/{} with config {}", name, dir, name, self.config
         );
 
         let inner = InnerRobt::Build {
@@ -169,9 +174,8 @@ where
         )))?;
 
         info!(
-            target: "robt-factory",
-            "open disk index at {:?}/{} with configuration ...\n{}",
-            dir, name, self.config
+            target: "robtfc",
+            "{:?}, open from {:?}/{} with config {}", name, dir, name, self.config
         );
 
         let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
@@ -315,7 +319,7 @@ where
         let inner = self.inner.lock().unwrap();
         match inner.deref() {
             InnerRobt::Snapshot { dir, name, .. } => {
-                info!(target: "robt", "creating a new reader for {}", name.0);
+                info!(target: "robt  ", "{:?}, new reader ", name);
                 Snapshot::open(dir, &name.0)
             }
             InnerRobt::Build { .. } => panic!("cannot create a reader"),
@@ -338,10 +342,7 @@ where
                 let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
                 let stats = snapshot.to_stats()?;
 
-                info!(
-                    target: "robt",
-                    "flush commit to {}, stats ... \n{}", name, stats
-                );
+                info!(target: "robt  ", "{:?}, flush commit, stats {}", name, stats);
 
                 InnerRobt::Snapshot {
                     dir: dir.clone(),
@@ -363,8 +364,8 @@ where
                 let stats = snapshot.to_stats()?;
 
                 info!(
-                    target: "robt",
-                    "incremental commit to {}, stats ... \n{}", name, stats
+                    target: "robt  ",
+                    "{:?}, incremental commit, stats {}", name, stats
                 );
 
                 InnerRobt::Snapshot {
@@ -400,7 +401,7 @@ where
                 meta,
                 ..
             } => {
-                info!(target: "robt", "opening {} for compaction ...", name.0);
+                info!(target: "robt  ", "{:?}, opening for compaction ...", name.0);
                 let mut index = Snapshot::<K, V>::open(dir, &name.0)?;
                 let iter = index.iter()?;
                 let meta = match &meta[2] {
@@ -415,10 +416,7 @@ where
                 let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
                 let stats = snapshot.to_stats()?;
 
-                info!(
-                    target: "robt",
-                    "compacted to {}, stats ... \n{}", name, stats
-                );
+                info!(target: "robt  ", "{:?}, compacted stats {}", name, stats);
 
                 InnerRobt::Snapshot {
                     dir: dir.clone(),

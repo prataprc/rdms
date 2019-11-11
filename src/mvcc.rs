@@ -130,8 +130,7 @@ where
     fn new(&self, name: &str) -> Result<Self::I> {
         info!(
             target: "mvccfc",
-            "creating a new mvcc instance {} with {}",
-            name, self.to_config_string()
+            "{:?}, new mvcc instance, with config {}", name, self.to_config_string()
         );
 
         let mut index = if self.lsm {
@@ -181,8 +180,8 @@ where
         let n = self.multi_rw();
         if n > Self::CONCUR_REF_COUNT {
             error!(
-                target: "mvcc",
-                "Mvcc {} dropped before read/write handles {}", self.name, n
+                target: "mvcc  ",
+                "{:?}, dropped before read/write handles {}", self.name, n
             );
         }
 
@@ -222,7 +221,7 @@ where
             panic!("leak or double free n_nodes:{}", n);
         }
 
-        info!(target: "mvcc", "Mvcc {} dropped ...", self.name);
+        info!(target: "mvcc  ", "{:?}, dropped ...", self.name);
     }
 }
 
@@ -1982,10 +1981,7 @@ where
         };
 
         let index: &mut Mvcc<K, V> = r.as_mut();
-        info!(
-            target: "mvcc",
-            "creating a new reader {} for {}", id, index.name
-        );
+        info!(target: "mvcc  ", "{:?}, new reader {}", index.name, id);
         r
     }
 }
@@ -1998,7 +1994,7 @@ where
     fn drop(&mut self) {
         let id = self.id;
         let index: &mut Mvcc<K, V> = self.as_mut();
-        info!(target: "mvcc", "dropping reader {} for {}", id, index.name);
+        info!(target: "mvcc  ", "{:?}, dropping reader {}", index.name, id);
 
         // leak this index, it is only a reference
         Box::leak(self.index.take().unwrap());
@@ -2150,10 +2146,7 @@ where
         };
 
         let index: &mut Mvcc<K, V> = w.as_mut();
-        info!(
-            target: "mvcc",
-            "creating a new writer {} for {}", id, index.name
-        );
+        info!(target: "mvcc  ", "{:?}, new writer {}", index.name, id);
         w
     }
 }
@@ -2166,7 +2159,7 @@ where
     fn drop(&mut self) {
         let id = self.id;
         let index: &mut Mvcc<K, V> = self.as_mut();
-        info!(target: "mvcc", "dropping writer {} for {}", id, index.name);
+        info!(target: "mvcc  ", "{:?}, dropping writer {}", index.name, id);
 
         // leak this index, it is only a reference
         Box::leak(self.index.take().unwrap());

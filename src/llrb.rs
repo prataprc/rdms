@@ -120,8 +120,7 @@ where
     fn new(&self, name: &str) -> Result<Self::I> {
         info!(
             target: "llrbfc",
-            "creating a new llrb instance {} with config {}",
-            name, self.to_config_string()
+            "{:?}, new llrb instance, with config {}", name, self.to_config_string()
         );
 
         let mut index = if self.lsm {
@@ -171,11 +170,10 @@ where
         if n > Self::CONCUR_REF_COUNT {
             error!(
                 target: "llrb  ",
-                "for index {}, dropped before read/write handles {}",
-                self.name, n
+                "{:?}, dropped before read/write handles {}", self.name, n
             );
         } else {
-            info!(target: "llrb  ", "for index {}, dropped ...", self.name);
+            info!(target: "llrb  ", "{:?}, dropped ...", self.name);
         }
     }
 }
@@ -496,8 +494,7 @@ where
         if m.len() > 0 {
             warn!(
                 target: "llrb  ",
-                "for index {}, commit ignore metadata of len {}",
-                self.name, m.len()
+                "{:?}, commit ignore metadata of len {}", self.name, m.len()
             );
         }
 
@@ -512,10 +509,7 @@ where
             count
         };
 
-        info!(
-            target: "llrb  ",
-            "for index {}, committed {} items", self.name, count
-        );
+        info!(target: "llrb  ", "{:?}, committed {} items", self.name, count);
         Ok(count.try_into().unwrap())
     }
 
@@ -1724,10 +1718,7 @@ where
         };
 
         let index: &mut Llrb<K, V> = r.as_mut();
-        info!(
-            target: "llrb  ",
-            "for index {}, creating a new reader {} ...", index.name, id,
-        );
+        info!( target: "llrb  ", "{:?}, creating a new reader {} ...", index.name, id);
         r
     }
 }
@@ -1740,10 +1731,7 @@ where
     fn drop(&mut self) {
         let id = self.id;
         let index: &mut Llrb<K, V> = self.as_mut();
-        info!(
-            target: "llrb  ",
-            "for index {}, dropping reader {}", index.name, id
-        );
+        info!(target: "llrb  ", "{:?}, dropping reader {}", index.name, id);
 
         // leak this index, it is only a reference
         Box::leak(self.index.take().unwrap());
@@ -1895,10 +1883,7 @@ where
         };
 
         let index: &mut Llrb<K, V> = w.as_mut();
-        info!(
-            target: "llrb  ",
-            "for index {}, creating a new writer {}", index.name, id
-        );
+        info!(target: "llrb  ", "{:?}, creating a new writer {}", index.name, id);
         w
     }
 }
@@ -1911,10 +1896,7 @@ where
     fn drop(&mut self) {
         let id = self.id;
         let index: &mut Llrb<K, V> = self.as_mut();
-        info!(
-            target: "llrb  ",
-            "for index {}, dropping writer {}", index.name, id
-        );
+        info!(target: "llrb  ", "{:?}, dropping writer {}", index.name, id);
 
         // leak this index, it is only a reference
         Box::leak(self.index.take().unwrap());

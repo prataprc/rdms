@@ -23,18 +23,9 @@ travis-ci = { repository = "bnclabs/rdms" }
 
 [dependencies]
 lazy_static = "1.2.0"
-# TODO: this goes into enterpise mode.
 jsondata = "0.6.2"
 log = "0.4.8"
 fs2 = "0.4.3"
-
-[target.'cfg(unix)'.dependencies]
-# TODO: remove this and start using fs2-rs
-libc = "0.2.30"
-
-[target.'cfg(windows)'.dependencies]
-# TODO: remove this and start using fs2-rs
-winapi = { version = "0.3", features = ["handleapi", "processthreadsapi", "winerror", "fileapi", "winbase", "std"] }
 
 [dev-dependencies]
 rand = "0.6.4"

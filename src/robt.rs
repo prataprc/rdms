@@ -525,15 +525,14 @@ impl Config {
 
     /// Enable delta persistence, and configure value-log-file. To disable
     /// delta persistance, pass `vlog_file` as None.
-    pub fn set_delta(&mut self, vlog_file: Option<ffi::OsString>) -> &mut Self {
+    pub fn set_delta(&mut self, vlog_file: Option<ffi::OsString>, ok: bool) -> &mut Self {
         match vlog_file {
             Some(vlog_file) => {
                 self.delta_ok = true;
                 self.vlog_file = Some(vlog_file);
             }
-            None => {
-                self.delta_ok = false;
-            }
+            None if ok => self.delta_ok = true,
+            None => self.delta_ok = false,
         }
         self
     }

@@ -146,7 +146,7 @@ fn test_config() {
     assert_eq!(config2.flush_queue_size, Config::FLUSH_QUEUE_SIZE);
 
     config1.set_blocksize(1024 * 8, 1024 * 32, 1024 * 64);
-    config1.set_delta(None);
+    config1.set_delta(None, false);
     config1.set_value_log(None, false);
     config1.set_flush_queue_size(1023);
     assert_eq!(config1.z_blocksize, 1024 * 8);

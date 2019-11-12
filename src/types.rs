@@ -68,8 +68,8 @@ impl Diff for [u8; 20] {
 impl Serialize for [u8; 20] {
     fn encode(&self, buf: &mut Vec<u8>) -> usize {
         let m = buf.len();
-        buf.resize(20, 0);
-        buf[m..].copy_from_slice(self);
+        buf.resize(m + 20, 0);
+        buf[m..(m + 20)].copy_from_slice(self);
         20
     }
 
@@ -108,11 +108,11 @@ impl Serialize for Vec<u8> {
         let hdr1: u32 = self.len().try_into().unwrap();
         let scratch = hdr1.to_be_bytes();
 
-        let mut n = buf.len();
-        buf.resize(n + scratch.len() + self.len(), 0);
-        buf[n..n + scratch.len()].copy_from_slice(&scratch);
-        n += scratch.len();
-        buf[n..].copy_from_slice(self);
+        let mut m = buf.len();
+        buf.resize(m + scratch.len() + self.len(), 0);
+        buf[m..m + scratch.len()].copy_from_slice(&scratch);
+        m += scratch.len();
+        buf[m..(m + self.len())].copy_from_slice(self);
         scratch.len() + self.len()
     }
 
@@ -158,9 +158,9 @@ impl Diff for i32 {
 
 impl Serialize for i32 {
     fn encode(&self, buf: &mut Vec<u8>) -> usize {
-        let n = buf.len();
-        buf.resize(n + 4, 0);
-        buf[n..].copy_from_slice(&self.to_be_bytes());
+        let m = buf.len();
+        buf.resize(m + 4, 0);
+        buf[m..m + 4].copy_from_slice(&self.to_be_bytes());
         4
     }
 
@@ -203,7 +203,7 @@ impl Serialize for i64 {
     fn encode(&self, buf: &mut Vec<u8>) -> usize {
         let n = buf.len();
         buf.resize(n + 8, 0);
-        buf[n..].copy_from_slice(&self.to_be_bytes());
+        buf[n..n + 8].copy_from_slice(&self.to_be_bytes());
         8
     }
 

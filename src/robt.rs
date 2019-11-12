@@ -151,15 +151,17 @@ where
     type I = Robt<K, V>;
 
     fn new(&self, dir: &ffi::OsStr, name: &str) -> Result<Robt<K, V>> {
+        let mut config = self.config.clone();
+        config.name = name.to_string();
         info!(
             target: "robtfc",
-            "{:?}, new index at {:?}/{} with config {}", name, dir, name, self.config
+            "{:?}, new index at {:?} with config {}", name, dir, config
         );
 
         let inner = InnerRobt::Build {
             dir: dir.to_os_string(),
             name: (name.to_string(), 0).into(),
-            config: self.config.clone(),
+            config,
 
             _phantom_key: marker::PhantomData,
             _phantom_val: marker::PhantomData,
@@ -565,22 +567,16 @@ impl fmt::Display for Config {
         let vlog_file = self
             .vlog_file
             .as_ref()
-            .map_or("".to_string(), |f| format!("vlog_file={:?}, ", f));
-        write!(f, "robt.name = {}\n", self.name)?;
+            .map_or("".to_string(), |f| format!("{:?}, ", f));
         write!(
             f,
-            "robt.config.blocksize = {{ z={}, m={}, v={} }}\n",
-            z, m, v
-        )?;
-        write!(
-            f,
-            "robt.config = {{ delta_ok={}, value_in_vlog={} }}\n",
-            self.delta_ok, self.value_in_vlog,
-        )?;
-        write!(
-            f,
-            "robt.config = {{ {}, flush_queue_size={} }}\n",
-            vlog_file, self.flush_queue_size,
+            concat!(
+                "robt.name = {}\n",
+                "robt.config.blocksize = {{ z={}, m={}, v={} }}\n",
+                "robt.config = {{ delta_ok={}, value_in_vlog={} }}\n",
+                "robt.config = {{ vlog_file={:?}, flush_queue_size={} }}",
+            ),
+            self.name, z, m, v, self.delta_ok, self.value_in_vlog, vlog_file, self.flush_queue_size,
         )
     }
 }

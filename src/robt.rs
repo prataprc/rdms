@@ -155,7 +155,7 @@ where
         config.name = name.to_string();
         info!(
             target: "robtfc",
-            "{:?}, new index at {:?} with config {}", name, dir, config
+            "{:?}, new index at {:?} with config ...\n{}", name, dir, config
         );
 
         let inner = InnerRobt::Build {
@@ -177,7 +177,7 @@ where
 
         info!(
             target: "robtfc",
-            "{:?}, open from {:?}/{} with config {}", name, dir, name, self.config
+            "{:?}, open from {:?}/{} with config ...\n{}", name, dir, name, self.config
         );
 
         let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
@@ -321,7 +321,7 @@ where
         let inner = self.inner.lock().unwrap();
         match inner.deref() {
             InnerRobt::Snapshot { dir, name, .. } => {
-                info!(target: "robt  ", "{:?}, new reader ", name);
+                info!(target: "robt  ", "{:?}, new reader ...", name);
                 Snapshot::open(dir, &name.0)
             }
             InnerRobt::Build { .. } => panic!("cannot create a reader"),
@@ -341,15 +341,20 @@ where
                 let b = Builder::<K, V>::initial(dir, &name.0, config.clone())?;
                 b.build(iter, md)?;
 
+                info!(target: "robt  ", "{:?}, flush commit ... ", name);
                 let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
                 let stats = snapshot.to_stats()?;
-
-                info!(target: "robt  ", "{:?}, flush commit, stats {}", name, stats);
+                let footprint = snapshot.footprint()?;
+                info!(target: "robt  ", "{:?}, flushed to index file {:?}", name, snapshot.index_fd.0);
+                if let Some((vlog_file, _)) = &snapshot.valog_fd {
+                    info!(target: "robt  ", "{:?}, flushed to valog file {:?}", name, vlog_file);
+                }
+                info!(target: "robt  ", "{:?}, footprint {}", name, footprint);
 
                 InnerRobt::Snapshot {
                     dir: dir.clone(),
                     name: name.clone(),
-                    footprint: snapshot.footprint()?,
+                    footprint,
                     meta: snapshot.meta.clone(),
                     config: snapshot.config.clone(),
                     stats,
@@ -358,25 +363,35 @@ where
             InnerRobt::Snapshot {
                 dir, name, config, ..
             } => {
+                //info!(target: "robt  ", "{:?}, opening for commit ...", name.0);
+                //let mut index = Snapshot::<K, V>::open(dir, &name.0)?;
+                //let diter = index.iter_with_versions()?;
+                //if config.delta_ok {
+                //    lsm::y_iter_versions(
+                //} else {
+                //}
+
                 let name = name.clone().next();
                 let b = Builder::incremental(dir, &name.0, config.clone())?;
                 b.build(iter, md)?;
 
+                info!(target: "robt  ", "{:?}, incremental commit ...", name);
                 let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
                 let stats = snapshot.to_stats()?;
-
-                info!(
-                    target: "robt  ",
-                    "{:?}, incremental commit, stats {}", name, stats
-                );
+                let footprint = snapshot.footprint()?;
+                info!(target: "robt  ", "{:?}, commited to index file {:?}", name, snapshot.index_fd.0);
+                if let Some((vlog_file, _)) = &snapshot.valog_fd {
+                    info!(target: "robt  ", "{:?}, commited to valog file {:?}", name, vlog_file);
+                }
+                info!(target: "robt  ", "{:?}, footprint {}", name, footprint);
 
                 InnerRobt::Snapshot {
                     dir: dir.clone(),
                     name: name.clone(),
-                    footprint: snapshot.footprint()?,
+                    footprint,
                     meta: snapshot.meta.clone(),
                     config: snapshot.config.clone(),
-                    stats: snapshot.to_stats()?,
+                    stats,
                 }
             }
         };
@@ -405,20 +420,27 @@ where
             } => {
                 info!(target: "robt  ", "{:?}, opening for compaction ...", name.0);
                 let mut index = Snapshot::<K, V>::open(dir, &name.0)?;
-                let iter = index.iter()?;
-                let meta = match &meta[2] {
+                let iter = index.iter_with_versions()?;
+
+                let name = name.clone().next();
+                let mut conf = config.clone();
+                conf.vlog_file = None; // use a new vlog file as the target.
+                let meta = match &meta[1] {
                     MetaItem::AppMetadata(data) => data.clone(),
                     _ => unreachable!(),
                 };
-
-                let name = name.clone().next();
-                let b = Builder::initial(dir, &name.0, config.clone())?;
+                let b = Builder::initial(dir, &name.0, conf)?;
                 b.build(iter, meta)?;
 
+                info!(target: "robt  ", "{:?}, compact ...", name);
                 let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
                 let stats = snapshot.to_stats()?;
-
-                info!(target: "robt  ", "{:?}, compacted stats {}", name, stats);
+                let footprint = snapshot.footprint()?;
+                info!(target: "robt  ", "{:?}, compacted to index file {:?}", name, snapshot.index_fd.0);
+                if let Some((vlog_file, _)) = &snapshot.valog_fd {
+                    info!(target: "robt  ", "{:?}, compacted to valog file {:?}", name, vlog_file);
+                }
+                info!(target: "robt  ", "{:?}, footprint {}", name, footprint);
 
                 InnerRobt::Snapshot {
                     dir: dir.clone(),
@@ -567,14 +589,14 @@ impl fmt::Display for Config {
         let vlog_file = self
             .vlog_file
             .as_ref()
-            .map_or("".to_string(), |f| format!("{:?}, ", f));
+            .map_or(r#""""#.to_string(), |f| format!("{:?}, ", f));
         write!(
             f,
             concat!(
                 "robt.name = {}\n",
                 "robt.config.blocksize = {{ z={}, m={}, v={} }}\n",
                 "robt.config = {{ delta_ok={}, value_in_vlog={} }}\n",
-                "robt.config = {{ vlog_file={:?}, flush_queue_size={} }}",
+                "robt.config = {{ vlog_file={}, flush_queue_size={} }}",
             ),
             self.name, z, m, v, self.delta_ok, self.value_in_vlog, vlog_file, self.flush_queue_size,
         )
@@ -1423,7 +1445,8 @@ where
     meta: Vec<MetaItem>,
     config: Config,
     // working fields
-    fd: (fs::File, Option<fs::File>),
+    index_fd: (ffi::OsString, fs::File),
+    valog_fd: Option<(ffi::OsString, fs::File)>,
 
     phantom_key: marker::PhantomData<K>,
     phantom_val: marker::PhantomData<V>,
@@ -1435,8 +1458,10 @@ where
     V: Clone + Diff + Serialize,
 {
     fn drop(&mut self) {
-        self.fd.0.unlock().ok();
-        self.fd.1.as_ref().map(|fd| fd.unlock().ok());
+        self.index_fd.1.unlock().ok();
+        if let Some((_, fd)) = &self.valog_fd {
+            fd.unlock().ok();
+        }
     }
 }
 
@@ -1461,42 +1486,72 @@ where
         }?;
         let config: Config = stats.into();
 
+        // open index file.
         let index_fd = {
             let index_file = Config::stitch_index_file(dir, name);
-            util::open_file_r(&index_file.as_ref())?
+            (index_file.clone(), util::open_file_r(&index_file.as_ref())?)
         };
-        let vlog_file = config.vlog_file.map(|vfile| {
-            // stem the file name.
-            let mut vpath = path::PathBuf::new();
-            vpath.push(path::Path::new(dir));
-            vpath.push(path::Path::new(&vfile).file_name().unwrap());
-            vpath.as_os_str().to_os_string()
-        });
-        let vlog_fd = vlog_file
-            .as_ref()
-            .map(|s| util::open_file_r(s.as_ref()))
-            .transpose()?;
-
-        index_fd.lock_shared()?;
-        vlog_fd.as_ref().map(|fd| fd.lock_shared());
+        index_fd.1.lock_shared()?;
+        // open optional value log file.
+        let valog_fd = match config.vlog_file {
+            Some(vfile) => {
+                // stem the file name.
+                let mut vpath = path::PathBuf::new();
+                vpath.push(path::Path::new(dir));
+                vpath.push(path::Path::new(&vfile).file_name().unwrap());
+                let vlog_file = vpath.as_os_str().to_os_string();
+                let fd = util::open_file_r(&vlog_file)?;
+                fd.lock_shared()?;
+                Some((vlog_file, fd))
+            }
+            None => None,
+        };
 
         let mut snap = Snapshot {
             dir: dir.to_os_string(),
             name: name.to_string(),
             meta: meta_items,
             config: Default::default(),
-            fd: (index_fd, vlog_fd),
+            index_fd,
+            valog_fd,
 
             phantom_key: marker::PhantomData,
             phantom_val: marker::PhantomData,
         };
         snap.config = snap.to_stats()?.into();
 
+        snap.log()?;
+
         Ok(snap) // Okey dockey
     }
 
     pub fn is_snapshot(file_name: &ffi::OsStr) -> bool {
         RobtFactory::to_name(&file_name).is_some()
+    }
+
+    fn log(&self) -> Result<()> {
+        info!(
+            target: "robt  ",
+            "{:?}, opening snapshot in dir {:?} config ...\n{}", self.name, self.dir, self.config
+        );
+        for item in self.meta.iter().enumerate() {
+            match item {
+                (0, MetaItem::Root(fpos)) => info!(
+                    target: "robt  ", "{:?}, meta-item root at {}", self.name, fpos
+                ),
+                (1, MetaItem::AppMetadata(data)) => info!(
+                    target: "robt  ", "{:?}, meta-item app-meta-data {} bytes", self.name, data.len()
+                ),
+                (2, MetaItem::Stats(_)) => info!(
+                    target: "robt  ", "{:?}, meta-item stats\n{}", self.name, self.to_stats()?
+                ),
+                (3, MetaItem::Marker(data)) => info!(
+                    target: "robt  ", "{:?}, meta-item marker {} bytes", self.name, data.len()
+                ),
+                _ => unreachable!(),
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1568,19 +1623,9 @@ where
     V: Clone + Diff + Serialize,
 {
     fn footprint(&self) -> Result<isize> {
-        let (dir, name) = (self.dir.as_os_str(), self.name.as_str());
-
-        let mut footprint = {
-            let filen = Config::stitch_index_file(dir, name);
-            fs::metadata(filen)?.len()
-        };
-        let vlog_file = self
-            .fd
-            .1
-            .as_ref()
-            .map(|_| Config::stitch_vlog_file(dir, name));
-        footprint += match vlog_file {
-            Some(vlog_file) => fs::metadata(vlog_file)?.len(),
+        let mut footprint = fs::metadata(&self.index_fd.0)?.len();
+        footprint += match &self.valog_fd {
+            Some((vlog_file, _)) => fs::metadata(vlog_file)?.len(),
             None => 0,
         };
         Ok(footprint.try_into().unwrap())
@@ -1698,7 +1743,7 @@ where
         Q: Ord + ?Sized,
     {
         let mblock = {
-            let fd = &mut self.fd.0;
+            let fd = &mut self.index_fd.1;
             MBlock::<K, V>::new_decode(fd, fpos, &self.config)?
         };
         match mblock.get(key, Bound::Unbounded, Bound::Unbounded) {
@@ -1718,7 +1763,7 @@ where
 
         // println!("do_get {}", zfpos);
         let zblock: ZBlock<K, V> = {
-            let fd = &mut self.fd.0;
+            let fd = &mut self.index_fd.1;
             ZBlock::new_decode(fd, zfpos, &self.config)?
         };
         match zblock.find(key, Bound::Unbounded, Bound::Unbounded) {
@@ -1816,7 +1861,7 @@ where
         mut fpos: u64,           // from node
         mzs: &mut Vec<MZ<K, V>>, // output
     ) -> Result<()> {
-        let fd = &mut self.fd.0;
+        let fd = &mut self.index_fd.1;
         let config = &self.config;
 
         // println!("build_fwd {} {}", mzs.len(), fpos);
@@ -1844,7 +1889,7 @@ where
             None => Ok(()),
             Some(MZ::M { fpos, mut index }) => {
                 let mblock = {
-                    let fd = &mut self.fd.0;
+                    let fd = &mut self.index_fd.1;
                     MBlock::<K, V>::new_decode(fd, fpos, config)?
                 };
                 index += 1;
@@ -1853,7 +1898,7 @@ where
                         mzs.push(MZ::M { fpos, index });
 
                         let zblock = {
-                            let fd = &mut self.fd.0;
+                            let fd = &mut self.index_fd.1;
                             ZBlock::new_decode(fd, zfpos, config)?
                         };
                         mzs.push(MZ::Z { zblock, index: 0 });
@@ -1881,7 +1926,7 @@ where
 
         let zfpos = loop {
             let mblock = {
-                let fd = &mut self.fd.0;
+                let fd = &mut self.index_fd.1;
                 MBlock::<K, V>::new_decode(fd, fpos, config)?
             };
             let index = mblock.len() - 1;
@@ -1895,7 +1940,7 @@ where
         };
 
         let zblock = {
-            let fd = &mut self.fd.0;
+            let fd = &mut self.index_fd.1;
             ZBlock::new_decode(fd, zfpos, config)?
         };
         let index: isize = (zblock.len() - 1).try_into().unwrap();
@@ -1911,7 +1956,7 @@ where
             Some(MZ::M { index: 0, .. }) => self.rebuild_rev(mzs),
             Some(MZ::M { fpos, mut index }) => {
                 let mblock = {
-                    let fd = &mut self.fd.0;
+                    let fd = &mut self.index_fd.1;
                     MBlock::<K, V>::new_decode(fd, fpos, config)?
                 };
                 index -= 1;
@@ -1920,7 +1965,7 @@ where
                         mzs.push(MZ::M { fpos, index });
 
                         let zblock = {
-                            let fd = &mut self.fd.0;
+                            let fd = &mut self.index_fd.1;
                             ZBlock::new_decode(fd, zfpos, config)?
                         };
                         let idx: isize = (zblock.len() - 1).try_into().unwrap();
@@ -1949,7 +1994,7 @@ where
         Q: Ord + ?Sized,
     {
         let mut fpos = self.to_root().unwrap();
-        let fd = &mut self.fd.0;
+        let fd = &mut self.index_fd.1;
         let config = &self.config;
         let (from_min, to_max) = (Bound::Unbounded, Bound::Unbounded);
 
@@ -1990,13 +2035,13 @@ where
         mut entry: Entry<K, V>,
         versions: bool, // fetch deltas as well
     ) -> Result<Entry<K, V>> {
-        match &mut self.fd.1 {
-            Some(fd) => entry.fetch_value(fd)?,
+        match &mut self.valog_fd {
+            Some((_, fd)) => entry.fetch_value(fd)?,
             _ => (),
         }
         if versions {
-            match &mut self.fd.1 {
-                Some(fd) => entry.fetch_deltas(fd)?,
+            match &mut self.valog_fd {
+                Some((_, fd)) => entry.fetch_deltas(fd)?,
                 _ => (),
             }
         }

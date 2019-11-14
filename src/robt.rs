@@ -59,6 +59,7 @@ use crate::{
     core::{Diff, DiskIndexFactory, Entry, Footprint, IndexIter, Reader, Result},
     core::{Index, Serialize, ToJson},
     error::Error,
+    lsm,
     panic::Panic,
     robt_entry::MEntry,
     robt_index::{MBlock, ZBlock},
@@ -363,13 +364,9 @@ where
             InnerRobt::Snapshot {
                 dir, name, config, ..
             } => {
-                //info!(target: "robt  ", "{:?}, opening for commit ...", name.0);
-                //let mut index = Snapshot::<K, V>::open(dir, &name.0)?;
-                //let diter = index.iter_with_versions()?;
-                //if config.delta_ok {
-                //    lsm::y_iter_versions(
-                //} else {
-                //}
+                info!(target: "robt  ", "{:?}, opening for commit ...", name.0);
+                let mut index = Snapshot::<K, V>::open(dir, &name.0)?;
+                let iter = lsm::y_iter(iter, index.iter()?, false /*reverse*/);
 
                 let name = name.clone().next();
                 let b = Builder::incremental(dir, &name.0, config.clone())?;
@@ -908,7 +905,7 @@ impl fmt::Display for Stats {
         let bt = time::Duration::from_nanos(self.build_time);
         write!(
             f,
-            r#"robt.stats = {{ padding={}, n_abytes={}, took="{:?}" }}\n"#,
+            "robt.stats = {{ padding={}, n_abytes={}, took=\"{:?}\" }}",
             self.padding, self.n_abytes, bt
         )
     }

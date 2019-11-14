@@ -119,8 +119,7 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         match (self.x_entry.take(), self.y_entry.take()) {
             (Some(Ok(xe)), Some(Ok(ye))) => {
-                // println!("yiter next xe {:?} {}", xe.to_key(), xe.to_seqno());
-                // println!("yiter next ye {:?} {}", ye.to_key(), ye.to_seqno());
+                // println!("yiter next xe {} ye {}", xe.to_seqno(), ye.to_seqno());
                 let cmp = if self.reverse {
                     xe.as_key().cmp(ye.as_key()).reverse()
                 } else {

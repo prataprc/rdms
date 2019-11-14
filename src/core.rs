@@ -942,14 +942,14 @@ where
         self.deltas.iter().for_each(|d| seqnos.push(d.to_seqno()));
         seqnos.push(entr.to_seqno());
         entr.deltas.iter().for_each(|d| seqnos.push(d.to_seqno()));
-        let mut fail = seqnos[0..seqnos.len() - 1]
+        let fail = seqnos[0..seqnos.len() - 1]
             .into_iter()
             .zip(seqnos[1..].into_iter())
             .any(|(a, b)| a <= b);
         // println!("validate_xmerge {} {:?}", fail, seqnos);
         // validate self contains all native value and deltas.
-        fail = fail || self.value.is_reference();
-        fail = fail || self.deltas.iter().any(|d| d.is_reference());
+        // fail = fail || self.value.is_reference();
+        // fail = fail || self.deltas.iter().any(|d| d.is_reference());
 
         if fail {
             unreachable!()

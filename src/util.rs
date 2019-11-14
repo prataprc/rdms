@@ -53,7 +53,7 @@ pub(crate) fn read_buffer(fd: &mut fs::File, fpos: u64, n: u64, msg: &str) -> Re
     if buf.len() == n {
         Ok(buf)
     } else {
-        let msg = format!("{} partial read {} at {}", msg, fpos, n);
+        let msg = format!("{} partial read {}/{} at {}", msg, buf.len(), n, fpos);
         Err(Error::PartialRead(msg))
     }
 }

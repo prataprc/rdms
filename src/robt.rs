@@ -339,10 +339,11 @@ where
             InnerRobt::Build {
                 dir, name, config, ..
             } => {
+                info!(target: "robt  ", "{:?}, flush commit ... ", name);
+
                 let b = Builder::<K, V>::initial(dir, &name.0, config.clone())?;
                 b.build(iter, md)?;
 
-                info!(target: "robt  ", "{:?}, flush commit ... ", name);
                 let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
                 let stats = snapshot.to_stats()?;
                 let footprint = snapshot.footprint()?;
@@ -368,11 +369,12 @@ where
                 let mut index = Snapshot::<K, V>::open(dir, &name.0)?;
                 let iter = lsm::y_iter(iter, index.iter()?, false /*reverse*/);
 
+                info!(target: "robt  ", "{:?}, incremental commit ...", name);
+
                 let name = name.clone().next();
                 let b = Builder::incremental(dir, &name.0, config.clone())?;
                 b.build(iter, md)?;
 
-                info!(target: "robt  ", "{:?}, incremental commit ...", name);
                 let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
                 let stats = snapshot.to_stats()?;
                 let footprint = snapshot.footprint()?;
@@ -426,10 +428,12 @@ where
                     MetaItem::AppMetadata(data) => data.clone(),
                     _ => unreachable!(),
                 };
+
+                info!(target: "robt  ", "{:?}, compact ...", name);
+
                 let b = Builder::initial(dir, &name.0, conf)?;
                 b.build(iter, meta)?;
 
-                info!(target: "robt  ", "{:?}, compact ...", name);
                 let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
                 let stats = snapshot.to_stats()?;
                 let footprint = snapshot.footprint()?;
@@ -1410,8 +1414,7 @@ fn thread_flush(
     mut fd: fs::File,
     rx: mpsc::Receiver<Vec<u8>>,
 ) -> Result<()> {
-    fd.lock_exclusive()?; // <----- write lock
-                          // let mut fpos = 0;
+    fd.lock_shared()?; // <---- read lock
     for data in rx {
         // println!("flusher {:?} {} {}", file, fpos, data.len());
         // fpos += data.len();
@@ -1419,13 +1422,13 @@ fn thread_flush(
         let m = data.len();
         if n != m {
             let msg = format!("robt flusher: {:?} {}/{}...", &file, m, n);
-            fd.unlock()?; // <----- write un-lock
+            fd.unlock()?; // <----- read un-lock
             return Err(Error::PartialWrite(msg));
         }
     }
     fd.sync_all()?;
     // file descriptor and receiver channel shall be dropped.
-    fd.unlock()?; // <----- write un-lock
+    fd.unlock()?; // <----- read un-lock
     Ok(())
 }
 

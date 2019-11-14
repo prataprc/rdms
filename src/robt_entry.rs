@@ -159,10 +159,34 @@ where
 {
     const UPSERT_FLAG: u64 = 0x1000000000000000;
     const DLEN_MASK: u64 = 0x0FFFFFFFFFFFFFFF;
+    const REFERENCE_FLAG: u64 = 0x8000000000000000;
 
     fn encode(delta: &core::Delta<V>, leaf: &mut Vec<u8>, blob: &mut Vec<u8>) -> Result<usize> {
         match delta.as_ref() {
+            core::InnerDelta::U {
+                delta:
+                    vlog::Delta::Reference {
+                        fpos,
+                        length,
+                        seqno,
+                    },
+                seqno: seqno1,
+            } => {
+                let (fpos, length, seqno) = (*fpos | Self::REFERENCE_FLAG, *length, *seqno);
+                if seqno != *seqno1 {
+                    // TODO: remove this once robt stabilizes.
+                    panic!("mismatch in delta-reference seqno {} != {}", seqno, *seqno1);
+                }
+
+                let hdr1 = length | Self::UPSERT_FLAG;
+
+                leaf.extend_from_slice(&hdr1.to_be_bytes()); // diff-len
+                leaf.extend_from_slice(&seqno.to_be_bytes());
+                leaf.extend_from_slice(&fpos.to_be_bytes()); // fpos
+                Ok(length.try_into().unwrap())
+            }
             core::InnerDelta::U { delta, seqno } => {
+                // native delta
                 let mpos: u64 = blob.len().try_into().unwrap();
 
                 let (hdr1, n) = {
@@ -193,7 +217,12 @@ where
         };
         if !is_deleted {
             let scratch: [u8; 8] = buf[16..24].try_into().unwrap();
-            let fpos = vpos + u64::from_be_bytes(scratch);
+            let enc_fpos = u64::from_be_bytes(scratch);
+            let fpos = if (enc_fpos & Self::REFERENCE_FLAG) == 0 {
+                vpos + enc_fpos
+            } else {
+                enc_fpos & (!Self::REFERENCE_FLAG)
+            };
             buf[16..24].copy_from_slice(&fpos.to_be_bytes());
         }
     }

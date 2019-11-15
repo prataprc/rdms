@@ -63,6 +63,7 @@ use crate::{
     panic::Panic,
     robt_entry::MEntry,
     robt_index::{MBlock, ZBlock},
+    scans::CompactScan,
     util,
 };
 
@@ -250,8 +251,6 @@ where
         _phantom_key: marker::PhantomData<K>,
         _phantom_val: marker::PhantomData<V>,
     },
-    // TODO: Even though the file is not opened, should we hold a file_lock
-    // in lock_shared() mode ??
     Snapshot {
         dir: ffi::OsString,
         name: Name,
@@ -339,12 +338,13 @@ where
             InnerRobt::Build {
                 dir, name, config, ..
             } => {
-                info!(target: "robt  ", "{:?}, flush commit ... ", name);
+                info!(target: "robt  ", "{:?}, flush commit ...", name);
 
-                let b = Builder::<K, V>::initial(dir, &name.0, config.clone())?;
-                b.build(iter, md)?;
-
-                let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
+                let snapshot = {
+                    let b = Builder::<K, V>::initial(dir, &name.0, config.clone())?;
+                    b.build(iter, md)?;
+                    Snapshot::<K, V>::open(dir, &name.0)?
+                };
                 let stats = snapshot.to_stats()?;
                 let footprint = snapshot.footprint()?;
                 info!(target: "robt  ", "{:?}, flushed to index file {:?}", name, snapshot.index_fd.0);
@@ -366,16 +366,18 @@ where
                 dir, name, config, ..
             } => {
                 info!(target: "robt  ", "{:?}, opening for commit ...", name.0);
-                let mut index = Snapshot::<K, V>::open(dir, &name.0)?;
-                let iter = lsm::y_iter(iter, index.iter()?, false /*reverse*/);
 
-                info!(target: "robt  ", "{:?}, incremental commit ...", name);
+                let snapshot = {
+                    let mut index = Snapshot::<K, V>::open(dir, &name.0)?;
+                    let iter = lsm::y_iter(iter, index.iter()?, false /*reverse*/);
 
-                let name = name.clone().next();
-                let b = Builder::incremental(dir, &name.0, config.clone())?;
-                b.build(iter, md)?;
+                    info!(target: "robt  ", "{:?}, incremental commit ...", name);
 
-                let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
+                    let name = name.clone().next();
+                    let b = Builder::incremental(dir, &name.0, config.clone())?;
+                    b.build(iter, md)?;
+                    Snapshot::<K, V>::open(dir, &name.0)?
+                };
                 let stats = snapshot.to_stats()?;
                 let footprint = snapshot.footprint()?;
                 info!(target: "robt  ", "{:?}, commited to index file {:?}", name, snapshot.index_fd.0);
@@ -398,7 +400,7 @@ where
         Ok(0)
     }
 
-    fn compact(&mut self, _cutoff: Bound<u64>) -> Result<usize> {
+    fn compact(&mut self, cutoff: Bound<u64>) -> Result<usize> {
         let mut inner = self.inner.lock().unwrap();
         let new_inner = match inner.deref() {
             InnerRobt::Build {
@@ -418,23 +420,22 @@ where
                 ..
             } => {
                 info!(target: "robt  ", "{:?}, opening for compaction ...", name.0);
-                let mut index = Snapshot::<K, V>::open(dir, &name.0)?;
-                let iter = index.iter_with_versions()?;
+                let snapshot = {
+                    let mut index = Snapshot::<K, V>::open(dir, &name.0)?;
+                    let iter = CompactScan::new(index.iter_with_versions()?, cutoff);
 
-                let name = name.clone().next();
-                let mut conf = config.clone();
-                conf.vlog_file = None; // use a new vlog file as the target.
-                let meta = match &meta[1] {
-                    MetaItem::AppMetadata(data) => data.clone(),
-                    _ => unreachable!(),
+                    info!(target: "robt  ", "{:?}, compact ...", name);
+                    let name = name.clone().next();
+                    let mut conf = config.clone();
+                    conf.vlog_file = None; // use a new vlog file as the target.
+                    let meta = match &meta[1] {
+                        MetaItem::AppMetadata(data) => data.clone(),
+                        _ => unreachable!(),
+                    };
+                    let b = Builder::initial(dir, &name.0, conf)?;
+                    b.build(iter, meta)?;
+                    Snapshot::<K, V>::open(dir, &name.0)?
                 };
-
-                info!(target: "robt  ", "{:?}, compact ...", name);
-
-                let b = Builder::initial(dir, &name.0, conf)?;
-                b.build(iter, meta)?;
-
-                let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
                 let stats = snapshot.to_stats()?;
                 let footprint = snapshot.footprint()?;
                 info!(target: "robt  ", "{:?}, compacted to index file {:?}", name, snapshot.index_fd.0);

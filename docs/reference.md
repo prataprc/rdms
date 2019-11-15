@@ -1,3 +1,6 @@
+Introduction to LLRB
+https://www.geeksforgeeks.org/left-leaning-red-black-tree-insertion/
+
 http://www.actapress.com/Abstract.aspx?paperId=453069
 
 Presentation on torturing databases.

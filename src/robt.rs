@@ -39,7 +39,7 @@
 use fs2::FileExt;
 use jsondata::Json;
 use lazy_static::lazy_static;
-use log::info;
+use log::{error, info, warn};
 
 use std::{
     borrow::Borrow,
@@ -160,15 +160,19 @@ where
             "{:?}, new index at {:?} with config ...\n{}", name, dir, config
         );
 
+        let (tx, rx) = mpsc::channel();
         let inner = InnerRobt::Build {
             dir: dir.to_os_string(),
             name: (name.to_string(), 0).into(),
+            purge_tx: Some(tx),
             config,
 
             _phantom_key: marker::PhantomData,
             _phantom_val: marker::PhantomData,
         };
-        Ok(Robt::new(inner))
+        let name = name.to_string();
+        let handle = thread::spawn(|| purger(name, rx));
+        Ok(Robt::new(inner, handle))
     }
 
     fn open(&self, dir: &ffi::OsStr, root: ffi::OsString) -> Result<Robt<K, V>> {
@@ -183,15 +187,19 @@ where
         );
 
         let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
+        let (tx, rx) = mpsc::channel();
         let inner = InnerRobt::Snapshot {
             dir: dir.to_os_string(),
-            name: name,
+            name: name.clone(),
             footprint: snapshot.footprint()?,
             meta: snapshot.meta.clone(),
             config: snapshot.config.clone(),
             stats: snapshot.to_stats()?,
+            purge_tx: Some(tx),
         };
-        Ok(Robt::new(inner))
+        let name = name.0.clone();
+        let handle = thread::spawn(|| purger(name, rx));
+        Ok(Robt::new(inner, handle))
     }
 
     fn to_type(&self) -> String {
@@ -207,19 +215,24 @@ where
     <V as Diff>::D: Serialize,
 {
     inner: sync::Mutex<InnerRobt<K, V>>,
+    purger: Option<thread::JoinHandle<()>>,
 }
 
-impl<K, V> Clone for Robt<K, V>
+impl<K, V> Drop for Robt<K, V>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
 {
-    fn clone(&self) -> Robt<K, V> {
-        let inner = self.inner.lock().unwrap();
-        Robt {
-            inner: sync::Mutex::new(inner.clone()),
+    fn drop(&mut self) {
+        {
+            let inner = self.inner.get_mut().unwrap();
+            let _purge_tx = match inner {
+                InnerRobt::Build { purge_tx, .. } => purge_tx.take().unwrap(),
+                InnerRobt::Snapshot { purge_tx, .. } => purge_tx.take().unwrap(),
+            };
         }
+        self.purger.take().unwrap().join().ok(); // TODO: log message
     }
 }
 
@@ -229,9 +242,10 @@ where
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
 {
-    fn new(inner: InnerRobt<K, V>) -> Robt<K, V> {
+    fn new(inner: InnerRobt<K, V>, purger: thread::JoinHandle<()>) -> Robt<K, V> {
         Robt {
             inner: sync::Mutex::new(inner),
+            purger: Some(purger),
         }
     }
 }
@@ -247,6 +261,7 @@ where
         dir: ffi::OsString,
         name: Name,
         config: Config,
+        purge_tx: Option<mpsc::Sender<ffi::OsString>>,
 
         _phantom_key: marker::PhantomData<K>,
         _phantom_val: marker::PhantomData<V>,
@@ -258,6 +273,7 @@ where
         meta: Vec<MetaItem>,
         config: Config,
         stats: Stats,
+        purge_tx: Option<mpsc::Sender<ffi::OsString>>,
     },
 }
 
@@ -336,7 +352,11 @@ where
         let mut inner = self.inner.lock().unwrap();
         let new_inner = match inner.deref() {
             InnerRobt::Build {
-                dir, name, config, ..
+                dir,
+                name,
+                config,
+                purge_tx,
+                ..
             } => {
                 info!(target: "robt  ", "{:?}, flush commit ...", name);
 
@@ -360,23 +380,36 @@ where
                     meta: snapshot.meta.clone(),
                     config: snapshot.config.clone(),
                     stats,
+                    purge_tx: purge_tx.clone(),
                 }
             }
             InnerRobt::Snapshot {
-                dir, name, config, ..
+                dir,
+                name,
+                config,
+                purge_tx,
+                ..
             } => {
                 info!(target: "robt  ", "{:?}, opening for commit ...", name.0);
 
-                let snapshot = {
-                    let mut index = Snapshot::<K, V>::open(dir, &name.0)?;
-                    let iter = lsm::y_iter(iter, index.iter()?, false /*reverse*/);
+                let (name, snapshot) = {
+                    let mut old_snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
+                    let iter = lsm::y_iter(iter, old_snapshot.iter()?, false /*reverse*/);
 
                     info!(target: "robt  ", "{:?}, incremental commit ...", name);
 
                     let name = name.clone().next();
                     let b = Builder::incremental(dir, &name.0, config.clone())?;
                     b.build(iter, md)?;
-                    Snapshot::<K, V>::open(dir, &name.0)?
+                    let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
+
+                    // purge old snapshots file(s).
+                    purge_tx
+                        .as_ref()
+                        .unwrap()
+                        .send(old_snapshot.index_fd.0.clone())?;
+
+                    (name, snapshot)
                 };
                 let stats = snapshot.to_stats()?;
                 let footprint = snapshot.footprint()?;
@@ -393,6 +426,7 @@ where
                     meta: snapshot.meta.clone(),
                     config: snapshot.config.clone(),
                     stats,
+                    purge_tx: purge_tx.clone(),
                 }
             }
         };
@@ -404,11 +438,16 @@ where
         let mut inner = self.inner.lock().unwrap();
         let new_inner = match inner.deref() {
             InnerRobt::Build {
-                dir, name, config, ..
+                dir,
+                name,
+                config,
+                purge_tx,
+                ..
             } => InnerRobt::Build {
                 dir: dir.clone(),
                 name: name.clone(),
                 config: config.clone(),
+                purge_tx: purge_tx.clone(),
                 _phantom_key: marker::PhantomData,
                 _phantom_val: marker::PhantomData,
             },
@@ -417,12 +456,13 @@ where
                 name,
                 config,
                 meta,
+                purge_tx,
                 ..
             } => {
                 info!(target: "robt  ", "{:?}, opening for compaction ...", name.0);
-                let snapshot = {
-                    let mut index = Snapshot::<K, V>::open(dir, &name.0)?;
-                    let iter = CompactScan::new(index.iter_with_versions()?, cutoff);
+                let (name, snapshot) = {
+                    let mut old_snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
+                    let iter = CompactScan::new(old_snapshot.iter_with_versions()?, cutoff);
 
                     info!(target: "robt  ", "{:?}, compact ...", name);
                     let name = name.clone().next();
@@ -434,7 +474,19 @@ where
                     };
                     let b = Builder::initial(dir, &name.0, conf)?;
                     b.build(iter, meta)?;
-                    Snapshot::<K, V>::open(dir, &name.0)?
+                    let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
+
+                    // purge old snapshots file(s).
+                    purge_tx
+                        .as_ref()
+                        .unwrap()
+                        .send(old_snapshot.index_fd.0.clone())?;
+                    match &old_snapshot.valog_fd {
+                        Some((file, _)) => purge_tx.as_ref().unwrap().send(file.clone())?,
+                        None => (),
+                    }
+
+                    (name, snapshot)
                 };
                 let stats = snapshot.to_stats()?;
                 let footprint = snapshot.footprint()?;
@@ -451,6 +503,7 @@ where
                     meta: snapshot.meta.clone(),
                     config: snapshot.config.clone(),
                     stats,
+                    purge_tx: purge_tx.clone(),
                 }
             }
         };
@@ -2351,6 +2404,83 @@ where
             MZ::M { .. } => unreachable!(),
         }
     }
+}
+
+fn purger(name: String, rx: mpsc::Receiver<ffi::OsString>) {
+    info!(target: "robtpr", "{:?}, starting purger ...", name);
+
+    let mut files = vec![];
+    let mut err_files = vec![];
+
+    let purge_file = |file: ffi::OsString| -> &'static str {
+        match util::open_file_r(&file) {
+            Ok(fd) => match fd.try_lock_exclusive() {
+                Ok(_) => {
+                    let res = match fs::remove_file(&file) {
+                        Err(err) => {
+                            error!(target: "robtpr", "{:?}, open_file_r {:?} {:?}", name, file, err);
+                            "error"
+                        }
+                        Ok(_) => {
+                            info!(target: "robtpr", "{:?}, purged file {:?}", name, file);
+                            "ok"
+                        }
+                    };
+                    fd.unlock().ok();
+                    res
+                }
+                Err(_) => "locked",
+            },
+            Err(err) => {
+                error!(target: "robtpr", "{:?}, open_file_r {:?} {:?}", name, file, err);
+                "error"
+            }
+        }
+    };
+
+    loop {
+        match rx.try_recv() {
+            Err(mpsc::TryRecvError::Empty) => (),
+            Err(mpsc::TryRecvError::Disconnected) => break,
+            Ok(file) => match purge_file(file.clone()) {
+                "ok" => (),
+                "locked" => files.push(file),
+                "error" => err_files.push(file),
+                _ => unreachable!(),
+            },
+        }
+        for (i, file) in files.clone().into_iter().enumerate() {
+            match purge_file(file.clone()) {
+                "locked" => (),
+                "ok" => {
+                    files.remove(i);
+                }
+                "error" => {
+                    files.remove(i);
+                    err_files.push(file);
+                }
+                _ => unreachable!(),
+            }
+        }
+        if err_files.len() > 0 {
+            error!(target: "robtpr", "{:?}, failed purging {} files", name, err_files.len());
+        }
+
+        thread::sleep(time::Duration::from_secs(1));
+    }
+
+    for file in files.into_iter() {
+        match purge_file(file.clone()) {
+            "locked" => warn!(target: "robtpr", "{:?}, file not purged {:?}", name, file),
+            "ok" | "error" => (),
+            _ => unreachable!(),
+        }
+    }
+    for file in err_files.into_iter() {
+        error!(target: "robtpr", "{:?}, error purging file {:?}", name, file);
+    }
+
+    info!(target: "robtpr", "{:?}, stopping purger ...", name);
 }
 
 #[cfg(test)]

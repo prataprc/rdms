@@ -211,6 +211,46 @@ where
     }
 }
 
+pub struct CompactScan<'a, K, V>
+where
+    K: 'a + Clone + Ord,
+    V: 'a + Clone + Diff,
+{
+    iter: IndexIter<'a, K, V>,
+    cutoff: Bound<u64>,
+}
+
+impl<'a, K, V> CompactScan<'a, K, V>
+where
+    K: 'a + Clone + Ord,
+    V: 'a + Clone + Diff,
+{
+    pub fn new(iter: IndexIter<'a, K, V>, cutoff: Bound<u64>) -> CompactScan<'a, K, V> {
+        CompactScan { iter, cutoff }
+    }
+}
+
+impl<'a, K, V> Iterator for CompactScan<'a, K, V>
+where
+    K: 'a + Clone + Ord,
+    V: 'a + Clone + Diff,
+{
+    type Item = Result<Entry<K, V>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            match self.iter.next() {
+                Some(Ok(entry)) => match entry.purge(self.cutoff) {
+                    Some(entry) => break Some(Ok(entry)),
+                    None => (),
+                },
+                Some(Err(err)) => break Some(Err(err)),
+                None => break None,
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "scans_test.rs"]
 mod scans_test;

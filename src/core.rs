@@ -4,6 +4,7 @@ use std::{
     ffi, fmt, fs,
     mem::{self, ManuallyDrop},
     ops::{Bound, RangeBounds},
+    result,
     sync::atomic::{AtomicBool, Ordering::SeqCst},
 };
 
@@ -13,7 +14,7 @@ use crate::{error::Error, vlog};
 // a blind unwrap.
 
 /// Result returned by rdms functions and methods.
-pub type Result<T> = std::result::Result<T, Error>;
+pub type Result<T> = result::Result<T, Error>;
 
 /// Type alias to trait-objects iterating over an index.
 pub type IndexIter<'a, K, V> = Box<dyn Iterator<Item = Result<Entry<K, V>>> + 'a>;
@@ -802,6 +803,8 @@ where
         let n = self.to_seqno();
         // If all versions of this entry are before cutoff, then purge entry
         match cutoff {
+            Bound::Included(0) => return Some(self),
+            Bound::Excluded(0) => return Some(self),
             Bound::Included(cutoff) if n <= cutoff => return None,
             Bound::Excluded(cutoff) if n < cutoff => return None,
             Bound::Unbounded => return None,

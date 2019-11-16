@@ -24,14 +24,14 @@ fn test_node_size() {
 
 #[test]
 fn test_id() {
-    let llrb: Box<Llrb<i32, Empty>> = Llrb::new("test-llrb");
+    let mut llrb: Box<Llrb<i32, Empty>> = Llrb::new("test-llrb");
     assert_eq!(llrb.to_name(), "test-llrb".to_string());
     assert!(llrb.validate().is_ok());
 }
 
 #[test]
 fn test_len() {
-    let llrb: Box<Llrb<i32, Empty>> = Llrb::new("test-llrb");
+    let mut llrb: Box<Llrb<i32, Empty>> = Llrb::new("test-llrb");
     assert_eq!(llrb.len(), 0);
     assert!(llrb.validate().is_ok());
 }

@@ -111,7 +111,7 @@ where
     I: Index<K, V> + Validate<T>,
     T: fmt::Display,
 {
-    fn validate(&self) -> Result<T> {
+    fn validate(&mut self) -> Result<T> {
         self.index.validate()
     }
 }

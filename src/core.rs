@@ -234,7 +234,7 @@ where
 /// Validate trait that can be called on an index instance to self
 /// validate itself.
 pub trait Validate<T: fmt::Display> {
-    fn validate(&self) -> Result<T>;
+    fn validate(&mut self) -> Result<T>;
 }
 
 /// Index read operations.

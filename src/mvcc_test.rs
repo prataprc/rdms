@@ -16,14 +16,14 @@ include!("./ref_test.rs");
 
 #[test]
 fn test_id() {
-    let mvcc: Box<Mvcc<i32, Empty>> = Mvcc::new("test-mvcc");
+    let mut mvcc: Box<Mvcc<i32, Empty>> = Mvcc::new("test-mvcc");
     assert_eq!(mvcc.to_name(), "test-mvcc".to_string());
     assert!(mvcc.validate().is_ok());
 }
 
 #[test]
 fn test_len() {
-    let mvcc: Box<Mvcc<i32, Empty>> = Mvcc::new("test-mvcc");
+    let mut mvcc: Box<Mvcc<i32, Empty>> = Mvcc::new("test-mvcc");
     assert_eq!(mvcc.len(), 0);
     assert!(mvcc.validate().is_ok());
 }

@@ -57,7 +57,7 @@ use std::{
 
 use crate::{
     core::{Diff, DiskIndexFactory, Entry, Footprint, IndexIter, Reader, Result},
-    core::{Index, Serialize, ToJson},
+    core::{Index, Serialize, ToJson, Validate},
     error::Error,
     lsm,
     panic::Panic,
@@ -1686,6 +1686,73 @@ where
             None => 0,
         };
         Ok(footprint.try_into().unwrap())
+    }
+}
+
+impl<K, V> Validate<Stats> for Snapshot<K, V>
+where
+    K: Clone + Ord + Serialize + fmt::Debug,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
+{
+    fn validate(&mut self) -> Result<Stats> {
+        // validate config and stats.
+        let c = self.config.clone();
+        let s = self.to_stats()?;
+        if c.name != s.name {
+            let msg = format!("robt name {} != {}", c.name, s.name);
+            return Err(Error::ValidationFail(msg));
+        } else if c.z_blocksize != s.z_blocksize {
+            let msg = format!("robt z_blocksize {} != {}", c.z_blocksize, s.z_blocksize);
+            return Err(Error::ValidationFail(msg));
+        } else if c.m_blocksize != s.m_blocksize {
+            let msg = format!("robt m_blocksize {} != {}", c.m_blocksize, s.m_blocksize);
+            return Err(Error::ValidationFail(msg));
+        } else if c.v_blocksize != s.v_blocksize {
+            let msg = format!("robt v_blocksize {} != {}", c.v_blocksize, s.v_blocksize);
+            return Err(Error::ValidationFail(msg));
+        } else if c.delta_ok != s.delta_ok {
+            let msg = format!("robt delta_ok {} != {}", c.delta_ok, s.delta_ok);
+            return Err(Error::ValidationFail(msg));
+        } else if c.value_in_vlog != s.value_in_vlog {
+            let msg = format!(
+                "robt value_in_vlog {} != {}",
+                c.value_in_vlog, s.value_in_vlog
+            );
+            return Err(Error::ValidationFail(msg));
+        }
+
+        let iter = self.iter()?;
+        let mut prev_key: Option<K> = None;
+        let (mut n_count, mut n_deleted, mut seqno) = (0, 0, 0);
+        for entry in iter {
+            let entry = entry?;
+            if entry.is_deleted() {
+                n_deleted += 1;
+            }
+            n_count += 1;
+            seqno = cmp::max(seqno, entry.to_seqno());
+            prev_key = match prev_key {
+                Some(prev_key) if prev_key.ge(entry.as_key()) => {
+                    let msg = format!("robt sort error {:?} >= {:?}", prev_key, entry.as_key());
+                    return Err(Error::ValidationFail(msg));
+                }
+                _ => Some(entry.to_key()),
+            }
+        }
+
+        if n_count != s.n_count {
+            let msg = format!("robt n_count {} > {}", n_count, s.n_count);
+            Err(Error::ValidationFail(msg))
+        } else if n_deleted != s.n_deleted {
+            let msg = format!("robt n_deleted {} > {}", n_deleted, s.n_deleted);
+            Err(Error::ValidationFail(msg))
+        } else if seqno != s.seqno {
+            let msg = format!("robt seqno {} > {}", seqno, s.seqno);
+            Err(Error::ValidationFail(msg))
+        } else {
+            Ok(s)
+        }
     }
 }
 

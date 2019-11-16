@@ -1468,8 +1468,8 @@ where
     K: Clone + Ord + Debug,
     V: Clone + Diff,
 {
-    fn validate(&self) -> Result<Stats> {
-        self.as_ref().validate()
+    fn validate(&mut self) -> Result<Stats> {
+        self.as_mut().validate()
     }
 }
 
@@ -1488,7 +1488,7 @@ where
     ///
     /// Additionally return full statistics on the tree. Refer to [`Stats`]
     /// for more information.
-    fn validate(&self) -> Result<Stats> {
+    fn validate(&mut self) -> Result<Stats> {
         let arc_mvcc = OuterSnapshot::clone(&self.snapshot);
 
         let root = arc_mvcc.as_root();

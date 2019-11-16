@@ -1511,8 +1511,8 @@ where
     K: Clone + Ord + Debug,
     V: Clone + Diff,
 {
-    fn validate(&self) -> Result<Stats> {
-        self.as_ref().validate()
+    fn validate(&mut self) -> Result<Stats> {
+        self.as_mut().validate()
     }
 }
 
@@ -1529,7 +1529,7 @@ where
     ///
     /// Additionally return full statistics on the tree. Refer to [`Stats`]
     /// for more information.
-    fn validate(&self) -> Result<Stats> {
+    fn validate(&mut self) -> Result<Stats> {
         let _latch = self.latch.acquire_read(self.spin);
 
         let root = self.root.as_ref().map(Deref::deref);

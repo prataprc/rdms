@@ -39,7 +39,7 @@
 use fs2::FileExt;
 use jsondata::Json;
 use lazy_static::lazy_static;
-use log::{error, info, warn};
+use log::{error, info};
 
 use std::{
     borrow::Borrow,
@@ -2476,80 +2476,73 @@ where
     }
 }
 
+fn purge_file(
+    file: ffi::OsString,
+    files: &mut Vec<ffi::OsString>,
+    efiles: &mut Vec<ffi::OsString>,
+) -> &'static str {
+    let res = match util::open_file_r(&file) {
+        Ok(fd) => match fd.try_lock_exclusive() {
+            Ok(_) => {
+                let res = match fs::remove_file(&file) {
+                    Err(err) => ("error", format!("remove_file {:?} {:?}", file, err)),
+                    Ok(_) => ("ok", format!("purged file {:?}", file)),
+                };
+                fd.unlock().ok();
+                res
+            }
+            Err(_) => ("locked", format!("locked file {:?}", file)),
+        },
+        Err(err) => ("error", format!("open_file_r {:?} {:?}", file, err)),
+    };
+    match res {
+        ("ok", msg) => {
+            info!(target: "robtpr", "{}", msg);
+            "ok"
+        }
+        ("locked", msg) => {
+            info!(target: "robtpr", "{}", msg);
+            files.push(file);
+            "locked"
+        }
+        ("error", msg) => {
+            error!(target: "robtpr", "{}", msg);
+            efiles.push(file);
+            "error"
+        }
+        _ => unreachable!(),
+    }
+}
+
 fn purger(name: String, rx: mpsc::Receiver<ffi::OsString>) {
     info!(target: "robtpr", "{:?}, starting purger ...", name);
 
     let mut files = vec![];
-    let mut err_files = vec![];
-
-    let purge_file = |file: ffi::OsString| -> &'static str {
-        match util::open_file_r(&file) {
-            Ok(fd) => match fd.try_lock_exclusive() {
-                Ok(_) => {
-                    let res = match fs::remove_file(&file) {
-                        Err(err) => {
-                            error!(target: "robtpr", "{:?}, open_file_r {:?} {:?}", name, file, err);
-                            "error"
-                        }
-                        Ok(_) => {
-                            info!(target: "robtpr", "{:?}, purged file {:?}", name, file);
-                            "ok"
-                        }
-                    };
-                    fd.unlock().ok();
-                    res
-                }
-                Err(_) => "locked",
-            },
-            Err(err) => {
-                error!(target: "robtpr", "{:?}, open_file_r {:?} {:?}", name, file, err);
-                "error"
-            }
-        }
-    };
+    let mut efiles = vec![];
 
     loop {
         match rx.try_recv() {
             Err(mpsc::TryRecvError::Empty) => (),
             Err(mpsc::TryRecvError::Disconnected) => break,
-            Ok(file) => match purge_file(file.clone()) {
-                "ok" => (),
-                "locked" => files.push(file),
-                "error" => err_files.push(file),
-                _ => unreachable!(),
-            },
-        }
-        for (i, file) in files.clone().into_iter().enumerate() {
-            match purge_file(file.clone()) {
-                "locked" => (),
-                "ok" => {
-                    files.remove(i);
-                }
-                "error" => {
-                    files.remove(i);
-                    err_files.push(file);
-                }
-                _ => unreachable!(),
+            Ok(file) => {
+                purge_file(file.clone(), &mut files, &mut efiles);
             }
         }
-        if err_files.len() > 0 {
-            error!(target: "robtpr", "{:?}, failed purging {} files", name, err_files.len());
+        for file in files.drain(..).collect::<Vec<ffi::OsString>>() {
+            purge_file(file.clone(), &mut files, &mut efiles);
         }
-
+        if efiles.len() > 0 {
+            error!(target: "robtpr", "{:?}, failed purging {} files", name, efiles.len());
+        }
         thread::sleep(time::Duration::from_secs(1));
     }
 
-    for file in files.into_iter() {
-        match purge_file(file.clone()) {
-            "locked" => warn!(target: "robtpr", "{:?}, file not purged {:?}", name, file),
-            "ok" | "error" => (),
-            _ => unreachable!(),
-        }
+    for file in files.drain(..).collect::<Vec<ffi::OsString>>() {
+        purge_file(file.clone(), &mut files, &mut efiles);
     }
-    for file in err_files.into_iter() {
+    for file in efiles.into_iter() {
         error!(target: "robtpr", "{:?}, error purging file {:?}", name, file);
     }
-
     info!(target: "robtpr", "{:?}, stopping purger ...", name);
 }
 

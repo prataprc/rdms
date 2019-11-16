@@ -1,3 +1,4 @@
+use fs2::FileExt;
 use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
 
 use super::*;
@@ -207,6 +208,49 @@ fn test_robt_llrb2() {
 fn test_robt_llrb3() {
     let seed: u128 = random();
     run_robt_llrb("test-robt-llrb3", 6_000_000, 2_000_000_i64, 1, seed);
+}
+
+#[test]
+fn test_purger() {
+    let file = {
+        let mut dir = std::env::temp_dir();
+        dir.push("test-purger-purge-file.data");
+        dir.into_os_string()
+    };
+    let (mut files, mut efiles) = (vec![], vec![]);
+
+    assert_eq!(purge_file(file.clone(), &mut files, &mut efiles), "error");
+    assert_eq!(files.len(), 0);
+    assert_eq!(efiles.len(), 1);
+    assert_eq!(efiles[0], file);
+    efiles.remove(0);
+
+    fs::File::create(&file).unwrap();
+    assert_eq!(purge_file(file.clone(), &mut files, &mut efiles), "ok");
+    assert_eq!(files.len(), 0);
+    assert_eq!(efiles.len(), 0);
+
+    let fd = fs::File::create(&file).unwrap();
+    fd.lock_shared().unwrap();
+    assert_eq!(purge_file(file.clone(), &mut files, &mut efiles), "locked");
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0], file);
+    assert_eq!(efiles.len(), 0);
+    fd.unlock().unwrap();
+
+    fd.lock_exclusive().unwrap();
+    assert_eq!(purge_file(file.clone(), &mut files, &mut efiles), "locked");
+    assert_eq!(files.len(), 2);
+    assert_eq!(files[0], file);
+    assert_eq!(files[1], file);
+    assert_eq!(efiles.len(), 0);
+    fd.unlock().unwrap();
+    files.remove(0);
+    files.remove(0);
+
+    assert_eq!(purge_file(file.clone(), &mut files, &mut efiles), "ok");
+    assert_eq!(files.len(), 0);
+    assert_eq!(efiles.len(), 0);
 }
 
 fn run_robt_llrb(name: &str, mut n_ops: u64, key_max: i64, repeat: usize, seed: u128) {

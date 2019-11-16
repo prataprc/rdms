@@ -181,12 +181,11 @@ where
             dir, root
         )))?;
 
-        info!(
-            target: "robtfc",
-            "{:?}, open from {:?}/{} with config ...\n{}", name, dir, name, self.config
-        );
+        info!(target: "robtfc", "{:?}, open from {:?}/{} with config ...", name, dir, name);
 
         let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
+        snapshot.log()?;
+
         let (tx, rx) = mpsc::channel();
         let inner = InnerRobt::Snapshot {
             dir: dir.to_os_string(),
@@ -338,7 +337,9 @@ where
         match inner.deref() {
             InnerRobt::Snapshot { dir, name, .. } => {
                 info!(target: "robt  ", "{:?}, new reader ...", name);
-                Snapshot::open(dir, &name.0)
+                let snapshot = Snapshot::open(dir, &name.0)?;
+                snapshot.log()?;
+                Ok(snapshot)
             }
             InnerRobt::Build { .. } => panic!("cannot create a reader"),
         }
@@ -363,7 +364,9 @@ where
                 let snapshot = {
                     let b = Builder::<K, V>::initial(dir, &name.0, config.clone())?;
                     b.build(iter, md)?;
-                    Snapshot::<K, V>::open(dir, &name.0)?
+                    let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
+                    snapshot.log()?;
+                    snapshot
                 };
                 let stats = snapshot.to_stats()?;
                 let footprint = snapshot.footprint()?;
@@ -402,6 +405,7 @@ where
                     let b = Builder::incremental(dir, &name.0, config.clone())?;
                     b.build(iter, md)?;
                     let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
+                    snapshot.log()?;
 
                     // purge old snapshots file(s).
                     purge_tx
@@ -475,6 +479,7 @@ where
                     let b = Builder::initial(dir, &name.0, conf)?;
                     b.build(iter, meta)?;
                     let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
+                    snapshot.log()?;
 
                     // purge old snapshots file(s).
                     purge_tx
@@ -1573,8 +1578,6 @@ where
             phantom_val: marker::PhantomData,
         };
         snap.config = snap.to_stats()?.into();
-
-        snap.log()?;
 
         Ok(snap) // Okey dockey
     }

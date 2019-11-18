@@ -1,13 +1,12 @@
 // TODO: flush put blocks into tx channel. Right now we simply unwrap()
 
-use std::{borrow::Borrow, cmp::Ordering, convert::TryInto, fs, marker, ops::Bound};
+use std::{borrow::Borrow, cmp::Ordering, convert::TryInto, marker, ops::Bound};
 
 use crate::{
     core::{self, Diff, Result, Serialize},
     error::Error,
     robt::{Config, Flusher, Stats},
     robt_entry::{MEntry, ZEntry},
-    util,
 };
 
 // Binary format (InterMediate-Block prefix):
@@ -197,13 +196,7 @@ impl<K, V> MBlock<K, V>
 where
     K: Ord + Serialize,
 {
-    pub(crate) fn new_decode(
-        fd: &mut fs::File,
-        fpos: u64,
-        config: &Config,
-    ) -> Result<MBlock<K, V>> {
-        let n: u64 = config.m_blocksize.try_into().unwrap();
-        let block = util::read_buffer(fd, fpos, n, "reading mblock")?;
+    pub(crate) fn new_decode(block: Vec<u8>) -> Result<MBlock<K, V>> {
         let count = u32::from_be_bytes(block[..4].try_into().unwrap());
         let adjust: usize = (4 + (count * 4)).try_into().unwrap();
         let offsets = &block[4..adjust] as *const [u8];
@@ -570,13 +563,7 @@ where
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
 {
-    pub(crate) fn new_decode(
-        fd: &mut fs::File,
-        fpos: u64,
-        config: &Config,
-    ) -> Result<ZBlock<K, V>> {
-        let n: u64 = config.z_blocksize.try_into().unwrap();
-        let block = util::read_buffer(fd, fpos, n, "reading zblock")?;
+    pub(crate) fn new_decode(block: Vec<u8>) -> Result<ZBlock<K, V>> {
         let count = u32::from_be_bytes(block[..4].try_into().unwrap());
         let adjust: usize = (4 + (count * 4)).try_into().unwrap();
         let offsets = &block[4..adjust] as *const [u8];

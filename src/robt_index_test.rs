@@ -1,7 +1,8 @@
 use rand::prelude::random;
+use std::fs;
 
 use super::*;
-use crate::{core, vlog};
+use crate::{core, util, vlog};
 
 #[test]
 fn test_mblock_m() {
@@ -46,8 +47,13 @@ fn test_mblock_m() {
         file
     };
 
-    let (mut fd, fpos) = (util::open_file_r(&file).unwrap(), 0);
-    let mb = MBlock::<i32, i32>::new_decode(&mut fd, fpos, &config).unwrap();
+    let mb = {
+        let (mut fd, fpos) = (util::open_file_r(&file).unwrap(), 0);
+        MBlock::<i32, i32>::new_decode(
+            util::read_buffer(&mut fd, fpos, config.m_blocksize as u64, "reading mblock").unwrap(),
+        )
+        .unwrap()
+    };
     assert_eq!(mb.len(), keys.len());
 
     for (i, entry) in keys.iter().enumerate() {
@@ -153,8 +159,13 @@ fn test_mblock_z() {
         file
     };
 
-    let (mut fd, fpos) = (util::open_file_r(&file).unwrap(), 0);
-    let mb = MBlock::<i32, i32>::new_decode(&mut fd, fpos, &config).unwrap();
+    let mb = {
+        let (mut fd, fpos) = (util::open_file_r(&file).unwrap(), 0);
+        MBlock::<i32, i32>::new_decode(
+            util::read_buffer(&mut fd, fpos, config.m_blocksize as u64, "reading mblock").unwrap(),
+        )
+        .unwrap()
+    };
     assert_eq!(mb.len(), keys.len());
 
     for (i, entry) in keys.iter().enumerate() {
@@ -272,8 +283,13 @@ fn test_zblock1() {
         file
     };
 
-    let (mut fd, fpos) = (util::open_file_r(&file).unwrap(), 0);
-    let zb = ZBlock::<i32, i32>::new_decode(&mut fd, fpos, &config).unwrap();
+    let zb = {
+        let (mut fd, fpos) = (util::open_file_r(&file).unwrap(), 0);
+        ZBlock::<i32, i32>::new_decode(
+            util::read_buffer(&mut fd, fpos, config.z_blocksize as u64, "reading zblock").unwrap(),
+        )
+        .unwrap()
+    };
     assert_eq!(zb.len(), entries.len());
 
     for (i, entry) in entries.iter().enumerate() {
@@ -360,8 +376,13 @@ fn test_zblock2() {
         file
     };
 
-    let (mut fd, fpos) = (util::open_file_r(&file).unwrap(), 0);
-    let zb = ZBlock::<i32, i32>::new_decode(&mut fd, fpos, &config).unwrap();
+    let zb = {
+        let (mut fd, fpos) = (util::open_file_r(&file).unwrap(), 0);
+        ZBlock::<i32, i32>::new_decode(
+            util::read_buffer(&mut fd, fpos, config.z_blocksize as u64, "reading zblock").unwrap(),
+        )
+        .unwrap()
+    };
     assert_eq!(zb.len(), entries.len());
 
     let mut doff = 0;
@@ -470,8 +491,13 @@ fn test_zblock3() {
         file
     };
 
-    let (mut fd, fpos) = (util::open_file_r(&file).unwrap(), 0);
-    let zb = ZBlock::<i32, i32>::new_decode(&mut fd, fpos, &config).unwrap();
+    let zb = {
+        let (mut fd, fpos) = (util::open_file_r(&file).unwrap(), 0);
+        ZBlock::<i32, i32>::new_decode(
+            util::read_buffer(&mut fd, fpos, config.z_blocksize as u64, "reading zblock").unwrap(),
+        )
+        .unwrap()
+    };
     assert_eq!(zb.len(), entries.len());
 
     let mut voff = 0;
@@ -574,8 +600,13 @@ fn test_zblock4() {
         file
     };
 
-    let (mut fd, fpos) = (util::open_file_r(&file).unwrap(), 0);
-    let zb = ZBlock::<i32, i32>::new_decode(&mut fd, fpos, &config).unwrap();
+    let zb = {
+        let (mut fd, fpos) = (util::open_file_r(&file).unwrap(), 0);
+        ZBlock::<i32, i32>::new_decode(
+            util::read_buffer(&mut fd, fpos, config.z_blocksize as u64, "reading zblock").unwrap(),
+        )
+        .unwrap()
+    };
     assert_eq!(zb.len(), entries.len());
 
     let (mut doff, mut voff) = (0, 0);

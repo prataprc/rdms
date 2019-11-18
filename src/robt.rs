@@ -370,7 +370,10 @@ where
                 };
                 let stats = snapshot.to_stats()?;
                 let footprint = snapshot.footprint()?;
-                info!(target: "robt  ", "{:?}, flushed to index file {:?}", name, snapshot.index_fd.0);
+                info!(
+                    target: "robt  ",
+                    "{:?}, flushed to index file {:?}", name, snapshot.index_fd.to_file()
+                );
                 if let Some((vlog_file, _)) = &snapshot.valog_fd {
                     info!(target: "robt  ", "{:?}, flushed to valog file {:?}", name, vlog_file);
                 }
@@ -411,13 +414,16 @@ where
                     purge_tx
                         .as_ref()
                         .unwrap()
-                        .send(old_snapshot.index_fd.0.clone())?;
+                        .send(old_snapshot.index_fd.to_file())?;
 
                     (name, snapshot)
                 };
                 let stats = snapshot.to_stats()?;
                 let footprint = snapshot.footprint()?;
-                info!(target: "robt  ", "{:?}, commited to index file {:?}", name, snapshot.index_fd.0);
+                info!(
+                    target: "robt  ",
+                    "{:?}, commited to index file {:?}", name, snapshot.index_fd.to_file()
+                );
                 if let Some((vlog_file, _)) = &snapshot.valog_fd {
                     info!(target: "robt  ", "{:?}, commited to valog file {:?}", name, vlog_file);
                 }
@@ -485,7 +491,7 @@ where
                     purge_tx
                         .as_ref()
                         .unwrap()
-                        .send(old_snapshot.index_fd.0.clone())?;
+                        .send(old_snapshot.index_fd.to_file())?;
                     match &old_snapshot.valog_fd {
                         Some((file, _)) => purge_tx.as_ref().unwrap().send(file.clone())?,
                         None => (),
@@ -495,7 +501,10 @@ where
                 };
                 let stats = snapshot.to_stats()?;
                 let footprint = snapshot.footprint()?;
-                info!(target: "robt  ", "{:?}, compacted to index file {:?}", name, snapshot.index_fd.0);
+                info!(
+                    target: "robt  ",
+                    "{:?}, compacted to index file {:?}", name, snapshot.index_fd.to_file()
+                );
                 if let Some((vlog_file, _)) = &snapshot.valog_fd {
                     info!(target: "robt  ", "{:?}, compacted to valog file {:?}", name, vlog_file);
                 }
@@ -1491,6 +1500,86 @@ fn thread_flush(
     Ok(())
 }
 
+// enumerated index file, that can use file-access or mmap-access based
+// on configured variant.
+enum IndexFile {
+    Block {
+        fd: fs::File,
+        file: ffi::OsString,
+    },
+    Mmap {
+        fd: fs::File,
+        mmap: memmap::Mmap,
+        file: ffi::OsString,
+    },
+}
+
+impl IndexFile {
+    // always created for file access.
+    fn new_block(file: ffi::OsString) -> Result<IndexFile> {
+        Ok(IndexFile::Block {
+            fd: util::open_file_r(&file)?,
+            file,
+        })
+    }
+
+    // and later on converted to mmap access, if configured,
+    unsafe fn enable_mmap(&mut self) -> Result<()> {
+        match self {
+            IndexFile::Block { file, .. } => {
+                let file = file.clone();
+                let fd = util::open_file_r(&file)?;
+                match memmap::Mmap::map(&fd) {
+                    Ok(mmap) => {
+                        *self = IndexFile::Mmap { fd, file, mmap };
+                        Ok(())
+                    }
+                    Err(err) => Err(Error::InvalidSnapshot(format!(
+                        "opening {:?} in mmap mode failed, {:?}",
+                        file, err
+                    ))),
+                }
+            }
+            IndexFile::Mmap { .. } => Ok(()),
+        }
+    }
+
+    fn read_buffer(&mut self, fpos: u64, n: usize, msg: &str) -> Result<Vec<u8>> {
+        Ok(match self {
+            IndexFile::Block { fd, .. } => {
+                let n: u64 = n.try_into().unwrap();
+                util::read_buffer(fd, fpos, n, msg)?
+            }
+            IndexFile::Mmap { mmap, .. } => {
+                let start: usize = fpos.try_into().unwrap();
+                mmap[start..(start + n)].to_vec()
+            }
+        })
+    }
+
+    fn to_file(&self) -> ffi::OsString {
+        match self {
+            IndexFile::Block { file, .. } => file.clone(),
+            IndexFile::Mmap { file, .. } => file.clone(),
+        }
+    }
+
+    fn as_fd(&self) -> &fs::File {
+        match self {
+            IndexFile::Block { fd, .. } => fd,
+            IndexFile::Mmap { fd, .. } => fd,
+        }
+    }
+
+    fn footprint(&self) -> Result<isize> {
+        let file = match self {
+            IndexFile::Block { file, .. } => file,
+            IndexFile::Mmap { file, .. } => file,
+        };
+        Ok(fs::metadata(file)?.len().try_into().unwrap())
+    }
+}
+
 /// A read only snapshot of BTree built using [robt] index.
 ///
 /// [robt]: crate::robt
@@ -1504,7 +1593,7 @@ where
     meta: Vec<MetaItem>,
     config: Config,
     // working fields
-    index_fd: (ffi::OsString, fs::File),
+    index_fd: IndexFile,
     valog_fd: Option<(ffi::OsString, fs::File)>,
 
     phantom_key: marker::PhantomData<K>,
@@ -1517,7 +1606,7 @@ where
     V: Clone + Diff + Serialize,
 {
     fn drop(&mut self) {
-        self.index_fd.1.unlock().ok();
+        self.index_fd.as_fd().unlock().ok();
         if let Some((_, fd)) = &self.valog_fd {
             fd.unlock().ok();
         }
@@ -1546,11 +1635,8 @@ where
         let config: Config = stats.into();
 
         // open index file.
-        let index_fd = {
-            let index_file = Config::stitch_index_file(dir, name);
-            (index_file.clone(), util::open_file_r(&index_file.as_ref())?)
-        };
-        index_fd.1.lock_shared()?;
+        let index_fd = IndexFile::new_block(Config::stitch_index_file(dir, name))?;
+        index_fd.as_fd().lock_shared()?;
         // open optional value log file.
         let valog_fd = match config.vlog_file {
             Some(vfile) => {
@@ -1580,6 +1666,10 @@ where
         snap.config = snap.to_stats()?.into();
 
         Ok(snap) // Okey dockey
+    }
+
+    pub fn enable_mmap(&mut self) -> Result<()> {
+        unsafe { self.index_fd.enable_mmap() }
     }
 
     pub fn is_snapshot(file_name: &ffi::OsStr) -> bool {
@@ -1680,12 +1770,12 @@ where
     V: Clone + Diff + Serialize,
 {
     fn footprint(&self) -> Result<isize> {
-        let mut footprint = fs::metadata(&self.index_fd.0)?.len();
-        footprint += match &self.valog_fd {
-            Some((vlog_file, _)) => fs::metadata(vlog_file)?.len(),
+        let i_footprint: isize = self.index_fd.footprint()?.try_into().unwrap();
+        let v_footprint: isize = match &self.valog_fd {
+            Some((vlog_file, _)) => fs::metadata(vlog_file)?.len().try_into().unwrap(),
             None => 0,
         };
-        Ok(footprint.try_into().unwrap())
+        Ok(i_footprint + v_footprint)
     }
 }
 
@@ -1866,10 +1956,11 @@ where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        let mblock = {
-            let fd = &mut self.index_fd.1;
-            MBlock::<K, V>::new_decode(fd, fpos, &self.config)?
-        };
+        let mblock = MBlock::<K, V>::new_decode(self.index_fd.read_buffer(
+            fpos,
+            self.config.m_blocksize,
+            "get_zpos(), reading mblock",
+        )?)?;
         match mblock.get(key, Bound::Unbounded, Bound::Unbounded) {
             Err(Error::__LessThan) => Err(Error::KeyNotFound),
             Ok(mentry) if mentry.is_zblock() => Ok(mentry.to_fpos()),
@@ -1886,10 +1977,11 @@ where
         let zfpos = self.get_zpos(key, self.to_root().unwrap())?;
 
         // println!("do_get {}", zfpos);
-        let zblock: ZBlock<K, V> = {
-            let fd = &mut self.index_fd.1;
-            ZBlock::new_decode(fd, zfpos, &self.config)?
-        };
+        let zblock: ZBlock<K, V> = ZBlock::new_decode(self.index_fd.read_buffer(
+            zfpos,
+            self.config.z_blocksize,
+            "do_get(), reading zblock",
+        )?)?;
         match zblock.find(key, Bound::Unbounded, Bound::Unbounded) {
             Ok((_, entry)) => {
                 if entry.as_key().borrow().eq(key) {
@@ -1985,12 +2077,15 @@ where
         mut fpos: u64,           // from node
         mzs: &mut Vec<MZ<K, V>>, // output
     ) -> Result<()> {
-        let fd = &mut self.index_fd.1;
         let config = &self.config;
 
         // println!("build_fwd {} {}", mzs.len(), fpos);
         let zfpos = loop {
-            let mblock = MBlock::<K, V>::new_decode(fd, fpos, config)?;
+            let mblock = MBlock::<K, V>::new_decode(self.index_fd.read_buffer(
+                fpos,
+                config.m_blocksize,
+                "build_fwd(), reading mblock",
+            )?)?;
             mzs.push(MZ::M { fpos, index: 0 });
 
             let mentry = mblock.to_entry(0)?;
@@ -2001,7 +2096,11 @@ where
         };
         // println!("build_fwd {}", mzs.len());
 
-        let zblock = ZBlock::new_decode(fd, zfpos, config)?;
+        let zblock = ZBlock::new_decode(self.index_fd.read_buffer(
+            zfpos,
+            config.z_blocksize,
+            "build_fwd(), reading zblock",
+        )?)?;
         mzs.push(MZ::Z { zblock, index: 0 });
         Ok(())
     }
@@ -2012,19 +2111,21 @@ where
         match mzs.pop() {
             None => Ok(()),
             Some(MZ::M { fpos, mut index }) => {
-                let mblock = {
-                    let fd = &mut self.index_fd.1;
-                    MBlock::<K, V>::new_decode(fd, fpos, config)?
-                };
+                let mblock = MBlock::<K, V>::new_decode(self.index_fd.read_buffer(
+                    fpos,
+                    config.m_blocksize,
+                    "rebuild_fwd(), reading mblock",
+                )?)?;
                 index += 1;
                 match mblock.to_entry(index) {
                     Ok(MEntry::DecZ { fpos: zfpos, .. }) => {
                         mzs.push(MZ::M { fpos, index });
 
-                        let zblock = {
-                            let fd = &mut self.index_fd.1;
-                            ZBlock::new_decode(fd, zfpos, config)?
-                        };
+                        let zblock = ZBlock::new_decode(self.index_fd.read_buffer(
+                            zfpos,
+                            config.z_blocksize,
+                            "rebuild_fwd(), reading zblock",
+                        )?)?;
                         mzs.push(MZ::Z { zblock, index: 0 });
                         Ok(())
                     }
@@ -2049,10 +2150,11 @@ where
         let config = &self.config;
 
         let zfpos = loop {
-            let mblock = {
-                let fd = &mut self.index_fd.1;
-                MBlock::<K, V>::new_decode(fd, fpos, config)?
-            };
+            let mblock = MBlock::<K, V>::new_decode(self.index_fd.read_buffer(
+                fpos,
+                config.m_blocksize,
+                "build_rev(), reading mblock",
+            )?)?;
             let index = mblock.len() - 1;
             mzs.push(MZ::M { fpos, index });
 
@@ -2063,10 +2165,11 @@ where
             fpos = mentry.to_fpos();
         };
 
-        let zblock = {
-            let fd = &mut self.index_fd.1;
-            ZBlock::new_decode(fd, zfpos, config)?
-        };
+        let zblock = ZBlock::new_decode(self.index_fd.read_buffer(
+            zfpos,
+            config.z_blocksize,
+            "build_rev(), reading zblock",
+        )?)?;
         let index: isize = (zblock.len() - 1).try_into().unwrap();
         mzs.push(MZ::Z { zblock, index });
         Ok(())
@@ -2079,19 +2182,21 @@ where
             None => Ok(()),
             Some(MZ::M { index: 0, .. }) => self.rebuild_rev(mzs),
             Some(MZ::M { fpos, mut index }) => {
-                let mblock = {
-                    let fd = &mut self.index_fd.1;
-                    MBlock::<K, V>::new_decode(fd, fpos, config)?
-                };
+                let mblock = MBlock::<K, V>::new_decode(self.index_fd.read_buffer(
+                    fpos,
+                    config.m_blocksize,
+                    "rebuild_rev(), reading mblock",
+                )?)?;
                 index -= 1;
                 match mblock.to_entry(index) {
                     Ok(MEntry::DecZ { fpos: zfpos, .. }) => {
                         mzs.push(MZ::M { fpos, index });
 
-                        let zblock = {
-                            let fd = &mut self.index_fd.1;
-                            ZBlock::new_decode(fd, zfpos, config)?
-                        };
+                        let zblock = ZBlock::new_decode(self.index_fd.read_buffer(
+                            zfpos,
+                            config.z_blocksize,
+                            "rebuild_rev(), reading zblock",
+                        )?)?;
                         let idx: isize = (zblock.len() - 1).try_into().unwrap();
                         mzs.push(MZ::Z { zblock, index: idx });
                         Ok(())
@@ -2118,12 +2223,15 @@ where
         Q: Ord + ?Sized,
     {
         let mut fpos = self.to_root().unwrap();
-        let fd = &mut self.index_fd.1;
         let config = &self.config;
         let (from_min, to_max) = (Bound::Unbounded, Bound::Unbounded);
 
         let zfpos = loop {
-            let mblock = MBlock::<K, V>::new_decode(fd, fpos, config)?;
+            let mblock = MBlock::<K, V>::new_decode(self.index_fd.read_buffer(
+                fpos,
+                config.m_blocksize,
+                "build(), reading mblock",
+            )?)?;
             let mentry = match mblock.find(key, from_min, to_max) {
                 Ok(mentry) => Ok(mentry),
                 Err(Error::__LessThan) => mblock.to_entry(0),
@@ -2137,7 +2245,11 @@ where
             fpos = mentry.to_fpos();
         };
 
-        let zblock = ZBlock::new_decode(fd, zfpos, config)?;
+        let zblock = ZBlock::new_decode(self.index_fd.read_buffer(
+            zfpos,
+            config.z_blocksize,
+            "build(), reading zblock",
+        )?)?;
         let (index, entry) = match zblock.find(key, from_min, to_max) {
             Ok((index, entry)) => Ok((index, entry)),
             Err(Error::__LessThan) => zblock.to_entry(0),

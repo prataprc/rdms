@@ -341,6 +341,10 @@ fn run_robt_llrb(name: &str, mut n_ops: u64, key_max: i64, repeat: usize, seed: 
         }
 
         let mut snap = robt::Snapshot::<i64, i64>::open(&dir, name).unwrap();
+        if rng.gen::<bool>() {
+            println!("enabling mmap");
+            snap.enable_mmap();
+        }
         assert_eq!(snap.len(), refs.len());
         assert_eq!(snap.to_seqno(), llrb.to_seqno());
         assert_eq!(snap.to_app_meta().unwrap(), app_meta.as_bytes().to_vec());

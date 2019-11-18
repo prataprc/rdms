@@ -200,7 +200,7 @@ where
     /// Applicable only to disk index, identifies the index's master file.
     fn to_root(&self) -> Self::O;
 
-    /// Return the metadata from index that was previously committed.
+    /// Return application metadata, that was previously commited into index.
     fn to_metadata(&self) -> Result<Vec<u8>>;
 
     /// Return the current seqno tracked by this index.
@@ -221,14 +221,18 @@ where
     /// reference, there can be concurrent compact() call. It is upto the
     /// implementing type to synchronize the concurrent commit() and compact()
     /// calls.
-    fn commit(&mut self, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<usize>;
+    fn commit<F>(&mut self, iter: IndexIter<K, V>, metacb: F) -> Result<usize>
+    where
+        F: Fn(Vec<u8>) -> Vec<u8>;
 
     /// Compact index to reduce index-footprint. Though it takes mutable
     /// reference, there can be concurrent commit() call. It is upto the
     /// implementing type to synchronize the concurrent commit() and
     /// compact() calls. All entries whose mutation versions are below the
     /// `cutoff` bound can be purged permenantly.
-    fn compact(&mut self, cutoff: Bound<u64>) -> Result<usize>;
+    fn compact<F>(&mut self, cutoff: Bound<u64>, metacb: F) -> Result<usize>
+    where
+        F: Fn(Vec<Vec<u8>>) -> Vec<u8>;
 }
 
 /// Validate trait that can be called on an index instance to self

@@ -1,5 +1,5 @@
 use std::{
-    ffi, fmt, marker,
+    convert, ffi, fmt, marker,
     ops::Bound,
     thread,
     time::{Duration, SystemTime},
@@ -95,12 +95,18 @@ where
         self.index.to_writer()
     }
 
-    pub fn commit(&mut self, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<usize> {
-        self.index.commit(iter, meta)
+    pub fn commit<F>(&mut self, iter: IndexIter<K, V>, metacb: F) -> Result<usize>
+    where
+        F: Fn(Vec<u8>) -> Vec<u8>,
+    {
+        self.index.commit(iter, metacb)
     }
 
-    pub fn compact(&mut self, cutoff: Bound<u64>) -> Result<usize> {
-        self.index.compact(cutoff)
+    pub fn compact<F>(&mut self, cutoff: Bound<u64>, metacb: F) -> Result<usize>
+    where
+        F: Fn(Vec<Vec<u8>>) -> Vec<u8>,
+    {
+        self.index.compact(cutoff, metacb)
     }
 }
 
@@ -154,8 +160,7 @@ where
             _phantom_key: &phantom_key,
             _phantom_val: &phantom_val,
         });
-        let meta = vec![];
-        rdms.commit(iter, meta).unwrap();
+        rdms.commit(iter, convert::identity).unwrap();
         elapsed = start.elapsed().ok().unwrap();
     }
 }

@@ -101,11 +101,17 @@ where
         Ok(Panic::new("nodisk"))
     }
 
-    fn commit(&mut self, _: IndexIter<K, V>, _: Vec<u8>) -> Result<usize> {
+    fn commit<F>(&mut self, _: IndexIter<K, V>, _metadb: F) -> Result<usize>
+    where
+        F: Fn(Vec<u8>) -> Vec<u8>,
+    {
         Ok(0)
     }
 
-    fn compact(&mut self, _: Bound<u64>) -> Result<usize> {
+    fn compact<F>(&mut self, _: Bound<u64>, _: F) -> Result<usize>
+    where
+        F: Fn(Vec<Vec<u8>>) -> Vec<u8>,
+    {
         Ok(0)
     }
 }

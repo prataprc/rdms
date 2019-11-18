@@ -349,7 +349,10 @@ where
         Ok(Panic::new("robt"))
     }
 
-    fn commit(&mut self, iter: IndexIter<K, V>, md: Vec<u8>) -> Result<usize> {
+    fn commit<F>(&mut self, iter: IndexIter<K, V>, metacb: F) -> Result<usize>
+    where
+        F: Fn(Vec<u8>) -> Vec<u8>,
+    {
         let mut inner = self.inner.lock().unwrap();
         let new_inner = match inner.deref() {
             InnerRobt::Build {
@@ -363,7 +366,7 @@ where
 
                 let snapshot = {
                     let b = Builder::<K, V>::initial(dir, &name.0, config.clone())?;
-                    b.build(iter, md)?;
+                    b.build(iter, metacb(vec![]))?;
                     let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
                     snapshot.log()?;
                     snapshot
@@ -400,13 +403,14 @@ where
 
                 let (name, snapshot) = {
                     let mut old_snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
+                    let old_meta = old_snapshot.to_app_meta()?;
                     let iter = lsm::y_iter(iter, old_snapshot.iter()?, false /*reverse*/);
 
                     info!(target: "robt  ", "{:?}, incremental commit ...", name);
 
                     let name = name.clone().next();
                     let b = Builder::incremental(dir, &name.0, config.clone())?;
-                    b.build(iter, md)?;
+                    b.build(iter, metacb(old_meta))?;
                     let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
                     snapshot.log()?;
 
@@ -444,7 +448,10 @@ where
         Ok(0)
     }
 
-    fn compact(&mut self, cutoff: Bound<u64>) -> Result<usize> {
+    fn compact<F>(&mut self, cutoff: Bound<u64>, _metacb: F) -> Result<usize>
+    where
+        F: Fn(Vec<Vec<u8>>) -> Vec<u8>,
+    {
         let mut inner = self.inner.lock().unwrap();
         let new_inner = match inner.deref() {
             InnerRobt::Build {
@@ -1524,9 +1531,9 @@ impl IndexFile {
     }
 
     // and later on converted to mmap access, if configured,
-    unsafe fn enable_mmap(&mut self) -> Result<()> {
+    unsafe fn set_mmap(&mut self, ok: bool) -> Result<()> {
         match self {
-            IndexFile::Block { file, .. } => {
+            IndexFile::Block { file, .. } if ok => {
                 let file = file.clone();
                 let fd = util::open_file_r(&file)?;
                 match memmap::Mmap::map(&fd) {
@@ -1540,6 +1547,13 @@ impl IndexFile {
                     ))),
                 }
             }
+            IndexFile::Mmap { file, .. } if !ok => {
+                let file = file.clone();
+                let fd = util::open_file_r(&file)?;
+                *self = IndexFile::Block { file, fd };
+                Ok(())
+            }
+            IndexFile::Block { .. } => Ok(()),
             IndexFile::Mmap { .. } => Ok(()),
         }
     }
@@ -1668,8 +1682,8 @@ where
         Ok(snap) // Okey dockey
     }
 
-    pub fn enable_mmap(&mut self) -> Result<()> {
-        unsafe { self.index_fd.enable_mmap() }
+    pub fn set_mmap(&mut self, ok: bool) -> Result<()> {
+        unsafe { self.index_fd.set_mmap(ok) }
     }
 
     pub fn is_snapshot(file_name: &ffi::OsStr) -> bool {

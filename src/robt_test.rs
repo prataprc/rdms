@@ -310,9 +310,10 @@ fn run_robt_llrb(name: &str, mut n_ops: u64, key_max: i64, repeat: usize, seed: 
             91..=100 => (Bound::<u64>::Excluded(n_ops), Bound::<u64>::Unbounded),
             _ => unreachable!(),
         };
+        let mmap = rng.gen::<bool>();
         println!(
-            "seed:{} n_ops:{} lsm:{} delta:{} vlog:{} within:{:?}",
-            seed, n_ops, lsm, config.delta_ok, config.value_in_vlog, within
+            "seed:{} n_ops:{} lsm:{} delta:{} vlog:{} within:{:?} mmap: {}",
+            seed, n_ops, lsm, config.delta_ok, config.value_in_vlog, within, mmap,
         );
         let (mut llrb, refs) = llrb_to_refs1(llrb, within.clone(), &config);
         let n_deleted: usize = refs
@@ -341,10 +342,7 @@ fn run_robt_llrb(name: &str, mut n_ops: u64, key_max: i64, repeat: usize, seed: 
         }
 
         let mut snap = robt::Snapshot::<i64, i64>::open(&dir, name).unwrap();
-        if rng.gen::<bool>() {
-            println!("enabling mmap");
-            snap.enable_mmap();
-        }
+        snap.set_mmap(mmap);
         assert_eq!(snap.len(), refs.len());
         assert_eq!(snap.to_seqno(), llrb.to_seqno());
         assert_eq!(snap.to_app_meta().unwrap(), app_meta.as_bytes().to_vec());

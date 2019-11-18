@@ -425,12 +425,18 @@ where
         self.as_mut().to_writer()
     }
 
-    fn commit(&mut self, iter: IndexIter<K, V>, m: Vec<u8>) -> Result<usize> {
-        self.as_mut().commit(iter, m)
+    fn commit<F>(&mut self, iter: IndexIter<K, V>, metacb: F) -> Result<usize>
+    where
+        F: Fn(Vec<u8>) -> Vec<u8>,
+    {
+        self.as_mut().commit(iter, metacb)
     }
 
-    fn compact(&mut self, cutoff: Bound<u64>) -> Result<usize> {
-        self.as_mut().compact(cutoff)
+    fn compact<F>(&mut self, cutoff: Bound<u64>, metacb: F) -> Result<usize>
+    where
+        F: Fn(Vec<Vec<u8>>) -> Vec<u8>,
+    {
+        self.as_mut().compact(cutoff, metacb)
     }
 }
 
@@ -490,13 +496,11 @@ where
         Ok(LlrbWriter::<K, V>::new(index, writer))
     }
 
-    fn commit(&mut self, iter: IndexIter<K, V>, m: Vec<u8>) -> Result<usize> {
-        if m.len() > 0 {
-            warn!(
-                target: "llrb  ",
-                "{:?}, commit ignore metadata of len {}", self.name, m.len()
-            );
-        }
+    fn commit<F>(&mut self, iter: IndexIter<K, V>, _metacb: F) -> Result<usize>
+    where
+        F: Fn(Vec<u8>) -> Vec<u8>,
+    {
+        warn!(target: "llrb  ", "{:?}, ignores all metadata", self.name);
 
         let count = {
             let _latch = self.latch.acquire_write(self.spin);
@@ -513,7 +517,10 @@ where
         Ok(count.try_into().unwrap())
     }
 
-    fn compact(&mut self, cutoff: Bound<u64>) -> Result<usize> {
+    fn compact<F>(&mut self, cutoff: Bound<u64>, _metacb: F) -> Result<usize>
+    where
+        F: Fn(Vec<Vec<u8>>) -> Vec<u8>,
+    {
         let mut low = Bound::Unbounded;
         let mut count = 0;
         const LIMIT: usize = 1_000; // TODO: no magic number

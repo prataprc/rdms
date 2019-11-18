@@ -1,4 +1,4 @@
-use log::debug;
+use log::{debug, info};
 
 use std::{
     borrow::Borrow,
@@ -679,7 +679,10 @@ where
         Ok(DgmReader::new(&self.name, arc_rs))
     }
 
-    fn commit(&mut self, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<usize> {
+    fn commit<F>(&mut self, iter: IndexIter<K, V>, metacb: F) -> Result<usize>
+    where
+        F: Fn(Vec<u8>) -> Vec<u8>,
+    {
         use Snapshot::{Active, Commit, Compact, Flush, Write};
 
         self.cleanup_handles();
@@ -715,7 +718,7 @@ where
 
         let no_reverse = false;
         let iter = lsm::y_iter(iter, r_m1.iter()?, no_reverse);
-        disk.commit(iter, meta)?;
+        disk.commit(iter, metacb)?;
 
         // update the readers
         {
@@ -741,7 +744,10 @@ where
         Ok(0)
     }
 
-    fn compact(&mut self, _cutoff: Bound<u64>) -> Result<usize> {
+    fn compact<F>(&mut self, _cutoff: Bound<u64>, metacb: F) -> Result<usize>
+    where
+        F: Fn(Vec<Vec<u8>>) -> Vec<u8>,
+    {
         use Snapshot::{Active, Commit, Compact, Flush, Write};
 
         self.cleanup_handles();
@@ -788,7 +794,10 @@ where
                     ),
                     _ => unreachable!(),
                 };
-                let meta = d1.as_mut_disk().unwrap().to_metadata()?;
+                let meta = metacb(vec![
+                    d1.as_mut_disk().unwrap().to_metadata()?,
+                    d2.as_mut_disk().unwrap().to_metadata()?,
+                ]);
                 levels.disks[l1] = d1;
                 levels.disks[l1] = d2;
 
@@ -820,14 +829,14 @@ where
                 return Ok(0);
             }
             (None, None, None, Some(mut disk)) => {
-                disk.compact(_cutoff)?;
+                disk.compact(_cutoff, metacb)?;
                 disk
             }
             (Some(r1), Some(r2), Some(meta), Some(mut disk)) => {
                 let no_reverse = false;
                 let (iter1, iter2) = (r1.1.iter()?, r2.1.iter()?);
                 let iter = lsm::y_iter_versions(iter1, iter2, no_reverse);
-                disk.commit(iter, meta)?;
+                disk.commit(iter, |_| meta.clone())?;
                 disk
             }
             _ => unreachable!(),
@@ -1322,7 +1331,10 @@ where
             // unsafe
             (ccmu.get_ptr() as *mut Dgm<K, V, M, D>).as_mut().unwrap()
         };
-        dgm.compact(Bound::Unbounded).unwrap(); // TODO: log error using error!
+        match dgm.compact(Bound::Unbounded, |metas| metas[0].clone()) {
+            Ok(count) => info!(target: "dgm   ", "{:?}, compacted {} entries", dgm.name, count),
+            Err(err) => info!(target: "dgm   ", "{:?}, compaction error, {:?}", dgm.name, err),
+        }
         elapsed = start.elapsed().ok().unwrap();
     }
 }

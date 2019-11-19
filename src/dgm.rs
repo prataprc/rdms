@@ -679,7 +679,7 @@ where
         Ok(DgmReader::new(&self.name, arc_rs))
     }
 
-    fn commit<F>(&mut self, iter: IndexIter<K, V>, metacb: F) -> Result<usize>
+    fn commit<F>(&mut self, iter: IndexIter<K, V>, metacb: F) -> Result<()>
     where
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
@@ -741,10 +741,10 @@ where
                 }
             }
         }
-        Ok(0)
+        Ok(())
     }
 
-    fn compact<F>(&mut self, _cutoff: Bound<u64>, metacb: F) -> Result<usize>
+    fn compact<F>(&mut self, _cutoff: Bound<u64>, metacb: F) -> Result<()>
     where
         F: Fn(Vec<Vec<u8>>) -> Vec<u8>,
     {
@@ -826,7 +826,7 @@ where
 
         let disk = match (r1.as_mut(), r2.as_mut(), meta, disk) {
             (None, None, None, None) => {
-                return Ok(0);
+                return Ok(());
             }
             (None, None, None, Some(mut disk)) => {
                 disk.compact(_cutoff, metacb)?;
@@ -869,7 +869,7 @@ where
                 }
             }
         }
-        Ok(0)
+        Ok(())
     }
 }
 
@@ -1332,7 +1332,7 @@ where
             (ccmu.get_ptr() as *mut Dgm<K, V, M, D>).as_mut().unwrap()
         };
         match dgm.compact(Bound::Unbounded, |metas| metas[0].clone()) {
-            Ok(count) => info!(target: "dgm   ", "{:?}, compacted {} entries", dgm.name, count),
+            Ok(_) => info!(target: "dgm   ", "{:?}, compaction completed ", dgm.name),
             Err(err) => info!(target: "dgm   ", "{:?}, compaction error, {:?}", dgm.name, err),
         }
         elapsed = start.elapsed().ok().unwrap();

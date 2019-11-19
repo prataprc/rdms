@@ -879,9 +879,7 @@ fn test_commit1() {
     let mut rindex: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-ref-index");
 
     let iter = index2.iter().unwrap();
-    let committed = index1.commit(iter, |meta| meta.clone()).unwrap();
-
-    assert_eq!(committed, index1.len());
+    index1.commit(iter, |meta| meta.clone()).unwrap();
     check_commit_nodes(index1.as_mut(), rindex.as_mut());
 }
 
@@ -895,9 +893,7 @@ fn test_commit2() {
     rindex.set(100, 200).unwrap();
 
     let iter = index2.iter().unwrap();
-    let committed = index1.commit(iter, |meta| meta.clone()).unwrap();
-
-    assert_eq!(committed, index1.len());
+    index1.commit(iter, |meta| meta.clone()).unwrap();
     check_commit_nodes(index1.as_mut(), rindex.as_mut());
 }
 
@@ -970,9 +966,7 @@ fn test_commit3() {
         }
 
         let iter = index2.iter().unwrap();
-        let committed = index1.commit(iter, |meta| meta.clone()).unwrap();
-        assert_eq!(committed, index2.len());
-
+        index1.commit(iter, |meta| meta.clone()).unwrap();
         check_commit_nodes(index1.as_mut(), rindex.as_mut());
     }
 }
@@ -1083,10 +1077,7 @@ fn test_compact() {
             lsm, sticky, n_ops, cutoff
         );
 
-        let n_count = index.n_count;
-        let count = index.compact(cutoff, |metas| metas[0].clone()).unwrap();
-        assert_eq!(count, n_count);
-
+        index.compact(cutoff, |metas| metas[0].clone()).unwrap();
         check_compact_nodes(index.as_mut(), rindex.as_mut(), cutoff);
     }
 }

@@ -425,14 +425,14 @@ where
         self.as_mut().to_writer()
     }
 
-    fn commit<F>(&mut self, iter: IndexIter<K, V>, metacb: F) -> Result<usize>
+    fn commit<F>(&mut self, iter: IndexIter<K, V>, metacb: F) -> Result<()>
     where
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
         self.as_mut().commit(iter, metacb)
     }
 
-    fn compact<F>(&mut self, cutoff: Bound<u64>, metacb: F) -> Result<usize>
+    fn compact<F>(&mut self, cutoff: Bound<u64>, metacb: F) -> Result<()>
     where
         F: Fn(Vec<Vec<u8>>) -> Vec<u8>,
     {
@@ -496,7 +496,7 @@ where
         Ok(LlrbWriter::<K, V>::new(index, writer))
     }
 
-    fn commit<F>(&mut self, iter: IndexIter<K, V>, _metacb: F) -> Result<usize>
+    fn commit<F>(&mut self, iter: IndexIter<K, V>, _metacb: F) -> Result<()>
     where
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
@@ -514,17 +514,17 @@ where
         };
 
         info!(target: "llrb  ", "{:?}, committed {} items", self.name, count);
-        Ok(count.try_into().unwrap())
+        Ok(())
     }
 
-    fn compact<F>(&mut self, cutoff: Bound<u64>, _metacb: F) -> Result<usize>
+    fn compact<F>(&mut self, cutoff: Bound<u64>, _metacb: F) -> Result<()>
     where
         F: Fn(Vec<Vec<u8>>) -> Vec<u8>,
     {
         let mut low = Bound::Unbounded;
         let mut count = 0;
         const LIMIT: usize = 1_000; // TODO: no magic number
-        loop {
+        let count = loop {
             let _latch = self.latch.acquire_write(self.spin);
 
             let mut dels = vec![];
@@ -541,12 +541,14 @@ where
             dels.into_iter()
                 .for_each(|key| self.delete_index_entry(key));
             match res {
-                (_, limit) if limit > 0 => break Ok(count + (LIMIT - limit)),
+                (_, limit) if limit > 0 => break count + (LIMIT - limit),
                 (Some(lw), _) => low = Bound::Excluded(lw),
                 _ => unreachable!(),
             }
             count += LIMIT;
-        }
+        };
+        info!(target: "llrb  ", "{:?}, compacted {} items", self.name, count);
+        Ok(())
     }
 }
 

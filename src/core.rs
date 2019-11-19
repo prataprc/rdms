@@ -221,7 +221,7 @@ where
     /// reference, there can be concurrent compact() call. It is upto the
     /// implementing type to synchronize the concurrent commit() and compact()
     /// calls.
-    fn commit<F>(&mut self, iter: IndexIter<K, V>, metacb: F) -> Result<usize>
+    fn commit<F>(&mut self, iter: IndexIter<K, V>, metacb: F) -> Result<()>
     where
         F: Fn(Vec<u8>) -> Vec<u8>;
 
@@ -230,7 +230,7 @@ where
     /// implementing type to synchronize the concurrent commit() and
     /// compact() calls. All entries whose mutation versions are below the
     /// `cutoff` bound can be purged permenantly.
-    fn compact<F>(&mut self, cutoff: Bound<u64>, metacb: F) -> Result<usize>
+    fn compact<F>(&mut self, cutoff: Bound<u64>, metacb: F) -> Result<()>
     where
         F: Fn(Vec<Vec<u8>>) -> Vec<u8>;
 }

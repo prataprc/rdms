@@ -95,14 +95,14 @@ where
         self.index.to_writer()
     }
 
-    pub fn commit<F>(&mut self, iter: IndexIter<K, V>, metacb: F) -> Result<usize>
+    pub fn commit<F>(&mut self, iter: IndexIter<K, V>, metacb: F) -> Result<()>
     where
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
         self.index.commit(iter, metacb)
     }
 
-    pub fn compact<F>(&mut self, cutoff: Bound<u64>, metacb: F) -> Result<usize>
+    pub fn compact<F>(&mut self, cutoff: Bound<u64>, metacb: F) -> Result<()>
     where
         F: Fn(Vec<Vec<u8>>) -> Vec<u8>,
     {

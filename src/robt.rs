@@ -349,7 +349,7 @@ where
         Ok(Panic::new("robt"))
     }
 
-    fn commit<F>(&mut self, iter: IndexIter<K, V>, metacb: F) -> Result<usize>
+    fn commit<F>(&mut self, iter: IndexIter<K, V>, metacb: F) -> Result<()>
     where
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
@@ -445,10 +445,10 @@ where
             }
         };
         *inner = new_inner;
-        Ok(0)
+        Ok(())
     }
 
-    fn compact<F>(&mut self, cutoff: Bound<u64>, _metacb: F) -> Result<usize>
+    fn compact<F>(&mut self, cutoff: Bound<u64>, _metacb: F) -> Result<()>
     where
         F: Fn(Vec<Vec<u8>>) -> Vec<u8>,
     {
@@ -529,7 +529,7 @@ where
             }
         };
         *inner = new_inner;
-        Ok(0)
+        Ok(())
     }
 }
 

@@ -493,14 +493,14 @@ where
         self.as_mut().to_writer()
     }
 
-    fn commit<F>(&mut self, iter: IndexIter<K, V>, metacb: F) -> Result<usize>
+    fn commit<F>(&mut self, iter: IndexIter<K, V>, metacb: F) -> Result<()>
     where
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
         self.as_mut().commit(iter, metacb)
     }
 
-    fn compact<F>(&mut self, cutoff: Bound<u64>, metacb: F) -> Result<usize>
+    fn compact<F>(&mut self, cutoff: Bound<u64>, metacb: F) -> Result<()>
     where
         F: Fn(Vec<Vec<u8>>) -> Vec<u8>,
     {
@@ -565,18 +565,18 @@ where
         Ok(MvccWriter::<K, V>::new(index, writer))
     }
 
-    fn commit<F>(&mut self, _: IndexIter<K, V>, _metacb: F) -> Result<usize>
+    fn commit<F>(&mut self, _: IndexIter<K, V>, _metacb: F) -> Result<()>
     where
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
-        Ok(0)
+        Ok(())
     }
 
-    fn compact<F>(&mut self, _: Bound<u64>, _: F) -> Result<usize>
+    fn compact<F>(&mut self, _: Bound<u64>, _: F) -> Result<()>
     where
         F: Fn(Vec<Vec<u8>>) -> Vec<u8>,
     {
-        Ok(0)
+        Ok(())
     }
 }
 

@@ -380,7 +380,10 @@ where
                 if let Some((vlog_file, _)) = &snapshot.valog_fd {
                     info!(target: "robt  ", "{:?}, flushed to valog file {:?}", name, vlog_file);
                 }
-                info!(target: "robt  ", "{:?}, footprint {}", name, footprint);
+                info!(
+                    target: "robt  ",
+                    "{:?}, footprint {}, wrote {} bytes", name, footprint, footprint
+                );
 
                 InnerRobt::Snapshot {
                     dir: dir.clone(),
@@ -431,7 +434,11 @@ where
                 if let Some((vlog_file, _)) = &snapshot.valog_fd {
                     info!(target: "robt  ", "{:?}, commited to valog file {:?}", name, vlog_file);
                 }
-                info!(target: "robt  ", "{:?}, footprint {}", name, footprint);
+                info!(
+                    target: "robt  ",
+                    "{:?}, footprint {}, wrote {} bytes",
+                    name, footprint, stats.z_bytes + stats.m_bytes + stats.v_bytes
+                );
 
                 InnerRobt::Snapshot {
                     dir: dir.clone(),
@@ -515,7 +522,11 @@ where
                 if let Some((vlog_file, _)) = &snapshot.valog_fd {
                     info!(target: "robt  ", "{:?}, compacted to valog file {:?}", name, vlog_file);
                 }
-                info!(target: "robt  ", "{:?}, footprint {}", name, footprint);
+                info!(
+                    target: "robt  ",
+                    "{:?}, footprint {}, wrote {} bytes",
+                    name, footprint, stats.z_bytes + stats.m_bytes + stats.v_bytes
+                );
 
                 InnerRobt::Snapshot {
                     dir: dir.clone(),

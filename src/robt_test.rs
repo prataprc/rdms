@@ -259,11 +259,13 @@ fn run_robt_llrb(name: &str, mut n_ops: u64, key_max: i64, repeat: usize, seed: 
         let mut rng = SmallRng::from_seed(seed.to_le_bytes());
         // populate llrb
         let lsm: bool = rng.gen();
+        let sticky: bool = rng.gen();
         let mut llrb: Box<Llrb<i64, i64>> = if lsm {
             Llrb::new_lsm("test-llrb")
         } else {
             Llrb::new("test-llrb")
         };
+        llrb.set_sticky(sticky);
         for _i in 0..n_ops {
             let key = (rng.gen::<i64>() % key_max).abs();
             let op = rng.gen::<usize>() % 3;
@@ -312,8 +314,8 @@ fn run_robt_llrb(name: &str, mut n_ops: u64, key_max: i64, repeat: usize, seed: 
         };
         let mmap = rng.gen::<bool>();
         println!(
-            "seed:{} n_ops:{} lsm:{} delta:{} vlog:{} within:{:?} mmap: {}",
-            seed, n_ops, lsm, config.delta_ok, config.value_in_vlog, within, mmap,
+            "seed:{} n_ops:{} lsm:{} sticky:{} delta:{} vlog:{} within:{:?} mmap: {}",
+            seed, n_ops, lsm, sticky, config.delta_ok, config.value_in_vlog, within, mmap,
         );
         let (mut llrb, refs) = llrb_to_refs1(llrb, within.clone(), &config);
         let n_deleted: usize = refs
@@ -352,7 +354,7 @@ fn run_robt_llrb(name: &str, mut n_ops: u64, key_max: i64, repeat: usize, seed: 
         assert_eq!(stats.v_blocksize, config.v_blocksize);
         assert_eq!(stats.delta_ok, config.delta_ok);
         assert_eq!(stats.value_in_vlog, config.value_in_vlog);
-        if lsm {
+        if lsm || sticky {
             assert_eq!(stats.n_deleted, n_deleted);
         }
 

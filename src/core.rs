@@ -921,6 +921,9 @@ where
     // two entries from two index, where one of them is a newer snapshot
     // of the same index. In any case it is expected that all versions of
     // one entry shall either be greater than all versions of the other entry.
+    //
+    // TODO: should fix the order of newer entry and older entry and avoid the
+    // `a` `b` logic.
     pub(crate) fn xmerge(self, entry: Entry<K, V>) -> Entry<K, V> {
         // `a` is newer than `b`, and all versions in a and b are mutually
         // exclusive in seqno ordering.

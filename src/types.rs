@@ -5,6 +5,9 @@ use crate::{
     error::Error,
 };
 
+// TODO: instead of using resize()/copy_from_slice() can we use
+// extend_from_slice() ?
+
 /// Empty value, can be used for indexing entries that have a
 /// key but no value.
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]

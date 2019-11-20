@@ -326,6 +326,7 @@ where
     const VLEN_MASK: u64 = 0x0FFFFFFFFFFFFFFF;
     const NDELTA_MASK: u64 = 0xFFFFFFFF;
     const KLEN_SHIFT: u64 = 32;
+    const REFERENCE_FLAG: u64 = 0x8000000000000000;
 
     pub(crate) fn encode_l(entry: &core::Entry<K, V>, leaf: &mut Vec<u8>) -> Result<ZEntry<K, V>> {
         let (n_deltas, is_vlog) = (0_usize, false);
@@ -416,10 +417,13 @@ where
         let klen = Self::encode_key(entry.as_key(), leaf)?;
         // encode value
         let pos = blob.len();
-        let (vlen, is_del, seqno) = ZEntry::encode_value_vlog(entry, blob)?;
+        let (is_reference, vlen, is_del, seqno) = ZEntry::encode_value_vlog(entry, blob)?;
         let voff = leaf.len() - m;
         if !is_del {
-            let pos: u64 = pos.try_into().unwrap();
+            let mut pos: u64 = pos.try_into().unwrap();
+            if is_reference {
+                pos |= Self::REFERENCE_FLAG;
+            }
             leaf.extend_from_slice(&pos.to_be_bytes());
         }
         // encode header.
@@ -474,7 +478,7 @@ where
     ) -> Result<(usize, bool, u64)> {
         match entry.as_value() {
             core::Value::U { value, seqno, .. } => {
-                let vlen = value.encode_local(buf)?;
+                let vlen = value.encode_leaf(buf)?;
                 Ok((vlen, false, *seqno))
             }
             core::Value::D { seqno } => Ok((0, true, *seqno)),
@@ -484,13 +488,13 @@ where
     fn encode_value_vlog(
         entry: &core::Entry<K, V>,
         buf: &mut Vec<u8>,
-    ) -> Result<(usize, bool, u64)> {
+    ) -> Result<(bool, usize, bool, u64)> {
         match entry.as_value() {
             core::Value::U { value, seqno, .. } => {
-                let vlen = value.encode(buf)?;
-                Ok((vlen, false, *seqno))
+                let (is_reference, vlen) = value.encode(buf)?;
+                Ok((is_reference, vlen, false, *seqno))
             }
-            core::Value::D { seqno } => Ok((0, true, *seqno)),
+            core::Value::D { seqno } => Ok((false, 0, true, *seqno)),
         }
     }
 
@@ -542,7 +546,12 @@ where
         };
         if !is_deleted {
             let scratch: [u8; 8] = leaf[voff..voff + 8].try_into().unwrap();
-            let fpos = u64::from_be_bytes(scratch) + vpos;
+            let enc_fpos = u64::from_be_bytes(scratch);
+            let fpos = if (enc_fpos & Self::REFERENCE_FLAG) == 0 {
+                vpos + enc_fpos
+            } else {
+                enc_fpos & (!Self::REFERENCE_FLAG)
+            };
             leaf[voff..voff + 8].copy_from_slice(&fpos.to_be_bytes());
         }
     }

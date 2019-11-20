@@ -59,7 +59,6 @@ use crate::{
     core::{Diff, DiskIndexFactory, Entry, Footprint, IndexIter, Reader, Result},
     core::{Index, Serialize, ToJson, Validate},
     error::Error,
-    lsm,
     panic::Panic,
     robt_entry::MEntry,
     robt_index::{MBlock, ZBlock},
@@ -406,8 +405,9 @@ where
 
                 let (name, snapshot) = {
                     let mut old_snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
+                    let index_file = old_snapshot.index_fd.to_file();
                     let old_meta = old_snapshot.to_app_meta()?;
-                    let iter = lsm::y_iter(iter, old_snapshot.iter()?, false /*reverse*/);
+                    let iter = Self::commit_merge(iter, &mut old_snapshot)?;
 
                     info!(target: "robt  ", "{:?}, incremental commit ...", name);
 
@@ -418,10 +418,7 @@ where
                     snapshot.log()?;
 
                     // purge old snapshots file(s).
-                    purge_tx
-                        .as_ref()
-                        .unwrap()
-                        .send(old_snapshot.index_fd.to_file())?;
+                    purge_tx.as_ref().unwrap().send(index_file)?;
 
                     (name, snapshot)
                 };
@@ -541,6 +538,34 @@ where
         };
         *inner = new_inner;
         Ok(())
+    }
+}
+
+impl<K, V> Robt<K, V>
+where
+    K: Clone + Ord + Footprint + Serialize,
+    V: Clone + Diff + Footprint + Serialize,
+    <V as Diff>::D: Serialize,
+{
+    fn commit_merge<'a, 'b, 'n>(
+        mut iter: IndexIter<'a, K, V>,
+        old_snapshot: &'b mut Snapshot<K, V>,
+    ) -> Result<IndexIter<'n, K, V>>
+    where
+        'a: 'n,
+        'b: 'n,
+    {
+        let mut mzs = vec![];
+        old_snapshot.build_fwd(old_snapshot.to_root().unwrap(), &mut mzs)?;
+        let mut old_iter = Iter::new_shallow(old_snapshot, mzs);
+        let x_entry = iter.next();
+        let y_entry = old_iter.next();
+        Ok(Box::new(CommitIter {
+            x: iter,
+            y: old_iter,
+            x_entry,
+            y_entry,
+        }))
     }
 }
 
@@ -2010,7 +2035,7 @@ where
         match zblock.find(key, Bound::Unbounded, Bound::Unbounded) {
             Ok((_, entry)) => {
                 if entry.as_key().borrow().eq(key) {
-                    self.fetch(entry, versions)
+                    self.fetch(entry, false /*shallow*/, versions)
                 } else {
                     Err(Error::KeyNotFound)
                 }
@@ -2294,11 +2319,14 @@ where
     fn fetch(
         &mut self,
         mut entry: Entry<K, V>,
+        shallow: bool,  // fetch neither value nor deltas.
         versions: bool, // fetch deltas as well
     ) -> Result<Entry<K, V>> {
-        match &mut self.valog_fd {
-            Some((_, fd)) => entry.fetch_value(fd)?,
-            _ => (),
+        if !shallow {
+            match &mut self.valog_fd {
+                Some((_, fd)) => entry.fetch_value(fd)?,
+                _ => (),
+            }
         }
         if versions {
             match &mut self.valog_fd {
@@ -2321,6 +2349,7 @@ where
 {
     snap: &'a mut Snapshot<K, V>,
     mzs: Vec<MZ<K, V>>,
+    shallow: bool,
     versions: bool,
 }
 
@@ -2334,18 +2363,26 @@ where
         Box::new(Iter {
             snap,
             mzs,
+            shallow: false,
             versions: false,
         })
     }
 
-    fn new_versions(
-        snap: &'a mut Snapshot<K, V>, // reference to snapshot
-        mzs: Vec<MZ<K, V>>,
-    ) -> Box<Self> {
+    fn new_versions(snap: &'a mut Snapshot<K, V>, mzs: Vec<MZ<K, V>>) -> Box<Self> {
         Box::new(Iter {
             snap,
             mzs,
+            shallow: false,
             versions: true,
+        })
+    }
+
+    fn new_shallow(snap: &'a mut Snapshot<K, V>, mzs: Vec<MZ<K, V>>) -> Box<Self> {
+        Box::new(Iter {
+            snap,
+            mzs,
+            shallow: true,
+            versions: false,
         })
     }
 }
@@ -2364,7 +2401,7 @@ where
             Some(mut z) => match z.next() {
                 Some(Ok(entry)) => {
                     self.mzs.push(z);
-                    Some(self.snap.fetch(entry, self.versions))
+                    Some(self.snap.fetch(entry, self.shallow, self.versions))
                 }
                 Some(Err(err)) => {
                     self.mzs.truncate(0);
@@ -2446,7 +2483,7 @@ where
                 Some(Ok(entry)) => {
                     if self.till_ok(&entry) {
                         self.mzs.push(z);
-                        Some(self.snap.fetch(entry, self.versions))
+                        Some(self.snap.fetch(entry, false /*shallow*/, self.versions))
                     } else {
                         self.mzs.truncate(0);
                         None
@@ -2537,7 +2574,7 @@ where
                 Some(Ok(entry)) => {
                     if self.till_ok(&entry) {
                         self.mzs.push(z);
-                        Some(self.snap.fetch(entry, self.versions))
+                        Some(self.snap.fetch(entry, false /*shallow*/, self.versions))
                     } else {
                         self.mzs.truncate(0);
                         None
@@ -2681,6 +2718,64 @@ fn purger(name: String, rx: mpsc::Receiver<ffi::OsString>) {
         error!(target: "robtpr", "{:?}, error purging file {:?}", name, file);
     }
     info!(target: "robtpr", "{:?}, stopping purger ...", name);
+}
+
+struct CommitIter<'a, 'b, K, V>
+where
+    K: Clone + Ord + Serialize + Footprint,
+    V: Clone + Diff + Serialize + Footprint,
+    <V as Diff>::D: Serialize,
+{
+    x: IndexIter<'a, K, V>, // new iterator
+    y: Box<Iter<'b, K, V>>, // old iterator
+    x_entry: Option<Result<Entry<K, V>>>,
+    y_entry: Option<Result<Entry<K, V>>>,
+}
+
+impl<'a, 'b, K, V> Iterator for CommitIter<'a, 'b, K, V>
+where
+    K: Clone + Ord + Serialize + Footprint,
+    V: Clone + Diff + Serialize + Footprint,
+    <V as Diff>::D: Serialize,
+{
+    type Item = Result<Entry<K, V>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match (self.x_entry.take(), self.y_entry.take()) {
+            (Some(Ok(xe)), Some(Ok(ye))) => match xe.as_key().cmp(ye.as_key()) {
+                cmp::Ordering::Less => {
+                    self.x_entry = self.x.next();
+                    self.y_entry = Some(Ok(ye));
+                    Some(Ok(xe))
+                }
+                cmp::Ordering::Greater => {
+                    self.y_entry = self.y.next();
+                    self.x_entry = Some(Ok(xe));
+                    Some(Ok(ye))
+                }
+                cmp::Ordering::Equal => {
+                    self.x_entry = self.x.next();
+                    self.y_entry = self.y.next();
+                    // fetch the value from old snapshot, only value.
+                    match self.y.snap.fetch(ye, false, false) {
+                        Ok(ye) => Some(Ok(xe.xmerge(ye))),
+                        Err(err) => Some(Err(err)),
+                    }
+                }
+            },
+            (Some(Ok(xe)), None) => {
+                self.x_entry = self.x.next();
+                Some(Ok(xe))
+            }
+            (None, Some(Ok(ye))) => {
+                self.y_entry = self.y.next();
+                Some(Ok(ye))
+            }
+            (Some(Ok(_xe)), Some(Err(err))) => Some(Err(err)),
+            (Some(Err(err)), Some(Ok(_ye))) => Some(Err(err)),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]

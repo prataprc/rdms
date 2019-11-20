@@ -188,7 +188,7 @@ fn test_zentry_value() {
     let mut buf = vec![];
     assert_eq!(
         ZEntry::<i32, i32>::encode_value_vlog(&entry, &mut buf).unwrap(),
-        (12, false, 10)
+        (false, 12, false, 10)
     );
 
     let value = core::Value::new_delete(11);
@@ -196,7 +196,7 @@ fn test_zentry_value() {
     let mut buf = vec![];
     assert_eq!(
         ZEntry::<i32, i32>::encode_value_vlog(&entry, &mut buf).unwrap(),
-        (0, true, 11)
+        (false, 0, true, 11)
     );
 }
 

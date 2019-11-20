@@ -5,6 +5,7 @@ use super::*;
 use crate::{
     core::{Delta, Index, Reader, Writer},
     llrb::Llrb,
+    nobitmap::NoBitmap,
     robt,
     scans::{FilterScan, SkipScan},
 };
@@ -46,6 +47,8 @@ fn test_stats() {
         z_bytes: 256000000,
         v_bytes: 2048000000,
         m_bytes: 256000000,
+        mem_bitmap: 12310000,
+        n_bitmap: 1000000,
         padding: 100000000,
         n_abytes: 0,
 
@@ -100,6 +103,7 @@ fn test_meta_items() {
 
     let meta_items = vec![
         MetaItem::Root(5),
+        MetaItem::Bitmap(vec![]),
         MetaItem::AppMetadata(app_meta.clone()),
         MetaItem::Stats(stats.clone()),
         MetaItem::Marker(ROOT_MARKER.clone()),
@@ -108,13 +112,14 @@ fn test_meta_items() {
     let ref_n = Config::compute_root_block(32 + len1 + len2 + len3);
     assert_eq!(n, ref_n as u64);
 
-    let iter = read_meta_items(&dir, &name).unwrap().into_iter();
+    let iter = read_meta_items(&dir, &name).unwrap().0.into_iter();
     for (i, item) in iter.enumerate() {
         match (i, item) {
             (0, MetaItem::Root(value)) => assert_eq!(value, 5),
-            (1, MetaItem::AppMetadata(value)) => assert_eq!(value, app_meta),
-            (2, MetaItem::Stats(value)) => assert_eq!(value, stats),
-            (3, MetaItem::Marker(v)) => assert_eq!(v, ROOT_MARKER.clone()),
+            (1, MetaItem::Bitmap(value)) => assert_eq!(value, vec![]),
+            (2, MetaItem::AppMetadata(value)) => assert_eq!(value, app_meta),
+            (3, MetaItem::Stats(value)) => assert_eq!(value, stats),
+            (4, MetaItem::Marker(v)) => assert_eq!(v, ROOT_MARKER.clone()),
             (i, _) => panic!("at {}, failure", i),
         }
     }
@@ -329,7 +334,7 @@ fn run_robt_llrb(name: &str, mut n_ops: u64, key_max: i64, repeat: usize, seed: 
             dir.push("test-robt-build");
             dir.into_os_string()
         };
-        let b = Builder::initial(&dir, name, config.clone()).unwrap();
+        let b = Builder::<i64, i64, NoBitmap>::initial(&dir, name, config.clone()).unwrap();
         let app_meta = "heloo world".to_string();
         match b.build(iter, app_meta.as_bytes().to_vec()) {
             Err(Error::DiskIndexFail(msg)) => {
@@ -343,7 +348,8 @@ fn run_robt_llrb(name: &str, mut n_ops: u64, key_max: i64, repeat: usize, seed: 
             _ => (),
         }
 
-        let mut snap = robt::Snapshot::<i64, i64>::open(&dir, name).unwrap();
+        let mut snap = robt::Snapshot::<i64, i64, NoBitmap>::open(&dir, name).unwrap();
+        snap.validate().unwrap();
         snap.set_mmap(mmap);
         assert_eq!(snap.len(), refs.len());
         assert_eq!(snap.to_seqno(), llrb.to_seqno());

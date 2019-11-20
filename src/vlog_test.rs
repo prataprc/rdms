@@ -6,7 +6,7 @@ fn test_value() {
     assert_eq!(value.footprint().unwrap(), 0);
     // encode
     let mut out = vec![];
-    assert_eq!(value.encode(&mut out).unwrap(), 12);
+    assert_eq!(value.encode(&mut out).unwrap(), (false, 12));
     assert_eq!(out, vec![16, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 10]);
     // to_native_value
     assert_eq!(value.to_native_value(), Some(10));
@@ -19,7 +19,7 @@ fn test_value() {
     assert_eq!(value.footprint().unwrap(), 3);
     // encode
     let mut out = vec![];
-    assert_eq!(value.encode(&mut out).unwrap(), 15);
+    assert_eq!(value.encode(&mut out).unwrap(), (false, 15));
     assert_eq!(out, vec![16, 0, 0, 0, 0, 0, 0, 7, 0, 0, 0, 3, 10, 20, 30]);
     // to_native_value
     assert_eq!(value.to_native_value(), Some(vec![10_u8, 20, 30]));

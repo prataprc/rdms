@@ -51,13 +51,13 @@ use std::{
     ops::{Bound, Deref, RangeBounds},
     path, result,
     str::FromStr,
-    sync::{self, mpsc},
+    sync::{self, mpsc, Arc},
     thread, time,
 };
 
 use crate::{
+    core::{Bloom, Index, Serialize, ToJson, Validate},
     core::{Diff, DiskIndexFactory, Entry, Footprint, IndexIter, Reader, Result},
-    core::{Index, Serialize, ToJson, Validate},
     error::Error,
     panic::Panic,
     robt_entry::MEntry,
@@ -121,15 +121,43 @@ impl fmt::Debug for Name {
     }
 }
 
-pub fn robt_factory(config: Config) -> RobtFactory {
-    RobtFactory { config }
+pub fn robt_factory<K, V, B>(config: Config) -> RobtFactory<K, V, B>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Serialize,
+    B: Bloom<K>,
+{
+    RobtFactory {
+        config,
+
+        _phantom_key: marker::PhantomData,
+        _phantom_val: marker::PhantomData,
+        _phantom_bitmap: marker::PhantomData,
+    }
 }
 
-pub struct RobtFactory {
+pub struct RobtFactory<K, V, B>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Serialize,
+    B: Bloom<K>,
+{
     config: Config,
+
+    _phantom_key: marker::PhantomData<K>,
+    _phantom_val: marker::PhantomData<V>,
+    _phantom_bitmap: marker::PhantomData<B>,
 }
 
-impl RobtFactory {
+impl<K, V, B> RobtFactory<K, V, B>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Serialize,
+    B: Bloom<K>,
+{
     // file name should match the following criteria.
     // a. must have a `.indx` suffix.
     // b. must have the robt naming convention, refer `Name` type for details.
@@ -143,15 +171,16 @@ impl RobtFactory {
     }
 }
 
-impl<K, V> DiskIndexFactory<K, V> for RobtFactory
+impl<K, V, B> DiskIndexFactory<K, V> for RobtFactory<K, V, B>
 where
     K: Clone + Ord + Footprint + Serialize,
     V: Clone + Diff + Footprint + Serialize,
     <V as Diff>::D: Serialize,
+    B: Bloom<K>,
 {
-    type I = Robt<K, V>;
+    type I = Robt<K, V, B>;
 
-    fn new(&self, dir: &ffi::OsStr, name: &str) -> Result<Robt<K, V>> {
+    fn new(&self, dir: &ffi::OsStr, name: &str) -> Result<Robt<K, V, B>> {
         let mut config = self.config.clone();
         config.name = name.to_string();
         info!(
@@ -174,7 +203,7 @@ where
         Ok(Robt::new(inner, handle))
     }
 
-    fn open(&self, dir: &ffi::OsStr, root: ffi::OsString) -> Result<Robt<K, V>> {
+    fn open(&self, dir: &ffi::OsStr, root: ffi::OsString) -> Result<Robt<K, V, B>> {
         let name = Self::to_name(&root).ok_or(Error::InvalidFile(format!(
             "open robt {:?}/{:?}",
             dir, root
@@ -182,7 +211,7 @@ where
 
         info!(target: "robtfc", "{:?}, open from {:?}/{} with config ...", name, dir, name);
 
-        let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
+        let snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
         snapshot.log()?;
 
         let (tx, rx) = mpsc::channel();
@@ -193,6 +222,7 @@ where
             meta: snapshot.meta.clone(),
             config: snapshot.config.clone(),
             stats: snapshot.to_stats()?,
+            bitmap: Arc::new(snapshot.to_bitmap()?),
             purge_tx: Some(tx),
         };
         let name = name.0.clone();
@@ -206,21 +236,23 @@ where
 }
 
 /// Read only btree. Immutable, fully-packed and lockless sharing.
-pub struct Robt<K, V>
+pub struct Robt<K, V, B>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
+    B: Bloom<K>,
 {
-    inner: sync::Mutex<InnerRobt<K, V>>,
+    inner: sync::Mutex<InnerRobt<K, V, B>>,
     purger: Option<thread::JoinHandle<()>>,
 }
 
-impl<K, V> Drop for Robt<K, V>
+impl<K, V, B> Drop for Robt<K, V, B>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
+    B: Bloom<K>,
 {
     fn drop(&mut self) {
         {
@@ -234,13 +266,14 @@ where
     }
 }
 
-impl<K, V> Robt<K, V>
+impl<K, V, B> Robt<K, V, B>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
+    B: Bloom<K>,
 {
-    fn new(inner: InnerRobt<K, V>, purger: thread::JoinHandle<()>) -> Robt<K, V> {
+    fn new(inner: InnerRobt<K, V, B>, purger: thread::JoinHandle<()>) -> Robt<K, V, B> {
         Robt {
             inner: sync::Mutex::new(inner),
             purger: Some(purger),
@@ -249,11 +282,12 @@ where
 }
 
 #[derive(Clone)]
-enum InnerRobt<K, V>
+enum InnerRobt<K, V, B>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
+    B: Bloom<K>,
 {
     Build {
         dir: ffi::OsString,
@@ -271,17 +305,19 @@ where
         meta: Vec<MetaItem>,
         config: Config,
         stats: Stats,
+        bitmap: Arc<B>,
         purge_tx: Option<mpsc::Sender<ffi::OsString>>,
     },
 }
 
-impl<K, V> Index<K, V> for Robt<K, V>
+impl<K, V, B> Index<K, V> for Robt<K, V, B>
 where
     K: Clone + Ord + Footprint + Serialize,
     V: Clone + Diff + Footprint + Serialize,
     <V as Diff>::D: Serialize,
+    B: Bloom<K>,
 {
-    type R = Snapshot<K, V>;
+    type R = Snapshot<K, V, B>;
     type W = Panic;
     type O = ffi::OsString;
 
@@ -334,9 +370,12 @@ where
     fn to_reader(&mut self) -> Result<Self::R> {
         let inner = self.inner.lock().unwrap();
         match inner.deref() {
-            InnerRobt::Snapshot { dir, name, .. } => {
+            InnerRobt::Snapshot {
+                dir, name, bitmap, ..
+            } => {
                 info!(target: "robt  ", "{:?}, new reader ...", name);
-                let snapshot = Snapshot::open(dir, &name.0)?;
+                let mut snapshot = Snapshot::open(dir, &name.0)?;
+                assert!(snapshot.set_bitmap(Arc::clone(bitmap)));
                 snapshot.log()?;
                 Ok(snapshot)
             }
@@ -364,9 +403,9 @@ where
                 info!(target: "robt  ", "{:?}, flush commit ...", name);
 
                 let snapshot = {
-                    let b = Builder::<K, V>::initial(dir, &name.0, config.clone())?;
+                    let b = Builder::<K, V, B>::initial(dir, &name.0, config.clone())?;
                     b.build(iter, metacb(vec![]))?;
-                    let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
+                    let snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
                     snapshot.log()?;
                     snapshot
                 };
@@ -391,6 +430,7 @@ where
                     meta: snapshot.meta.clone(),
                     config: snapshot.config.clone(),
                     stats,
+                    bitmap: Arc::new(snapshot.to_bitmap()?),
                     purge_tx: purge_tx.clone(),
                 }
             }
@@ -404,7 +444,7 @@ where
                 info!(target: "robt  ", "{:?}, opening for commit ...", name.0);
 
                 let (name, snapshot) = {
-                    let mut old_snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
+                    let mut old_snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
                     let index_file = old_snapshot.index_fd.to_file();
                     let old_meta = old_snapshot.to_app_meta()?;
                     let iter = Self::commit_merge(iter, &mut old_snapshot)?;
@@ -412,9 +452,9 @@ where
                     info!(target: "robt  ", "{:?}, incremental commit ...", name);
 
                     let name = name.clone().next();
-                    let b = Builder::incremental(dir, &name.0, config.clone())?;
+                    let b = Builder::<K, V, B>::incremental(dir, &name.0, config.clone())?;
                     b.build(iter, metacb(old_meta))?;
-                    let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
+                    let snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
                     snapshot.log()?;
 
                     // purge old snapshots file(s).
@@ -444,6 +484,7 @@ where
                     meta: snapshot.meta.clone(),
                     config: snapshot.config.clone(),
                     stats,
+                    bitmap: Arc::new(snapshot.to_bitmap()?),
                     purge_tx: purge_tx.clone(),
                 }
             }
@@ -482,20 +523,20 @@ where
             } => {
                 info!(target: "robt  ", "{:?}, opening for compaction ...", name.0);
                 let (name, snapshot) = {
-                    let mut old_snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
+                    let mut old_snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
                     let iter = CompactScan::new(old_snapshot.iter_with_versions()?, cutoff);
 
                     info!(target: "robt  ", "{:?}, compact ...", name);
                     let name = name.clone().next();
                     let mut conf = config.clone();
                     conf.vlog_file = None; // use a new vlog file as the target.
-                    let meta = match &meta[1] {
+                    let meta = match &meta[2] {
                         MetaItem::AppMetadata(data) => data.clone(),
                         _ => unreachable!(),
                     };
-                    let b = Builder::initial(dir, &name.0, conf)?;
+                    let b = Builder::<K, V, B>::initial(dir, &name.0, conf)?;
                     b.build(iter, meta)?;
-                    let snapshot = Snapshot::<K, V>::open(dir, &name.0)?;
+                    let snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
                     snapshot.log()?;
 
                     // purge old snapshots file(s).
@@ -532,6 +573,7 @@ where
                     meta: snapshot.meta.clone(),
                     config: snapshot.config.clone(),
                     stats,
+                    bitmap: Arc::new(snapshot.to_bitmap()?),
                     purge_tx: purge_tx.clone(),
                 }
             }
@@ -541,15 +583,16 @@ where
     }
 }
 
-impl<K, V> Robt<K, V>
+impl<K, V, B> Robt<K, V, B>
 where
     K: Clone + Ord + Footprint + Serialize,
     V: Clone + Diff + Footprint + Serialize,
     <V as Diff>::D: Serialize,
+    B: Bloom<K>,
 {
     fn commit_merge<'a, 'b, 'n>(
         mut iter: IndexIter<'a, K, V>,
-        old_snapshot: &'b mut Snapshot<K, V>,
+        old_snapshot: &'b mut Snapshot<K, V, B>,
     ) -> Result<IndexIter<'n, K, V>>
     where
         'a: 'n,
@@ -569,11 +612,12 @@ where
     }
 }
 
-impl<K, V> Footprint for Robt<K, V>
+impl<K, V, B> Footprint for Robt<K, V, B>
 where
     K: Clone + Ord + Serialize + Footprint,
     V: Clone + Diff + Serialize + Footprint,
     <V as Diff>::D: Serialize + Footprint,
+    B: Bloom<K>,
 {
     fn footprint(&self) -> Result<isize> {
         let inner = self.inner.lock().unwrap();
@@ -811,6 +855,8 @@ pub enum MetaItem {
     ///
     /// [Rdms]: crate::Rdms
     AppMetadata(Vec<u8>),
+    /// Probability data structure,
+    Bitmap(Vec<u8>),
     /// File-position where the root block for the Btree starts.
     Root(u64),
 }
@@ -825,26 +871,30 @@ pub(crate) fn write_meta_items(
     let mut fd = opts.append(true).open(p)?;
 
     let (mut hdr, mut block) = (vec![], vec![]);
-    hdr.resize(32, 0);
+    hdr.resize(40, 0);
 
     for (i, item) in items.into_iter().enumerate() {
         match (i, item) {
             (0, MetaItem::Root(fpos)) => {
                 hdr[0..8].copy_from_slice(&fpos.to_be_bytes());
             }
-            (1, MetaItem::AppMetadata(md)) => {
-                hdr[8..16].copy_from_slice(&(md.len() as u64).to_be_bytes());
+            (1, MetaItem::Bitmap(bitmap)) => {
+                hdr[8..16].copy_from_slice(&(bitmap.len() as u64).to_be_bytes());
+                block.extend_from_slice(&bitmap);
+            }
+            (2, MetaItem::AppMetadata(md)) => {
+                hdr[16..24].copy_from_slice(&(md.len() as u64).to_be_bytes());
                 block.extend_from_slice(&md);
             }
-            (2, MetaItem::Stats(s)) => {
-                hdr[16..24].copy_from_slice(&(s.len() as u64).to_be_bytes());
+            (3, MetaItem::Stats(s)) => {
+                hdr[24..32].copy_from_slice(&(s.len() as u64).to_be_bytes());
                 block.extend_from_slice(s.as_bytes());
             }
-            (3, MetaItem::Marker(data)) => {
-                hdr[24..32].copy_from_slice(&(data.len() as u64).to_be_bytes());
+            (4, MetaItem::Marker(data)) => {
+                hdr[32..40].copy_from_slice(&(data.len() as u64).to_be_bytes());
                 block.extend_from_slice(&data);
             }
-            (i, _) => panic!("unreachable arm at {}", i),
+            (i, m) => panic!("unreachable arm at {} {}", i, m),
         }
     }
     block.extend_from_slice(&hdr[..]);
@@ -868,34 +918,41 @@ pub(crate) fn write_meta_items(
 /// Read meta items from [Robt] index file.
 ///
 /// Meta-items is stored at the tip of the index file. If successful,
-/// a vector of meta items is returned. To learn more about the meta items
+/// a vector of meta items is returned. Along with it, number of
+/// meta-block bytes is return. To learn more about the meta items
 /// refer to [MetaItem] type.
 ///
 /// [Robt]: crate::robt::Robt
 pub fn read_meta_items(
     dir: &ffi::OsStr, // directory of index, can be os-native string
     name: &str,
-) -> Result<Vec<MetaItem>> {
+) -> Result<(Vec<MetaItem>, usize)> {
     let index_file = Config::stitch_index_file(dir, name);
     let m = fs::metadata(&index_file)?.len();
     let mut fd = util::open_file_r(index_file.as_ref())?;
 
     // read header
-    let hdr = util::read_buffer(&mut fd, m - 32, 32, "read root-block header")?;
+    let hdr = util::read_buffer(&mut fd, m - 40, 40, "read root-block header")?;
     let root = u64::from_be_bytes(hdr[..8].try_into().unwrap());
-    let n_md = u64::from_be_bytes(hdr[8..16].try_into().unwrap()) as usize;
-    let n_stats = u64::from_be_bytes(hdr[16..24].try_into().unwrap()) as usize;
-    let n_marker = u64::from_be_bytes(hdr[24..32].try_into().unwrap()) as usize;
+    let n_bmap = u64::from_be_bytes(hdr[8..16].try_into().unwrap()) as usize;
+    let n_md = u64::from_be_bytes(hdr[16..24].try_into().unwrap()) as usize;
+    let n_stats = u64::from_be_bytes(hdr[24..32].try_into().unwrap()) as usize;
+    let n_marker = u64::from_be_bytes(hdr[32..40].try_into().unwrap()) as usize;
     // read block
-    let n = Config::compute_root_block(n_stats + n_md + n_marker + 32)
+    let meta_block_bytes = Config::compute_root_block(n_bmap + n_md + n_stats + n_marker + 40)
         .try_into()
         .unwrap();
-    let block: Vec<u8> = util::read_buffer(&mut fd, m - n, n, "read root-block")?
-        .into_iter()
-        .collect();
+    let block: Vec<u8> = util::read_buffer(
+        &mut fd,
+        m - meta_block_bytes,
+        meta_block_bytes,
+        "read root-block",
+    )?
+    .into_iter()
+    .collect();
 
     let mut meta_items: Vec<MetaItem> = vec![];
-    let z = (n as usize) - 32;
+    let z = (meta_block_bytes as usize) - 40;
 
     let (x, y) = (z - n_marker, z);
     let marker = block[x..y].to_vec();
@@ -910,19 +967,26 @@ pub fn read_meta_items(
     let (x, y) = (z - n_marker - n_stats - n_md, z - n_marker - n_stats);
     let app_data = block[x..y].to_vec();
 
+    let (x, y) = (
+        z - n_marker - n_stats - n_md - n_bmap,
+        z - n_marker - n_stats - n_md,
+    );
+    let bitmap = block[x..y].to_vec();
+
     meta_items.push(MetaItem::Root(root));
+    meta_items.push(MetaItem::Bitmap(bitmap));
     meta_items.push(MetaItem::AppMetadata(app_data));
     meta_items.push(MetaItem::Stats(stats.clone()));
     meta_items.push(MetaItem::Marker(marker.clone()));
 
     // validate and return
     let stats: Stats = stats.parse()?;
-    let at = m - n - (stats.m_blocksize as u64);
+    let at = m - meta_block_bytes - (stats.m_blocksize as u64);
     if at != root {
         let msg = format!("robt expected root at {}, found {}", at, root);
         Err(Error::InvalidSnapshot(msg))
     } else {
-        Ok(meta_items)
+        Ok((meta_items, meta_block_bytes as usize))
     }
 }
 
@@ -930,8 +994,9 @@ impl fmt::Display for MetaItem {
     fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
         match self {
             MetaItem::Marker(_) => write!(f, "MetaItem::Marker"),
-            MetaItem::AppMetadata(_) => write!(f, "MetaItem::AppMetadata"),
             MetaItem::Stats(_) => write!(f, "MetaItem::Stats"),
+            MetaItem::AppMetadata(_) => write!(f, "MetaItem::AppMetadata"),
+            MetaItem::Bitmap(_) => write!(f, "MetaItem::Bitmap"),
             MetaItem::Root(_) => write!(f, "MetaItem::Root"),
         }
     }
@@ -992,6 +1057,10 @@ pub struct Stats {
     pub padding: usize,
     /// Older size of value-log file, applicable only in compact build.
     pub n_abytes: usize,
+    /// Size of serialized bitmap bytes.
+    pub mem_bitmap: usize,
+    /// Number of entries in bitmap.
+    pub n_bitmap: usize,
 
     /// Time take to build this btree.
     pub build_time: u64,
@@ -1016,6 +1085,11 @@ impl fmt::Display for Stats {
             f,
             "robt.stats = {{ z_bytes={}, m_bytes={}, v_bytes={} }}\n",
             self.z_bytes, self.m_bytes, self.v_bytes,
+        )?;
+        write!(
+            f,
+            "robt.stats = {{ mem_bitmap={}, n_bitmap={}, }}\n",
+            self.mem_bitmap, self.n_bitmap,
         )?;
         let bt = time::Duration::from_nanos(self.build_time);
         write!(
@@ -1049,6 +1123,8 @@ impl ToJson for Stats {
             format!(r#""z_bytes": {}"#, self.z_bytes),
             format!(r#""m_bytes": {}"#, self.m_bytes),
             format!(r#""v_bytes": {}"#, self.v_bytes),
+            format!(r#""mem_bitmap": {}"#, self.mem_bitmap),
+            format!(r#""n_bitmap": {}"#, self.n_bitmap),
             format!(r#""padding": {}"#, self.padding),
             format!(r#""n_abytes": {}"#, self.n_abytes),
             format!(r#""build_time": {}"#, self.build_time),
@@ -1078,6 +1154,8 @@ impl From<Config> for Stats {
             z_bytes: Default::default(),
             v_bytes: Default::default(),
             m_bytes: Default::default(),
+            mem_bitmap: Default::default(),
+            n_bitmap: Default::default(),
             padding: Default::default(),
             n_abytes: Default::default(),
 
@@ -1128,6 +1206,8 @@ impl FromStr for Stats {
             z_bytes: to_usize("/z_bytes")?,
             v_bytes: to_usize("/v_bytes")?,
             m_bytes: to_usize("/m_bytes")?,
+            mem_bitmap: to_usize("/mem_bitmap")?,
+            n_bitmap: to_usize("/n_bitmap")?,
             padding: to_usize("/padding")?,
             n_abytes: to_usize("/n_abytes")?,
 
@@ -1141,26 +1221,29 @@ impl FromStr for Stats {
 ///
 /// Index can be built in _initial_ mode or _incremental_ mode. Refer
 /// to corresponding methods for more information.
-pub struct Builder<K, V>
+pub struct Builder<K, V, B>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
+    B: Bloom<K>,
 {
     config: Config,
     iflusher: Flusher,
     vflusher: Option<Flusher>,
     stats: Stats,
 
-    phantom_key: marker::PhantomData<K>,
-    phantom_val: marker::PhantomData<V>,
+    _phantom_key: marker::PhantomData<K>,
+    _phantom_val: marker::PhantomData<V>,
+    _phantom_bitmap: marker::PhantomData<B>,
 }
 
-impl<K, V> Builder<K, V>
+impl<K, V, B> Builder<K, V, B>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
+    B: Bloom<K>,
 {
     /// For commit builds, index file and value-log-file, if configured,
     /// shall be created new.
@@ -1168,7 +1251,7 @@ where
         dir: &ffi::OsStr, // directory path where index file(s) are stored
         name: &str,
         mut config: Config, //  TODO: Bit of ugliness here
-    ) -> Result<Builder<K, V>> {
+    ) -> Result<Builder<K, V, B>> {
         let create = true;
         let iflusher = {
             let file = Config::stitch_index_file(dir, name);
@@ -1191,8 +1274,10 @@ where
             iflusher,
             vflusher,
             stats: From::from(config),
-            phantom_key: marker::PhantomData,
-            phantom_val: marker::PhantomData,
+
+            _phantom_key: marker::PhantomData,
+            _phantom_val: marker::PhantomData,
+            _phantom_bitmap: marker::PhantomData,
         })
     }
 
@@ -1202,7 +1287,7 @@ where
         dir: &ffi::OsStr, // directory path where index files are stored
         name: &str,
         mut config: Config, //  TODO: Bit of ugliness here
-    ) -> Result<Builder<K, V>> {
+    ) -> Result<Builder<K, V, B>> {
         let iflusher = {
             let file = Config::stitch_index_file(dir, name);
             Flusher::new(file, config.clone(), true /*create*/)?
@@ -1228,8 +1313,10 @@ where
             iflusher,
             vflusher,
             stats,
-            phantom_key: marker::PhantomData,
-            phantom_val: marker::PhantomData,
+
+            _phantom_key: marker::PhantomData,
+            _phantom_val: marker::PhantomData,
+            _phantom_bitmap: marker::PhantomData,
         })
     }
 
@@ -1240,12 +1327,15 @@ where
     where
         I: Iterator<Item = Result<Entry<K, V>>>,
     {
-        let (took, root): (u64, u64) = {
+        let (took, root, n_bitmap, bitmap): (u64, u64, usize, Vec<u8>) = {
+            let mut bitmap = <B as Bloom<K>>::create();
             let start = time::SystemTime::now();
-            let root = self.build_tree(iter)?;
+            let root = self.build_tree(iter, &mut bitmap)?;
             (
                 start.elapsed().unwrap().as_nanos().try_into().unwrap(),
                 root,
+                bitmap.len(),
+                bitmap.to_vec(),
             )
         };
 
@@ -1259,12 +1349,15 @@ where
                 .try_into()
                 .unwrap();
             self.stats.epoch = epoch;
+            self.stats.mem_bitmap = bitmap.len();
+            self.stats.n_bitmap = n_bitmap;
             self.stats.to_json()
         };
 
         // start building metadata items for index files
         let meta_items: Vec<MetaItem> = vec![
             MetaItem::Root(root),
+            MetaItem::Bitmap(bitmap),
             MetaItem::AppMetadata(app_meta),
             MetaItem::Stats(stats),
             MetaItem::Marker(ROOT_MARKER.clone()), // tip of the index.
@@ -1282,7 +1375,7 @@ where
         Ok(())
     }
 
-    fn build_tree<I>(&mut self, iter: I) -> Result<u64>
+    fn build_tree<I>(&mut self, iter: I, bitmap: &mut B) -> Result<u64>
     where
         I: Iterator<Item = Result<Entry<K, V>>>,
     {
@@ -1314,6 +1407,7 @@ where
                 Some(entry) => entry,
                 None => continue,
             };
+            bitmap.add(entry.as_key());
 
             // println!("build key: {:?}", entry.to_key());
             // println!("build entry: {}", entry.to_seqno());
@@ -1633,27 +1727,31 @@ impl IndexFile {
 /// A read only snapshot of BTree built using [robt] index.
 ///
 /// [robt]: crate::robt
-pub struct Snapshot<K, V>
+pub struct Snapshot<K, V, B>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
+    B: Bloom<K>,
 {
     dir: ffi::OsString,
     name: String,
     meta: Vec<MetaItem>,
     config: Config,
+    bitmap: Arc<B>,
+
     // working fields
     index_fd: IndexFile,
     valog_fd: Option<(ffi::OsString, fs::File)>,
 
-    phantom_key: marker::PhantomData<K>,
-    phantom_val: marker::PhantomData<V>,
+    _phantom_key: marker::PhantomData<K>,
+    _phantom_val: marker::PhantomData<V>,
 }
 
-impl<K, V> Drop for Snapshot<K, V>
+impl<K, V, B> Drop for Snapshot<K, V, B>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
+    B: Bloom<K>,
 {
     fn drop(&mut self) {
         self.index_fd.as_fd().unlock().ok();
@@ -1664,24 +1762,35 @@ where
 }
 
 // Construction methods.
-impl<K, V> Snapshot<K, V>
+impl<K, V, B> Snapshot<K, V, B>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
+    <V as Diff>::D: Serialize,
+    B: Bloom<K>,
 {
     /// Open BTree snapshot from file that can be constructed from ``dir``
     /// and ``name``.
     pub fn open(
         dir: &ffi::OsStr,
         name: &str, // index file name.
-    ) -> Result<Snapshot<K, V>> {
-        let meta_items = read_meta_items(dir, name)?;
-        let stats: Stats = if let MetaItem::Stats(stats) = &meta_items[2] {
+    ) -> Result<Snapshot<K, V, B>> {
+        let (mut meta_items, _) = read_meta_items(dir, name)?;
+        let stats: Stats = if let MetaItem::Stats(stats) = &meta_items[3] {
             Ok(stats.parse()?)
         } else {
             let msg = "robt snapshot statistics missing".to_string();
             Err(Error::InvalidSnapshot(msg))
         }?;
+        let bitmap: Arc<B> = if let MetaItem::Bitmap(data) = &mut meta_items[1] {
+            let bitmap = <B as Bloom<K>>::from_vec(&data)?;
+            data.drain(..);
+            Ok(Arc::new(bitmap))
+        } else {
+            let msg = "robt snapshot bitmap missing".to_string();
+            Err(Error::InvalidSnapshot(msg))
+        }?;
+
         let config: Config = stats.into();
 
         // open index file.
@@ -1707,11 +1816,13 @@ where
             name: name.to_string(),
             meta: meta_items,
             config: Default::default(),
+            bitmap,
+
             index_fd,
             valog_fd,
 
-            phantom_key: marker::PhantomData,
-            phantom_val: marker::PhantomData,
+            _phantom_key: marker::PhantomData,
+            _phantom_val: marker::PhantomData,
         };
         snap.config = snap.to_stats()?.into();
 
@@ -1722,8 +1833,14 @@ where
         unsafe { self.index_fd.set_mmap(ok) }
     }
 
+    pub fn set_bitmap(&mut self, bitmap: Arc<B>) -> bool {
+        let res = bitmap.to_vec() == self.bitmap.to_vec();
+        self.bitmap = bitmap;
+        res
+    }
+
     pub fn is_snapshot(file_name: &ffi::OsStr) -> bool {
-        RobtFactory::to_name(&file_name).is_some()
+        RobtFactory::<K, V, B>::to_name(&file_name).is_some()
     }
 
     fn log(&self) -> Result<()> {
@@ -1736,13 +1853,16 @@ where
                 (0, MetaItem::Root(fpos)) => info!(
                     target: "robt  ", "{:?}, meta-item root at {}", self.name, fpos
                 ),
-                (1, MetaItem::AppMetadata(data)) => info!(
+                (1, MetaItem::Bitmap(bitmap)) => info!(
+                    target: "robt  ", "{:?}, meta-item bit-map length {}", self.name, bitmap.len()
+                ),
+                (2, MetaItem::AppMetadata(data)) => info!(
                     target: "robt  ", "{:?}, meta-item app-meta-data {} bytes", self.name, data.len()
                 ),
-                (2, MetaItem::Stats(_)) => info!(
+                (3, MetaItem::Stats(_)) => info!(
                     target: "robt  ", "{:?}, meta-item stats\n{}", self.name, self.to_stats()?
                 ),
-                (3, MetaItem::Marker(data)) => info!(
+                (4, MetaItem::Marker(data)) => info!(
                     target: "robt  ", "{:?}, meta-item marker {} bytes", self.name, data.len()
                 ),
                 _ => unreachable!(),
@@ -1753,10 +1873,11 @@ where
 }
 
 // maintanence methods.
-impl<K, V> Snapshot<K, V>
+impl<K, V, B> Snapshot<K, V, B>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
+    B: Bloom<K>,
 {
     /// Return number of entries in the snapshot.
     pub fn len(&self) -> usize {
@@ -1768,9 +1889,29 @@ where
         self.to_stats().unwrap().seqno
     }
 
+    /// Return the file-position for Btree's root node.
+    pub fn to_root(&self) -> Result<u64> {
+        if let MetaItem::Root(root) = self.meta[0] {
+            Ok(root)
+        } else {
+            Err(Error::InvalidSnapshot(
+                "robt snapshot root missing".to_string(),
+            ))
+        }
+    }
+
+    fn to_bitmap(&self) -> Result<B> {
+        if let MetaItem::Bitmap(data) = &self.meta[1] {
+            <B as Bloom<K>>::from_vec(&data)
+        } else {
+            let msg = "robt snapshot app-bitmap missing".to_string();
+            Err(Error::InvalidSnapshot(msg))
+        }
+    }
+
     /// Return the application metadata.
     pub fn to_app_meta(&self) -> Result<Vec<u8>> {
-        if let MetaItem::AppMetadata(data) = &self.meta[1] {
+        if let MetaItem::AppMetadata(data) = &self.meta[2] {
             Ok(data.clone())
         } else {
             let msg = "robt snapshot app-metadata missing".to_string();
@@ -1780,22 +1921,11 @@ where
 
     /// Return Btree statistics.
     pub fn to_stats(&self) -> Result<Stats> {
-        if let MetaItem::Stats(stats) = &self.meta[2] {
+        if let MetaItem::Stats(stats) = &self.meta[3] {
             Ok(stats.parse()?)
         } else {
             let msg = "robt snapshot statistics missing".to_string();
             Err(Error::InvalidSnapshot(msg))
-        }
-    }
-
-    /// Return the file-position for Btree's root node.
-    pub fn to_root(&self) -> Result<u64> {
-        if let MetaItem::Root(root) = self.meta[0] {
-            Ok(root)
-        } else {
-            Err(Error::InvalidSnapshot(
-                "robt snapshot root missing".to_string(),
-            ))
         }
     }
 
@@ -1814,10 +1944,11 @@ where
     }
 }
 
-impl<K, V> Footprint for Snapshot<K, V>
+impl<K, V, B> Footprint for Snapshot<K, V, B>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
+    B: Bloom<K>,
 {
     fn footprint(&self) -> Result<isize> {
         let i_footprint: isize = self.index_fd.footprint()?.try_into().unwrap();
@@ -1829,11 +1960,12 @@ where
     }
 }
 
-impl<K, V> Validate<Stats> for Snapshot<K, V>
+impl<K, V, B> Validate<Stats> for Snapshot<K, V, B>
 where
     K: Clone + Ord + Serialize + fmt::Debug,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
+    B: Bloom<K>,
 {
     fn validate(&mut self) -> Result<Stats> {
         // validate config and stats.
@@ -1861,6 +1993,13 @@ where
             );
             return Err(Error::ValidationFail(msg));
         }
+
+        let mut footprint: isize = (s.m_bytes + s.z_bytes + s.v_bytes + s.n_abytes)
+            .try_into()
+            .unwrap();
+        let (_, meta_block_bytes) = read_meta_items(&self.dir, &self.name)?;
+        footprint += meta_block_bytes as isize;
+        assert_eq!(footprint, self.footprint().unwrap());
 
         let iter = self.iter()?;
         let mut prev_key: Option<K> = None;
@@ -1897,11 +2036,12 @@ where
 }
 
 // Read methods
-impl<K, V> Reader<K, V> for Snapshot<K, V>
+impl<K, V, B> Reader<K, V> for Snapshot<K, V, B>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
+    B: Bloom<K>,
 {
     fn get<Q>(&mut self, key: &Q) -> Result<Entry<K, V>>
     where
@@ -1909,13 +2049,13 @@ where
         Q: Ord + ?Sized,
     {
         // println!("robt get ..");
-        let snap = unsafe { (self as *mut Snapshot<K, V>).as_mut().unwrap() };
+        let snap = unsafe { (self as *mut Snapshot<K, V, B>).as_mut().unwrap() };
         let versions = false;
         snap.do_get(key, versions)
     }
 
     fn iter(&mut self) -> Result<IndexIter<K, V>> {
-        let snap = unsafe { (self as *mut Snapshot<K, V>).as_mut().unwrap() };
+        let snap = unsafe { (self as *mut Snapshot<K, V, B>).as_mut().unwrap() };
         let mut mzs = vec![];
         snap.build_fwd(snap.to_root().unwrap(), &mut mzs)?;
         Ok(Iter::new(snap, mzs))
@@ -1927,7 +2067,7 @@ where
         R: 'a + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        let snap = unsafe { (self as *mut Snapshot<K, V>).as_mut().unwrap() };
+        let snap = unsafe { (self as *mut Snapshot<K, V, B>).as_mut().unwrap() };
         let versions = false;
         snap.do_range(range, versions)
     }
@@ -1938,7 +2078,7 @@ where
         R: 'a + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        let snap = unsafe { (self as *mut Snapshot<K, V>).as_mut().unwrap() };
+        let snap = unsafe { (self as *mut Snapshot<K, V, B>).as_mut().unwrap() };
         let versions = false;
         snap.do_reverse(range, versions)
     }
@@ -1948,7 +2088,7 @@ where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        let snap = unsafe { (self as *mut Snapshot<K, V>).as_mut().unwrap() };
+        let snap = unsafe { (self as *mut Snapshot<K, V, B>).as_mut().unwrap() };
         let versions = true;
         snap.do_get(key, versions)
     }
@@ -1956,7 +2096,7 @@ where
     /// Iterate over all entries in this index. Returned entry shall
     /// have all its previous versions, can be a costly call.
     fn iter_with_versions(&mut self) -> Result<IndexIter<K, V>> {
-        let snap = unsafe { (self as *mut Snapshot<K, V>).as_mut().unwrap() };
+        let snap = unsafe { (self as *mut Snapshot<K, V, B>).as_mut().unwrap() };
         let mut mzs = vec![];
         snap.build_fwd(snap.to_root().unwrap(), &mut mzs)?;
         Ok(Iter::new_versions(snap, mzs))
@@ -1973,7 +2113,7 @@ where
         R: 'a + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        let snap = unsafe { (self as *mut Snapshot<K, V>).as_mut().unwrap() };
+        let snap = unsafe { (self as *mut Snapshot<K, V, B>).as_mut().unwrap() };
         let versions = true;
         snap.do_range(range, versions)
     }
@@ -1989,17 +2129,18 @@ where
         R: 'a + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        let snap = unsafe { (self as *mut Snapshot<K, V>).as_mut().unwrap() };
+        let snap = unsafe { (self as *mut Snapshot<K, V, B>).as_mut().unwrap() };
         let versions = true;
         snap.do_reverse(range, versions)
     }
 }
 
-impl<K, V> Snapshot<K, V>
+impl<K, V, B> Snapshot<K, V, B>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
+    B: Bloom<K>,
 {
     fn get_zpos<Q>(&mut self, key: &Q, fpos: u64) -> Result<u64>
     where
@@ -2341,25 +2482,27 @@ where
 /// Iterate over [Robt] index, from beginning to end.
 ///
 /// [Robt]: crate::robt::Robt
-pub struct Iter<'a, K, V>
+pub struct Iter<'a, K, V, B>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
+    B: Bloom<K>,
 {
-    snap: &'a mut Snapshot<K, V>,
+    snap: &'a mut Snapshot<K, V, B>,
     mzs: Vec<MZ<K, V>>,
     shallow: bool,
     versions: bool,
 }
 
-impl<'a, K, V> Iter<'a, K, V>
+impl<'a, K, V, B> Iter<'a, K, V, B>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
+    B: Bloom<K>,
 {
-    fn new(snap: &'a mut Snapshot<K, V>, mzs: Vec<MZ<K, V>>) -> Box<Self> {
+    fn new(snap: &'a mut Snapshot<K, V, B>, mzs: Vec<MZ<K, V>>) -> Box<Self> {
         Box::new(Iter {
             snap,
             mzs,
@@ -2368,7 +2511,7 @@ where
         })
     }
 
-    fn new_versions(snap: &'a mut Snapshot<K, V>, mzs: Vec<MZ<K, V>>) -> Box<Self> {
+    fn new_versions(snap: &'a mut Snapshot<K, V, B>, mzs: Vec<MZ<K, V>>) -> Box<Self> {
         Box::new(Iter {
             snap,
             mzs,
@@ -2377,7 +2520,7 @@ where
         })
     }
 
-    fn new_shallow(snap: &'a mut Snapshot<K, V>, mzs: Vec<MZ<K, V>>) -> Box<Self> {
+    fn new_shallow(snap: &'a mut Snapshot<K, V, B>, mzs: Vec<MZ<K, V>>) -> Box<Self> {
         Box::new(Iter {
             snap,
             mzs,
@@ -2387,11 +2530,12 @@ where
     }
 }
 
-impl<'a, K, V> Iterator for Iter<'a, K, V>
+impl<'a, K, V, B> Iterator for Iter<'a, K, V, B>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
+    B: Bloom<K>,
 {
     type Item = Result<Entry<K, V>>;
 
@@ -2419,31 +2563,33 @@ where
 /// Iterate over [Robt] index, from a _lower bound_ to _upper bound_.
 ///
 /// [Robt]: crate::robt::Robt
-pub struct Range<'a, K, V, R, Q>
+pub struct Range<'a, K, V, B, R, Q>
 where
     K: Clone + Ord + Borrow<Q> + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
+    B: Bloom<K>,
     R: RangeBounds<Q>,
     Q: Ord + ?Sized,
 {
-    snap: &'a mut Snapshot<K, V>,
+    snap: &'a mut Snapshot<K, V, B>,
     mzs: Vec<MZ<K, V>>,
     range: R,
     high: marker::PhantomData<Q>,
     versions: bool,
 }
 
-impl<'a, K, V, R, Q> Range<'a, K, V, R, Q>
+impl<'a, K, V, B, R, Q> Range<'a, K, V, B, R, Q>
 where
     K: Clone + Ord + Borrow<Q> + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
+    B: Bloom<K>,
     R: RangeBounds<Q>,
     Q: Ord + ?Sized,
 {
     fn new(
-        snap: &'a mut Snapshot<K, V>,
+        snap: &'a mut Snapshot<K, V, B>,
         mzs: Vec<MZ<K, V>>,
         range: R, // range bound
         versions: bool,
@@ -2466,11 +2612,12 @@ where
     }
 }
 
-impl<'a, K, V, R, Q> Iterator for Range<'a, K, V, R, Q>
+impl<'a, K, V, B, R, Q> Iterator for Range<'a, K, V, B, R, Q>
 where
     K: Clone + Ord + Borrow<Q> + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
+    B: Bloom<K>,
     R: RangeBounds<Q>,
     Q: Ord + ?Sized,
 {
@@ -2506,31 +2653,33 @@ where
 /// to _lower bound_.
 ///
 /// [Robt]: crate::robt::Robt
-pub struct Reverse<'a, K, V, R, Q>
+pub struct Reverse<'a, K, V, B, R, Q>
 where
     K: Clone + Ord + Borrow<Q> + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
+    B: Bloom<K>,
     R: RangeBounds<Q>,
     Q: Ord + ?Sized,
 {
-    snap: &'a mut Snapshot<K, V>,
+    snap: &'a mut Snapshot<K, V, B>,
     mzs: Vec<MZ<K, V>>,
     range: R,
     low: marker::PhantomData<Q>,
     versions: bool,
 }
 
-impl<'a, K, V, R, Q> Reverse<'a, K, V, R, Q>
+impl<'a, K, V, B, R, Q> Reverse<'a, K, V, B, R, Q>
 where
     K: Clone + Ord + Borrow<Q> + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
+    B: Bloom<K>,
     R: RangeBounds<Q>,
     Q: Ord + ?Sized,
 {
     fn new(
-        snap: &'a mut Snapshot<K, V>,
+        snap: &'a mut Snapshot<K, V, B>,
         mzs: Vec<MZ<K, V>>,
         range: R, // reverse range bound
         versions: bool,
@@ -2553,11 +2702,12 @@ where
     }
 }
 
-impl<'a, K, V, R, Q> Iterator for Reverse<'a, K, V, R, Q>
+impl<'a, K, V, B, R, Q> Iterator for Reverse<'a, K, V, B, R, Q>
 where
     K: Clone + Ord + Borrow<Q> + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
+    B: Bloom<K>,
     R: RangeBounds<Q>,
     Q: Ord + ?Sized,
 {
@@ -2720,23 +2870,25 @@ fn purger(name: String, rx: mpsc::Receiver<ffi::OsString>) {
     info!(target: "robtpr", "{:?}, stopping purger ...", name);
 }
 
-struct CommitIter<'a, 'b, K, V>
+struct CommitIter<'a, 'b, K, V, B>
 where
     K: Clone + Ord + Serialize + Footprint,
     V: Clone + Diff + Serialize + Footprint,
     <V as Diff>::D: Serialize,
+    B: Bloom<K>,
 {
-    x: IndexIter<'a, K, V>, // new iterator
-    y: Box<Iter<'b, K, V>>, // old iterator
+    x: IndexIter<'a, K, V>,    // new iterator
+    y: Box<Iter<'b, K, V, B>>, // old iterator
     x_entry: Option<Result<Entry<K, V>>>,
     y_entry: Option<Result<Entry<K, V>>>,
 }
 
-impl<'a, 'b, K, V> Iterator for CommitIter<'a, 'b, K, V>
+impl<'a, 'b, K, V, B> Iterator for CommitIter<'a, 'b, K, V, B>
 where
     K: Clone + Ord + Serialize + Footprint,
     V: Clone + Diff + Serialize + Footprint,
     <V as Diff>::D: Serialize,
+    B: Bloom<K>,
 {
     type Item = Result<Entry<K, V>>;
 

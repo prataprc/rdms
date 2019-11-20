@@ -241,6 +241,28 @@ pub trait Validate<T: fmt::Display> {
     fn validate(&mut self) -> Result<T>;
 }
 
+/// Bloom-filter trait to manage key index.
+pub trait Bloom<K>: Sized {
+    /// Create an empty bit-map
+    fn create() -> Self;
+
+    /// Return the number of items in the bitmap.
+    fn len(&self) -> usize;
+
+    /// Add key into the index.
+    fn add(&self, element: &K);
+
+    /// Check whether key in persent, there can be false positives but
+    /// no false negatives.
+    fn contains(&self, element: &K) -> bool;
+
+    /// Serialize the bit-map to binary array.
+    fn to_vec(&self) -> Vec<u8>;
+
+    /// Deserialize the binary array to bit-map.
+    fn from_vec(buf: &[u8]) -> Result<Self>;
+}
+
 /// Index read operations.
 pub trait Reader<K, V>
 where

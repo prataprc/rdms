@@ -72,5 +72,8 @@ pub mod robt;
 mod robt_entry;
 mod robt_index;
 
+// bloom filters.
+pub mod nobitmap;
+
 pub mod rdms;
 pub use crate::rdms::Rdms;

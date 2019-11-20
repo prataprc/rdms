@@ -120,12 +120,12 @@ where
         match (self.x_entry.take(), self.y_entry.take()) {
             (Some(Ok(xe)), Some(Ok(ye))) => {
                 // println!("yiter next xe {} ye {}", xe.to_seqno(), ye.to_seqno());
-                let cmp = if self.reverse {
+                let cmpval = if self.reverse {
                     xe.as_key().cmp(ye.as_key()).reverse()
                 } else {
                     xe.as_key().cmp(ye.as_key())
                 };
-                match cmp {
+                match cmpval {
                     cmp::Ordering::Less => {
                         self.x_entry = self.x.next();
                         self.y_entry = Some(Ok(ye));
@@ -186,12 +186,12 @@ where
             (Some(Ok(xe)), Some(Ok(ye))) => {
                 // println!("yiter next xe {:?} {}", xe.to_key(), xe.to_seqno());
                 // println!("yiter next ye {:?} {}", ye.to_key(), ye.to_seqno());
-                let cmp = if self.reverse {
+                let cmpval = if self.reverse {
                     xe.as_key().cmp(ye.as_key()).reverse()
                 } else {
                     xe.as_key().cmp(ye.as_key())
                 };
-                match cmp {
+                match cmpval {
                     cmp::Ordering::Less => {
                         self.x_entry = self.x.next();
                         self.y_entry = Some(Ok(ye));

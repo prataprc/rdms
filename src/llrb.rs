@@ -38,6 +38,7 @@ use std::{
     convert::TryInto,
     ffi, fmt,
     fmt::Debug,
+    hash::Hash,
     marker, mem,
     ops::{Bound, Deref, DerefMut, RangeBounds},
     result,
@@ -1360,7 +1361,7 @@ where
     fn get<Q>(&mut self, key: &Q) -> Result<Entry<K, V>>
     where
         K: Borrow<Q>,
-        Q: Ord + ?Sized,
+        Q: Ord + ?Sized + Hash,
     {
         let _latch = self.latch.acquire_read(self.spin);
         get(self.root.as_ref().map(Deref::deref), key)
@@ -1431,7 +1432,7 @@ where
     fn get_with_versions<Q>(&mut self, key: &Q) -> Result<Entry<K, V>>
     where
         K: Borrow<Q>,
-        Q: Ord + ?Sized,
+        Q: Ord + ?Sized + Hash,
     {
         self.get(key)
     }
@@ -1771,7 +1772,7 @@ where
     fn get<Q>(&mut self, key: &Q) -> Result<Entry<K, V>>
     where
         K: Borrow<Q>,
-        Q: Ord + ?Sized,
+        Q: Ord + ?Sized + Hash,
     {
         let index: &mut Llrb<K, V> = self.as_mut();
         index.get(key)
@@ -1809,7 +1810,7 @@ where
     fn get_with_versions<Q>(&mut self, key: &Q) -> Result<Entry<K, V>>
     where
         K: Borrow<Q>,
-        Q: Ord + ?Sized,
+        Q: Ord + ?Sized + Hash,
     {
         self.get(key)
     }

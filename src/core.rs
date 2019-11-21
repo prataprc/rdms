@@ -2,6 +2,7 @@ use std::{
     borrow::Borrow,
     convert::TryInto,
     ffi, fmt, fs,
+    hash::Hash,
     mem::{self, ManuallyDrop},
     ops::{Bound, RangeBounds},
     result,
@@ -242,19 +243,22 @@ pub trait Validate<T: fmt::Display> {
 }
 
 /// Bloom-filter trait to manage key index.
-pub trait Bloom<K>: Sized {
-    /// Create an empty bit-map
+pub trait Bloom: Sized {
+    /// Create an empty bit-map, with capacity.
     fn create() -> Self;
 
     /// Return the number of items in the bitmap.
     fn len(&self) -> usize;
 
     /// Add key into the index.
-    fn add(&self, element: &K);
+    fn add_key<Q: ?Sized + Hash>(&mut self, element: &Q);
+
+    /// Add key into the index.
+    fn add_digest32(&mut self, digest: u32);
 
     /// Check whether key in persent, there can be false positives but
     /// no false negatives.
-    fn contains(&self, element: &K) -> bool;
+    fn contains<Q: ?Sized + Hash>(&self, element: &Q) -> bool;
 
     /// Serialize the bit-map to binary array.
     fn to_vec(&self) -> Vec<u8>;
@@ -274,7 +278,7 @@ where
     fn get<Q>(&mut self, key: &Q) -> Result<Entry<K, V>>
     where
         K: Borrow<Q>,
-        Q: Ord + ?Sized;
+        Q: Ord + ?Sized + Hash;
 
     /// Iterate over all entries in this index. Returned entry may not
     /// have all its previous versions, if it is costly to fetch from disk.
@@ -301,7 +305,7 @@ where
     fn get_with_versions<Q>(&mut self, key: &Q) -> Result<Entry<K, V>>
     where
         K: Borrow<Q>,
-        Q: Ord + ?Sized;
+        Q: Ord + ?Sized + Hash;
 
     /// Iterate over all entries in this index. Returned entry shall
     /// have all its previous versions, can be a costly call.

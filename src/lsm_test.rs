@@ -5,10 +5,10 @@ use std::{convert::TryInto, ops::Bound, thread};
 use super::*;
 use crate::{
     core::{Index, IndexIter, Reader, Validate, Writer},
+    croaring::CRoaring,
     error::Error,
     llrb::Llrb,
     mvcc::{Mvcc, MvccReader, MvccWriter},
-    nobitmap::NoBitmap,
     robt,
     scans::SkipScan,
 };
@@ -1610,7 +1610,7 @@ fn random_robt(
     seed: u128,
     delta_ok: bool,
     iter: IndexIter<i64, i64>,
-) -> robt::Snapshot<i64, i64, NoBitmap> {
+) -> robt::Snapshot<i64, i64, CRoaring> {
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
     let dir = {
         let mut dir = std::env::temp_dir();
@@ -1621,11 +1621,11 @@ fn random_robt(
     config.delta_ok = delta_ok;
     config.value_in_vlog = rng.gen();
     let b =
-        robt::Builder::<i64, i64, NoBitmap>::initial(&dir, "random_robt", config.clone()).unwrap();
+        robt::Builder::<i64, i64, CRoaring>::initial(&dir, "random_robt", config.clone()).unwrap();
     let app_meta = "heloo world".to_string();
     b.build(iter, app_meta.as_bytes().to_vec()).unwrap();
 
-    robt::Snapshot::<i64, i64, NoBitmap>::open(&dir, "random_robt").unwrap()
+    robt::Snapshot::<i64, i64, CRoaring>::open(&dir, "random_robt").unwrap()
 }
 
 fn concurrent_write(

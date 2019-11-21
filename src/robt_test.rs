@@ -4,8 +4,8 @@ use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
 use super::*;
 use crate::{
     core::{Delta, Index, Reader, Writer},
+    croaring::CRoaring,
     llrb::Llrb,
-    nobitmap::NoBitmap,
     robt,
     scans::{FilterScan, SkipScan},
 };
@@ -319,7 +319,7 @@ fn run_robt_llrb(name: &str, mut n_ops: u64, key_max: i64, repeat: usize, seed: 
         };
         let mmap = rng.gen::<bool>();
         println!(
-            "seed:{} n_ops:{} lsm:{} sticky:{} delta:{} vlog:{} within:{:?} mmap: {}",
+            "seed:{} n_ops:{} lsm:{} sticky:{} delta:{} vlog:{} within:{:?} mmap:{}",
             seed, n_ops, lsm, sticky, config.delta_ok, config.value_in_vlog, within, mmap,
         );
         let (mut llrb, refs) = llrb_to_refs1(llrb, within.clone(), &config);
@@ -334,7 +334,7 @@ fn run_robt_llrb(name: &str, mut n_ops: u64, key_max: i64, repeat: usize, seed: 
             dir.push("test-robt-build");
             dir.into_os_string()
         };
-        let b = Builder::<i64, i64, NoBitmap>::initial(&dir, name, config.clone()).unwrap();
+        let b = Builder::<i64, i64, CRoaring>::initial(&dir, name, config.clone()).unwrap();
         let app_meta = "heloo world".to_string();
         match b.build(iter, app_meta.as_bytes().to_vec()) {
             Err(Error::DiskIndexFail(msg)) => {
@@ -348,7 +348,7 @@ fn run_robt_llrb(name: &str, mut n_ops: u64, key_max: i64, repeat: usize, seed: 
             _ => (),
         }
 
-        let mut snap = robt::Snapshot::<i64, i64, NoBitmap>::open(&dir, name).unwrap();
+        let mut snap = robt::Snapshot::<i64, i64, CRoaring>::open(&dir, name).unwrap();
         snap.validate().unwrap();
         snap.set_mmap(mmap);
         assert_eq!(snap.len(), refs.len());

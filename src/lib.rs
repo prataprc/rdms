@@ -73,6 +73,7 @@ mod robt_entry;
 mod robt_index;
 
 // bloom filters.
+pub mod croaring;
 pub mod nobitmap;
 
 pub mod rdms;

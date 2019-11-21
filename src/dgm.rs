@@ -2,7 +2,9 @@ use log::{debug, info};
 
 use std::{
     borrow::Borrow,
-    ffi, fmt, fs, marker, mem,
+    ffi, fmt, fs,
+    hash::Hash,
+    marker, mem,
     ops::{Bound, DerefMut, RangeBounds},
     result,
     sync::{self, Arc},
@@ -989,7 +991,7 @@ where
     fn get<Q>(&mut self, key: &Q) -> Result<Entry<K, V>>
     where
         K: Borrow<Q>,
-        Q: Ord + ?Sized,
+        Q: Ord + ?Sized + Hash,
     {
         let mut rs = self.get_readers()?;
         match rs.r_m0.get(key) {
@@ -1116,7 +1118,7 @@ where
     fn get_with_versions<Q>(&mut self, key: &Q) -> Result<Entry<K, V>>
     where
         K: Borrow<Q>,
-        Q: Ord + ?Sized,
+        Q: Ord + ?Sized + Hash,
     {
         let mut rs = self.get_readers()?;
         let m0_entry = match rs.r_m0.get_with_versions(key) {

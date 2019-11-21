@@ -1,6 +1,8 @@
 use std::{
     borrow::Borrow,
-    ffi, marker,
+    ffi,
+    hash::Hash,
+    marker,
     ops::{Bound, RangeBounds},
 };
 
@@ -146,7 +148,7 @@ where
     fn get<Q>(&mut self, _key: &Q) -> Result<Entry<K, V>>
     where
         K: Borrow<Q>,
-        Q: Ord + ?Sized,
+        Q: Ord + ?Sized + Hash,
     {
         Err(Error::KeyNotFound)
     }
@@ -185,7 +187,7 @@ where
     fn get_with_versions<Q>(&mut self, _key: &Q) -> Result<Entry<K, V>>
     where
         K: Borrow<Q>,
-        Q: Ord + ?Sized,
+        Q: Ord + ?Sized + Hash,
     {
         Err(Error::KeyNotFound)
     }

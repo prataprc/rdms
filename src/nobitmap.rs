@@ -2,7 +2,7 @@ use crate::core::{Bloom, Result};
 
 pub struct NoBitmap;
 
-impl<K> Bloom<K> for NoBitmap {
+impl Bloom for NoBitmap {
     #[inline]
     fn create() -> Self {
         NoBitmap
@@ -14,12 +14,17 @@ impl<K> Bloom<K> for NoBitmap {
     }
 
     #[inline]
-    fn add(&self, _element: &K) {
+    fn add_key<Q: ?Sized>(&mut self, _element: &Q) {
         // Do nothing.
     }
 
     #[inline]
-    fn contains(&self, _element: &K) -> bool {
+    fn add_digest32(&mut self, _digest: u32) {
+        // Do nothing.
+    }
+
+    #[inline]
+    fn contains<Q: ?Sized>(&self, _element: &Q) -> bool {
         true // false positives are okay.
     }
 
@@ -29,7 +34,7 @@ impl<K> Bloom<K> for NoBitmap {
     }
 
     #[inline]
-    fn from_vec(_buf: &[u8]) -> Result<Self> {
+    fn from_vec(_buf: &[u8]) -> Result<NoBitmap> {
         Ok(NoBitmap)
     }
 }

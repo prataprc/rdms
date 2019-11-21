@@ -1,5 +1,5 @@
 //! Implement get() and iter() for LSM indexes.
-use std::{borrow::Borrow, cmp};
+use std::{borrow::Borrow, cmp, hash::Hash};
 
 use crate::{
     core::{Diff, Entry, Footprint, IndexIter, Reader, Result},
@@ -231,7 +231,7 @@ pub(crate) fn getter<'a, 'b, I, K, V, Q>(index: &'a mut I, versions: bool) -> Ls
 where
     K: Clone + Ord + Borrow<Q>,
     V: Clone + Diff,
-    Q: 'b + Ord + ?Sized,
+    Q: 'b + Ord + ?Sized + Hash,
     I: Reader<K, V>,
 {
     if versions {

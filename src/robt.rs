@@ -36,16 +36,18 @@
 //! [Config]: crate::robt::Config
 //!
 
+use crc::crc32::{self, Hasher32};
 use fs2::FileExt;
 use jsondata::Json;
 use lazy_static::lazy_static;
-use log::{error, info};
+use log::{debug, error, info};
 
 use std::{
     borrow::Borrow,
     cmp,
     convert::TryInto,
     ffi, fmt, fs,
+    hash::Hash,
     io::Write,
     marker, mem,
     ops::{Bound, Deref, RangeBounds},
@@ -67,6 +69,9 @@ use crate::{
 };
 
 include!("robt_marker.rs");
+
+// TODO: bitmap computation can be optimized for commit-iteration
+// and compact iteration. try CommitIter, CompactIter, BitmapIter.
 
 #[derive(Clone)]
 struct Name(String);
@@ -126,7 +131,6 @@ where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
-    B: Bloom<K>,
 {
     RobtFactory {
         config,
@@ -142,7 +146,6 @@ where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
-    B: Bloom<K>,
 {
     config: Config,
 
@@ -156,7 +159,6 @@ where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
-    B: Bloom<K>,
 {
     // file name should match the following criteria.
     // a. must have a `.indx` suffix.
@@ -173,10 +175,10 @@ where
 
 impl<K, V, B> DiskIndexFactory<K, V> for RobtFactory<K, V, B>
 where
-    K: Clone + Ord + Footprint + Serialize,
+    K: Clone + Ord + Hash + Footprint + Serialize,
     V: Clone + Diff + Footprint + Serialize,
     <V as Diff>::D: Serialize,
-    B: Bloom<K>,
+    B: Bloom,
 {
     type I = Robt<K, V, B>;
 
@@ -241,7 +243,6 @@ where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
-    B: Bloom<K>,
 {
     inner: sync::Mutex<InnerRobt<K, V, B>>,
     purger: Option<thread::JoinHandle<()>>,
@@ -252,7 +253,6 @@ where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
-    B: Bloom<K>,
 {
     fn drop(&mut self) {
         {
@@ -271,7 +271,6 @@ where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
-    B: Bloom<K>,
 {
     fn new(inner: InnerRobt<K, V, B>, purger: thread::JoinHandle<()>) -> Robt<K, V, B> {
         Robt {
@@ -287,7 +286,6 @@ where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
-    B: Bloom<K>,
 {
     Build {
         dir: ffi::OsString,
@@ -312,10 +310,10 @@ where
 
 impl<K, V, B> Index<K, V> for Robt<K, V, B>
 where
-    K: Clone + Ord + Footprint + Serialize,
+    K: Clone + Ord + Hash + Footprint + Serialize,
     V: Clone + Diff + Footprint + Serialize,
     <V as Diff>::D: Serialize,
-    B: Bloom<K>,
+    B: Bloom,
 {
     type R = Snapshot<K, V, B>;
     type W = Panic;
@@ -443,7 +441,7 @@ where
             } => {
                 info!(target: "robt  ", "{:?}, opening for commit ...", name.0);
 
-                let (name, snapshot) = {
+                let (name, snapshot, meta_block_bytes) = {
                     let mut old_snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
                     let index_file = old_snapshot.index_fd.to_file();
                     let old_meta = old_snapshot.to_app_meta()?;
@@ -453,14 +451,14 @@ where
 
                     let name = name.clone().next();
                     let b = Builder::<K, V, B>::incremental(dir, &name.0, config.clone())?;
-                    b.build(iter, metacb(old_meta))?;
+                    let meta_block_bytes = b.build(iter, metacb(old_meta))?;
                     let snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
                     snapshot.log()?;
 
                     // purge old snapshots file(s).
                     purge_tx.as_ref().unwrap().send(index_file)?;
 
-                    (name, snapshot)
+                    (name, snapshot, meta_block_bytes)
                 };
                 let stats = snapshot.to_stats()?;
                 let footprint = snapshot.footprint()?;
@@ -474,7 +472,7 @@ where
                 info!(
                     target: "robt  ",
                     "{:?}, footprint {}, wrote {} bytes",
-                    name, footprint, stats.z_bytes + stats.m_bytes + stats.v_bytes
+                    name, footprint, stats.z_bytes + stats.m_bytes + stats.v_bytes + meta_block_bytes
                 );
 
                 InnerRobt::Snapshot {
@@ -522,7 +520,7 @@ where
                 ..
             } => {
                 info!(target: "robt  ", "{:?}, opening for compaction ...", name.0);
-                let (name, snapshot) = {
+                let (name, snapshot, meta_block_bytes) = {
                     let mut old_snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
                     let iter = CompactScan::new(old_snapshot.iter_with_versions()?, cutoff);
 
@@ -535,7 +533,7 @@ where
                         _ => unreachable!(),
                     };
                     let b = Builder::<K, V, B>::initial(dir, &name.0, conf)?;
-                    b.build(iter, meta)?;
+                    let meta_block_bytes = b.build(iter, meta)?;
                     let snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
                     snapshot.log()?;
 
@@ -549,7 +547,7 @@ where
                         None => (),
                     }
 
-                    (name, snapshot)
+                    (name, snapshot, meta_block_bytes)
                 };
                 let stats = snapshot.to_stats()?;
                 let footprint = snapshot.footprint()?;
@@ -563,7 +561,7 @@ where
                 info!(
                     target: "robt  ",
                     "{:?}, footprint {}, wrote {} bytes",
-                    name, footprint, stats.z_bytes + stats.m_bytes + stats.v_bytes
+                    name, footprint, stats.z_bytes + stats.m_bytes + stats.v_bytes + meta_block_bytes
                 );
 
                 InnerRobt::Snapshot {
@@ -588,7 +586,7 @@ where
     K: Clone + Ord + Footprint + Serialize,
     V: Clone + Diff + Footprint + Serialize,
     <V as Diff>::D: Serialize,
-    B: Bloom<K>,
+    B: Bloom,
 {
     fn commit_merge<'a, 'b, 'n>(
         mut iter: IndexIter<'a, K, V>,
@@ -617,7 +615,6 @@ where
     K: Clone + Ord + Serialize + Footprint,
     V: Clone + Diff + Serialize + Footprint,
     <V as Diff>::D: Serialize + Footprint,
-    B: Bloom<K>,
 {
     fn footprint(&self) -> Result<isize> {
         let inner = self.inner.lock().unwrap();
@@ -876,18 +873,25 @@ pub(crate) fn write_meta_items(
     for (i, item) in items.into_iter().enumerate() {
         match (i, item) {
             (0, MetaItem::Root(fpos)) => {
+                debug!(target: "robt  ", "{:?}, writing root at {} ...", file, fpos);
                 hdr[0..8].copy_from_slice(&fpos.to_be_bytes());
             }
             (1, MetaItem::Bitmap(bitmap)) => {
-                hdr[8..16].copy_from_slice(&(bitmap.len() as u64).to_be_bytes());
+                let ln = bitmap.len() as u64;
+                debug!(target: "robt  ", "{:?}, writing bitmap {} bytes ...", file, ln);
+                hdr[8..16].copy_from_slice(&ln.to_be_bytes());
                 block.extend_from_slice(&bitmap);
             }
             (2, MetaItem::AppMetadata(md)) => {
-                hdr[16..24].copy_from_slice(&(md.len() as u64).to_be_bytes());
+                let ln = md.len() as u64;
+                debug!(target: "robt  ", "{:?}, writing app-meta {} bytes ...", file, ln);
+                hdr[16..24].copy_from_slice(&ln.to_be_bytes());
                 block.extend_from_slice(&md);
             }
             (3, MetaItem::Stats(s)) => {
-                hdr[24..32].copy_from_slice(&(s.len() as u64).to_be_bytes());
+                let ln = s.len() as u64;
+                debug!(target: "robt  ", "{:?}, writing stats {} bytes ...", file, ln);
+                hdr[24..32].copy_from_slice(&ln.to_be_bytes());
                 block.extend_from_slice(s.as_bytes());
             }
             (4, MetaItem::Marker(data)) => {
@@ -1226,7 +1230,6 @@ where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
-    B: Bloom<K>,
 {
     config: Config,
     iflusher: Flusher,
@@ -1243,7 +1246,7 @@ where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
-    B: Bloom<K>,
+    B: Bloom,
 {
     /// For commit builds, index file and value-log-file, if configured,
     /// shall be created new.
@@ -1323,14 +1326,22 @@ where
     /// Build a new index from the supplied iterator. The iterator shall
     /// return an index entry for each iteration, and the entries are
     /// expected in sort order.
-    pub fn build<I>(mut self, iter: I, app_meta: Vec<u8>) -> Result<()>
+    pub fn build<I>(mut self, iter: I, app_meta: Vec<u8>) -> Result<usize>
     where
+        K: Hash,
         I: Iterator<Item = Result<Entry<K, V>>>,
     {
         let (took, root, n_bitmap, bitmap): (u64, u64, usize, Vec<u8>) = {
-            let mut bitmap = <B as Bloom<K>>::create();
             let start = time::SystemTime::now();
-            let root = self.build_tree(iter, &mut bitmap)?;
+            let (root, bitmap) = {
+                let mut iter = BuildIter::new(iter);
+                let root = self.build_tree(&mut iter)?;
+                self.stats.seqno = iter.seqno;
+                self.stats.n_count = iter.n_count;
+                self.stats.n_deleted = iter.n_deleted;
+                let bitmap = iter.close()?;
+                (root, bitmap)
+            };
             (
                 start.elapsed().unwrap().as_nanos().try_into().unwrap(),
                 root,
@@ -1370,13 +1381,14 @@ where
         self.vflusher.take().map(|x| x.close_wait()).transpose()?;
 
         // flush meta items to disk and close
-        write_meta_items(index_file, meta_items)?;
+        let meta_block_bytes = write_meta_items(index_file, meta_items)?;
 
-        Ok(())
+        Ok(meta_block_bytes.try_into().unwrap())
     }
 
-    fn build_tree<I>(&mut self, iter: I, bitmap: &mut B) -> Result<u64>
+    fn build_tree<I>(&mut self, iter: &mut BuildIter<K, V, I, B>) -> Result<u64>
     where
+        K: Hash,
         I: Iterator<Item = Result<Entry<K, V>>>,
     {
         struct Context<K, V>
@@ -1403,15 +1415,9 @@ where
         };
 
         for entry in iter {
-            let mut entry = match self.preprocess(entry?) {
-                Some(entry) => entry,
-                None => continue,
-            };
-            bitmap.add(entry.as_key());
-
+            let entry = entry?;
             // println!("build key: {:?}", entry.to_key());
             // println!("build entry: {}", entry.to_seqno());
-
             match c.z.insert(&entry, &mut self.stats) {
                 Ok(_) => (),
                 Err(Error::__ZBlockOverflow(_)) => {
@@ -1447,8 +1453,6 @@ where
                 }
                 Err(err) => return Err(err),
             };
-
-            self.postprocess(&mut entry);
         }
         // println!(" number of mblocks: {}", c.ms.len());
 
@@ -1541,18 +1545,87 @@ where
         ms.push(m0);
         Ok((ms, fpos))
     }
+}
 
-    fn preprocess(&mut self, entry: Entry<K, V>) -> Option<Entry<K, V>> {
-        self.stats.seqno = cmp::max(self.stats.seqno, entry.to_seqno());
-        Some(entry)
-    }
+struct BuildIter<K, V, I, B>
+where
+    K: Clone + Ord + Hash + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Serialize,
+    I: Iterator<Item = Result<Entry<K, V>>>,
+    B: Bloom,
+{
+    seqno: u64,
+    n_count: u64,
+    n_deleted: usize,
+    iter: I,
+    hasher: crc32::Digest,
+    bitmap: B,
+}
 
-    fn postprocess(&mut self, entry: &mut Entry<K, V>) {
-        self.stats.n_count += 1;
-        if entry.is_deleted() {
-            self.stats.n_deleted += 1;
+impl<K, V, I, B> BuildIter<K, V, I, B>
+where
+    K: Clone + Ord + Hash + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Serialize,
+    I: Iterator<Item = Result<Entry<K, V>>>,
+    B: Bloom,
+{
+    fn new(iter: I) -> BuildIter<K, V, I, B> {
+        BuildIter {
+            seqno: Default::default(),
+            n_count: Default::default(),
+            n_deleted: Default::default(),
+            iter,
+            hasher: crc32::Digest::new(crc32::IEEE),
+            bitmap: <B as Bloom>::create(),
         }
     }
+
+    fn close(self) -> Result<B> {
+        Ok(self.bitmap)
+    }
+}
+
+impl<K, V, I, B> Iterator for BuildIter<K, V, I, B>
+where
+    K: Clone + Ord + Hash + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Serialize,
+    I: Iterator<Item = Result<Entry<K, V>>>,
+    B: Bloom,
+{
+    type Item = Result<Entry<K, V>>;
+
+    fn next(&mut self) -> Option<Result<Entry<K, V>>> {
+        match self.iter.next() {
+            Some(Ok(entry)) => {
+                self.seqno = cmp::max(self.seqno, entry.to_seqno());
+                self.n_count += 1;
+                if entry.is_deleted() {
+                    self.n_deleted += 1;
+                }
+                self.hasher.reset();
+                entry.as_key().hash(&mut self.hasher);
+                self.bitmap.add_digest32(self.hasher.sum32());
+                Some(Ok(entry))
+            }
+            Some(Err(err)) => Some(Err(err)),
+            None => None,
+        }
+    }
+}
+
+#[allow(dead_code)] // TODO: remove this.
+fn bitmap_index<B>(bitmap_rx: mpsc::Receiver<u32>) -> B
+where
+    B: Bloom,
+{
+    let mut bitmap = <B as Bloom>::create();
+    for digest in bitmap_rx {
+        bitmap.add_digest32(digest)
+    }
+    bitmap
 }
 
 pub(crate) struct Flusher {
@@ -1731,7 +1804,6 @@ pub struct Snapshot<K, V, B>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
-    B: Bloom<K>,
 {
     dir: ffi::OsString,
     name: String,
@@ -1751,7 +1823,6 @@ impl<K, V, B> Drop for Snapshot<K, V, B>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
-    B: Bloom<K>,
 {
     fn drop(&mut self) {
         self.index_fd.as_fd().unlock().ok();
@@ -1767,7 +1838,7 @@ where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
-    B: Bloom<K>,
+    B: Bloom,
 {
     /// Open BTree snapshot from file that can be constructed from ``dir``
     /// and ``name``.
@@ -1783,7 +1854,7 @@ where
             Err(Error::InvalidSnapshot(msg))
         }?;
         let bitmap: Arc<B> = if let MetaItem::Bitmap(data) = &mut meta_items[1] {
-            let bitmap = <B as Bloom<K>>::from_vec(&data)?;
+            let bitmap = <B as Bloom>::from_vec(&data)?;
             data.drain(..);
             Ok(Arc::new(bitmap))
         } else {
@@ -1853,8 +1924,8 @@ where
                 (0, MetaItem::Root(fpos)) => info!(
                     target: "robt  ", "{:?}, meta-item root at {}", self.name, fpos
                 ),
-                (1, MetaItem::Bitmap(bitmap)) => info!(
-                    target: "robt  ", "{:?}, meta-item bit-map length {}", self.name, bitmap.len()
+                (1, MetaItem::Bitmap(_)) => info!(
+                    target: "robt  ", "{:?}, meta-item bit-map", self.name
                 ),
                 (2, MetaItem::AppMetadata(data)) => info!(
                     target: "robt  ", "{:?}, meta-item app-meta-data {} bytes", self.name, data.len()
@@ -1877,7 +1948,6 @@ impl<K, V, B> Snapshot<K, V, B>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
-    B: Bloom<K>,
 {
     /// Return number of entries in the snapshot.
     pub fn len(&self) -> usize {
@@ -1897,15 +1967,6 @@ where
             Err(Error::InvalidSnapshot(
                 "robt snapshot root missing".to_string(),
             ))
-        }
-    }
-
-    fn to_bitmap(&self) -> Result<B> {
-        if let MetaItem::Bitmap(data) = &self.meta[1] {
-            <B as Bloom<K>>::from_vec(&data)
-        } else {
-            let msg = "robt snapshot app-bitmap missing".to_string();
-            Err(Error::InvalidSnapshot(msg))
         }
     }
 
@@ -1944,11 +2005,26 @@ where
     }
 }
 
+impl<K, V, B> Snapshot<K, V, B>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    B: Bloom,
+{
+    fn to_bitmap(&self) -> Result<B> {
+        if let MetaItem::Bitmap(data) = &self.meta[1] {
+            <B as Bloom>::from_vec(&data)
+        } else {
+            let msg = "robt snapshot app-bitmap missing".to_string();
+            Err(Error::InvalidSnapshot(msg))
+        }
+    }
+}
+
 impl<K, V, B> Footprint for Snapshot<K, V, B>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
-    B: Bloom<K>,
 {
     fn footprint(&self) -> Result<isize> {
         let i_footprint: isize = self.index_fd.footprint()?.try_into().unwrap();
@@ -1965,7 +2041,7 @@ where
     K: Clone + Ord + Serialize + fmt::Debug,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
-    B: Bloom<K>,
+    B: Bloom,
 {
     fn validate(&mut self) -> Result<Stats> {
         // validate config and stats.
@@ -2041,13 +2117,17 @@ where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
-    B: Bloom<K>,
+    B: Bloom,
 {
     fn get<Q>(&mut self, key: &Q) -> Result<Entry<K, V>>
     where
         K: Borrow<Q>,
-        Q: Ord + ?Sized,
+        Q: Ord + ?Sized + Hash,
     {
+        // check in the bitmap if available.
+        if self.bitmap.contains(key) == false {
+            return Err(Error::KeyNotFound);
+        }
         // println!("robt get ..");
         let snap = unsafe { (self as *mut Snapshot<K, V, B>).as_mut().unwrap() };
         let versions = false;
@@ -2086,7 +2166,7 @@ where
     fn get_with_versions<Q>(&mut self, key: &Q) -> Result<Entry<K, V>>
     where
         K: Borrow<Q>,
-        Q: Ord + ?Sized,
+        Q: Ord + ?Sized + Hash,
     {
         let snap = unsafe { (self as *mut Snapshot<K, V, B>).as_mut().unwrap() };
         let versions = true;
@@ -2140,7 +2220,6 @@ where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
-    B: Bloom<K>,
 {
     fn get_zpos<Q>(&mut self, key: &Q, fpos: u64) -> Result<u64>
     where
@@ -2456,7 +2535,14 @@ where
         });
         Ok(entry)
     }
+}
 
+impl<K, V, B> Snapshot<K, V, B>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
+{
     fn fetch(
         &mut self,
         mut entry: Entry<K, V>,
@@ -2487,7 +2573,6 @@ where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
-    B: Bloom<K>,
 {
     snap: &'a mut Snapshot<K, V, B>,
     mzs: Vec<MZ<K, V>>,
@@ -2500,7 +2585,6 @@ where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
-    B: Bloom<K>,
 {
     fn new(snap: &'a mut Snapshot<K, V, B>, mzs: Vec<MZ<K, V>>) -> Box<Self> {
         Box::new(Iter {
@@ -2535,7 +2619,6 @@ where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
-    B: Bloom<K>,
 {
     type Item = Result<Entry<K, V>>;
 
@@ -2568,7 +2651,6 @@ where
     K: Clone + Ord + Borrow<Q> + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
-    B: Bloom<K>,
     R: RangeBounds<Q>,
     Q: Ord + ?Sized,
 {
@@ -2584,7 +2666,6 @@ where
     K: Clone + Ord + Borrow<Q> + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
-    B: Bloom<K>,
     R: RangeBounds<Q>,
     Q: Ord + ?Sized,
 {
@@ -2617,7 +2698,6 @@ where
     K: Clone + Ord + Borrow<Q> + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
-    B: Bloom<K>,
     R: RangeBounds<Q>,
     Q: Ord + ?Sized,
 {
@@ -2658,7 +2738,6 @@ where
     K: Clone + Ord + Borrow<Q> + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
-    B: Bloom<K>,
     R: RangeBounds<Q>,
     Q: Ord + ?Sized,
 {
@@ -2674,7 +2753,6 @@ where
     K: Clone + Ord + Borrow<Q> + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
-    B: Bloom<K>,
     R: RangeBounds<Q>,
     Q: Ord + ?Sized,
 {
@@ -2707,7 +2785,6 @@ where
     K: Clone + Ord + Borrow<Q> + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
-    B: Bloom<K>,
     R: RangeBounds<Q>,
     Q: Ord + ?Sized,
 {
@@ -2875,7 +2952,6 @@ where
     K: Clone + Ord + Serialize + Footprint,
     V: Clone + Diff + Serialize + Footprint,
     <V as Diff>::D: Serialize,
-    B: Bloom<K>,
 {
     x: IndexIter<'a, K, V>,    // new iterator
     y: Box<Iter<'b, K, V, B>>, // old iterator
@@ -2888,7 +2964,6 @@ where
     K: Clone + Ord + Serialize + Footprint,
     V: Clone + Diff + Serialize + Footprint,
     <V as Diff>::D: Serialize,
-    B: Bloom<K>,
 {
     type Item = Result<Entry<K, V>>;
 

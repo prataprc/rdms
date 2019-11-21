@@ -73,6 +73,8 @@ include!("robt_marker.rs");
 // TODO: bitmap computation can be optimized for commit-iteration
 // and compact iteration. try CommitIter, CompactIter, BitmapIter.
 
+// TODO: write test cases for CommitIter.
+
 #[derive(Clone)]
 struct Name(String);
 

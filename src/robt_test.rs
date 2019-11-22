@@ -350,23 +350,6 @@ fn run_robt_llrb(name: &str, n_ops: u64, key_max: i64, repeat: usize, seed: u128
         }
 
         let mut snap = robt::Snapshot::<i64, i64, CRoaring>::open(&dir, name).unwrap();
-        if llrb.is_lsm() {
-            let (mut n_muts, iter) = (0, snap.iter_with_versions().unwrap());
-            for entry in iter {
-                match entry.unwrap().filter_within(within.0, within.1) {
-                    Some(entry) => {
-                        let versions: Vec<Entry<i64, i64>> = entry.versions().collect();
-                        n_muts += versions.len();
-                    }
-                    None => (),
-                }
-            }
-            assert_eq!(n_muts as u64, n_ops);
-            assert_eq!(
-                llrb.to_stats().n_deleted,
-                snap.to_stats().unwrap().n_deleted
-            );
-        }
         snap.validate().unwrap();
         snap.set_mmap(mmap);
         assert_eq!(snap.len(), refs.len());

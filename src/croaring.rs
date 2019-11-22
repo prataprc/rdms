@@ -1,3 +1,10 @@
+//! Module `croaring` implement [Bloom] for [croaring][croaring] binding
+//! for [roaring bitmap][roaring-bitmap].
+//!
+//! [Bloom]: crate::core::Bloom
+//! [croaring]: https://github.com/saulius/croaring-rs
+//! [roaring-bitmap]: https://roaringbitmap.org
+
 use crc::crc32::{self, Hasher32};
 use croaring::bitmap::Bitmap;
 

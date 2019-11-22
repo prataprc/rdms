@@ -1,3 +1,5 @@
+//! Module `nobitmap` define a dummy bitmap index.
+
 use crate::core::{Bloom, Result};
 
 pub struct NoBitmap;

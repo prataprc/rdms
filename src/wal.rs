@@ -1,4 +1,4 @@
-//! Write-Ahead-Logging for Rdms index.
+//! Module `wal` implement write-ahead-logging for [Rdms] index.
 //!
 //! Takes care of batching write operations, serializing, appending
 //! them to disk, and finally commiting the appended batch(es). A

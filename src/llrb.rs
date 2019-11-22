@@ -1,4 +1,4 @@
-//! Module ``llrb`` export an in-memory index type, implementing
+//! Module ``llrb`` implement an in-memory index type, using
 //! _Left Leaning Red Black_ tree.
 //!
 //! [Llrb] type allow concurrent read and write access at API level,

@@ -1,3 +1,5 @@
+//! Module `core` define and implement core types and traits for `rdms`.
+
 use std::{
     borrow::Borrow,
     convert::TryInto,

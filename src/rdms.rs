@@ -1,3 +1,8 @@
+//! Module `rdms` implement a full-featured storage index.
+//!
+//! [Rdms] can be composed using underlying components and mechanisms defined
+//! in `core` module.
+
 use std::{
     convert, ffi, fmt, marker,
     ops::Bound,

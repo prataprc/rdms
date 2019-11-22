@@ -1,3 +1,6 @@
+//! Module `sync` implements synchronisation primitive to implement
+//! complex index types.
+
 use std::{ffi, mem, sync::Arc};
 
 pub struct CCMu {

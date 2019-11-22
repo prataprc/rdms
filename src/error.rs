@@ -1,5 +1,7 @@
-//! Module error define enumeration of `rdms` errors and convertion
-//! traits from other error types, like from std-lib, to `rdms` error.
+//! Module error define enumeration of all `rdms` errors.
+//!
+//! Convertion traits, from other error types, like from std-lib, to `rdms`
+//! error are implemented in this module.
 
 use jsondata;
 

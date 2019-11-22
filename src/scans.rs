@@ -1,39 +1,41 @@
-//! Stitch a full table scan from piece-wise iteration.
-//!
-//! Typically used for memory-only index.
+//! Module `scans` implement iterator variants that are useful for
+//! building and managing complex data-index.
 
 use std::{
+    hash::Hash,
     ops::{Bound, RangeBounds},
     vec,
 };
 
-use crate::core::{Diff, Entry, IndexIter, PiecewiseScan, Result, ScanEntry};
+use crate::core::{Bloom, Diff, Entry, IndexIter, PiecewiseScan, Result, ScanEntry};
 
 // TODO: benchmark SkipScan and FilterScan and measure the difference.
 
-pub const SKIP_SCAN_BATCH_SIZE: usize = 1000;
+const SKIP_SCAN_BATCH_SIZE: usize = 1000;
 
-/// SkipScan can be used to stitch piece-wise scanning of LSM
-/// data-structure, only selecting mutations (and versions)
+/// SkipScan for full table iteration of LSM data structure.
+///
+/// SkipScan achieve full table scan by stitching together piece-wise
+/// scan of LSM data-structure, only selecting mutations (and versions)
 /// that are within specified sequence-no range.
 ///
 /// Mitigates following issues.
 ///
-/// a. Read references to data-structure is held only for
-///    very small period, like few tens of micro-seconds.
-/// b. Automatically filters mutations that are older than
-///    specified sequence-no range, there by saving time for
-///    top-level DB components.
-/// c. Ignores mutations that are newer than the specified
-///    sequence-no range, there by providing a stable full
-///    table scan.
+/// * Read references to data-structure is held only for
+///   very small period, like few tens of micro-seconds.
+/// * Automatically filters mutations that are older than
+///   specified sequence-no range, there by saving time for
+///   top-level DB components.
+/// * Ignores mutations that are newer than the specified
+///   sequence-no range, there by providing a stable full
+///   table scan.
 ///
 /// Important pre-requist:
 ///
-/// a. Applicable only for LSM based data structures.
-/// b. Data-structure must not suffer any delete/purge
-///    operation until full-scan is completed.
-/// c. Data-structure must implement PiecewiseScan trait.
+/// * Applicable only for LSM based data structures.
+/// * Data-structure must not suffer any delete/purge
+///   operation until full-scan is completed.
+/// * Data-structure must implement PiecewiseScan trait.
 pub struct SkipScan<R, K, V, G>
 where
     K: Clone + Ord,
@@ -65,6 +67,8 @@ where
     G: Clone + RangeBounds<u64>,
     R: PiecewiseScan<K, V>,
 {
+    /// Create a new full table scan using the reader handle. Pick
+    /// mutations that are `within` the specified range.
     pub fn new(reader: R, within: G) -> SkipScan<R, K, V, G> {
         SkipScan {
             reader,
@@ -75,6 +79,7 @@ where
         }
     }
 
+    /// Set the batch size for each iteration using the reader handle.
     pub fn set_batch_size(&mut self, batch_size: usize) {
         self.batch_size = batch_size
     }
@@ -155,6 +160,8 @@ where
     }
 }
 
+/// FilterScan for continuous full table iteration filtering out older and
+/// newer mutations.
 pub struct FilterScan<'a, K, V>
 where
     K: 'a + Clone + Ord,
@@ -195,6 +202,7 @@ where
 {
     type Item = Result<Entry<K, V>>;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             match self.iter.next() {
@@ -211,6 +219,8 @@ where
     }
 }
 
+/// CompactScan for continuous full table iteration filtering out
+/// older mutations.
 pub struct CompactScan<'a, K, V>
 where
     K: 'a + Clone + Ord,
@@ -237,6 +247,7 @@ where
 {
     type Item = Result<Entry<K, V>>;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             match self.iter.next() {
@@ -247,6 +258,58 @@ where
                 Some(Err(err)) => break Some(Err(err)),
                 None => break None,
             }
+        }
+    }
+}
+
+pub(crate) struct BitmapIter<K, V, I, B>
+where
+    K: Clone + Ord + Hash,
+    V: Clone + Diff,
+    I: Iterator<Item = Result<Entry<K, V>>>,
+    B: Bloom,
+{
+    iter: I,
+    bitmap: B,
+}
+
+impl<K, V, I, B> BitmapIter<K, V, I, B>
+where
+    K: Clone + Ord + Hash,
+    V: Clone + Diff,
+    I: Iterator<Item = Result<Entry<K, V>>>,
+    B: Bloom,
+{
+    pub(crate) fn new(iter: I) -> BitmapIter<K, V, I, B> {
+        BitmapIter {
+            iter,
+            bitmap: <B as Bloom>::create(),
+        }
+    }
+
+    pub(crate) fn close(self) -> Result<(I, B)> {
+        Ok((self.iter, self.bitmap))
+    }
+}
+
+impl<K, V, I, B> Iterator for BitmapIter<K, V, I, B>
+where
+    K: Clone + Ord + Hash,
+    V: Clone + Diff,
+    I: Iterator<Item = Result<Entry<K, V>>>,
+    B: Bloom,
+{
+    type Item = Result<Entry<K, V>>;
+
+    #[inline]
+    fn next(&mut self) -> Option<Result<Entry<K, V>>> {
+        match self.iter.next() {
+            Some(Ok(entry)) => {
+                self.bitmap.add_key(entry.as_key());
+                Some(Ok(entry))
+            }
+            Some(Err(err)) => Some(Err(err)),
+            None => None,
         }
     }
 }

@@ -1,3 +1,6 @@
+//! Module `types` implement core key-traits and value-traits for
+//! built-in types.
+
 use std::{convert::TryInto, ffi, marker};
 
 use crate::{

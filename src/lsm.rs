@@ -1,4 +1,6 @@
-//! Implement get() and iter() for LSM indexes.
+//! Module `lsm` implement merge logic for lookup and iteration api for
+//! LSM indexes.
+
 use std::{borrow::Borrow, cmp, hash::Hash};
 
 use crate::{

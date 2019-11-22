@@ -1,5 +1,5 @@
-//! Read-Write-Spinlock implements the idea of latch-and-spin mechanism
-//! normally used for non-blocking concurrency.
+//! Module `spinlock` implement read-write-spinlock, useful for
+//! non-blocking concurrency.
 //!
 //! Blocking concurrency can have impact on latency. When operations
 //! that require [rw-exclusion][rw-lock] is going to be quick and short,

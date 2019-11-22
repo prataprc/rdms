@@ -1,4 +1,4 @@
-//! Read Only BTree for disk based indexes.
+//! Module `robt` implement a read-only-btree for disk based indexes.
 //!
 //! ROBT instances shall have an index file and an optional value-log-file,
 //! refer to [Config] for more information.
@@ -13,6 +13,8 @@
 //! *------------------------------------------* SeekFrom::End(-16)
 //! |             app-metadata-length          |
 //! *------------------------------------------* SeekFrom::End(-24)
+//! |                bitmap-length             |
+//! *------------------------------------------* SeekFrom::End(-32)
 //! |                  root-fpos               |
 //! *------------------------------------------* SeekFrom::MetaBlock
 //! *                 meta-blocks              *
@@ -28,10 +30,11 @@
 //! following details:
 //! * Index statistics
 //! * Application metadata
+//! * Bitmap length, to optimize missing key lookups.
 //! * File-position for btree's root-block.
 //!
 //! Total length of `metadata-blocks` can be computed based on
-//! `marker-length`, `stats-length`, `app-metadata-length`.
+//! `marker-length`, `stats-length`, `app-metadata-length`, `bitmap-length`.
 //!
 //! [Config]: crate::robt::Config
 //!
@@ -63,7 +66,7 @@ use crate::{
     panic::Panic,
     robt_entry::MEntry,
     robt_index::{MBlock, ZBlock},
-    scans::CompactScan,
+    scans::{BitmapIter, CompactScan},
     util,
 };
 
@@ -834,13 +837,12 @@ impl Config {
     }
 }
 
-/// Enumerated meta types stored in [Robt] index.
+/// Enumeration of meta items stored in [Robt] index.
 ///
 /// [Robt] index is a fully packed immutable [Btree] index. To interpret
 /// the index a list of meta items are appended to the tip
 /// of index-file.
 ///
-/// [Robt]: crate::robt::Robt
 /// [Btree]: https://en.wikipedia.org/wiki/B-tree
 #[derive(Clone)]
 pub enum MetaItem {
@@ -1335,12 +1337,10 @@ where
         let (took, root, n_bitmap, bitmap): (u64, u64, usize, Vec<u8>) = {
             let start = time::SystemTime::now();
             let (root, bitmap) = {
-                let mut iter = BuildIter::new(iter);
+                let mut iter = BitmapIter::new(BuildIter::new(iter));
                 let root = self.build_tree(&mut iter)?;
-                self.stats.seqno = iter.seqno;
-                self.stats.n_count = iter.n_count;
-                self.stats.n_deleted = iter.n_deleted;
-                let bitmap = iter.close()?;
+                let (iter, bitmap) = iter.close()?;
+                iter.update_stats(&mut self.stats).ok();
                 (root, bitmap)
             };
             (
@@ -1387,7 +1387,7 @@ where
         Ok(meta_block_bytes.try_into().unwrap())
     }
 
-    fn build_tree<I>(&mut self, iter: &mut BuildIter<K, V, I, B>) -> Result<u64>
+    fn build_tree<I>(&mut self, iter: &mut BitmapIter<K, V, I, B>) -> Result<u64>
     where
         K: Hash,
         I: Iterator<Item = Result<Entry<K, V>>>,
@@ -1548,54 +1548,55 @@ where
     }
 }
 
-struct BuildIter<K, V, I, B>
+struct BuildIter<K, V, I>
 where
     K: Clone + Ord + Hash + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
     I: Iterator<Item = Result<Entry<K, V>>>,
-    B: Bloom,
 {
+    iter: I,
+
     seqno: u64,
     n_count: u64,
     n_deleted: usize,
-    iter: I,
-    bitmap: B,
 }
 
-impl<K, V, I, B> BuildIter<K, V, I, B>
+impl<K, V, I> BuildIter<K, V, I>
 where
     K: Clone + Ord + Hash + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
     I: Iterator<Item = Result<Entry<K, V>>>,
-    B: Bloom,
 {
-    fn new(iter: I) -> BuildIter<K, V, I, B> {
+    fn new(iter: I) -> BuildIter<K, V, I> {
         BuildIter {
+            iter,
+
             seqno: Default::default(),
             n_count: Default::default(),
             n_deleted: Default::default(),
-            iter,
-            bitmap: <B as Bloom>::create(),
         }
     }
 
-    fn close(self) -> Result<B> {
-        Ok(self.bitmap)
+    fn update_stats(self, stats: &mut Stats) -> Result<I> {
+        stats.seqno = self.seqno;
+        stats.n_count = self.n_count;
+        stats.n_deleted = self.n_deleted;
+        Ok(self.iter)
     }
 }
 
-impl<K, V, I, B> Iterator for BuildIter<K, V, I, B>
+impl<K, V, I> Iterator for BuildIter<K, V, I>
 where
     K: Clone + Ord + Hash + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
     I: Iterator<Item = Result<Entry<K, V>>>,
-    B: Bloom,
 {
     type Item = Result<Entry<K, V>>;
 
+    #[inline]
     fn next(&mut self) -> Option<Result<Entry<K, V>>> {
         match self.iter.next() {
             Some(Ok(entry)) => {
@@ -1604,7 +1605,6 @@ where
                 if entry.is_deleted() {
                     self.n_deleted += 1;
                 }
-                self.bitmap.add_key(entry.as_key());
                 Some(Ok(entry))
             }
             Some(Err(err)) => Some(Err(err)),

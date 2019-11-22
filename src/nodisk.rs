@@ -1,3 +1,5 @@
+//! Module `nodisk` define a dummy disk index.
+
 use std::{
     borrow::Borrow,
     ffi,

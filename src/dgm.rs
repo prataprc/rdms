@@ -1,3 +1,5 @@
+//! Module `dgm` implement index optimized for disk-greater-than-memory.
+
 use log::{debug, info};
 
 use std::{

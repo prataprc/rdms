@@ -36,7 +36,6 @@
 //! [Config]: crate::robt::Config
 //!
 
-use crc::crc32::{self, Hasher32};
 use fs2::FileExt;
 use jsondata::Json;
 use lazy_static::lazy_static;
@@ -1561,7 +1560,6 @@ where
     n_count: u64,
     n_deleted: usize,
     iter: I,
-    hasher: crc32::Digest,
     bitmap: B,
 }
 
@@ -1579,7 +1577,6 @@ where
             n_count: Default::default(),
             n_deleted: Default::default(),
             iter,
-            hasher: crc32::Digest::new(crc32::IEEE),
             bitmap: <B as Bloom>::create(),
         }
     }
@@ -1607,9 +1604,7 @@ where
                 if entry.is_deleted() {
                     self.n_deleted += 1;
                 }
-                self.hasher.reset();
-                entry.as_key().hash(&mut self.hasher);
-                self.bitmap.add_digest32(self.hasher.sum32());
+                self.bitmap.add_key(entry.as_key());
                 Some(Ok(entry))
             }
             Some(Err(err)) => Some(Err(err)),
@@ -2126,7 +2121,8 @@ where
         K: Borrow<Q>,
         Q: Ord + ?Sized + Hash,
     {
-        // check in the bitmap if available.
+        // check in the bitmap if key is present, there can be false
+        // positive, but can't be a false negative.
         if self.bitmap.contains(key) == false {
             return Err(Error::KeyNotFound);
         }
@@ -2170,6 +2166,12 @@ where
         K: Borrow<Q>,
         Q: Ord + ?Sized + Hash,
     {
+        // check in the bitmap if key is present, there can be false
+        // positive, but can't be a false negative.
+        if self.bitmap.contains(key) == false {
+            return Err(Error::KeyNotFound);
+        }
+
         let snap = unsafe { (self as *mut Snapshot<K, V, B>).as_mut().unwrap() };
         let versions = true;
         snap.do_get(key, versions)

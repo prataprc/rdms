@@ -30,7 +30,7 @@ impl Bloom for CRoaring {
     fn add_key<Q: ?Sized + Hash>(&mut self, element: &Q) {
         self.hasher.reset();
         element.hash(&mut self.hasher);
-        self.bitmap.add(self.hasher.sum32());
+        self.add_digest32(self.hasher.sum32());
     }
 
     #[inline]

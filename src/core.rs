@@ -267,6 +267,9 @@ pub trait Bloom: Sized {
 
     /// Deserialize the binary array to bit-map.
     fn from_vec(buf: &[u8]) -> Result<Self>;
+
+    /// Merge two bitmaps.
+    fn or(&self, other: &Self) -> Result<Self>;
 }
 
 /// Index read operations.

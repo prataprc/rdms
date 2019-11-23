@@ -39,4 +39,9 @@ impl Bloom for NoBitmap {
     fn from_vec(_buf: &[u8]) -> Result<NoBitmap> {
         Ok(NoBitmap)
     }
+
+    #[inline]
+    fn or(&self, _other: &NoBitmap) -> Result<NoBitmap> {
+        Ok(NoBitmap)
+    }
 }

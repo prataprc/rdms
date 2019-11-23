@@ -66,16 +66,14 @@ use crate::{
     panic::Panic,
     robt_entry::MEntry,
     robt_index::{MBlock, ZBlock},
-    scans::{BitmapIter, CompactScan},
+    scans::{BitmapIter, CompactIter},
     util,
 };
 
 include!("robt_marker.rs");
 
 // TODO: bitmap computation can be optimized for commit-iteration
-// and compact iteration. try CommitIter, CompactIter, BitmapIter.
-
-// TODO: write test cases for CommitIter.
+// and compact iteration. try CommitScan, CompactIter, BitmapIter.
 
 #[derive(Clone)]
 struct Name(String);
@@ -389,7 +387,7 @@ where
         Ok(Panic::new("robt"))
     }
 
-    fn commit<F>(&mut self, iter: IndexIter<K, V>, metacb: F) -> Result<()>
+    fn commit<F>(&mut self, mut iter: IndexIter<K, V>, metacb: F) -> Result<()>
     where
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
@@ -443,19 +441,38 @@ where
                 purge_tx,
                 ..
             } => {
-                info!(target: "robt  ", "{:?}, opening for commit ...", name.0);
+                info!(target: "robt  ", "{:?}, incremental commit ...", name);
 
                 let (name, snapshot, meta_block_bytes) = {
+                    let mut bitmap_iter = Box::new(BitmapIter::new(&mut *iter));
+
                     let mut old_snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
                     let index_file = old_snapshot.index_fd.to_file();
                     let old_meta = old_snapshot.to_app_meta()?;
-                    let iter = Self::commit_merge(iter, &mut old_snapshot)?;
+                    let (name, b, root) = {
+                        let mut commit_iter = {
+                            let mut mzs = vec![];
+                            old_snapshot.build_fwd(old_snapshot.to_root().unwrap(), &mut mzs)?;
+                            let old_iter = Iter::new_shallow(&mut old_snapshot, mzs);
+                            Box::new(CommitIter::new(&mut bitmap_iter, old_iter))
+                        };
+                        let mut build_iter = Box::new(BuildIter::new(&mut commit_iter));
+                        let name = name.clone().next();
+                        let mut b = Builder::<K, V, B>::incremental(dir, &name.0, config.clone())?;
+                        let root = b.build_tree(&mut build_iter)?;
+                        build_iter.update_stats(&mut b.stats)?;
+                        (name, b, root)
+                    };
 
-                    info!(target: "robt  ", "{:?}, incremental commit ...", name);
+                    let old_bitmap = old_snapshot.to_bitmap()?;
+                    let m = old_bitmap.len();
+                    let new_bitmap: B = bitmap_iter.close()?;
+                    let n = new_bitmap.len();
+                    let bitmap = old_bitmap.or(&new_bitmap)?;
+                    let x = bitmap.len();
+                    info!(target: "robt  ", "{:?}, old_bitmap({}) + new_bitmap({}) = {}", name, m, n, x);
+                    let meta_block_bytes = b.build_finish(metacb(old_meta), bitmap, root)?;
 
-                    let name = name.clone().next();
-                    let b = Builder::<K, V, B>::incremental(dir, &name.0, config.clone())?;
-                    let meta_block_bytes = b.build(iter, metacb(old_meta))?;
                     let snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
                     snapshot.log()?;
 
@@ -523,10 +540,9 @@ where
                 purge_tx,
                 ..
             } => {
-                info!(target: "robt  ", "{:?}, opening for compaction ...", name.0);
                 let (name, snapshot, meta_block_bytes) = {
                     let mut old_snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
-                    let iter = CompactScan::new(old_snapshot.iter_with_versions()?, cutoff);
+                    let iter = CompactIter::new(old_snapshot.iter_with_versions()?, cutoff);
 
                     info!(target: "robt  ", "{:?}, compact ...", name);
                     let name = name.clone().next();
@@ -582,35 +598,6 @@ where
         };
         *inner = new_inner;
         Ok(())
-    }
-}
-
-impl<K, V, B> Robt<K, V, B>
-where
-    K: Clone + Ord + Footprint + Serialize,
-    V: Clone + Diff + Footprint + Serialize,
-    <V as Diff>::D: Serialize,
-    B: Bloom,
-{
-    fn commit_merge<'a, 'b, 'n>(
-        mut iter: IndexIter<'a, K, V>,
-        old_snapshot: &'b mut Snapshot<K, V, B>,
-    ) -> Result<IndexIter<'n, K, V>>
-    where
-        'a: 'n,
-        'b: 'n,
-    {
-        let mut mzs = vec![];
-        old_snapshot.build_fwd(old_snapshot.to_root().unwrap(), &mut mzs)?;
-        let mut old_iter = Iter::new_shallow(old_snapshot, mzs);
-        let x_entry = iter.next();
-        let y_entry = old_iter.next();
-        Ok(Box::new(CommitIter {
-            x: iter,
-            y: old_iter,
-            x_entry,
-            y_entry,
-        }))
     }
 }
 
@@ -1329,40 +1316,41 @@ where
     /// Build a new index from the supplied iterator. The iterator shall
     /// return an index entry for each iteration, and the entries are
     /// expected in sort order.
-    pub fn build<I>(mut self, iter: I, app_meta: Vec<u8>) -> Result<usize>
+    pub fn build<I>(mut self, mut iter: I, app_meta: Vec<u8>) -> Result<usize>
     where
         K: Hash,
         I: Iterator<Item = Result<Entry<K, V>>>,
     {
-        let (took, root, n_bitmap, bitmap): (u64, u64, usize, Vec<u8>) = {
-            let start = time::SystemTime::now();
-            let (root, bitmap) = {
-                let mut iter = BitmapIter::new(BuildIter::new(iter));
-                let root = self.build_tree(&mut iter)?;
-                let (iter, bitmap) = iter.close()?;
-                iter.update_stats(&mut self.stats).ok();
-                (root, bitmap)
-            };
-            (
-                start.elapsed().unwrap().as_nanos().try_into().unwrap(),
-                root,
-                bitmap.len(),
-                bitmap.to_vec(),
-            )
+        let (root, bitmap): (u64, B) = {
+            let mut bitmap_iter = BitmapIter::new(&mut iter);
+            let mut build_iter = BuildIter::new(&mut bitmap_iter);
+            let root = self.build_tree(&mut build_iter)?;
+            build_iter.update_stats(&mut self.stats)?;
+            let bitmap = bitmap_iter.close()?;
+            (root, bitmap)
         };
 
-        // meta-stats
+        self.build_finish(app_meta, bitmap, root)
+    }
+
+    /// Start building the index, this API should be used along with
+    /// build_finish() to have more fine grained control, compared to
+    /// build(), over the index build process.
+    pub fn build_start<I>(mut self, mut iter: I) -> Result<u64>
+    where
+        I: Iterator<Item = Result<Entry<K, V>>>,
+    {
+        let mut build_iter = BuildIter::new(&mut iter);
+        let root = self.build_tree(&mut build_iter)?;
+        build_iter.update_stats(&mut self.stats)?;
+        Ok(root)
+    }
+
+    pub fn build_finish(mut self, app_meta: Vec<u8>, bitmap: B, root: u64) -> Result<usize> {
+        let (n_bitmap, bitmap) = (bitmap.len(), bitmap.to_vec());
         let stats: String = {
-            self.stats.build_time = took;
-            let epoch: i128 = time::UNIX_EPOCH
-                .elapsed()
-                .unwrap()
-                .as_nanos()
-                .try_into()
-                .unwrap();
-            self.stats.epoch = epoch;
-            self.stats.mem_bitmap = bitmap.len();
             self.stats.n_bitmap = n_bitmap;
+            self.stats.mem_bitmap = bitmap.len();
             self.stats.to_json()
         };
 
@@ -1376,22 +1364,16 @@ where
         ];
 
         let index_file: ffi::OsString = self.iflusher.file.clone();
-
         // flush blocks and close
         self.iflusher.close_wait()?;
         self.vflusher.take().map(|x| x.close_wait()).transpose()?;
-
         // flush meta items to disk and close
         let meta_block_bytes = write_meta_items(index_file, meta_items)?;
-
         Ok(meta_block_bytes.try_into().unwrap())
     }
 
-    fn build_tree<I>(&mut self, iter: &mut BitmapIter<K, V, I, B>) -> Result<u64>
-    where
-        K: Hash,
-        I: Iterator<Item = Result<Entry<K, V>>>,
-    {
+    // return root, iter
+    fn build_tree(&mut self, iter: &mut dyn Iterator<Item = Result<Entry<K, V>>>) -> Result<u64> {
         struct Context<K, V>
         where
             K: Clone + Ord + Serialize,
@@ -1548,51 +1530,57 @@ where
     }
 }
 
-struct BuildIter<K, V, I>
+struct BuildIter<'a, K, V>
 where
-    K: Clone + Ord + Hash + Serialize,
+    K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
-    I: Iterator<Item = Result<Entry<K, V>>>,
 {
-    iter: I,
+    iter: &'a mut dyn Iterator<Item = Result<Entry<K, V>>>,
 
+    start: time::SystemTime,
     seqno: u64,
     n_count: u64,
     n_deleted: usize,
 }
 
-impl<K, V, I> BuildIter<K, V, I>
+impl<'a, K, V> BuildIter<'a, K, V>
 where
-    K: Clone + Ord + Hash + Serialize,
+    K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
-    I: Iterator<Item = Result<Entry<K, V>>>,
 {
-    fn new(iter: I) -> BuildIter<K, V, I> {
+    fn new(iter: &'a mut dyn Iterator<Item = Result<Entry<K, V>>>) -> BuildIter<'a, K, V> {
         BuildIter {
             iter,
 
+            start: time::SystemTime::now(),
             seqno: Default::default(),
             n_count: Default::default(),
             n_deleted: Default::default(),
         }
     }
 
-    fn update_stats(self, stats: &mut Stats) -> Result<I> {
+    fn update_stats(self, stats: &mut Stats) -> Result<()> {
+        stats.build_time = self.start.elapsed().unwrap().as_nanos().try_into().unwrap();
         stats.seqno = self.seqno;
         stats.n_count = self.n_count;
         stats.n_deleted = self.n_deleted;
-        Ok(self.iter)
+        stats.epoch = time::UNIX_EPOCH
+            .elapsed()
+            .unwrap()
+            .as_nanos()
+            .try_into()
+            .unwrap();
+        Ok(())
     }
 }
 
-impl<K, V, I> Iterator for BuildIter<K, V, I>
+impl<'a, K, V> Iterator for BuildIter<'a, K, V>
 where
-    K: Clone + Ord + Hash + Serialize,
+    K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
-    I: Iterator<Item = Result<Entry<K, V>>>,
 {
     type Item = Result<Entry<K, V>>;
 
@@ -1609,6 +1597,85 @@ where
             }
             Some(Err(err)) => Some(Err(err)),
             None => None,
+        }
+    }
+}
+
+struct CommitIter<'a, 'b, K, V, B>
+where
+    K: Clone + Ord + Serialize + Footprint,
+    V: Clone + Diff + Serialize + Footprint,
+    <V as Diff>::D: Serialize,
+{
+    x_iter: &'a mut dyn Iterator<Item = Result<Entry<K, V>>>, // new iterator
+    y_iter: Box<Iter<'b, K, V, B>>,                           // old iterator
+    x_entry: Option<Result<Entry<K, V>>>,
+    y_entry: Option<Result<Entry<K, V>>>,
+}
+
+impl<'a, 'b, K, V, B> CommitIter<'a, 'b, K, V, B>
+where
+    K: Clone + Ord + Serialize + Footprint,
+    V: Clone + Diff + Serialize + Footprint,
+    <V as Diff>::D: Serialize,
+{
+    fn new(
+        x_iter: &'a mut dyn Iterator<Item = Result<Entry<K, V>>>,
+        mut y_iter: Box<Iter<'b, K, V, B>>,
+    ) -> CommitIter<'a, 'b, K, V, B> {
+        let x_entry = x_iter.next();
+        let y_entry = y_iter.next();
+        CommitIter {
+            x_iter,
+            y_iter,
+            x_entry,
+            y_entry,
+        }
+    }
+}
+
+impl<'a, 'b, K, V, B> Iterator for CommitIter<'a, 'b, K, V, B>
+where
+    K: Clone + Ord + Serialize + Footprint,
+    V: Clone + Diff + Serialize + Footprint,
+    <V as Diff>::D: Serialize,
+{
+    type Item = Result<Entry<K, V>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match (self.x_entry.take(), self.y_entry.take()) {
+            (Some(Ok(xe)), Some(Ok(ye))) => match xe.as_key().cmp(ye.as_key()) {
+                cmp::Ordering::Less => {
+                    self.x_entry = self.x_iter.next();
+                    self.y_entry = Some(Ok(ye));
+                    Some(Ok(xe))
+                }
+                cmp::Ordering::Greater => {
+                    self.y_entry = self.y_iter.next();
+                    self.x_entry = Some(Ok(xe));
+                    Some(Ok(ye))
+                }
+                cmp::Ordering::Equal => {
+                    self.x_entry = self.x_iter.next();
+                    self.y_entry = self.y_iter.next();
+                    // fetch the value from old snapshot, only value.
+                    match self.y_iter.snap.fetch(ye, false, false) {
+                        Ok(ye) => Some(Ok(xe.xmerge(ye))),
+                        Err(err) => Some(Err(err)),
+                    }
+                }
+            },
+            (Some(Ok(xe)), None) => {
+                self.x_entry = self.x_iter.next();
+                Some(Ok(xe))
+            }
+            (None, Some(Ok(ye))) => {
+                self.y_entry = self.y_iter.next();
+                Some(Ok(ye))
+            }
+            (Some(Ok(_xe)), Some(Err(err))) => Some(Err(err)),
+            (Some(Err(err)), Some(Ok(_ye))) => Some(Err(err)),
+            _ => None,
         }
     }
 }
@@ -2949,64 +3016,6 @@ fn purger(name: String, rx: mpsc::Receiver<ffi::OsString>) {
         error!(target: "robtpr", "{:?}, error purging file {:?}", name, file);
     }
     info!(target: "robtpr", "{:?}, stopping purger ...", name);
-}
-
-struct CommitIter<'a, 'b, K, V, B>
-where
-    K: Clone + Ord + Serialize + Footprint,
-    V: Clone + Diff + Serialize + Footprint,
-    <V as Diff>::D: Serialize,
-{
-    x: IndexIter<'a, K, V>,    // new iterator
-    y: Box<Iter<'b, K, V, B>>, // old iterator
-    x_entry: Option<Result<Entry<K, V>>>,
-    y_entry: Option<Result<Entry<K, V>>>,
-}
-
-impl<'a, 'b, K, V, B> Iterator for CommitIter<'a, 'b, K, V, B>
-where
-    K: Clone + Ord + Serialize + Footprint,
-    V: Clone + Diff + Serialize + Footprint,
-    <V as Diff>::D: Serialize,
-{
-    type Item = Result<Entry<K, V>>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match (self.x_entry.take(), self.y_entry.take()) {
-            (Some(Ok(xe)), Some(Ok(ye))) => match xe.as_key().cmp(ye.as_key()) {
-                cmp::Ordering::Less => {
-                    self.x_entry = self.x.next();
-                    self.y_entry = Some(Ok(ye));
-                    Some(Ok(xe))
-                }
-                cmp::Ordering::Greater => {
-                    self.y_entry = self.y.next();
-                    self.x_entry = Some(Ok(xe));
-                    Some(Ok(ye))
-                }
-                cmp::Ordering::Equal => {
-                    self.x_entry = self.x.next();
-                    self.y_entry = self.y.next();
-                    // fetch the value from old snapshot, only value.
-                    match self.y.snap.fetch(ye, false, false) {
-                        Ok(ye) => Some(Ok(xe.xmerge(ye))),
-                        Err(err) => Some(Err(err)),
-                    }
-                }
-            },
-            (Some(Ok(xe)), None) => {
-                self.x_entry = self.x.next();
-                Some(Ok(xe))
-            }
-            (None, Some(Ok(ye))) => {
-                self.y_entry = self.y.next();
-                Some(Ok(ye))
-            }
-            (Some(Ok(_xe)), Some(Err(err))) => Some(Err(err)),
-            (Some(Err(err)), Some(Ok(_ye))) => Some(Err(err)),
-            _ => None,
-        }
-    }
 }
 
 #[cfg(test)]

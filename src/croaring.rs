@@ -64,4 +64,12 @@ impl Bloom for CRoaring {
             bitmap: Bitmap::deserialize(buf),
         })
     }
+
+    #[inline]
+    fn or(&self, other: &CRoaring) -> Result<CRoaring> {
+        Ok(CRoaring {
+            hasher: crc32::Digest::new(crc32::IEEE),
+            bitmap: self.bitmap.or(&other.bitmap),
+        })
+    }
 }

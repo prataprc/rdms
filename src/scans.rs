@@ -219,9 +219,60 @@ where
     }
 }
 
-/// CompactScan for continuous full table iteration filtering out
+pub(crate) struct BitmapIter<'a, K, V, B>
+where
+    K: Clone + Ord + Hash,
+    V: Clone + Diff,
+    B: Bloom,
+{
+    iter: &'a mut dyn Iterator<Item = Result<Entry<K, V>>>,
+    bitmap: B,
+}
+
+impl<'a, K, V, B> BitmapIter<'a, K, V, B>
+where
+    K: Clone + Ord + Hash,
+    V: Clone + Diff,
+    B: Bloom,
+{
+    pub(crate) fn new(
+        iter: &'a mut dyn Iterator<Item = Result<Entry<K, V>>>,
+    ) -> BitmapIter<'a, K, V, B> {
+        BitmapIter {
+            iter,
+            bitmap: <B as Bloom>::create(),
+        }
+    }
+
+    pub(crate) fn close(self) -> Result<B> {
+        Ok(self.bitmap)
+    }
+}
+
+impl<'a, K, V, B> Iterator for BitmapIter<'a, K, V, B>
+where
+    K: Clone + Ord + Hash,
+    V: Clone + Diff,
+    B: Bloom,
+{
+    type Item = Result<Entry<K, V>>;
+
+    #[inline]
+    fn next(&mut self) -> Option<Result<Entry<K, V>>> {
+        match self.iter.next() {
+            Some(Ok(entry)) => {
+                self.bitmap.add_key(entry.as_key());
+                Some(Ok(entry))
+            }
+            Some(Err(err)) => Some(Err(err)),
+            None => None,
+        }
+    }
+}
+
+/// CompactIter for continuous full table iteration filtering out
 /// older mutations.
-pub struct CompactScan<'a, K, V>
+pub struct CompactIter<'a, K, V>
 where
     K: 'a + Clone + Ord,
     V: 'a + Clone + Diff,
@@ -230,17 +281,17 @@ where
     cutoff: Bound<u64>,
 }
 
-impl<'a, K, V> CompactScan<'a, K, V>
+impl<'a, K, V> CompactIter<'a, K, V>
 where
     K: 'a + Clone + Ord,
     V: 'a + Clone + Diff,
 {
-    pub fn new(iter: IndexIter<'a, K, V>, cutoff: Bound<u64>) -> CompactScan<'a, K, V> {
-        CompactScan { iter, cutoff }
+    pub fn new(iter: IndexIter<'a, K, V>, cutoff: Bound<u64>) -> CompactIter<'a, K, V> {
+        CompactIter { iter, cutoff }
     }
 }
 
-impl<'a, K, V> Iterator for CompactScan<'a, K, V>
+impl<'a, K, V> Iterator for CompactIter<'a, K, V>
 where
     K: 'a + Clone + Ord,
     V: 'a + Clone + Diff,
@@ -258,58 +309,6 @@ where
                 Some(Err(err)) => break Some(Err(err)),
                 None => break None,
             }
-        }
-    }
-}
-
-pub(crate) struct BitmapIter<K, V, I, B>
-where
-    K: Clone + Ord + Hash,
-    V: Clone + Diff,
-    I: Iterator<Item = Result<Entry<K, V>>>,
-    B: Bloom,
-{
-    iter: I,
-    bitmap: B,
-}
-
-impl<K, V, I, B> BitmapIter<K, V, I, B>
-where
-    K: Clone + Ord + Hash,
-    V: Clone + Diff,
-    I: Iterator<Item = Result<Entry<K, V>>>,
-    B: Bloom,
-{
-    pub(crate) fn new(iter: I) -> BitmapIter<K, V, I, B> {
-        BitmapIter {
-            iter,
-            bitmap: <B as Bloom>::create(),
-        }
-    }
-
-    pub(crate) fn close(self) -> Result<(I, B)> {
-        Ok((self.iter, self.bitmap))
-    }
-}
-
-impl<K, V, I, B> Iterator for BitmapIter<K, V, I, B>
-where
-    K: Clone + Ord + Hash,
-    V: Clone + Diff,
-    I: Iterator<Item = Result<Entry<K, V>>>,
-    B: Bloom,
-{
-    type Item = Result<Entry<K, V>>;
-
-    #[inline]
-    fn next(&mut self) -> Option<Result<Entry<K, V>>> {
-        match self.iter.next() {
-            Some(Ok(entry)) => {
-                self.bitmap.add_key(entry.as_key());
-                Some(Ok(entry))
-            }
-            Some(Err(err)) => Some(Err(err)),
-            None => None,
         }
     }
 }

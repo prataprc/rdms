@@ -7,7 +7,7 @@ use std::{
     vec,
 };
 
-use crate::core::{Bloom, Diff, Entry, IndexIter, PiecewiseScan, Result, ScanEntry};
+use crate::core::{Bloom, Diff, Entry, PiecewiseScan, Result, ScanEntry};
 
 // TODO: benchmark SkipScan and FilterScan and measure the difference.
 
@@ -276,29 +276,32 @@ where
 
 /// CompactIter for continuous full table iteration filtering out
 /// older mutations.
-pub struct CompactIter<'a, K, V>
+pub struct CompactIter<K, V, I>
 where
-    K: 'a + Clone + Ord,
-    V: 'a + Clone + Diff,
+    K: Clone + Ord,
+    V: Clone + Diff,
+    I: Iterator<Item = Result<Entry<K, V>>>,
 {
-    iter: IndexIter<'a, K, V>,
+    iter: I,
     cutoff: Bound<u64>,
 }
 
-impl<'a, K, V> CompactIter<'a, K, V>
+impl<K, V, I> CompactIter<K, V, I>
 where
-    K: 'a + Clone + Ord,
-    V: 'a + Clone + Diff,
+    K: Clone + Ord,
+    V: Clone + Diff,
+    I: Iterator<Item = Result<Entry<K, V>>>,
 {
-    pub fn new(iter: IndexIter<'a, K, V>, cutoff: Bound<u64>) -> CompactIter<'a, K, V> {
+    pub fn new(iter: I, cutoff: Bound<u64>) -> CompactIter<K, V, I> {
         CompactIter { iter, cutoff }
     }
 }
 
-impl<'a, K, V> Iterator for CompactIter<'a, K, V>
+impl<K, V, I> Iterator for CompactIter<K, V, I>
 where
-    K: 'a + Clone + Ord,
-    V: 'a + Clone + Diff,
+    K: Clone + Ord,
+    V: Clone + Diff,
+    I: Iterator<Item = Result<Entry<K, V>>>,
 {
     type Item = Result<Entry<K, V>>;
 

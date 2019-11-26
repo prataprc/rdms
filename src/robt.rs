@@ -446,24 +446,25 @@ where
 
                 let (name, snapshot, meta_block_bytes) = {
                     let iter = iter.iter()?;
-                    let mut bitmap_iter = Box::new(BitmapIter::new(iter));
+                    let bitmap_iter = BitmapIter::new(iter);
 
                     let mut old_snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
                     let index_file = old_snapshot.index_fd.to_file();
                     let old_meta = old_snapshot.to_app_meta()?;
-                    let (name, b, root) = {
+                    let (name, b, root, bitmap_iter) = {
                         let commit_iter = {
                             let mut mzs = vec![];
                             old_snapshot.build_fwd(old_snapshot.to_root().unwrap(), &mut mzs)?;
                             let old_iter = Iter::new_shallow(&mut old_snapshot, mzs);
-                            Box::new(CommitIter::new(&mut bitmap_iter, old_iter))
+                            CommitIter::new(bitmap_iter, old_iter)
                         };
-                        let mut build_iter = Box::new(BuildIter::new(commit_iter));
+                        let mut build_iter = BuildIter::new(commit_iter);
                         let name = name.clone().next();
                         let mut b = Builder::<K, V, B>::incremental(dir, &name.0, config.clone())?;
                         let root = b.build_tree(&mut build_iter)?;
-                        build_iter.update_stats(&mut b.stats)?;
-                        (name, b, root)
+                        let commit_iter = build_iter.update_stats(&mut b.stats)?;
+                        let (bitmap_iter, _) = commit_iter.close()?;
+                        (name, b, root, bitmap_iter)
                     };
 
                     let old_bitmap = old_snapshot.to_bitmap()?;
@@ -1604,28 +1605,27 @@ where
     }
 }
 
-struct CommitIter<'a, 'b, K, V, B>
+struct CommitIter<'a, K, V, I, B>
 where
     K: Clone + Ord + Serialize + Footprint,
     V: Clone + Diff + Serialize + Footprint,
     <V as Diff>::D: Serialize,
+    I: Iterator<Item = Result<Entry<K, V>>>,
 {
-    x_iter: &'a mut dyn Iterator<Item = Result<Entry<K, V>>>, // new iterator
-    y_iter: Box<Iter<'b, K, V, B>>,                           // old iterator
+    x_iter: I,
+    y_iter: Box<Iter<'a, K, V, B>>, // old iterator
     x_entry: Option<Result<Entry<K, V>>>,
     y_entry: Option<Result<Entry<K, V>>>,
 }
 
-impl<'a, 'b, K, V, B> CommitIter<'a, 'b, K, V, B>
+impl<'a, K, V, I, B> CommitIter<'a, K, V, I, B>
 where
     K: Clone + Ord + Serialize + Footprint,
     V: Clone + Diff + Serialize + Footprint,
     <V as Diff>::D: Serialize,
+    I: Iterator<Item = Result<Entry<K, V>>>,
 {
-    fn new(
-        x_iter: &'a mut dyn Iterator<Item = Result<Entry<K, V>>>,
-        mut y_iter: Box<Iter<'b, K, V, B>>,
-    ) -> CommitIter<'a, 'b, K, V, B> {
+    fn new(mut x_iter: I, mut y_iter: Box<Iter<'a, K, V, B>>) -> CommitIter<'a, K, V, I, B> {
         let x_entry = x_iter.next();
         let y_entry = y_iter.next();
         CommitIter {
@@ -1635,13 +1635,18 @@ where
             y_entry,
         }
     }
+
+    fn close(self) -> Result<(I, Box<Iter<'a, K, V, B>>)> {
+        Ok((self.x_iter, self.y_iter))
+    }
 }
 
-impl<'a, 'b, K, V, B> Iterator for CommitIter<'a, 'b, K, V, B>
+impl<'a, K, V, I, B> Iterator for CommitIter<'a, K, V, I, B>
 where
     K: Clone + Ord + Serialize + Footprint,
     V: Clone + Diff + Serialize + Footprint,
     <V as Diff>::D: Serialize,
+    I: Iterator<Item = Result<Entry<K, V>>>,
 {
     type Item = Result<Entry<K, V>>;
 

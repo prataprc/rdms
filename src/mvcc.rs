@@ -42,7 +42,7 @@ use std::{
     fmt::Debug,
     hash::Hash,
     marker, mem,
-    ops::{Bound, Deref, DerefMut, RangeBounds},
+    ops::{self, Bound, Deref, DerefMut, RangeBounds},
     result,
     sync::{
         atomic::{AtomicIsize, AtomicPtr, AtomicUsize, Ordering::SeqCst},
@@ -58,6 +58,7 @@ use crate::{
     error::Error,
     llrb::Llrb,
     llrb_node::{LlrbDepth, Node},
+    scans::SkipScan,
     spinlock::{self, RWSpinlock},
     types::Empty,
 };
@@ -2129,6 +2130,26 @@ where
     {
         let index: &mut Mvcc<K, V> = self.as_mut();
         index.pw_scan(from, within)
+    }
+}
+
+impl<K, V> CommitIterator<K, V> for MvccReader<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    type Iter = SkipScan<MvccReader<K, V>, K, V, (Bound<u64>, Bound<u64>)>;
+
+    fn iter(self) -> Result<Self::Iter> {
+        Ok(SkipScan::new(self, (Bound::Unbounded, Bound::Unbounded)))
+    }
+
+    fn iters(self, _shards: usize) -> Result<Vec<Self::Iter>> {
+        panic!("to be implemented") // TODO
+    }
+
+    fn range_iters(self, _ranges: Vec<ops::Range<K>>) -> Result<Vec<Self::Iter>> {
+        panic!("to be implemented") // TODO
     }
 }
 

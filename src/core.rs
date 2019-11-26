@@ -182,21 +182,26 @@ where
 /// CommitIterator trait and relevant methods to ingest a batch of pre-sorted
 /// entries into index.
 ///
-pub trait CommitIterator<K, V>: Sized
+pub trait CommitIterator<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff,
 {
     type Iter: Iterator<Item = Result<Entry<K, V>>>;
 
-    /// return a handle for full table iteration.
+    /// Return a handle for full table iteration.
     fn iter(self) -> Result<Self::Iter>;
 
-    /// return a list of equally balanced handles to iterator on
-    /// range-partitioned entries.
+    /// Return a list of equally balanced handles to iterator on
+    /// range-partitioned entries. Note that ``shards`` argument is
+    /// only a hint, return array of iterators can be less-than or
+    /// equal-to or greater-than the requested shards.
     fn iters(self, shards: usize) -> Result<Vec<Self::Iter>>;
 
-    /// same as iters() but range partition is decided by the `ranges` argument.
+    /// Same as iters() but range partition is decided by the `ranges`
+    /// argument. And unlike the ``shards`` argument, ``ranges`` argument
+    /// is treated with precision, range.len() is equal-to return array
+    /// of iterators.
     fn range_iters(self, ranges: Vec<ops::Range<K>>) -> Result<Vec<Self::Iter>>;
 }
 

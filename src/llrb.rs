@@ -40,7 +40,7 @@ use std::{
     fmt::Debug,
     hash::Hash,
     marker, mem,
-    ops::{Bound, Deref, DerefMut, RangeBounds},
+    ops::{self, Bound, Deref, DerefMut, RangeBounds},
     result,
     sync::Arc,
 };
@@ -52,6 +52,7 @@ use crate::{
     error::Error,
     llrb_node::{LlrbDepth, Node},
     mvcc::Snapshot,
+    scans::SkipScan,
     spinlock::{self, RWSpinlock},
     types::Empty,
 };
@@ -1864,6 +1865,26 @@ where
     {
         let index: &mut Llrb<K, V> = self.as_mut();
         index.pw_scan(from, within)
+    }
+}
+
+impl<K, V> CommitIterator<K, V> for LlrbReader<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    type Iter = SkipScan<LlrbReader<K, V>, K, V, (Bound<u64>, Bound<u64>)>;
+
+    fn iter(self) -> Result<Self::Iter> {
+        Ok(SkipScan::new(self, (Bound::Unbounded, Bound::Unbounded)))
+    }
+
+    fn iters(self, _shards: usize) -> Result<Vec<Self::Iter>> {
+        panic!("to be implemented") // TODO
+    }
+
+    fn range_iters(self, _ranges: Vec<ops::Range<K>>) -> Result<Vec<Self::Iter>> {
+        panic!("to be implemented") // TODO
     }
 }
 

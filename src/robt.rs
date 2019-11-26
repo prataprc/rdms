@@ -452,13 +452,13 @@ where
                     let index_file = old_snapshot.index_fd.to_file();
                     let old_meta = old_snapshot.to_app_meta()?;
                     let (name, b, root) = {
-                        let mut commit_iter = {
+                        let commit_iter = {
                             let mut mzs = vec![];
                             old_snapshot.build_fwd(old_snapshot.to_root().unwrap(), &mut mzs)?;
                             let old_iter = Iter::new_shallow(&mut old_snapshot, mzs);
                             Box::new(CommitIter::new(&mut bitmap_iter, old_iter))
                         };
-                        let mut build_iter = Box::new(BuildIter::new(&mut commit_iter));
+                        let mut build_iter = Box::new(BuildIter::new(commit_iter));
                         let name = name.clone().next();
                         let mut b = Builder::<K, V, B>::incremental(dir, &name.0, config.clone())?;
                         let root = b.build_tree(&mut build_iter)?;
@@ -1324,11 +1324,9 @@ where
         I: Iterator<Item = Result<Entry<K, V>>>,
     {
         let (root, bitmap): (u64, B) = {
-            let mut bitmap_iter = BitmapIter::new(&mut iter);
-            let mut build_iter = BuildIter::new(&mut bitmap_iter);
+            let mut build_iter = BuildIter::new(BitmapIter::new(&mut iter));
             let root = self.build_tree(&mut build_iter)?;
-            build_iter.update_stats(&mut self.stats)?;
-            let bitmap = bitmap_iter.close()?;
+            let bitmap = build_iter.update_stats(&mut self.stats)?.close()?;
             (root, bitmap)
         };
 
@@ -1338,11 +1336,11 @@ where
     /// Start building the index, this API should be used along with
     /// build_finish() to have more fine grained control, compared to
     /// build(), over the index build process.
-    pub fn build_start<I>(mut self, mut iter: I) -> Result<u64>
+    pub fn build_start<I>(mut self, iter: I) -> Result<u64>
     where
         I: Iterator<Item = Result<Entry<K, V>>>,
     {
-        let mut build_iter = BuildIter::new(&mut iter);
+        let mut build_iter = BuildIter::new(iter);
         let root = self.build_tree(&mut build_iter)?;
         build_iter.update_stats(&mut self.stats)?;
         Ok(root)
@@ -1532,13 +1530,14 @@ where
     }
 }
 
-struct BuildIter<'a, K, V>
+struct BuildIter<K, V, I>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
+    I: Iterator<Item = Result<Entry<K, V>>>,
 {
-    iter: &'a mut dyn Iterator<Item = Result<Entry<K, V>>>,
+    iter: I,
 
     start: time::SystemTime,
     seqno: u64,
@@ -1546,13 +1545,14 @@ where
     n_deleted: usize,
 }
 
-impl<'a, K, V> BuildIter<'a, K, V>
+impl<K, V, I> BuildIter<K, V, I>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
+    I: Iterator<Item = Result<Entry<K, V>>>,
 {
-    fn new(iter: &'a mut dyn Iterator<Item = Result<Entry<K, V>>>) -> BuildIter<'a, K, V> {
+    fn new(iter: I) -> BuildIter<K, V, I> {
         BuildIter {
             iter,
 
@@ -1563,7 +1563,7 @@ where
         }
     }
 
-    fn update_stats(self, stats: &mut Stats) -> Result<()> {
+    fn update_stats(self, stats: &mut Stats) -> Result<I> {
         stats.build_time = self.start.elapsed().unwrap().as_nanos().try_into().unwrap();
         stats.seqno = self.seqno;
         stats.n_count = self.n_count;
@@ -1574,15 +1574,16 @@ where
             .as_nanos()
             .try_into()
             .unwrap();
-        Ok(())
+        Ok(self.iter)
     }
 }
 
-impl<'a, K, V> Iterator for BuildIter<'a, K, V>
+impl<K, V, I> Iterator for BuildIter<K, V, I>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
+    I: Iterator<Item = Result<Entry<K, V>>>,
 {
     type Item = Result<Entry<K, V>>;
 

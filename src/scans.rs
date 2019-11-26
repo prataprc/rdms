@@ -162,22 +162,24 @@ where
 
 /// FilterScan for continuous full table iteration filtering out older and
 /// newer mutations.
-pub struct FilterScan<'a, K, V>
+pub struct FilterScan<K, V, I>
 where
-    K: 'a + Clone + Ord,
-    V: 'a + Clone + Diff,
+    K: Clone + Ord,
+    V: Clone + Diff,
+    I: Iterator<Item = Result<Entry<K, V>>>,
 {
-    iter: IndexIter<'a, K, V>,
+    iter: I,
     start: Bound<u64>,
     end: Bound<u64>,
 }
 
-impl<'a, K, V> FilterScan<'a, K, V>
+impl<K, V, I> FilterScan<K, V, I>
 where
-    K: 'a + Clone + Ord,
-    V: 'a + Clone + Diff,
+    K: Clone + Ord,
+    V: Clone + Diff,
+    I: Iterator<Item = Result<Entry<K, V>>>,
 {
-    pub fn new<R>(iter: IndexIter<'a, K, V>, within: R) -> FilterScan<'a, K, V>
+    pub fn new<R>(iter: I, within: R) -> FilterScan<K, V, I>
     where
         R: RangeBounds<u64>,
     {
@@ -195,10 +197,11 @@ where
     }
 }
 
-impl<'a, K, V> Iterator for FilterScan<'a, K, V>
+impl<K, V, I> Iterator for FilterScan<K, V, I>
 where
-    K: 'a + Clone + Ord,
-    V: 'a + Clone + Diff,
+    K: Clone + Ord,
+    V: Clone + Diff,
+    I: Iterator<Item = Result<Entry<K, V>>>,
 {
     type Item = Result<Entry<K, V>>;
 
@@ -219,40 +222,41 @@ where
     }
 }
 
-pub(crate) struct BitmapIter<'a, K, V, B>
+pub(crate) struct BitmapIter<K, V, I, B>
 where
     K: Clone + Ord + Hash,
     V: Clone + Diff,
+    I: Iterator<Item = Result<Entry<K, V>>>,
     B: Bloom,
 {
-    iter: &'a mut dyn Iterator<Item = Result<Entry<K, V>>>,
+    iter: I,
     bitmap: B,
 }
 
-impl<'a, K, V, B> BitmapIter<'a, K, V, B>
+impl<K, V, I, B> BitmapIter<K, V, I, B>
 where
     K: Clone + Ord + Hash,
     V: Clone + Diff,
+    I: Iterator<Item = Result<Entry<K, V>>>,
     B: Bloom,
 {
-    pub(crate) fn new(
-        iter: &'a mut dyn Iterator<Item = Result<Entry<K, V>>>,
-    ) -> BitmapIter<'a, K, V, B> {
+    pub(crate) fn new(iter: I) -> BitmapIter<K, V, I, B> {
         BitmapIter {
             iter,
             bitmap: <B as Bloom>::create(),
         }
     }
 
-    pub(crate) fn close(self) -> Result<B> {
-        Ok(self.bitmap)
+    pub(crate) fn close(self) -> Result<(I, B)> {
+        Ok((self.iter, self.bitmap))
     }
 }
 
-impl<'a, K, V, B> Iterator for BitmapIter<'a, K, V, B>
+impl<K, V, I, B> Iterator for BitmapIter<K, V, I, B>
 where
     K: Clone + Ord + Hash,
     V: Clone + Diff,
+    I: Iterator<Item = Result<Entry<K, V>>>,
     B: Bloom,
 {
     type Item = Result<Entry<K, V>>;

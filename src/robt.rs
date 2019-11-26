@@ -445,8 +445,8 @@ where
                 info!(target: "robt  ", "{:?}, incremental commit ...", name);
 
                 let (name, snapshot, meta_block_bytes) = {
-                    let mut iter = iter.iter()?;
-                    let mut bitmap_iter = Box::new(BitmapIter::new(&mut iter));
+                    let iter = iter.iter()?;
+                    let mut bitmap_iter = Box::new(BitmapIter::new(iter));
 
                     let mut old_snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
                     let index_file = old_snapshot.index_fd.to_file();
@@ -468,7 +468,7 @@ where
 
                     let old_bitmap = old_snapshot.to_bitmap()?;
                     let m = old_bitmap.len();
-                    let new_bitmap: B = bitmap_iter.close()?;
+                    let (_, new_bitmap): (_, B) = bitmap_iter.close()?;
                     let n = new_bitmap.len();
                     let bitmap = old_bitmap.or(&new_bitmap)?;
                     let x = bitmap.len();
@@ -1318,15 +1318,15 @@ where
     /// Build a new index from the supplied iterator. The iterator shall
     /// return an index entry for each iteration, and the entries are
     /// expected in sort order.
-    pub fn build<I>(mut self, mut iter: I, app_meta: Vec<u8>) -> Result<usize>
+    pub fn build<I>(mut self, iter: I, app_meta: Vec<u8>) -> Result<usize>
     where
         K: Hash,
         I: Iterator<Item = Result<Entry<K, V>>>,
     {
         let (root, bitmap): (u64, B) = {
-            let mut build_iter = BuildIter::new(BitmapIter::new(&mut iter));
+            let mut build_iter = BuildIter::new(BitmapIter::new(iter));
             let root = self.build_tree(&mut build_iter)?;
-            let bitmap = build_iter.update_stats(&mut self.stats)?.close()?;
+            let (_, bitmap) = build_iter.update_stats(&mut self.stats)?.close()?;
             (root, bitmap)
         };
 

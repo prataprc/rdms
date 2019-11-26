@@ -60,7 +60,7 @@ use std::{
 };
 
 use crate::{
-    core::{Bloom, Index, Serialize, ToJson, Validate},
+    core::{Bloom, CommitIterator, Index, Serialize, ToJson, Validate},
     core::{Diff, DiskIndexFactory, Entry, Footprint, IndexIter, Reader, Result},
     error::Error,
     panic::Panic,
@@ -387,8 +387,9 @@ where
         Ok(Panic::new("robt"))
     }
 
-    fn commit<F>(&mut self, mut iter: IndexIter<K, V>, metacb: F) -> Result<()>
+    fn commit<C, F>(&mut self, iter: C, metacb: F) -> Result<()>
     where
+        C: CommitIterator<K, V>,
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
         let mut inner = self.inner.lock().unwrap();
@@ -404,7 +405,7 @@ where
 
                 let snapshot = {
                     let b = Builder::<K, V, B>::initial(dir, &name.0, config.clone())?;
-                    b.build(iter, metacb(vec![]))?;
+                    b.build(iter.iter()?, metacb(vec![]))?;
                     let snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
                     snapshot.log()?;
                     snapshot
@@ -444,7 +445,8 @@ where
                 info!(target: "robt  ", "{:?}, incremental commit ...", name);
 
                 let (name, snapshot, meta_block_bytes) = {
-                    let mut bitmap_iter = Box::new(BitmapIter::new(&mut *iter));
+                    let mut iter = iter.iter()?;
+                    let mut bitmap_iter = Box::new(BitmapIter::new(&mut iter));
 
                     let mut old_snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
                     let index_file = old_snapshot.index_fd.to_file();

@@ -66,7 +66,7 @@ pub mod llrb;
 mod llrb_node;
 pub mod mvcc;
 // disk index
-pub mod dgm;
+// pub mod dgm; TODO
 pub mod nodisk;
 pub mod robt;
 mod robt_entry;

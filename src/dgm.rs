@@ -15,8 +15,8 @@ use std::{
 };
 
 use crate::{
+    core::{CommitIterator, Result, Serialize, WriteIndexFactory, Writer},
     core::{Diff, DiskIndexFactory, Entry, Footprint, Index, IndexIter, Reader},
-    core::{Result, Serialize, WriteIndexFactory, Writer},
     error::Error,
     lsm,
     sync::CCMu,
@@ -683,8 +683,9 @@ where
         Ok(DgmReader::new(&self.name, arc_rs))
     }
 
-    fn commit<F>(&mut self, iter: IndexIter<K, V>, metacb: F) -> Result<()>
+    fn commit<C, F>(&mut self, iter: C, metacb: F) -> Result<()>
     where
+        C: CommitIterator<K, V>,
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
         use Snapshot::{Active, Commit, Compact, Flush, Write};
@@ -721,7 +722,7 @@ where
         };
 
         let no_reverse = false;
-        let iter = lsm::y_iter(iter, r_m1.iter()?, no_reverse);
+        let iter = lsm::y_iter(iter.iter()?, r_m1.iter()?, no_reverse);
         disk.commit(iter, metacb)?;
 
         // update the readers

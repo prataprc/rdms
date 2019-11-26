@@ -46,9 +46,9 @@ use std::{
 };
 
 use crate::{
+    core::{CommitIterator, ToJson, Validate, Writer},
     core::{Diff, Entry, Footprint, Index, IndexIter, PiecewiseScan, Reader},
     core::{Result, ScanEntry, ScanIter, Value, WalWriter, WriteIndexFactory},
-    core::{ToJson, Validate, Writer},
     error::Error,
     llrb_node::{LlrbDepth, Node},
     mvcc::Snapshot,
@@ -426,8 +426,9 @@ where
         self.as_mut().to_writer()
     }
 
-    fn commit<F>(&mut self, iter: IndexIter<K, V>, metacb: F) -> Result<()>
+    fn commit<C, F>(&mut self, iter: C, metacb: F) -> Result<()>
     where
+        C: CommitIterator<K, V>,
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
         self.as_mut().commit(iter, metacb)
@@ -497,17 +498,19 @@ where
         Ok(LlrbWriter::<K, V>::new(index, writer))
     }
 
-    fn commit<F>(&mut self, iter: IndexIter<K, V>, _metacb: F) -> Result<()>
+    fn commit<C, F>(&mut self, iter: C, _metacb: F) -> Result<()>
     where
+        C: CommitIterator<K, V>,
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
         warn!(target: "llrb  ", "{:?}, ignores all metadata", self.name);
 
         let count = {
             let _latch = self.latch.acquire_write(self.spin);
+            let full_table_iter = iter.iter()?;
 
             let mut count = 0;
-            for entry in iter {
+            for entry in full_table_iter {
                 self.set_index_entry(entry?);
                 count += 1;
             }

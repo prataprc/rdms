@@ -52,9 +52,9 @@ use std::{
 };
 
 use crate::{
+    core::{CommitIterator, ToJson, Validate, Writer},
     core::{Diff, Entry, Footprint, Index, IndexIter, PiecewiseScan, Reader},
     core::{Result, ScanEntry, ScanIter, Value, WalWriter, WriteIndexFactory},
-    core::{ToJson, Validate, Writer},
     error::Error,
     llrb::Llrb,
     llrb_node::{LlrbDepth, Node},
@@ -494,8 +494,9 @@ where
         self.as_mut().to_writer()
     }
 
-    fn commit<F>(&mut self, iter: IndexIter<K, V>, metacb: F) -> Result<()>
+    fn commit<C, F>(&mut self, iter: C, metacb: F) -> Result<()>
     where
+        C: CommitIterator<K, V>,
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
         self.as_mut().commit(iter, metacb)
@@ -566,8 +567,9 @@ where
         Ok(MvccWriter::<K, V>::new(index, writer))
     }
 
-    fn commit<F>(&mut self, _: IndexIter<K, V>, _metacb: F) -> Result<()>
+    fn commit<C, F>(&mut self, _: C, _metacb: F) -> Result<()>
     where
+        C: CommitIterator<K, V>,
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
         Ok(())

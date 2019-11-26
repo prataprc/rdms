@@ -6,7 +6,7 @@ use std::{
     ffi, fmt, fs,
     hash::Hash,
     mem::{self, ManuallyDrop},
-    ops::{Bound, RangeBounds},
+    ops::{self, Bound, RangeBounds},
     result,
     sync::atomic::{AtomicBool, Ordering::SeqCst},
 };
@@ -179,6 +179,27 @@ where
     fn to_type(&self) -> String;
 }
 
+/// CommitIterator trait and relevant methods to ingest a batch of pre-sorted
+/// entries into index.
+///
+pub trait CommitIterator<K, V>: Sized
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    type Iter: Iterator<Item = Result<Entry<K, V>>>;
+
+    /// return a handle for full table iteration.
+    fn iter(self) -> Result<Self::Iter>;
+
+    /// return a list of equally balanced handles to iterator on
+    /// range-partitioned entries.
+    fn iters(self, shards: usize) -> Result<Vec<Self::Iter>>;
+
+    /// same as iters() but range partition is decided by the `ranges` argument.
+    fn range_iters(self, ranges: Vec<ops::Range<K>>) -> Result<Vec<Self::Iter>>;
+}
+
 /// Index trait implemented by all types of rdms-indexes. Note that not all
 /// index types shall implement all the traits/constraints and methods
 /// by Index.
@@ -224,8 +245,9 @@ where
     /// reference, there can be concurrent compact() call. It is upto the
     /// implementing type to synchronize the concurrent commit() and compact()
     /// calls.
-    fn commit<F>(&mut self, iter: IndexIter<K, V>, metacb: F) -> Result<()>
+    fn commit<C, F>(&mut self, iter: C, metacb: F) -> Result<()>
     where
+        C: CommitIterator<K, V>,
         F: Fn(Vec<u8>) -> Vec<u8>;
 
     /// Compact index to reduce index-footprint. Though it takes mutable

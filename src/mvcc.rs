@@ -2138,10 +2138,10 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    type Iter = SkipScan<MvccReader<K, V>, K, V, (Bound<u64>, Bound<u64>)>;
+    type Iter = SkipScan<K, V, MvccReader<K, V>>;
 
     fn iter(self) -> Result<Self::Iter> {
-        Ok(SkipScan::new(self, (Bound::Unbounded, Bound::Unbounded)))
+        Ok(SkipScan::new(self))
     }
 
     fn iters(self, _shards: usize) -> Result<Vec<Self::Iter>> {

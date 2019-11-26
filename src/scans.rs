@@ -36,18 +36,21 @@ const SKIP_SCAN_BATCH_SIZE: usize = 1000;
 /// * Data-structure must not suffer any delete/purge
 ///   operation until full-scan is completed.
 /// * Data-structure must implement PiecewiseScan trait.
-pub struct SkipScan<R, K, V, G>
+pub struct SkipScan<K, V, I>
 where
     K: Clone + Ord,
     V: Clone + Diff,
-    G: Clone + RangeBounds<u64>,
-    R: PiecewiseScan<K, V>,
+    I: PiecewiseScan<K, V>,
 {
-    reader: R,      // reader handle into index
-    within: G,      // pick mutations withing this sequence-no range.
-    from: Bound<K>, // place to start the next batch of scan.
+    reader: I,               // reader handle into index
+    seqno_start: Bound<u64>, // pick mutations withing this sequence-no range.
+    seqno_end: Bound<u64>,   // pick mutations withing this sequence-no range.
+    key_start: Bound<K>,     // pick mutations withing this sequence-no range.
+    key_end: Bound<K>,       // pick mutations withing this sequence-no range.
+
     iter: vec::IntoIter<Result<Entry<K, V>>>,
     batch_size: usize,
+    last_batch: bool,
 }
 
 enum Refill<K, V>
@@ -55,54 +58,94 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    Ok(Vec<Result<Entry<K, V>>>),
+    Ok(Vec<Result<Entry<K, V>>>, Option<K>),
     Retry(K, Vec<Result<Entry<K, V>>>),
     Finish(Vec<Result<Entry<K, V>>>),
 }
 
-impl<R, K, V, G> SkipScan<R, K, V, G>
+impl<K, V, I> SkipScan<K, V, I>
 where
     K: Clone + Ord,
     V: Clone + Diff,
-    G: Clone + RangeBounds<u64>,
-    R: PiecewiseScan<K, V>,
+    I: PiecewiseScan<K, V>,
 {
     /// Create a new full table scan using the reader handle. Pick
     /// mutations that are `within` the specified range.
-    pub fn new(reader: R, within: G) -> SkipScan<R, K, V, G> {
+    pub fn new(reader: I) -> SkipScan<K, V, I> {
         SkipScan {
             reader,
-            within,
-            from: Bound::Unbounded,
+            seqno_start: Bound::Unbounded,
+            seqno_end: Bound::Unbounded,
+            key_start: Bound::Unbounded,
+            key_end: Bound::Unbounded,
             iter: vec![].into_iter(),
             batch_size: SKIP_SCAN_BATCH_SIZE,
+            last_batch: false,
         }
     }
 
     /// Set the batch size for each iteration using the reader handle.
-    pub fn set_batch_size(&mut self, batch_size: usize) {
-        self.batch_size = batch_size
+    pub fn set_batch_size(&mut self, batch_size: usize) -> &mut Self {
+        self.batch_size = batch_size;
+        self
+    }
+
+    /// Set seqno range to filter out all mutations outside the range.
+    pub fn set_seqno_range<G>(&mut self, within: G) -> &mut Self
+    where
+        G: RangeBounds<u64>,
+    {
+        self.seqno_start = match within.start_bound() {
+            Bound::Included(seqno) => Bound::Included(*seqno),
+            Bound::Excluded(seqno) => Bound::Excluded(*seqno),
+            Bound::Unbounded => Bound::Unbounded,
+        };
+        self.seqno_end = match within.end_bound() {
+            Bound::Included(seqno) => Bound::Included(*seqno),
+            Bound::Excluded(seqno) => Bound::Excluded(*seqno),
+            Bound::Unbounded => Bound::Unbounded,
+        };
+        self
+    }
+
+    /// Set key range to filter out all keys outside the range.
+    pub fn set_key_range<G>(&mut self, range: G) -> &mut Self
+    where
+        G: RangeBounds<K>,
+    {
+        self.key_start = match range.start_bound() {
+            Bound::Included(key) => Bound::Included(key.clone()),
+            Bound::Excluded(key) => Bound::Excluded(key.clone()),
+            Bound::Unbounded => Bound::Unbounded,
+        };
+        self.key_end = match range.end_bound() {
+            Bound::Included(key) => Bound::Included(key.clone()),
+            Bound::Excluded(key) => Bound::Excluded(key.clone()),
+            Bound::Unbounded => Bound::Unbounded,
+        };
+        self
     }
 
     fn refill(&mut self) -> Refill<K, V> {
         let mut entries: Vec<Result<Entry<K, V>>> = vec![];
-        match self.reader.pw_scan(self.from.clone(), self.within.clone()) {
+        let within = (self.seqno_start.clone(), self.seqno_end.clone());
+        match self.reader.pw_scan(self.key_start.clone(), within) {
             Ok(niter) => {
                 let mut niter = niter.enumerate();
                 loop {
                     match niter.next() {
-                        Some((i, Ok(ScanEntry::Found(entry)))) => {
+                        Some((i, Ok(ScanEntry::Found(entry)))) if i <= self.batch_size => {
+                            entries.push(Ok(entry))
+                        }
+                        Some((_, Ok(ScanEntry::Found(entry)))) => {
+                            let key_start = Some(entry.to_key());
                             entries.push(Ok(entry));
-                            if i >= self.batch_size {
-                                break Refill::Ok(entries);
-                            }
+                            break Refill::Ok(entries, key_start);
                         }
-                        Some((_, Ok(ScanEntry::Retry(key)))) => {
-                            break Refill::Retry(key, entries);
-                        }
+                        Some((_, Ok(ScanEntry::Retry(key)))) => break Refill::Retry(key, entries),
                         Some((_, Err(err))) => {
                             entries.push(Err(err));
-                            break Refill::Ok(entries);
+                            break Refill::Ok(entries, None);
                         }
                         None => break Refill::Finish(entries),
                     }
@@ -110,28 +153,46 @@ where
             }
             Err(err) => {
                 entries.push(Err(err));
-                Refill::Ok(entries)
+                Refill::Ok(entries, None)
             }
+        }
+    }
+
+    fn is_last_batch(&self, entries: &Vec<Result<Entry<K, V>>>) -> bool {
+        match (&self.key_end, entries.last()) {
+            (Bound::Unbounded, Some(Ok(_))) => false,
+            (Bound::Included(key), Some(Ok(last))) => last.as_key().le(key),
+            (Bound::Excluded(key), Some(Ok(last))) => last.as_key().lt(key),
+            (_, _) => true,
         }
     }
 }
 
-impl<R, K, V, G> Iterator for SkipScan<R, K, V, G>
+impl<K, V, I> Iterator for SkipScan<K, V, I>
 where
     K: Clone + Ord,
     V: Clone + Diff,
-    G: Clone + RangeBounds<u64>,
-    R: PiecewiseScan<K, V>,
+    I: PiecewiseScan<K, V>,
 {
     type Item = Result<Entry<K, V>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             match self.iter.next() {
-                Some(Ok(entry)) => {
-                    self.from = Bound::Excluded(entry.to_key());
-                    break Some(Ok(entry));
-                }
+                Some(Ok(entry)) if !self.last_batch => break Some(Ok(entry)),
+                Some(Ok(entry)) => match (entry, &self.key_end) {
+                    (entry, Bound::Included(key)) if entry.as_key().le(key) => {
+                        break Some(Ok(entry))
+                    }
+                    (entry, Bound::Excluded(key)) if entry.as_key().lt(key) => {
+                        break Some(Ok(entry))
+                    }
+                    _ => {
+                        self.batch_size = 0;
+                        self.iter = vec![].into_iter();
+                        break None;
+                    }
+                },
                 Some(Err(err)) => {
                     self.batch_size = 0;
                     break Some(Err(err));
@@ -139,9 +200,13 @@ where
                 None if self.batch_size == 0 => break None,
                 None => {
                     let entries = match self.refill() {
-                        Refill::Ok(entries) => entries,
+                        Refill::Ok(entries, Some(key_start)) => {
+                            self.key_start = Bound::Excluded(key_start);
+                            entries
+                        }
+                        Refill::Ok(entries, None) => entries,
                         Refill::Retry(key, entries) => {
-                            self.from = Bound::Excluded(key);
+                            self.key_start = Bound::Excluded(key);
                             if entries.len() > 0 {
                                 entries
                             } else {
@@ -153,6 +218,7 @@ where
                             entries
                         }
                     };
+                    self.last_batch = self.is_last_batch(&entries);
                     self.iter = entries.into_iter()
                 }
             }
@@ -179,9 +245,9 @@ where
     V: Clone + Diff,
     I: Iterator<Item = Result<Entry<K, V>>>,
 {
-    pub fn new<R>(iter: I, within: R) -> FilterScan<K, V, I>
+    pub fn new<S>(iter: I, within: S) -> FilterScan<K, V, I>
     where
-        R: RangeBounds<u64>,
+        S: RangeBounds<u64>,
     {
         let start = match within.start_bound() {
             Bound::Included(start) => Bound::Included(*start),

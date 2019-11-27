@@ -105,6 +105,13 @@ where
             Bound::Excluded(seqno) => Bound::Excluded(*seqno),
             Bound::Unbounded => Bound::Unbounded,
         };
+        match (self.seqno_start, self.seqno_end) {
+            (Bound::Included(s1), Bound::Included(s2)) if s1 > s2 => self.batch_size = 0,
+            (Bound::Included(s1), Bound::Excluded(s2)) if s1 >= s2 => self.batch_size = 0,
+            (Bound::Excluded(s1), Bound::Included(s2)) if s1 >= s2 => self.batch_size = 0,
+            (Bound::Excluded(s1), Bound::Excluded(s2)) if s1 >= s2 => self.batch_size = 0,
+            _ => (),
+        }
         self
     }
 
@@ -161,8 +168,8 @@ where
     fn is_last_batch(&self, entries: &Vec<Result<Entry<K, V>>>) -> bool {
         match (&self.key_end, entries.last()) {
             (Bound::Unbounded, Some(Ok(_))) => false,
-            (Bound::Included(key), Some(Ok(last))) => last.as_key().le(key),
-            (Bound::Excluded(key), Some(Ok(last))) => last.as_key().lt(key),
+            (Bound::Included(key), Some(Ok(last))) => last.as_key().gt(key),
+            (Bound::Excluded(key), Some(Ok(last))) => last.as_key().ge(key),
             (_, _) => true,
         }
     }

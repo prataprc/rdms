@@ -11,9 +11,8 @@ use std::{
 };
 
 use crate::{
-    core::{CommitIterator, Diff, Footprint, Index, Result, Validate},
+    core::{CommitIterator, Diff, Entry, Footprint, Index, Result, Validate},
     sync::CCMu,
-    types::EmptyIter,
 };
 
 /// Default commit interval, in seconds. Refer to set_commit_interval()
@@ -100,12 +99,12 @@ where
         self.index.to_writer()
     }
 
-    pub fn commit<C, F>(&mut self, iter: C, metacb: F) -> Result<()>
+    pub fn commit<C, F>(&mut self, scanner: C, metacb: F) -> Result<()>
     where
         C: CommitIterator<K, V>,
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
-        self.index.commit(iter, metacb)
+        self.index.commit(scanner, metacb)
     }
 
     pub fn compact<F>(&mut self, cutoff: Bound<u64>, metacb: F) -> Result<()>
@@ -144,9 +143,6 @@ where
     V: Clone + Diff + Footprint,
     I: Index<K, V>,
 {
-    let phantom_key: marker::PhantomData<K> = marker::PhantomData;
-    let phantom_val: marker::PhantomData<V> = marker::PhantomData;
-
     let mut elapsed = Duration::new(0, 0);
     let initial_count = ccmu.strong_count();
     loop {
@@ -162,11 +158,8 @@ where
             // unsafe
             (ccmu.get_ptr() as *mut Rdms<K, V, I>).as_mut().unwrap()
         };
-        let iter = EmptyIter {
-            _phantom_key: &phantom_key,
-            _phantom_val: &phantom_val,
-        };
-        rdms.commit(iter, convert::identity).unwrap();
+        let empty: Vec<Result<Entry<K, V>>> = vec![];
+        rdms.commit(empty.into_iter(), convert::identity).unwrap();
         elapsed = start.elapsed().ok().unwrap();
     }
 }

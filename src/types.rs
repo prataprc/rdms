@@ -1,10 +1,10 @@
 //! Module `types` implement core key-traits and value-traits for
 //! built-in types.
 
-use std::{convert::TryInto, ffi, marker, ops};
+use std::{convert::TryInto, ffi, marker};
 
 use crate::{
-    core::{CommitIterator, Diff, Entry, Footprint, Result, Serialize},
+    core::{Diff, Entry, Footprint, Result, Serialize},
     error::Error,
 };
 
@@ -252,26 +252,6 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         None
-    }
-}
-
-impl<'a, K, V> CommitIterator<K, V> for EmptyIter<'a, K, V>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-{
-    type Iter = Self;
-
-    fn iter(self) -> Result<Self::Iter> {
-        Ok(self)
-    }
-
-    fn iters(self, _shards: usize) -> Result<Vec<Self::Iter>> {
-        Ok(vec![self])
-    }
-
-    fn range_iters(self, _ranges: Vec<ops::Range<K>>) -> Result<Vec<Self::Iter>> {
-        Ok(vec![self])
     }
 }
 

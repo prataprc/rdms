@@ -6,7 +6,7 @@ use std::{
     ffi, fmt, fs,
     hash::Hash,
     mem::{self, ManuallyDrop},
-    ops::{self, Bound, RangeBounds},
+    ops::{Bound, RangeBounds},
     result,
     sync::atomic::{AtomicBool, Ordering::SeqCst},
 };
@@ -190,19 +190,21 @@ where
     type Iter: Iterator<Item = Result<Entry<K, V>>>;
 
     /// Return a handle for full table iteration.
-    fn iter(self) -> Result<Self::Iter>;
+    fn scan(&mut self, from_seqno: Bound<u64>) -> Result<Self::Iter>;
 
     /// Return a list of equally balanced handles to iterator on
     /// range-partitioned entries. Note that ``shards`` argument is
     /// only a hint, return array of iterators can be less-than or
     /// equal-to or greater-than the requested shards.
-    fn iters(self, shards: usize) -> Result<Vec<Self::Iter>>;
+    fn scans(&mut self, shards: usize, from_seqno: Bound<u64>) -> Result<Vec<Self::Iter>>;
 
     /// Same as iters() but range partition is decided by the `ranges`
     /// argument. And unlike the ``shards`` argument, ``ranges`` argument
     /// is treated with precision, range.len() is equal-to return array
     /// of iterators.
-    fn range_iters(self, ranges: Vec<ops::Range<K>>) -> Result<Vec<Self::Iter>>;
+    fn range_scans<G>(&mut self, ranges: Vec<G>, from_seqno: Bound<u64>) -> Result<Vec<Self::Iter>>
+    where
+        G: RangeBounds<K>;
 }
 
 /// Index trait implemented by all types of rdms-indexes. Note that not all
@@ -250,7 +252,7 @@ where
     /// reference, there can be concurrent compact() call. It is upto the
     /// implementing type to synchronize the concurrent commit() and compact()
     /// calls.
-    fn commit<C, F>(&mut self, iter: C, metacb: F) -> Result<()>
+    fn commit<C, F>(&mut self, scan: C, metacb: F) -> Result<()>
     where
         C: CommitIterator<K, V>,
         F: Fn(Vec<u8>) -> Vec<u8>;

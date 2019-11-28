@@ -18,6 +18,27 @@ where
     node.map_or(true, Node::is_black)
 }
 
+fn do_shards<K, V>(nref: Option<&Node<K, V>>, shards: usize, acc: &mut Vec<Option<K>>)
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    match nref {
+        None => acc.push(None),
+        Some(_) if shards == 0 => (),
+        Some(nref) if shards == 1 => acc.push(Some(nref.to_key())),
+        Some(nref) if shards == 2 => {
+            do_shards(nref.as_left_deref(), 1, acc);
+            do_shards(nref.as_right_deref(), 1, acc);
+        }
+        Some(nref) => {
+            let lhalf = shards - (shards / 2);
+            do_shards(nref.as_left_deref(), lhalf, acc);
+            do_shards(nref.as_right_deref(), shards - lhalf, acc);
+        }
+    }
+}
+
 /// Get the latest version for key.
 fn get<K, V, Q>(node: Option<&Node<K, V>>, key: &Q) -> Result<Entry<K, V>>
 where

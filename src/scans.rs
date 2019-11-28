@@ -7,7 +7,7 @@ use std::{
     vec,
 };
 
-use crate::core::{Bloom, Diff, Entry, PiecewiseScan, Result, ScanEntry};
+use crate::core::{Bloom, CommitIterator, Diff, Entry, PiecewiseScan, Result, ScanEntry};
 
 // TODO: benchmark SkipScan and FilterScan and measure the difference.
 
@@ -390,6 +390,36 @@ where
                 None => break None,
             }
         }
+    }
+}
+
+impl<K, V> CommitIterator<K, V> for std::vec::IntoIter<Result<Entry<K, V>>>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    type Iter = Self;
+
+    fn scan(&mut self, _from_seqno: Bound<u64>) -> Result<Self::Iter> {
+        let entries: Vec<Result<Entry<K, V>>> = self.collect();
+        Ok(entries.into_iter())
+    }
+
+    fn scans(&mut self, _shards: usize, _from_seqno: Bound<u64>) -> Result<Vec<Self::Iter>> {
+        let entries: Vec<Result<Entry<K, V>>> = self.collect();
+        Ok(vec![entries.into_iter()])
+    }
+
+    fn range_scans<G>(
+        &mut self,
+        _ranges: Vec<G>,
+        _from_seqno: Bound<u64>,
+    ) -> Result<Vec<Self::Iter>>
+    where
+        G: RangeBounds<K>,
+    {
+        let entries: Vec<Result<Entry<K, V>>> = self.collect();
+        Ok(vec![entries.into_iter()])
     }
 }
 

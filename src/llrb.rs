@@ -40,7 +40,7 @@ use std::{
     fmt::Debug,
     hash::Hash,
     marker, mem,
-    ops::{self, Bound, Deref, DerefMut, RangeBounds},
+    ops::{Bound, Deref, DerefMut, RangeBounds},
     result,
     sync::Arc,
 };
@@ -427,12 +427,12 @@ where
         self.as_mut().to_writer()
     }
 
-    fn commit<C, F>(&mut self, iter: C, metacb: F) -> Result<()>
+    fn commit<C, F>(&mut self, scanner: C, metacb: F) -> Result<()>
     where
         C: CommitIterator<K, V>,
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
-        self.as_mut().commit(iter, metacb)
+        self.as_mut().commit(scanner, metacb)
     }
 
     fn compact<F>(&mut self, cutoff: Bound<u64>, metacb: F) -> Result<()>
@@ -499,7 +499,7 @@ where
         Ok(LlrbWriter::<K, V>::new(index, writer))
     }
 
-    fn commit<C, F>(&mut self, iter: C, _metacb: F) -> Result<()>
+    fn commit<C, F>(&mut self, mut scanner: C, _metacb: F) -> Result<()>
     where
         C: CommitIterator<K, V>,
         F: Fn(Vec<u8>) -> Vec<u8>,
@@ -508,7 +508,7 @@ where
 
         let count = {
             let _latch = self.latch.acquire_write(self.spin);
-            let full_table_iter = iter.iter()?;
+            let full_table_iter = scanner.scan(Bound::Unbounded)?;
 
             let mut count = 0;
             for entry in full_table_iter {
@@ -1473,6 +1473,71 @@ where
     }
 }
 
+impl<K, V> CommitIterator<K, V> for Llrb<K, V>
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+{
+    type Iter = SkipScan<K, V, LlrbReader<K, V>>;
+
+    fn scan(&mut self, from_seqno: Bound<u64>) -> Result<Self::Iter> {
+        let mut ss = SkipScan::new(self.to_reader()?);
+        ss.set_seqno_range((from_seqno, Bound::Included(self.to_seqno())));
+        Ok(ss)
+    }
+
+    fn scans(&mut self, shards: usize, from_seqno: Bound<u64>) -> Result<Vec<Self::Iter>> {
+        let within = (from_seqno, Bound::Included(self.to_seqno()));
+
+        let high_bounds = {
+            let _latch = Some(self.latch.acquire_read(self.spin));
+            let mut high_bounds = vec![];
+            do_shards(
+                self.root.as_ref().map(Deref::deref),
+                shards - 1,
+                &mut high_bounds,
+            );
+            high_bounds
+        };
+
+        let (mut scans, mut low_key) = (vec![], Bound::Unbounded);
+        for high_key in high_bounds {
+            let mut ss = SkipScan::new(self.to_reader()?);
+            low_key = match high_key {
+                Some(high_key) => {
+                    ss.set_key_range((low_key, Bound::Excluded(high_key.clone())))
+                        .set_seqno_range(within.clone());
+                    Bound::Included(high_key)
+                }
+                None => {
+                    ss.set_seqno_range((Bound::Excluded(0), Bound::Excluded(0)));
+                    low_key
+                }
+            };
+            scans.push(ss);
+        }
+        let mut ss = SkipScan::new(self.to_reader()?);
+        ss.set_key_range((low_key, Bound::Unbounded))
+            .set_seqno_range(within.clone());
+        scans.push(ss);
+        Ok(scans)
+    }
+
+    fn range_scans<G>(&mut self, ranges: Vec<G>, from_seqno: Bound<u64>) -> Result<Vec<Self::Iter>>
+    where
+        G: RangeBounds<K>,
+    {
+        let mut scans = vec![];
+        for range in ranges {
+            let mut ss = SkipScan::new(self.to_reader()?);
+            ss.set_key_range(range)
+                .set_seqno_range((from_seqno, Bound::Included(self.to_seqno())));
+            scans.push(ss);
+        }
+        Ok(scans)
+    }
+}
+
 impl<K, V> PiecewiseScan<K, V> for Llrb<K, V>
 where
     K: Clone + Ord,
@@ -1865,26 +1930,6 @@ where
     {
         let index: &mut Llrb<K, V> = self.as_mut();
         index.pw_scan(from, within)
-    }
-}
-
-impl<K, V> CommitIterator<K, V> for LlrbReader<K, V>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-{
-    type Iter = SkipScan<K, V, LlrbReader<K, V>>;
-
-    fn iter(self) -> Result<Self::Iter> {
-        Ok(SkipScan::new(self))
-    }
-
-    fn iters(self, _shards: usize) -> Result<Vec<Self::Iter>> {
-        panic!("to be implemented") // TODO
-    }
-
-    fn range_iters(self, _ranges: Vec<ops::Range<K>>) -> Result<Vec<Self::Iter>> {
-        panic!("to be implemented") // TODO
     }
 }
 

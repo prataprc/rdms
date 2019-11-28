@@ -683,7 +683,7 @@ where
         Ok(DgmReader::new(&self.name, arc_rs))
     }
 
-    fn commit<C, F>(&mut self, iter: C, metacb: F) -> Result<()>
+    fn commit<C, F>(&mut self, scanner: C, metacb: F) -> Result<()>
     where
         C: CommitIterator<K, V>,
         F: Fn(Vec<u8>) -> Vec<u8>,
@@ -722,8 +722,8 @@ where
         };
 
         let no_reverse = false;
-        let iter = lsm::y_iter(iter.iter()?, r_m1.iter()?, no_reverse);
-        disk.commit(iter, metacb)?;
+        let scanner = lsm::y_iter(scanner.scan()?, r_m1.iter()?, no_reverse);
+        disk.commit(scanner, metacb)?;
 
         // update the readers
         {
@@ -840,8 +840,8 @@ where
             (Some(r1), Some(r2), Some(meta), Some(mut disk)) => {
                 let no_reverse = false;
                 let (iter1, iter2) = (r1.1.iter()?, r2.1.iter()?);
-                let iter = lsm::y_iter_versions(iter1, iter2, no_reverse);
-                disk.commit(iter, |_| meta.clone())?;
+                let scan = lsm::y_iter_versions(iter1, iter2, no_reverse);
+                disk.commit(scan, |_| meta.clone())?;
                 disk
             }
             _ => unreachable!(),

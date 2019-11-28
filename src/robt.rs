@@ -387,7 +387,7 @@ where
         Ok(Panic::new("robt"))
     }
 
-    fn commit<C, F>(&mut self, iter: C, metacb: F) -> Result<()>
+    fn commit<C, F>(&mut self, mut scanner: C, metacb: F) -> Result<()>
     where
         C: CommitIterator<K, V>,
         F: Fn(Vec<u8>) -> Vec<u8>,
@@ -405,7 +405,7 @@ where
 
                 let snapshot = {
                     let b = Builder::<K, V, B>::initial(dir, &name.0, config.clone())?;
-                    b.build(iter.iter()?, metacb(vec![]))?;
+                    b.build(scanner.scan(Bound::Unbounded)?, metacb(vec![]))?;
                     let snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
                     snapshot.log()?;
                     snapshot
@@ -445,8 +445,8 @@ where
                 info!(target: "robt  ", "{:?}, incremental commit ...", name);
 
                 let (name, snapshot, meta_block_bytes) = {
-                    let iter = iter.iter()?;
-                    let bitmap_iter = BitmapIter::new(iter);
+                    let scanner = scanner.scan(Bound::Unbounded)?;
+                    let bitmap_iter = BitmapIter::new(scanner);
 
                     let mut old_snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
                     let index_file = old_snapshot.index_fd.to_file();

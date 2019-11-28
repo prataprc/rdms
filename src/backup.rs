@@ -186,7 +186,7 @@ where
         pair.0.to_reader()
     }
 
-    fn commit(&mut self, iter: IndexIter<K, V>, meta: Vec<u8>) -> Result<usize> {
+    fn commit(&mut self, scanner: IndexIter<K, V>, meta: Vec<u8>) -> Result<usize> {
         let mut pair = self.pair.lock().unwrap();
 
         let within = (
@@ -196,8 +196,8 @@ where
         let mut pw_scan = SkipScan::new(pair.0.to_reader()?, within);
         pw_scan.set_batch_size(self.pw_batch);
         let no_reverse = false;
-        let iter = lsm::y_iter(iter, Box::new(pw_scan), no_reverse);
-        pair.1.commit(iter, meta)
+        let scanner = lsm::y_iter(scanner, Box::new(pw_scan), no_reverse);
+        pair.1.commit(scanner, meta)
     }
 
     fn compact(&mut self, cutoff: Bound<u64>) -> Result<usize> {

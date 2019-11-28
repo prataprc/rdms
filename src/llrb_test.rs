@@ -880,9 +880,7 @@ fn test_commit1() {
     let mut index2: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-index2");
     let mut rindex: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-ref-index");
 
-    index1
-        .commit(index2.to_reader().unwrap(), |meta| meta.clone())
-        .unwrap();
+    index1.commit(&mut *index2, |meta| meta.clone()).unwrap();
     check_commit_nodes(index1.as_mut(), rindex.as_mut());
 }
 
@@ -895,9 +893,7 @@ fn test_commit2() {
     index2.set(100, 200).unwrap();
     rindex.set(100, 200).unwrap();
 
-    index1
-        .commit(index2.to_reader().unwrap(), |meta| meta.clone())
-        .unwrap();
+    index1.commit(&mut *index2, |meta| meta.clone()).unwrap();
     check_commit_nodes(index1.as_mut(), rindex.as_mut());
 }
 
@@ -969,9 +965,7 @@ fn test_commit3() {
             };
         }
 
-        index1
-            .commit(index2.to_reader().unwrap(), |meta| meta.clone())
-            .unwrap();
+        index1.commit(&mut *index2, |meta| meta.clone()).unwrap();
         check_commit_nodes(index1.as_mut(), rindex.as_mut());
     }
 }

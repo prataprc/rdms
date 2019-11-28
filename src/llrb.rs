@@ -1473,7 +1473,7 @@ where
     }
 }
 
-impl<K, V> CommitIterator<K, V> for Llrb<K, V>
+impl<K, V> CommitIterator<K, V> for &mut Llrb<K, V>
 where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,

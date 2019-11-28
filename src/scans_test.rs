@@ -14,7 +14,7 @@ fn test_skip_scan() {
     let seed: u128 = random();
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
-    let (n_ops, key_max) = (6_000_u64, 2_000);
+    let (n_ops, key_max) = (6_000_i64, 2_000);
     let mut llrb: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
     random_llrb(n_ops, key_max, seed, &mut llrb);
 
@@ -36,18 +36,18 @@ fn test_skip_scan() {
         let within = if j < withins.len() {
             withins[j].clone()
         } else {
-            let start_seqno = match rng.gen::<u64>() {
-                n if (n >= 0) && (n % 4 == 0) => Bound::Included(n % n_ops),
+            let start_seqno = match rng.gen::<i64>() {
+                n if (n >= 0) && (n % 4 == 0) => Bound::Included((n % n_ops) as u64),
                 n if (n >= 0) && (n % 4 == 1) => Bound::Included(0),
-                n if (n >= 0) && (n % 4 == 2) => Bound::Included(n % n_ops),
-                n if (n >= 0) && (n % 4 == 3) => Bound::Included((n % n_ops) + 1),
+                n if (n >= 0) && (n % 4 == 2) => Bound::Included((n % n_ops) as u64),
+                n if (n >= 0) && (n % 4 == 3) => Bound::Included(((n % n_ops) + 1) as u64),
                 _ => Bound::Unbounded,
             };
-            let end_seqno = match rng.gen::<u64>() {
-                n if (n >= 0) && (n % 4 == 0) => Bound::Included(n % n_ops),
+            let end_seqno = match rng.gen::<i64>() {
+                n if (n >= 0) && (n % 4 == 0) => Bound::Included((n % n_ops) as u64),
                 n if (n >= 0) && (n % 4 == 1) => Bound::Included(0),
-                n if (n >= 0) && (n % 4 == 2) => Bound::Included(n % n_ops),
-                n if (n >= 0) && (n % 4 == 3) => Bound::Included((n % n_ops) + 1),
+                n if (n >= 0) && (n % 4 == 2) => Bound::Included((n % n_ops) as u64),
+                n if (n >= 0) && (n % 4 == 3) => Bound::Included(((n % n_ops) + 1) as u64),
                 _ => Bound::Unbounded,
             };
             (start_seqno, end_seqno)
@@ -182,7 +182,7 @@ fn check_node(entry: &Entry<i64, i64>, ref_entry: &Entry<i64, i64>) {
     }
 }
 
-fn random_llrb(n_ops: u64, key_max: i64, seed: u128, llrb: &mut Llrb<i64, i64>) {
+fn random_llrb(n_ops: i64, key_max: i64, seed: u128, llrb: &mut Llrb<i64, i64>) {
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
     for _i in 0..n_ops {
         let key = (rng.gen::<i64>() % key_max).abs();

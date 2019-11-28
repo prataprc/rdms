@@ -1,9 +1,9 @@
-use rand::prelude::random;
+use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
 
 use std::ops::Bound;
 
 use crate::{
-    core::{Index, Reader, Validate, Writer},
+    core::{CommitIterator, Index, Reader, Result, Validate, Writer},
     error::Error,
     mvcc::Mvcc,
     scans::SkipScan,
@@ -788,4 +788,228 @@ fn test_pw_scan() {
     }
 
     assert!(index.validate().is_ok());
+}
+
+#[test]
+fn test_commit_iterator_scan() {
+    let seed: u128 = random();
+    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+
+    let (n_ops, key_max) = (60_000_i64, 20_000);
+    let mut mvcc: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc");
+    random_mvcc(n_ops, key_max, seed, &mut mvcc);
+
+    for i in 0..20 {
+        let from_seqno = match rng.gen::<i64>() % n_ops {
+            n if n >= 0 && n % 2 == 0 => Bound::Included(n as u64),
+            n if n >= 0 => Bound::Excluded(n as u64),
+            _ => Bound::Unbounded,
+        };
+        let mut iter = (&mut *mvcc).scan(from_seqno).unwrap();
+        let mut r = mvcc.to_reader().unwrap();
+        let mut ref_iter = r.iter().unwrap();
+        let within = (from_seqno, Bound::Included(mvcc.to_seqno()));
+        let mut count = 0;
+        loop {
+            match ref_iter.next() {
+                Some(Ok(ref_entry)) => match ref_entry.filter_within(within.0, within.1) {
+                    Some(ref_entry) => match iter.next() {
+                        Some(Ok(entry)) => {
+                            check_node1(&entry, &ref_entry);
+                            count += 1;
+                        }
+                        Some(Err(err)) => panic!("{:?}", err),
+                        None => unreachable!(),
+                    },
+                    None => continue,
+                },
+                Some(Err(err)) => panic!("{:?}", err),
+                None => {
+                    assert!(iter.next().is_none());
+                    break;
+                }
+            }
+        }
+        println!("{} {:?} {}", i, within, count);
+    }
+}
+
+#[test]
+fn test_commit_iterator_scans() {
+    type MyIter = Box<dyn Iterator<Item = Result<Entry<i64, i64>>>>;
+
+    let seed: u128 = random();
+    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+
+    let (n_ops, key_max) = (60_000_i64, 20_000);
+    let mut mvcc: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc");
+    random_mvcc(n_ops, key_max, seed, &mut mvcc);
+
+    for i in 0..20 {
+        let shards = rng.gen::<usize>() % 31 + 1;
+        let from_seqno = match rng.gen::<i64>() % n_ops {
+            n if n >= 0 && n % 2 == 0 => Bound::Included(n as u64),
+            n if n >= 0 => Bound::Excluded(n as u64),
+            _ => Bound::Unbounded,
+        };
+        let mut iters = (&mut *mvcc).scans(shards, from_seqno).unwrap();
+        let iter: MyIter = Box::new(iters.remove(0));
+        let mut iter = iters.drain(..).into_iter().fold(iter, |acc, iter| {
+            Box::new(acc.chain(Box::new(iter) as MyIter)) as MyIter
+        });
+
+        let mut r = mvcc.to_reader().unwrap();
+        let mut ref_iter = r.iter().unwrap();
+        let within = (from_seqno, Bound::Included(mvcc.to_seqno()));
+        let mut count = 0;
+        loop {
+            match ref_iter.next() {
+                Some(Ok(ref_entry)) => match ref_entry.filter_within(within.0, within.1) {
+                    Some(ref_entry) => match iter.next() {
+                        Some(Ok(entry)) => {
+                            check_node1(&entry, &ref_entry);
+                            count += 1;
+                        }
+                        Some(Err(err)) => panic!("{:?}", err),
+                        None => unreachable!(),
+                    },
+                    None => continue,
+                },
+                Some(Err(err)) => panic!("{:?}", err),
+                None => {
+                    assert!(iter.next().is_none());
+                    break;
+                }
+            }
+        }
+        println!("{} {:?} {}", i, within, count);
+    }
+}
+
+#[test]
+fn test_commit_iterator_range_scans() {
+    use std::ops::Bound;
+
+    type MyIter = Box<dyn Iterator<Item = Result<Entry<i64, i64>>>>;
+
+    let seed: u128 = random();
+    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+
+    let (n_ops, key_max) = (128_000_i64, 20_000);
+    let mut mvcc: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc");
+    random_mvcc(n_ops, key_max, seed, &mut mvcc);
+
+    for i in 1..33 {
+        let (mut ranges, mut low_key) = (vec![], Bound::Unbounded);
+        for high_key in (0..i).map(|j| (n_ops / i) * (j + 1)) {
+            ranges.push((low_key, Bound::Excluded(high_key)));
+            low_key = Bound::Included(high_key);
+        }
+        ranges.push((low_key, Bound::Unbounded));
+
+        let from_seqno = match rng.gen::<i64>() % n_ops {
+            n if n >= 0 && n % 2 == 0 => Bound::Included(n as u64),
+            n if n >= 0 => Bound::Excluded(n as u64),
+            _ => Bound::Unbounded,
+        };
+        let mut iters = (&mut *mvcc).range_scans(ranges, from_seqno).unwrap();
+        let iter: MyIter = Box::new(iters.remove(0));
+        let mut iter = iters.drain(..).into_iter().fold(iter, |acc, iter| {
+            Box::new(acc.chain(Box::new(iter) as MyIter)) as MyIter
+        });
+
+        let mut r = mvcc.to_reader().unwrap();
+        let mut ref_iter = r.iter().unwrap();
+        let within = (from_seqno, Bound::Included(mvcc.to_seqno()));
+        let mut count = 0;
+        loop {
+            match ref_iter.next() {
+                Some(Ok(ref_entry)) => match ref_entry.filter_within(within.0, within.1) {
+                    Some(ref_entry) => match iter.next() {
+                        Some(Ok(entry)) => {
+                            check_node1(&entry, &ref_entry);
+                            count += 1;
+                        }
+                        Some(Err(err)) => panic!("{:?}", err),
+                        None => unreachable!(),
+                    },
+                    None => continue,
+                },
+                Some(Err(err)) => panic!("{:?}", err),
+                None => {
+                    assert!(iter.next().is_none());
+                    break;
+                }
+            }
+        }
+        println!("{} {:?} {}", i, within, count);
+    }
+}
+
+fn random_mvcc(n_ops: i64, key_max: i64, seed: u128, mvcc: &mut Mvcc<i64, i64>) {
+    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    for _i in 0..n_ops {
+        let key = (rng.gen::<i64>() % key_max).abs();
+        let op = rng.gen::<usize>() % 3;
+        //println!("key {} {} {} {}", key, mvcc.to_seqno(), op);
+        match op {
+            0 => {
+                let value: i64 = rng.gen();
+                mvcc.set(key, value).unwrap();
+            }
+            1 => {
+                let value: i64 = rng.gen();
+                {
+                    let cas = match mvcc.get(&key) {
+                        Err(Error::KeyNotFound) => 0,
+                        Err(_err) => unreachable!(),
+                        Ok(e) => e.to_seqno(),
+                    };
+                    mvcc.set_cas(key, value, cas).unwrap();
+                }
+            }
+            2 => {
+                mvcc.delete(&key).unwrap();
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+fn check_node1(entry: &Entry<i64, i64>, ref_entry: &Entry<i64, i64>) {
+    //println!("check_node {} {}", entry.key(), ref_entry.key);
+    assert_eq!(entry.to_key(), ref_entry.to_key(), "key");
+
+    let key = entry.to_key();
+    //println!("check-node value {:?}", entry.to_native_value());
+    assert_eq!(
+        entry.to_native_value(),
+        ref_entry.to_native_value(),
+        "key {}",
+        key
+    );
+    assert_eq!(entry.to_seqno(), ref_entry.to_seqno(), "key {}", key);
+    assert_eq!(entry.is_deleted(), ref_entry.is_deleted(), "key {}", key);
+    assert_eq!(
+        entry.as_deltas().len(),
+        ref_entry.as_deltas().len(),
+        "key {}",
+        key
+    );
+
+    //println!("versions {} {}", n_vers, refn_vers);
+    let mut vers = entry.versions();
+    let mut ref_vers = ref_entry.versions();
+    loop {
+        match (vers.next(), ref_vers.next()) {
+            (Some(e), Some(re)) => {
+                assert_eq!(e.to_native_value(), re.to_native_value(), "key {}", key);
+                assert_eq!(e.to_seqno(), re.to_seqno(), "key {} ", key);
+                assert_eq!(e.is_deleted(), re.is_deleted(), "key {}", key);
+            }
+            (None, None) => break,
+            (Some(e), None) => panic!("invalid entry {} {}", e.to_key(), e.to_seqno()),
+            (None, Some(re)) => panic!("invalid entry {} {}", re.to_key(), re.to_seqno()),
+        }
+    }
 }

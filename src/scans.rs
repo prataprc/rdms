@@ -295,7 +295,7 @@ where
     }
 }
 
-pub(crate) struct BitmappedScan<K, V, I, B>
+pub struct BitmappedScan<K, V, I, B>
 where
     K: Clone + Ord + Hash,
     V: Clone + Diff,
@@ -313,14 +313,14 @@ where
     I: Iterator<Item = Result<Entry<K, V>>>,
     B: Bloom,
 {
-    pub(crate) fn new(iter: I) -> BitmappedScan<K, V, I, B> {
+    pub fn new(iter: I) -> BitmappedScan<K, V, I, B> {
         BitmappedScan {
             iter,
             bitmap: <B as Bloom>::create(),
         }
     }
 
-    pub(crate) fn close(self) -> Result<(I, B)> {
+    pub fn close(self) -> Result<(I, B)> {
         Ok((self.iter, self.bitmap))
     }
 }
@@ -347,9 +347,9 @@ where
     }
 }
 
-/// CompactIter for continuous full table iteration filtering out
+/// CompactScan for continuous full table iteration filtering out
 /// older mutations.
-pub struct CompactIter<K, V, I>
+pub struct CompactScan<K, V, I>
 where
     K: Clone + Ord,
     V: Clone + Diff,
@@ -359,18 +359,22 @@ where
     cutoff: Bound<u64>,
 }
 
-impl<K, V, I> CompactIter<K, V, I>
+impl<K, V, I> CompactScan<K, V, I>
 where
     K: Clone + Ord,
     V: Clone + Diff,
     I: Iterator<Item = Result<Entry<K, V>>>,
 {
-    pub fn new(iter: I, cutoff: Bound<u64>) -> CompactIter<K, V, I> {
-        CompactIter { iter, cutoff }
+    pub fn new(iter: I, cutoff: Bound<u64>) -> CompactScan<K, V, I> {
+        CompactScan { iter, cutoff }
+    }
+
+    pub fn close(self) -> Result<I> {
+        Ok(self.iter)
     }
 }
 
-impl<K, V, I> Iterator for CompactIter<K, V, I>
+impl<K, V, I> Iterator for CompactScan<K, V, I>
 where
     K: Clone + Ord,
     V: Clone + Diff,

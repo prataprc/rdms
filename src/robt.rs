@@ -66,14 +66,11 @@ use crate::{
     panic::Panic,
     robt_entry::MEntry,
     robt_index::{MBlock, ZBlock},
-    scans::{BitmappedScan, CompactIter},
+    scans::{BitmappedScan, CompactScan},
     util,
 };
 
 include!("robt_marker.rs");
-
-// TODO: bitmap computation can be optimized for commit-iteration
-// and compact iteration. try CommitScan, CompactIter, BitmappedScan.
 
 #[derive(Clone)]
 struct Name(String);
@@ -545,7 +542,7 @@ where
             } => {
                 let (name, snapshot, meta_block_bytes) = {
                     let mut old_snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
-                    let iter = CompactIter::new(old_snapshot.iter_with_versions()?, cutoff);
+                    let iter = CompactScan::new(old_snapshot.iter_with_versions()?, cutoff);
 
                     info!(target: "robt  ", "{:?}, compact ...", name);
                     let name = name.clone().next();

@@ -3,6 +3,7 @@ use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
 use super::*;
 use crate::{
     core::{Index, Reader, Writer},
+    croaring::CRoaring,
     error::Error,
     llrb::Llrb,
 };
@@ -253,6 +254,116 @@ fn test_filter_scan() {
     let scanner = FilterScan::new(llrb.iter().unwrap(), within);
     let es: Vec<Entry<i64, i64>> = scanner.map(|e| e.unwrap()).collect();
     assert_eq!(es.len(), 0);
+}
+
+#[test]
+fn test_bitmapped_scan() {
+    let seed: u128 = random();
+    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+
+    for i in 0..100 {
+        let (n_ops, key_max) = (6_000_i64, 2_000);
+        let mut llrb: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
+        random_llrb(n_ops, key_max, seed + (i * 10), &mut llrb);
+
+        let (bitmap, es) = {
+            let mut scanner = BitmappedScan::<_, _, _, CRoaring>::new(llrb.iter().unwrap());
+            let mut es = vec![];
+            let (mut iter, bitmap) = loop {
+                match scanner.next() {
+                    Some(e) => es.push(e.as_ref().unwrap().clone()),
+                    None => break scanner.close().unwrap(),
+                }
+            };
+            assert!(iter.next().is_none());
+            (bitmap, es)
+        };
+        println!("entries:{}", es.len());
+        assert!(es.len() == llrb.len());
+        assert!(
+            bitmap.len() <= llrb.len(),
+            "{}/{}",
+            bitmap.len(),
+            llrb.len()
+        );
+        for _j in 0..10000 {
+            let key = (rng.gen::<i64>() % key_max).abs();
+            let false_positve = llrb.get(&key).ok().is_some() == false && bitmap.contains(&key);
+            assert!(!false_positve);
+        }
+    }
+}
+
+#[test]
+fn test_compact_scan() {
+    use std::ops::Bound;
+
+    let seed: u128 = random();
+    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+
+    let (n_ops, key_max) = (6_000_i64, 2_000);
+    let mut llrb: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
+    random_llrb(n_ops, key_max, seed, &mut llrb);
+
+    let cutoffs = vec![
+        Bound::Included(0),
+        Bound::Included(6000),
+        Bound::Included(4000),
+        Bound::Excluded(5000),
+        Bound::Excluded(5000),
+        Bound::Excluded(5000),
+        Bound::Unbounded,
+        Bound::Unbounded,
+        Bound::Unbounded,
+    ];
+    for _i in 0..1000 {
+        let j = rng.gen::<usize>() % (cutoffs.len() * 2);
+
+        let cutoff = if j < cutoffs.len() {
+            cutoffs[j].clone()
+        } else {
+            match rng.gen::<i64>() {
+                n if (n >= 0) && (n % 4 == 0) => Bound::Included((n % n_ops) as u64),
+                n if (n >= 0) && (n % 4 == 1) => Bound::Included(0),
+                n if (n >= 0) && (n % 4 == 2) => Bound::Included((n % n_ops) as u64),
+                n if (n >= 0) && (n % 4 == 3) => Bound::Included(((n % n_ops) + 1) as u64),
+                _ => Bound::Unbounded,
+            }
+        };
+        let within = (Bound::Unbounded, cutoff.clone());
+
+        let scanner = CompactScan::new(llrb.iter().unwrap(), cutoff.clone());
+
+        let es: Vec<Entry<i64, i64>> = scanner.map(|e| e.unwrap()).collect();
+        println!("cutoff:{:?} entries:{}", cutoff, es.len());
+        for e in es.iter() {
+            assert!(e.to_seqno() <= n_ops as u64);
+            assert!(
+                !within.contains(&e.to_seqno()),
+                "key:{} seqno:{}",
+                e.to_key(),
+                e.to_seqno()
+            );
+            for d in e.as_deltas() {
+                assert!(!within.contains(&d.to_seqno()));
+            }
+        }
+
+        let (ref_iter, mut iter) = (llrb.iter().unwrap(), es.iter());
+        for ref_entry in ref_iter {
+            let ref_entry = ref_entry.unwrap();
+            let ref_entry = match ref_entry.purge(cutoff.clone()) {
+                Some(ref_entry) => ref_entry,
+                None => continue,
+            };
+            let entry = iter.next().unwrap();
+            check_node(entry, &ref_entry);
+        }
+        match iter.next() {
+            Some(entry) => panic!("cutoff:{:?} {}", cutoff, entry.to_key()),
+            None => (),
+        }
+    }
 }
 
 fn check_node(entry: &Entry<i64, i64>, ref_entry: &Entry<i64, i64>) {

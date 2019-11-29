@@ -295,6 +295,10 @@ where
     }
 }
 
+/// BitmappedScan wrapper for full-table scanners.
+///
+/// Computes a bitmap of all keys that are iterated over the index `I`. The
+/// bitmap type is parameterised as `B`.
 pub struct BitmappedScan<K, V, I, B>
 where
     K: Clone + Ord + Hash,

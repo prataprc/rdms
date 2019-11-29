@@ -16,7 +16,7 @@ use crate::{error::Error, vlog};
 // TODO: track all footprint calls and handle the Result<> without using
 // a blind unwrap.
 
-/// Result returned by rdms functions and methods.
+/// Type alias for all results returned by `rdms` methods.
 pub type Result<T> = result::Result<T, Error>;
 
 /// Type alias to trait-objects iterating over an index.
@@ -55,8 +55,7 @@ pub trait Diff: Sized + From<<Self as Diff>::D> {
     fn merge(&self, delta: &Self::D) -> Self;
 }
 
-/// Footprint shall be implemented by index-types, key-types and,
-/// value-types.
+/// Trait to be implemented by index-types, key-types and, value-types.
 ///
 /// This trait is required to compute the memory or disk foot-print
 /// for index-types, key-types and value-types.
@@ -71,7 +70,26 @@ pub trait Footprint {
     fn footprint(&self) -> Result<isize>;
 }
 
-/// Index write operations.
+/// Trait define methods to integrate index with Wal (Write-Ahead-Log).
+///
+/// All the methods defined by this trait will be dispatched when
+/// reloading an index from on-disk Write-Ahead-Log.
+pub trait Replay<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    /// While reloading replay set operation on index.
+    fn set_index(&mut self, key: K, value: V, index: u64) -> Result<Entry<K, V>>;
+
+    /// While reloading replay set-cas operation on index.
+    fn set_cas_index(&mut self, key: K, value: V, cas: u64, index: u64) -> Result<Entry<K, V>>;
+
+    /// While reloading replay delete operation on index.
+    fn delete_index(&mut self, key: K, index: u64) -> Result<Entry<K, V>>;
+}
+
+/// Trait define methods to integrate index with Wal (Write-Ahead-Log).
 pub trait WalWriter<K, V>
 where
     K: Clone + Ord,
@@ -125,23 +143,8 @@ where
         Q: ToOwned<Owned = K> + Ord + ?Sized;
 }
 
-/// Replay WAL (Write-Ahead-Log) entries on index.
-pub trait Replay<K, V>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-{
-    /// Replay set operation on index.
-    fn set_index(&mut self, key: K, value: V, index: u64) -> Result<Entry<K, V>>;
-
-    /// Replay set-cas operation on index.
-    fn set_cas_index(&mut self, key: K, value: V, cas: u64, index: u64) -> Result<Entry<K, V>>;
-
-    /// Replay delete operation on index.
-    fn delete_index(&mut self, key: K, index: u64) -> Result<Entry<K, V>>;
-}
-
-/// Factory trait to create new in-memory index snapshot.
+/// Trait to create new memory based index snapshot using pre-defined set of
+/// configuration.
 pub trait WriteIndexFactory<K, V>
 where
     K: Clone + Ord,
@@ -157,7 +160,8 @@ where
     fn to_type(&self) -> String;
 }
 
-/// Factory trait to create new on-disk index snapshot.
+/// Trait to create new disk based index snapshot using pre-defined set of
+/// configuration.
 pub trait DiskIndexFactory<K, V>
 where
     K: Clone + Ord,
@@ -179,9 +183,7 @@ where
     fn to_type(&self) -> String;
 }
 
-/// CommitIterator trait and relevant methods to ingest a batch of pre-sorted
-/// entries into index.
-///
+/// Trait to ingest a batch of pre-sorted entries into index.
 pub trait CommitIterator<K, V>
 where
     K: Clone + Ord,
@@ -189,7 +191,9 @@ where
 {
     type Iter: Iterator<Item = Result<Entry<K, V>>>;
 
-    /// Return a handle for full table iteration.
+    /// Return a handle for full table iteration. Caller can hold this handle
+    /// for a long time, hence implementors should make sure to handle
+    /// unwanted side-effects.
     fn scan(&mut self, from_seqno: Bound<u64>) -> Result<Self::Iter>;
 
     /// Return a list of equally balanced handles to iterator on
@@ -207,9 +211,10 @@ where
         G: RangeBounds<K>;
 }
 
-/// Index trait implemented by all types of rdms-indexes. Note that not all
-/// index types shall implement all the traits/constraints and methods
-/// by Index.
+/// Trait implemented by all types of rdms-indexes.
+///
+/// Note that not all index types shall implement all the traits/constraints
+/// and methods defined by this trait.
 ///
 pub trait Index<K, V>: Sized
 where
@@ -267,13 +272,13 @@ where
         F: Fn(Vec<Vec<u8>>) -> Vec<u8>;
 }
 
-/// Validate trait that can be called on an index instance to self
-/// validate itself.
+/// Trait define index interface to self-validate its internal state.
 pub trait Validate<T: fmt::Display> {
+    /// Self-validate the implementing index type. This can be costly call.
     fn validate(&mut self) -> Result<T>;
 }
 
-/// Bloom-filter trait to manage key index.
+/// Trait to manage keys in a bitmapped Bloom-filter.
 pub trait Bloom: Sized {
     /// Create an empty bit-map, with capacity.
     fn create() -> Self;
@@ -301,7 +306,7 @@ pub trait Bloom: Sized {
     fn or(&self, other: &Self) -> Result<Self>;
 }
 
-/// Index read operations.
+/// Trait define read operations for rdms-index.
 pub trait Reader<K, V>
 where
     K: Clone + Ord,
@@ -362,7 +367,7 @@ where
         Q: 'a + Ord + ?Sized;
 }
 
-/// Index write operations.
+/// Trait define write operations for rdms-index.
 pub trait Writer<K, V>
 where
     K: Clone + Ord,
@@ -398,7 +403,7 @@ where
         Q: ToOwned<Owned = K> + Ord + ?Sized;
 }
 
-/// Serialize values to binary sequence of bytes.
+/// Trait to serialize key and value types.
 pub trait Serialize: Sized {
     /// Convert this value into binary equivalent. Encoded bytes shall
     /// be appended to the input-buffer `buf`. Return bytes encoded.
@@ -409,8 +414,8 @@ pub trait Serialize: Sized {
     fn decode(&mut self, buf: &[u8]) -> Result<usize>;
 }
 
-/// PiecewiseScan trait implemented, typically by mem-only indexes,
-/// to construct a stable full-table scan.
+/// Trait typically implemented by mem-only indexes, to construct a stable
+/// full-table scan.
 pub trait PiecewiseScan<K, V>
 where
     K: Clone + Ord,
@@ -428,9 +433,9 @@ where
         G: Clone + RangeBounds<u64>;
 }
 
-/// Convert a type to JSON encoded string. Typically used for
-/// web-interfaces.
+/// Trait define interface to convert a type to JSON encoded string.
 ///
+/// Typically used for web-interfaces.
 pub trait ToJson {
     /// Call the method to get the JSON encoded string.
     fn to_json(&self) -> String;
@@ -1229,7 +1234,7 @@ where
     }
 }
 
-// Wrapper type for entries iterated by piece-wise full-table scanner.
+/// Wrapper type for entries iterated by piece-wise full-table scanner.
 pub enum ScanEntry<K, V>
 where
     K: Clone + Ord,

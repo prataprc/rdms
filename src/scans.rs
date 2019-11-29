@@ -295,7 +295,7 @@ where
     }
 }
 
-pub(crate) struct BitmapIter<K, V, I, B>
+pub(crate) struct BitmappedScan<K, V, I, B>
 where
     K: Clone + Ord + Hash,
     V: Clone + Diff,
@@ -306,15 +306,15 @@ where
     bitmap: B,
 }
 
-impl<K, V, I, B> BitmapIter<K, V, I, B>
+impl<K, V, I, B> BitmappedScan<K, V, I, B>
 where
     K: Clone + Ord + Hash,
     V: Clone + Diff,
     I: Iterator<Item = Result<Entry<K, V>>>,
     B: Bloom,
 {
-    pub(crate) fn new(iter: I) -> BitmapIter<K, V, I, B> {
-        BitmapIter {
+    pub(crate) fn new(iter: I) -> BitmappedScan<K, V, I, B> {
+        BitmappedScan {
             iter,
             bitmap: <B as Bloom>::create(),
         }
@@ -325,7 +325,7 @@ where
     }
 }
 
-impl<K, V, I, B> Iterator for BitmapIter<K, V, I, B>
+impl<K, V, I, B> Iterator for BitmappedScan<K, V, I, B>
 where
     K: Clone + Ord + Hash,
     V: Clone + Diff,

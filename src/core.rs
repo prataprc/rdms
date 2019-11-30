@@ -997,7 +997,7 @@ where
         } else if entry.to_seqno() > self.to_seqno() {
             (entry, self)
         } else {
-            unreachable!()
+            panic!("xmerge {} == {}", entry.to_seqno(), self.to_seqno())
         };
 
         // TODO remove this validation logic once rdms is fully stable.

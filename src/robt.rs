@@ -1653,16 +1653,19 @@ where
                 cmp::Ordering::Less => {
                     self.x_entry = self.x_iter.next();
                     self.y_entry = Some(Ok(ye));
+                    // println!("commitscan Less {}", xe.to_seqno());
                     Some(Ok(xe))
                 }
                 cmp::Ordering::Greater => {
                     self.y_entry = self.y_iter.next();
                     self.x_entry = Some(Ok(xe));
+                    // println!("commitscan Greater {}", ye.to_seqno());
                     Some(Ok(ye))
                 }
                 cmp::Ordering::Equal => {
                     self.x_entry = self.x_iter.next();
                     self.y_entry = self.y_iter.next();
+                    // println!("commitscan Equal {} {}", xe.to_seqno(), ye.to_seqno(),);
                     // fetch the value from old snapshot, only value.
                     match self.y_iter.snap.fetch(ye, false, false) {
                         Ok(ye) => Some(Ok(xe.xmerge(ye))),

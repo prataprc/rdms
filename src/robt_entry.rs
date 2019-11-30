@@ -417,14 +417,14 @@ where
         let klen = Self::encode_key(entry.as_key(), leaf)?;
         // encode value
         let pos = blob.len();
-        let (is_reference, vlen, is_del, seqno) = ZEntry::encode_value_vlog(entry, blob)?;
+        let (fpos, vlen, is_del, seqno) = ZEntry::encode_value_vlog(entry, blob)?;
         let voff = leaf.len() - m;
         if !is_del {
-            let mut pos: u64 = pos.try_into().unwrap();
-            if is_reference {
-                pos |= Self::REFERENCE_FLAG;
-            }
-            leaf.extend_from_slice(&pos.to_be_bytes());
+            let fpos: u64 = match fpos {
+                Some(fpos) => fpos | Self::REFERENCE_FLAG,
+                None => pos.try_into().unwrap(),
+            };
+            leaf.extend_from_slice(&fpos.to_be_bytes());
         }
         // encode header.
         let hdr = &mut leaf[m..m + 24];
@@ -488,13 +488,13 @@ where
     fn encode_value_vlog(
         entry: &core::Entry<K, V>,
         buf: &mut Vec<u8>,
-    ) -> Result<(bool, usize, bool, u64)> {
+    ) -> Result<(Option<u64>, usize, bool, u64)> {
         match entry.as_value() {
             core::Value::U { value, seqno, .. } => {
-                let (is_reference, vlen) = value.encode(buf)?;
-                Ok((is_reference, vlen, false, *seqno))
+                let (fpos, vlen) = value.encode(buf)?;
+                Ok((fpos, vlen, false, *seqno))
             }
-            core::Value::D { seqno } => Ok((false, 0, true, *seqno)),
+            core::Value::D { seqno } => Ok((None, 0, true, *seqno)),
         }
     }
 

@@ -6,6 +6,7 @@ use crate::{
     core::{Delta, Index, Reader, Writer},
     croaring::CRoaring,
     llrb::Llrb,
+    nobitmap::NoBitmap,
     robt,
     scans::{FilterScan, SkipScan},
 };
@@ -258,6 +259,128 @@ fn test_purger() {
     assert_eq!(efiles.len(), 0);
 }
 
+#[test]
+fn test_build_scan() {
+    let seed: u128 = random();
+
+    for _i in 0..100 {
+        let (n_ops, key_max) = (6_000_i64, 2_000);
+        let mut llrb: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
+        random_llrb(n_ops, key_max, seed, &mut llrb);
+
+        let stats = {
+            let mut scanner = BuildScan::new(llrb.iter().unwrap());
+            loop {
+                match scanner.next() {
+                    Some(_) => (),
+                    None => break,
+                }
+            }
+
+            let mut stats: Stats = Default::default();
+            let mut iter = scanner.update_stats(&mut stats).unwrap();
+            assert!(iter.next().is_none());
+            stats
+        };
+        assert_eq!(stats.seqno, llrb.to_seqno());
+        assert_eq!(stats.n_count as usize, llrb.to_stats().entries);
+        assert_eq!(stats.n_deleted, llrb.to_stats().n_deleted);
+    }
+}
+
+#[test]
+fn test_commit_scan() {
+    let seed: u128 = random();
+    // let seed: u128 = 329574334243588244341656545742438834233;
+    println!("seed:{}", seed);
+    let dir = {
+        let mut dir = std::env::temp_dir();
+        dir.push("test-commit-scan");
+        dir.into_os_string()
+    };
+    let mut config: robt::Config = Default::default();
+    config.delta_ok = true;
+    config.value_in_vlog = true;
+    let app_meta = "heloo world".to_string();
+
+    for i in 0..50 {
+        let mut llrb: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
+        let mut snap1 = {
+            let (n_ops, key_max, config) = (30_000_i64, 20_000, config.clone());
+            let mut llrb_snap: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
+            random_llrb(n_ops, key_max, seed + (i + 1) * 10, &mut llrb_snap);
+            let es: Vec<Result<Entry<i64, i64>>> = llrb_snap
+                .iter()
+                .unwrap()
+                .map(|e| Ok(e.as_ref().unwrap().clone()))
+                .collect();
+            llrb.commit(es.into_iter(), |val| val).unwrap();
+
+            let b = Builder::<i64, i64, NoBitmap>::initial(&dir, "snapshot1", config).unwrap();
+            b.build(llrb_snap.iter().unwrap(), app_meta.as_bytes().to_vec())
+                .unwrap();
+            robt::Snapshot::<i64, i64, NoBitmap>::open(&dir, "snapshot1").unwrap()
+        };
+        let stats1 = snap1.to_stats().unwrap();
+        let fp1 = snap1.footprint().unwrap();
+        // println!("flushed snap1");
+
+        let mut snap2 = {
+            let (n_ops, key_max, config) = (30_000_i64, 20_000, config.clone());
+            let mut llrb_snap: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
+            llrb_snap.set_seqno(llrb.to_seqno());
+            random_llrb(n_ops, key_max, seed + (i + 1) * 20, &mut llrb_snap);
+            let es: Vec<Result<Entry<i64, i64>>> = llrb_snap
+                .iter()
+                .unwrap()
+                .map(|e| Ok(e.as_ref().unwrap().clone()))
+                .collect();
+            llrb.commit(es.into_iter(), |val| val).unwrap();
+
+            let b = Builder::<i64, i64, NoBitmap>::initial(&dir, "snapshot2", config).unwrap();
+            b.build(llrb_snap.iter().unwrap(), app_meta.as_bytes().to_vec())
+                .unwrap();
+            robt::Snapshot::<i64, i64, NoBitmap>::open(&dir, "snapshot2").unwrap()
+        };
+        let stats2 = snap2.to_stats().unwrap();
+        let fp2 = snap2.footprint().unwrap();
+        // println!("flushed snap2");
+
+        let config: Config = stats1.clone().into();
+        let new_scanner = snap2.iter_with_versions().unwrap();
+        let commit_scanner = {
+            let mut mzs = vec![];
+            snap1.build_fwd(snap1.to_root().unwrap(), &mut mzs).unwrap();
+            CommitScan::new(new_scanner, Iter::new_shallow(&mut snap1, mzs))
+        };
+        let b = Builder::<i64, i64, NoBitmap>::incremental(&dir, "snapshot3", config).unwrap();
+        b.build(commit_scanner, app_meta.as_bytes().to_vec())
+            .unwrap();
+        let mut snap = robt::Snapshot::<i64, i64, NoBitmap>::open(&dir, "snapshot3").unwrap();
+        let stats = snap.to_stats().unwrap();
+        let fp = snap.footprint().unwrap();
+
+        println!(
+            "snap1:{}/{}, snap2:{}/{}, snap:{}/{}",
+            stats1.n_count, fp1, stats2.n_count, fp2, stats.n_count, fp,
+        );
+
+        let mut iter = snap.iter_with_versions().unwrap();
+        for ref_entry in llrb.iter().unwrap() {
+            let ref_entry = ref_entry.unwrap();
+            match iter.next() {
+                Some(Ok(entry)) => {
+                    check_entry1(&entry, &ref_entry);
+                    check_entry2(&entry, &ref_entry);
+                }
+                Some(Err(err)) => panic!("{:?}", err),
+                None => panic!("entry key:{} not found", ref_entry.to_key()),
+            }
+        }
+        assert!(iter.next().is_none());
+    }
+}
+
 fn run_robt_llrb(name: &str, n_ops: u64, key_max: i64, repeat: usize, seed: u128) {
     for i in 0..repeat {
         let mut n_ops = n_ops;
@@ -272,32 +395,9 @@ fn run_robt_llrb(name: &str, n_ops: u64, key_max: i64, repeat: usize, seed: u128
             Llrb::new("test-llrb")
         };
         llrb.set_sticky(sticky);
-        for _i in 0..n_ops {
-            let key = (rng.gen::<i64>() % key_max).abs();
-            let op = rng.gen::<usize>() % 3;
-            match op {
-                0 => {
-                    // println!("run_robt_llrb key: {} op:{}", key, op);
-                    let value: i64 = rng.gen();
-                    llrb.set(key, value).unwrap();
-                }
-                1 => {
-                    let value: i64 = rng.gen();
-                    let cas = match llrb.get(&key) {
-                        Err(Error::KeyNotFound) => 0,
-                        Err(_err) => unreachable!(),
-                        Ok(e) => e.to_seqno(),
-                    };
-                    // println!("run_robt_llrb key: {} op:{} cas:{}", key, op, cas);
-                    llrb.set_cas(key, value, cas).unwrap();
-                }
-                2 => {
-                    // println!("run_robt_llrb key: {} op:{}", key, op);
-                    llrb.delete(&key).unwrap();
-                }
-                _ => unreachable!(),
-            }
-        }
+
+        random_llrb(n_ops as i64, key_max, seed, &mut llrb);
+
         // to avoid screwing up the seqno in non-lsm mode, say, what if
         // the last operation was a delete.
         llrb.set(123, 123456789).unwrap();
@@ -499,6 +599,38 @@ where
     .collect()
 }
 
+fn random_llrb(n_ops: i64, key_max: i64, seed: u128, llrb: &mut Llrb<i64, i64>) {
+    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    for _i in 0..n_ops {
+        let key = (rng.gen::<i64>() % key_max).abs();
+        let op = rng.gen::<usize>() % 3;
+        match op {
+            0 => {
+                let value: i64 = rng.gen();
+                // println!("key {} {} {} {}", key, llrb.to_seqno(), op, value);
+                llrb.set(key, value).unwrap();
+            }
+            1 => {
+                let value: i64 = rng.gen();
+                // println!("key {} {} {} {}", key, llrb.to_seqno(), op, value);
+                {
+                    let cas = match llrb.get(&key) {
+                        Err(Error::KeyNotFound) => 0,
+                        Err(_err) => unreachable!(),
+                        Ok(e) => e.to_seqno(),
+                    };
+                    llrb.set_cas(key, value, cas).unwrap();
+                }
+            }
+            2 => {
+                // println!("key {} {} {}", key, llrb.to_seqno(), op);
+                llrb.delete(&key).unwrap();
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
 fn random_low_high(key_max: i64, seed: u128) -> (Bound<i64>, Bound<i64>) {
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
     let (low, high): (i64, i64) = (rng.gen(), rng.gen());
@@ -520,21 +652,24 @@ fn random_low_high(key_max: i64, seed: u128) -> (Bound<i64>, Bound<i64>) {
 
 fn check_entry1(e1: &Entry<i64, i64>, e2: &Entry<i64, i64>) {
     assert_eq!(e1.to_key(), e2.to_key());
-    assert_eq!(e1.to_seqno(), e2.to_seqno());
-    assert_eq!(e1.to_native_value(), e2.to_native_value());
-    assert_eq!(e1.is_deleted(), e2.is_deleted());
-    assert_eq!(e1.as_deltas().len(), e2.as_deltas().len());
+    let key = e1.to_key();
+    assert_eq!(e1.to_seqno(), e2.to_seqno(), "key:{}", key);
+    assert_eq!(e1.to_native_value(), e2.to_native_value(), "key:{}", key);
+    assert_eq!(e1.is_deleted(), e2.is_deleted(), "key:{}", key);
+    assert_eq!(e1.as_deltas().len(), e2.as_deltas().len(), "key:{}", key);
 }
 
 fn check_entry2(e1: &Entry<i64, i64>, e2: &Entry<i64, i64>) {
     let key = e1.to_key();
     let xs: Vec<Delta<i64>> = e1.to_deltas();
     let ys: Vec<Delta<i64>> = e2.to_deltas();
+
     assert_eq!(xs.len(), ys.len(), "for key {}", key);
     for (m, n) in xs.iter().zip(ys.iter()) {
         assert_eq!(m.to_seqno(), n.to_seqno(), "for key {}", key);
         assert_eq!(m.is_deleted(), n.is_deleted(), "for key {}", key);
         // println!("d {} {}", m.is_deleted(), n.is_deleted());
         assert_eq!(m.to_diff(), n.to_diff(), "for key {}", key);
+        // println!("key:{} diff {:?} {:?}", key, m.to_diff(), n.to_diff());
     }
 }

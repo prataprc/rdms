@@ -88,8 +88,8 @@ impl<V> Value<V>
 where
     V: Serialize,
 {
-    // Return (is_reference, the size of header + payload).
-    pub(crate) fn encode(&self, buf: &mut Vec<u8>) -> Result<(bool, usize)> {
+    // Return (optional-fpos, the size of header + payload).
+    pub(crate) fn encode(&self, buf: &mut Vec<u8>) -> Result<(Option<u64>, usize)> {
         match self {
             Value::Native { value } => {
                 let m = buf.len();
@@ -107,9 +107,11 @@ where
                 hdr1 |= Value::<V>::VALUE_FLAG;
                 buf[m..m + 8].copy_from_slice(&hdr1.to_be_bytes());
 
-                Ok((false, vlen + 8))
+                Ok((None, vlen + 8))
             }
-            Value::Reference { length, .. } => Ok((true, (*length).try_into().unwrap())),
+            Value::Reference { fpos, length, .. } => {
+                Ok((Some(*fpos), (*length).try_into().unwrap()))
+            }
         }
     }
 

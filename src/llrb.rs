@@ -73,10 +73,10 @@ pub struct LlrbFactory {
 /// to its ``set_``, methods.
 ///
 /// * *lsm*, spawn Llrb instances in lsm mode, this will preserve the
-/// entire history of all write operations applied on the index.
+///   entire history of all write operations applied on the index.
 /// * *sticky*, is a shallow variant of lsm, applicable only when
-/// `lsm` option is disabled. For more information refer to Llrb::set_sticky()
-/// method.
+///   `lsm` option is disabled. For more information refer to
+///   Llrb::set_sticky() method.
 pub fn llrb_factory(lsm: bool) -> LlrbFactory {
     LlrbFactory {
         lsm,
@@ -85,9 +85,18 @@ pub fn llrb_factory(lsm: bool) -> LlrbFactory {
     }
 }
 
+/// Configuration methods.
 impl LlrbFactory {
-    /// If spin is true, calling thread will spin while waiting for the
+    /// If lsm is _true_, this will preserve the entire history of all write
+    /// operations applied on the index. _Default: false_.
+    pub fn set_lsm(&mut self, lsm: bool) -> &mut Self {
+        self.lsm = lsm;
+        self
+    }
+
+    /// If spin is _true_, calling thread will spin while waiting for the
     /// latch, otherwise, calling thead will be yielded to OS scheduler.
+    /// _Default: false_.
     pub fn set_spinlatch(&mut self, spin: bool) -> &mut Self {
         self.spin = spin;
         self
@@ -95,6 +104,7 @@ impl LlrbFactory {
 
     /// Create all Llrb instances in sticky mode, refer to Llrb::set_sticky()
     /// for more details.
+    /// _Default: false_.
     pub fn set_sticky(&mut self, spin: bool) -> &mut Self {
         self.spin = spin;
         self
@@ -128,11 +138,9 @@ where
         let mut index = if self.lsm {
             Llrb::new_lsm(name)
         } else {
-            let mut index = Llrb::new(name);
-            index.set_sticky(self.sticky);
-            index
+            Llrb::new(name);
         };
-        index.set_spinlatch(self.spin);
+        index.set_sticky(self.sticky).set_spinlatch(self.spin);
         Ok(index)
     }
 }

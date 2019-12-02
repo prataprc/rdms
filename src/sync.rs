@@ -3,6 +3,34 @@
 
 use std::{ffi, mem, sync::Arc};
 
+pub struct SyncAccess<T> {
+    value: T,
+}
+
+impl<T> SyncAccess<T> {
+    pub fn new(value: T) -> SyncAccess<T> {
+        SyncAccess { value }
+    }
+}
+
+impl<U, T> AsRef<U> for SyncAccess<T>
+where
+    T: AsRef<U>,
+{
+    fn as_ref(&self) -> &U {
+        self.value.as_ref()
+    }
+}
+
+impl<U, T> AsMut<U> for SyncAccess<T>
+where
+    T: AsMut<U>,
+{
+    fn as_mut(&mut self) -> &mut U {
+        self.value.as_mut()
+    }
+}
+
 pub struct CCMu {
     inner: mem::MaybeUninit<Arc<mem::ManuallyDrop<Box<ffi::c_void>>>>,
 }
@@ -30,7 +58,7 @@ impl CCMu {
         Arc::strong_count(unsafe { self.inner.get_ref() })
     }
 
-    pub fn get_ptr(&self) -> *mut ffi::c_void {
+    pub fn as_mut_ptr(&self) -> *mut ffi::c_void {
         let arc_ref = unsafe { self.inner.get_ref() };
         let ptr: &ffi::c_void = arc_ref.as_ref().as_ref();
         ptr as *const ffi::c_void as *mut ffi::c_void

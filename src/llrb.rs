@@ -138,7 +138,7 @@ where
         let mut index = if self.lsm {
             Llrb::new_lsm(name)
         } else {
-            Llrb::new(name);
+            Llrb::new(name)
         };
         index.set_sticky(self.sticky).set_spinlatch(self.spin);
         Ok(index)

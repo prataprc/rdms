@@ -4,16 +4,14 @@
 //! in `core` module.
 
 use std::{
-    convert, ffi, fmt, marker,
+    convert, fmt, marker,
     ops::Bound,
+    sync::{self, Arc},
     thread,
     time::{Duration, SystemTime},
 };
 
-use crate::{
-    core::{CommitIterator, Diff, Entry, Footprint, Index, Result, Validate},
-    sync::CCMu,
-};
+use crate::core::{CommitIterator, Diff, Entry, Footprint, Index, Result, Validate};
 
 /// Default commit interval, in seconds. Refer to set_commit_interval()
 /// method for more detail.
@@ -29,8 +27,7 @@ where
 {
     name: String,
 
-    commit_mu: CCMu,
-    index: I,
+    index: Arc<sync::Mutex<I>>,
     _key: marker::PhantomData<K>,
     _value: marker::PhantomData<V>,
 }
@@ -45,27 +42,50 @@ where
     where
         S: AsRef<str>,
     {
-        let mut index = Box::new(Rdms {
+        let value = Box::new(Rdms {
             name: name.as_ref().to_string(),
 
-            commit_mu: CCMu::uninit(),
-            index,
+            index: Arc::new(sync::Mutex::new(index)),
             _key: marker::PhantomData,
             _value: marker::PhantomData,
         });
-        let ptr = unsafe {
-            // transmute self as void pointer.
-            Box::from_raw(&mut *index as *mut Rdms<K, V, I> as *mut ffi::c_void)
-        };
-        index.commit_mu = CCMu::init_with_ptr(ptr);
-        Ok(index)
+        Ok(value)
     }
+}
 
+impl<K, V, I> Rdms<K, V, I>
+where
+    K: Send + Clone + Ord + Footprint,
+    V: Send + Clone + Diff + Footprint,
+    I: 'static + Send + Index<K, V>,
+{
     /// Set interval in time duration, for invoking auto commit.
     /// Calling this method will spawn an auto compaction thread.
     pub fn set_commit_interval(&mut self, interval: Duration) {
-        let mu = CCMu::clone(&self.commit_mu);
-        thread::spawn(move || auto_commit::<K, V, I>(mu, interval));
+        let index = Arc::clone(&self.index);
+        thread::spawn(move || auto_commit::<K, V, I>(index, interval));
+    }
+}
+
+impl<K, V, I> Drop for Rdms<K, V, I>
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+    I: Index<K, V>,
+{
+    fn drop(&mut self) {
+        // place holder
+    }
+}
+
+impl<K, V, I> AsRef<sync::Mutex<I>> for Rdms<K, V, I>
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+    I: Index<K, V>,
+{
+    fn as_ref(&self) -> &sync::Mutex<I> {
+        &self.index
     }
 }
 
@@ -79,24 +99,29 @@ where
         self.name.to_string()
     }
 
-    pub fn to_metadata(&mut self) -> Result<Vec<u8>> {
-        self.index.to_metadata()
+    pub fn to_metadata(&self) -> Result<Vec<u8>> {
+        let index = self.index.lock().unwrap();
+        index.to_metadata()
     }
 
-    pub fn to_seqno(&mut self) -> u64 {
-        self.index.to_seqno()
+    pub fn to_seqno(&self) -> u64 {
+        let index = self.index.lock().unwrap();
+        index.to_seqno()
     }
 
     pub fn set_seqno(&mut self, seqno: u64) {
-        self.index.set_seqno(seqno)
+        let mut index = self.index.lock().unwrap();
+        index.set_seqno(seqno)
     }
 
     pub fn to_reader(&mut self) -> Result<<I as Index<K, V>>::R> {
-        self.index.to_reader()
+        let mut index = self.index.lock().unwrap();
+        index.to_reader()
     }
 
     pub fn to_writer(&mut self) -> Result<<I as Index<K, V>>::W> {
-        self.index.to_writer()
+        let mut index = self.index.lock().unwrap();
+        index.to_writer()
     }
 
     pub fn commit<C, F>(&mut self, scanner: C, metacb: F) -> Result<()>
@@ -104,14 +129,16 @@ where
         C: CommitIterator<K, V>,
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
-        self.index.commit(scanner, metacb)
+        let mut index = self.index.lock().unwrap();
+        index.commit(scanner, metacb)
     }
 
     pub fn compact<F>(&mut self, cutoff: Bound<u64>, metacb: F) -> Result<()>
     where
         F: Fn(Vec<Vec<u8>>) -> Vec<u8>,
     {
-        self.index.compact(cutoff, metacb)
+        let mut index = self.index.lock().unwrap();
+        index.compact(cutoff, metacb)
     }
 }
 
@@ -123,7 +150,8 @@ where
     T: fmt::Display,
 {
     fn validate(&mut self) -> Result<T> {
-        self.index.validate()
+        let mut index = self.index.lock().unwrap();
+        index.validate()
     }
 }
 
@@ -137,29 +165,28 @@ where
 //    }
 //}
 
-fn auto_commit<K, V, I>(ccmu: CCMu, interval: Duration)
+fn auto_commit<K, V, I>(index: Arc<sync::Mutex<I>>, interval: Duration)
 where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
     I: Index<K, V>,
 {
     let mut elapsed = Duration::new(0, 0);
-    let initial_count = ccmu.strong_count();
+    let initial_count = Arc::strong_count(&index);
     loop {
         if elapsed < interval {
             thread::sleep(interval - elapsed);
         }
-        if ccmu.strong_count() < initial_count {
-            break; // cascading quit.
+        if Arc::strong_count(&index) < initial_count {
+            break; // cascading quite,
         }
 
-        let start = SystemTime::now();
-        let rdms = unsafe {
-            // unsafe
-            (ccmu.get_ptr() as *mut Rdms<K, V, I>).as_mut().unwrap()
+        elapsed = {
+            let start = SystemTime::now();
+            let mut indx = index.lock().unwrap();
+            let empty: Vec<Result<Entry<K, V>>> = vec![];
+            indx.commit(empty.into_iter(), convert::identity).unwrap();
+            start.elapsed().ok().unwrap()
         };
-        let empty: Vec<Result<Entry<K, V>>> = vec![];
-        rdms.commit(empty.into_iter(), convert::identity).unwrap();
-        elapsed = start.elapsed().ok().unwrap();
     }
 }

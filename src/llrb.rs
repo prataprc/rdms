@@ -514,9 +514,9 @@ where
     {
         warn!(target: "llrb  ", "{:?}, ignores all metadata", self.name);
 
+        let full_table_iter = scanner.scan(Bound::Unbounded)?;
         let count = {
             let _latch = self.latch.acquire_write(self.spin);
-            let full_table_iter = scanner.scan(Bound::Unbounded)?;
 
             let mut count = 0;
             for entry in full_table_iter {
@@ -634,46 +634,22 @@ where
         key: K,
         value: V,
         seqno: Option<u64>,
-    ) -> (Option<u64>, Result<Option<Entry<K, V>>>) {
+    ) -> (u64, Option<Entry<K, V>>) {
         let _latch = self.latch.acquire_write(self.spin);
-        let seqno = match seqno {
-            Some(seqno) => seqno,
-            None => self.seqno + 1,
+        let entry = {
+            let seqno = match seqno {
+                Some(seqno) => seqno,
+                None => self.seqno + 1,
+            };
+            Entry::new(key, Value::new_upsert_value(value, seqno))
         };
-
-        let key_footprint = key.footprint().unwrap();
-        let new_entry = {
-            let value = Value::new_upsert_value(value, seqno);
-            Entry::new(key, value)
-        };
-
-        // !("set_index, root {}", self.root.is_some());
-        match Llrb::upsert(self.root.take(), new_entry, self.lsm) {
-            UpsertResult {
-                node: Some(mut root),
-                old_entry,
-                size,
-            } => {
-                // println!("set_index, result {}", size);
-                match &old_entry {
-                    None => {
-                        self.n_count += 1;
-                        self.key_footprint += key_footprint;
-                    }
-                    Some(oe) if oe.is_deleted() && (self.lsm || self.sticky) => {
-                        self.n_deleted -= 1;
-                    }
-                    _ => (),
-                }
-                self.tree_footprint += size;
-
-                root.set_black();
-                self.root = Some(root);
-                self.seqno = seqno;
-                (Some(seqno), Ok(old_entry))
+        let (seqno, old_entry) = self.set_index_entry(entry);
+        if let Some(old_entry) = &old_entry {
+            if old_entry.is_deleted() && (!self.lsm && !self.sticky) {
+                panic!("impossible case");
             }
-            _ => panic!("set: impossible case, call programmer"),
         }
+        (seqno, old_entry)
     }
 
     /// Similar to set, but succeeds only when CAS matches with entry's
@@ -826,8 +802,8 @@ where
     ///
     /// *LSM mode*: Add a new version for the key, perserving the old value.
     fn set(&mut self, key: K, value: V) -> Result<Option<Entry<K, V>>> {
-        let (_seqno, entry) = self.set_index(key, value, None);
-        entry
+        let (_seqno, old_entry) = self.set_index(key, value, None);
+        Ok(old_entry)
     }
 
     /// Similar to set, but succeeds only when CAS matches with entry's
@@ -1207,7 +1183,7 @@ where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
 {
-    fn set_index_entry(&self, entry: Entry<K, V>) {
+    fn set_index_entry(&self, entry: Entry<K, V>) -> (u64, Option<Entry<K, V>>) {
         let mself = unsafe {
             // caller hold a write latch.
             (self as *const Self as *mut Self).as_mut().unwrap()
@@ -1241,6 +1217,7 @@ where
                 root.set_black();
                 mself.root = Some(root);
                 mself.seqno = cmp::max(mself.seqno, seqno);
+                (mself.seqno, old_entry)
             }
             _ => panic!("set: impossible case, call programmer"),
         }
@@ -2022,8 +1999,8 @@ where
     /// *LSM mode*: Add a new version for the key, perserving the old value.
     fn set(&mut self, key: K, value: V) -> Result<Option<Entry<K, V>>> {
         let index: &mut Llrb<K, V> = self.as_mut();
-        let (_seqno, entry) = index.set_index(key, value, None);
-        entry
+        let (_seqno, old_entry) = index.set_index(key, value, None);
+        Ok(old_entry)
     }
 
     /// Similar to set, but succeeds only when CAS matches with entry's
@@ -2078,7 +2055,8 @@ where
         seqno: u64, // seqno for this mutation
     ) -> (Option<u64>, Result<Option<Entry<K, V>>>) {
         let index: &mut Llrb<K, V> = self.as_mut();
-        index.set_index(key, value, Some(seqno))
+        let (seqno, old_entry) = index.set_index(key, value, Some(seqno));
+        (Some(seqno), Ok(old_entry))
     }
 
     /// Similar to set, but succeeds only when CAS matches with entry's

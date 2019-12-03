@@ -32,11 +32,11 @@
 //! [LSM mode]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
 //!
 
-use log::{error, info};
+use log::{error, info, warn};
 
 use std::{
     borrow::Borrow,
-    cmp::{Ord, Ordering},
+    cmp::{self, Ord, Ordering},
     convert::TryInto,
     ffi, fmt,
     fmt::Debug,
@@ -568,11 +568,26 @@ where
         Ok(MvccWriter::<K, V>::new(index, writer))
     }
 
-    fn commit<C, F>(&mut self, _: C, _metacb: F) -> Result<()>
+    fn commit<C, F>(&mut self, mut scanner: C, _metacb: F) -> Result<()>
     where
         C: CommitIterator<K, V>,
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
+        warn!(target: "mvcc  ", "{:?}, ignores all metadata", self.name);
+
+        let full_table_iter = scanner.scan(Bound::Unbounded)?;
+        let count = {
+            let _latch = self.latch.acquire_write(self.spin);
+
+            let mut count = 0;
+            for entry in full_table_iter {
+                self.set_index_entry(entry?);
+                count += 1;
+            }
+            count
+        };
+
+        info!(target: "mvcc  ", "{:?}, committed {} items", self.name, count);
         Ok(())
     }
 
@@ -611,59 +626,24 @@ where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
 {
-    fn set_index(
-        &mut self,
-        key: K,
-        value: V,
-        seqno: Option<u64>, // seqno for this mutation
-    ) -> (Option<u64>, Result<Option<Entry<K, V>>>) {
+    fn set_index(&mut self, key: K, value: V, seqno: Option<u64>) -> (u64, Option<Entry<K, V>>) {
         let _w = self.latch.acquire_write(self.spin);
 
-        let snapshot: &Arc<Snapshot<K, V>> = self.snapshot.as_ref();
-        let seqno = match seqno {
-            Some(seqno) => seqno,
-            None => snapshot.seqno + 1,
+        let entry = {
+            let snapshot: &Arc<Snapshot<K, V>> = self.snapshot.as_ref();
+            let seqno = match seqno {
+                Some(seqno) => seqno,
+                None => snapshot.seqno + 1,
+            };
+            Entry::new(key, Value::new_upsert_value(value, seqno))
         };
-        let key_footprint = key.footprint().unwrap();
-        let new_entry = Entry::new(key, Value::new_upsert_value(value, seqno));
-
-        let mut n_count = snapshot.n_count;
-        let root = snapshot.root_duplicate();
-        let mut rclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
-        match self.upsert(root, new_entry, self.lsm, &mut rclm) {
-            UpsertResult {
-                node: Some(mut root),
-                new_node: Some(mut n),
-                old_entry,
-                size,
-            } => {
-                match &old_entry {
-                    None => {
-                        n_count += 1;
-                        self.key_footprint += key_footprint;
-                    }
-                    Some(oe) if oe.is_deleted() && (self.lsm || self.sticky) => {
-                        self.n_deleted -= 1;
-                    }
-                    _ => (),
-                }
-                self.n_reclaimed += rclm.len();
-                self.tree_footprint += size;
-
-                root.set_black();
-                n.dirty = false;
-                Box::leak(n);
-                self.snapshot.shift_snapshot(
-                    // new snapshot
-                    Some(root),
-                    seqno,
-                    n_count,
-                    rclm,
-                );
-                (Some(seqno), Ok(old_entry))
+        let (seqno, old_entry) = self.set_index_entry(entry);
+        if let Some(old_entry) = &old_entry {
+            if old_entry.is_deleted() && (!self.lsm && !self.sticky) {
+                panic!("impossible case");
             }
-            _ => unreachable!(),
         }
+        (seqno, old_entry)
     }
 
     fn set_cas_index(
@@ -845,8 +825,8 @@ where
     ///
     /// *LSM mode*: Add a new version for the key, perserving the old value.
     fn set(&mut self, key: K, value: V) -> Result<Option<Entry<K, V>>> {
-        let (_seqno, entry) = self.set_index(key, value, None);
-        entry
+        let (_seqno, old_entry) = self.set_index(key, value, None);
+        Ok(old_entry)
     }
 
     /// Similar to set, but succeeds only when CAS matches with entry's
@@ -941,32 +921,56 @@ where
         }
 
         let node = node.unwrap();
-        let cmp = node.as_key().cmp(new_entry.as_key());
-        let r = if cmp == Ordering::Greater {
-            let mut new_node = self.node_mvcc_clone(&node, reclaim, false);
-            let left = new_node.left.take();
-            let mut r = self.upsert(left, new_entry, lsm, reclaim);
-            new_node.left = r.node;
-            r.node = Some(self.walkuprot_23(new_node, reclaim));
-            r
-        } else if cmp == Ordering::Less {
-            let mut new_node = self.node_mvcc_clone(&node, reclaim, false);
-            let right = new_node.right.take();
-            let mut r = self.upsert(right, new_entry, lsm, reclaim);
-            new_node.right = r.node;
-            r.node = Some(self.walkuprot_23(new_node, reclaim));
-            r
-        } else {
-            let mut new_node = self.node_mvcc_clone(&node, reclaim, true);
-            let entry = node.entry.clone();
-            let size = new_node.prepend_version(new_entry, lsm).unwrap();
-            new_node.dirty = true;
-            let n = new_node.duplicate();
-            UpsertResult {
-                node: Some(self.walkuprot_23(new_node, reclaim)),
-                new_node: Some(n),
-                old_entry: Some(entry),
-                size,
+        let r = match node.as_key().cmp(new_entry.as_key()) {
+            Ordering::Greater => {
+                let mut new_node = self.node_mvcc_clone(&node, reclaim, false);
+                let left = new_node.left.take();
+                let mut r = self.upsert(left, new_entry, lsm, reclaim);
+                new_node.left = r.node;
+                r.node = Some(self.walkuprot_23(new_node, reclaim));
+                r
+            }
+            Ordering::Less => {
+                let mut new_node = self.node_mvcc_clone(&node, reclaim, false);
+                let right = new_node.right.take();
+                let mut r = self.upsert(right, new_entry, lsm, reclaim);
+                new_node.right = r.node;
+                r.node = Some(self.walkuprot_23(new_node, reclaim));
+                r
+            }
+            Ordering::Equal if lsm => {
+                let mut new_node = self.node_mvcc_clone(&node, reclaim, true);
+                let size = new_node.footprint().unwrap(); // TODO
+                let (old_entry, entry) = {
+                    let d = Default::default();
+                    let entry = mem::replace(&mut new_node.entry, d);
+                    (Some(entry.clone()), entry)
+                };
+                new_node.entry = entry.xmerge(new_entry);
+                let size = new_node.footprint().unwrap() - size;
+
+                new_node.dirty = true;
+                let n = new_node.duplicate();
+                UpsertResult {
+                    node: Some(self.walkuprot_23(new_node, reclaim)),
+                    new_node: Some(n),
+                    old_entry: old_entry,
+                    size,
+                }
+            }
+            Ordering::Equal => {
+                let mut new_node = self.node_mvcc_clone(&node, reclaim, true);
+                let entry = node.entry.clone();
+                let size = new_node.prepend_version(new_entry, lsm).unwrap();
+
+                new_node.dirty = true;
+                let n = new_node.duplicate();
+                UpsertResult {
+                    node: Some(self.walkuprot_23(new_node, reclaim)),
+                    new_node: Some(n),
+                    old_entry: Some(entry),
+                    size,
+                }
             }
         };
 
@@ -1301,6 +1305,184 @@ where
             (Some(self.fixup(new_node, reclaim)), old_node)
         }
     }
+}
+
+impl<K, V> Mvcc<K, V>
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+{
+    fn set_index_entry(&self, entry: Entry<K, V>) -> (u64, Option<Entry<K, V>>) {
+        let mself = unsafe {
+            // caller hold a write latch.
+            (self as *const Self as *mut Self).as_mut().unwrap()
+        };
+
+        let snapshot: &Arc<Snapshot<K, V>> = mself.snapshot.as_ref();
+        let key_footprint = entry.as_key().footprint().unwrap();
+        let (seqno, deleted) = (entry.to_seqno(), entry.is_deleted());
+
+        let mut n_count = snapshot.n_count;
+        let root = snapshot.root_duplicate();
+        let mut rclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
+        match mself.upsert(root, entry, mself.lsm, &mut rclm) {
+            UpsertResult {
+                node: Some(mut root),
+                new_node: Some(mut n),
+                old_entry,
+                size,
+            } => {
+                // println!("set_index_entry, result {}", size);
+                match &old_entry {
+                    None => {
+                        n_count += 1;
+                        mself.key_footprint += key_footprint;
+                        if deleted {
+                            mself.n_deleted += 1;
+                        }
+                    }
+                    Some(oe) => match (oe.is_deleted(), deleted) {
+                        (true, false) => mself.n_deleted -= 1,
+                        (false, true) => mself.n_deleted += 1,
+                        _ => (),
+                    },
+                }
+                mself.n_reclaimed += rclm.len();
+                mself.tree_footprint += size;
+
+                root.set_black();
+                n.dirty = false;
+                Box::leak(n);
+                let seqno = cmp::max(snapshot.seqno, seqno);
+                mself
+                    .snapshot
+                    .shift_snapshot(Some(root), seqno, n_count, rclm);
+                (seqno, old_entry)
+            }
+            _ => panic!("set: impossible case, call programmer"),
+        }
+    }
+}
+
+impl<K, V> Mvcc<K, V>
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+{
+    //fn compact_loop(
+    //    node: Option<&mut Node<K, V>>,
+    //    low: Bound<K>,
+    //    cutoff: Bound<u64>,
+    //    dels: &mut Vec<K>,
+    //    tree_footprint: &mut isize,
+    //    limit: usize,
+    //) -> (Option<K>, usize) {
+    //    use std::ops::Bound::{Excluded, Unbounded};
+
+    //    match (node, low) {
+    //        (None, _) => (None, limit),
+    //        // find the starting point
+    //        (Some(node), Excluded(key)) => match key.cmp(node.as_key()) {
+    //            Ordering::Less => match Self::compact_loop(
+    //                node.as_left_deref_mut(),
+    //                Excluded(key),
+    //                cutoff,
+    //                dels,
+    //                tree_footprint,
+    //                limit,
+    //            ) {
+    //                (seen, limit) if limit == 0 => (seen, limit),
+    //                (_, limit) => {
+    //                    *tree_footprint += Self::compact_entry(node, cutoff, dels);
+    //                    match Self::compact_loop(
+    //                        node.as_right_deref_mut(),
+    //                        Unbounded,
+    //                        cutoff,
+    //                        dels,
+    //                        tree_footprint,
+    //                        limit - 1,
+    //                    ) {
+    //                        (None, limit) => (Some(node.to_key()), limit),
+    //                        res => res,
+    //                    }
+    //                }
+    //            },
+    //            _ => Self::compact_loop(
+    //                node.as_right_deref_mut(),
+    //                Excluded(key),
+    //                cutoff,
+    //                dels,
+    //                tree_footprint,
+    //                limit,
+    //            ),
+    //        },
+    //        (Some(node), Unbounded) => {
+    //            match Self::compact_loop(
+    //                node.as_left_deref_mut(),
+    //                Unbounded,
+    //                cutoff,
+    //                dels,
+    //                tree_footprint,
+    //                limit,
+    //            ) {
+    //                (seen, limit) if limit == 0 => (seen, limit),
+    //                (_, limit) => {
+    //                    *tree_footprint += Self::compact_entry(node, cutoff, dels);
+    //                    match Self::compact_loop(
+    //                        node.as_right_deref_mut(),
+    //                        Unbounded,
+    //                        cutoff,
+    //                        dels,
+    //                        tree_footprint,
+    //                        limit - 1,
+    //                    ) {
+    //                        (None, limit) => (Some(node.to_key()), limit),
+    //                        res => res,
+    //                    }
+    //                }
+    //            }
+    //        }
+    //        _ => unreachable!(),
+    //    }
+    //}
+
+    //fn compact_entry(node: &mut Node<K, V>, cutoff: Bound<u64>, dels: &mut Vec<K>) -> isize {
+    //    let size = node.entry.footprint().unwrap();
+    //    match node.entry.clone().purge(cutoff) {
+    //        None => {
+    //            dels.push(node.entry.to_key());
+    //            0
+    //        }
+    //        Some(entry) => {
+    //            node.entry = entry;
+    //            node.entry.footprint().unwrap() - size
+    //        }
+    //    }
+    //}
+
+    //fn delete_index_entry(&self, key: K) {
+    //    let mself = unsafe {
+    //        // caller hold a write latch.
+    //        (self as *const Self as *mut Self).as_mut().unwrap()
+    //    };
+
+    //    // in non-lsm mode remove the entry from the tree.
+    //    let res = match Mvcc::do_delete(mself.root.take(), key.borrow()) {
+    //        res @ DeleteResult { node: None, .. } => res,
+    //        mut res => {
+    //            res.node.as_mut().map(|node| node.set_black());
+    //            res
+    //        }
+    //    };
+    //    mself.root = res.node;
+    //    mself.key_footprint -= key.footprint().unwrap();
+    //    mself.tree_footprint += res.size;
+    //    mself.n_count -= 1;
+    //    match res.old_entry {
+    //        Some(oe) if oe.is_deleted() => mself.n_deleted -= 1,
+    //        _ => (),
+    //    }
+    //}
 }
 
 /// Read operations on Mvcc instance.
@@ -2290,8 +2472,8 @@ where
     /// *LSM mode*: Add a new version for the key, perserving the old value.
     fn set(&mut self, key: K, value: V) -> Result<Option<Entry<K, V>>> {
         let index: &mut Mvcc<K, V> = self.as_mut();
-        let (_seqno, entry) = index.set_index(key, value, None);
-        entry
+        let (_seqno, old_entry) = index.set_index(key, value, None);
+        Ok(old_entry)
     }
 
     /// Similar to set, but succeeds only when CAS matches with entry's
@@ -2345,7 +2527,8 @@ where
         seqno: u64, // seqno for this mutation
     ) -> (Option<u64>, Result<Option<Entry<K, V>>>) {
         let index: &mut Mvcc<K, V> = self.as_mut();
-        index.set_index(key, value, Some(seqno))
+        let (seqno, old_entry) = index.set_index(key, value, Some(seqno));
+        (Some(seqno), Ok(old_entry))
     }
 
     /// Similar to set, but succeeds only when CAS matches with entry's

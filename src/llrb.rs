@@ -543,17 +543,15 @@ where
             let mut dels = vec![];
             let limit = LIMIT;
             let root = self.root.as_mut().map(DerefMut::deref_mut);
-            let res = Llrb::<K, V>::compact_loop(
-                root,
-                low,
+            let mut cc = CompactCtxt {
                 cutoff,
-                &mut dels,
-                &mut self.tree_footprint,
-                limit,
-            );
+                dels: &mut dels,
+                tree_footprint: &mut self.tree_footprint,
+            };
+            let (seen, limit) = Llrb::<K, V>::compact_loop(root, low, &mut cc, limit);
             dels.into_iter()
                 .for_each(|key| self.delete_index_entry(key));
-            match res {
+            match (seen, limit) {
                 (_, limit) if limit > 0 => break count + (LIMIT - limit),
                 (Some(lw), _) => low = Bound::Excluded(lw),
                 _ => unreachable!(),
@@ -1224,6 +1222,15 @@ where
     }
 }
 
+struct CompactCtxt<'a, K>
+where
+    K: Clone + Ord + Footprint,
+{
+    cutoff: Bound<u64>,
+    dels: &'a mut Vec<K>,
+    tree_footprint: &'a mut isize,
+}
+
 impl<K, V> Llrb<K, V>
 where
     K: Clone + Ord + Footprint,
@@ -1232,9 +1239,7 @@ where
     fn compact_loop(
         node: Option<&mut Node<K, V>>,
         low: Bound<K>,
-        cutoff: Bound<u64>,
-        dels: &mut Vec<K>,
-        tree_footprint: &mut isize,
+        cc: &mut CompactCtxt<K>,
         limit: usize,
     ) -> (Option<K>, usize) {
         use std::ops::Bound::{Excluded, Unbounded};
@@ -1242,82 +1247,51 @@ where
         match (node, low) {
             (None, _) => (None, limit),
             // find the starting point
-            (Some(node), Excluded(key)) => match key.cmp(node.as_key()) {
-                Ordering::Less => match Self::compact_loop(
-                    node.as_left_deref_mut(),
-                    Excluded(key),
-                    cutoff,
-                    dels,
-                    tree_footprint,
-                    limit,
-                ) {
-                    (seen, limit) if limit == 0 => (seen, limit),
-                    (_, limit) => {
-                        *tree_footprint += Self::compact_entry(node, cutoff, dels);
-                        match Self::compact_loop(
-                            node.as_right_deref_mut(),
-                            Unbounded,
-                            cutoff,
-                            dels,
-                            tree_footprint,
-                            limit - 1,
-                        ) {
-                            (None, limit) => (Some(node.to_key()), limit),
-                            res => res,
-                        }
-                    }
-                },
-                _ => Self::compact_loop(
-                    node.as_right_deref_mut(),
-                    Excluded(key),
-                    cutoff,
-                    dels,
-                    tree_footprint,
-                    limit,
-                ),
-            },
             (Some(node), Unbounded) => {
-                match Self::compact_loop(
-                    node.as_left_deref_mut(),
-                    Unbounded,
-                    cutoff,
-                    dels,
-                    tree_footprint,
-                    limit,
-                ) {
+                match Self::compact_loop(node.as_left_deref_mut(), Unbounded, cc, limit) {
                     (seen, limit) if limit == 0 => (seen, limit),
                     (_, limit) => {
-                        *tree_footprint += Self::compact_entry(node, cutoff, dels);
-                        match Self::compact_loop(
-                            node.as_right_deref_mut(),
-                            Unbounded,
-                            cutoff,
-                            dels,
-                            tree_footprint,
-                            limit - 1,
-                        ) {
+                        Self::compact_entry(node, cc);
+                        let right = node.as_right_deref_mut();
+                        match Self::compact_loop(right, Unbounded, cc, limit - 1) {
                             (None, limit) => (Some(node.to_key()), limit),
-                            res => res,
+                            (seen, limit) => (seen, limit),
                         }
                     }
                 }
             }
+            (Some(node), Excluded(key)) => match key.cmp(node.as_key()) {
+                Ordering::Less => {
+                    match Self::compact_loop(node.as_left_deref_mut(), Excluded(key), cc, limit) {
+                        (seen, limit) if limit == 0 => (seen, limit),
+                        (_, limit) => {
+                            Self::compact_entry(node, cc);
+                            let rnode = node.as_right_deref_mut();
+                            match Self::compact_loop(rnode, Unbounded, cc, limit - 1) {
+                                (None, limit) => (Some(node.to_key()), limit),
+                                (seen, limit) => (seen, limit),
+                            }
+                        }
+                    }
+                }
+                _ => Self::compact_loop(node.as_right_deref_mut(), Excluded(key), cc, limit),
+            },
             _ => unreachable!(),
         }
     }
 
-    fn compact_entry(node: &mut Node<K, V>, cutoff: Bound<u64>, dels: &mut Vec<K>) -> isize {
+    fn compact_entry(node: &mut Node<K, V>, cc: &mut CompactCtxt<K>) {
         let size = node.entry.footprint().unwrap();
-        match node.entry.clone().purge(cutoff) {
+        *cc.tree_footprint += match node.entry.clone().purge(cc.cutoff) {
             None => {
-                dels.push(node.entry.to_key());
+                cc.dels.push(node.entry.to_key());
                 0
             }
             Some(entry) => {
                 node.entry = entry;
                 node.entry.footprint().unwrap() - size
             }
-        }
+        };
     }
 
     fn delete_index_entry(&self, key: K) {
@@ -1339,7 +1313,7 @@ where
         mself.tree_footprint += res.size;
         mself.n_count -= 1;
         match res.old_entry {
-            Some(oe) if oe.is_deleted() => mself.n_deleted -= 1,
+            Some(old_entry) if old_entry.is_deleted() => mself.n_deleted -= 1,
             _ => (),
         }
     }

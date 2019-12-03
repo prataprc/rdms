@@ -591,10 +591,50 @@ where
         Ok(())
     }
 
-    fn compact<F>(&mut self, _: Bound<u64>, _: F) -> Result<()>
+    fn compact<F>(&mut self, cutoff: Bound<u64>, _metacb: F) -> Result<()>
     where
         F: Fn(Vec<Vec<u8>>) -> Vec<u8>,
     {
+        let (mut low, mut count) = (Bound::Unbounded, 0);
+        const LIMIT: usize = 1_000; // TODO: no magic number
+        let count = loop {
+            let (dels, seen, limit) = {
+                let _latch = self.latch.acquire_write(self.spin);
+
+                let snapshot: &Arc<Snapshot<K, V>> = self.snapshot.as_ref();
+                let (mut dels, limit) = (vec![], LIMIT);
+                let root = snapshot.root_duplicate();
+                let mut cc = CompactCtxt {
+                    cutoff,
+                    dels: &mut dels,
+                    tree_footprint: self.tree_footprint,
+                    reclaim: vec![],
+                };
+                let seqno = snapshot.seqno;
+                let n_count = snapshot.n_count;
+                let (root, seen, limit) = self.compact_loop(root, low, &mut cc, limit);
+                self.n_reclaimed += cc.reclaim.len();
+                self.tree_footprint = cc.tree_footprint;
+                self.snapshot
+                    .shift_snapshot(root, seqno, n_count, cc.reclaim);
+                (dels, seen, limit)
+            };
+
+            {
+                let _latch = self.latch.acquire_write(self.spin);
+                for key in dels.into_iter() {
+                    self.delete_index_entry(key);
+                }
+            }
+
+            match (seen, limit) {
+                (_, limit) if limit > 0 => break count + (LIMIT - limit),
+                (Some(key), _) => low = Bound::Excluded(key),
+                _ => unreachable!(),
+            }
+            count += LIMIT;
+        };
+        info!(target: "mvcc  ", "{:?}, compacted {} items", self.name, count);
         Ok(())
     }
 }
@@ -960,7 +1000,7 @@ where
             }
             Ordering::Equal => {
                 let mut new_node = self.node_mvcc_clone(&node, reclaim, true);
-                let entry = node.entry.clone();
+                let entry = new_node.entry.clone();
                 let size = new_node.prepend_version(new_entry, lsm).unwrap();
 
                 new_node.dirty = true;
@@ -1364,125 +1404,146 @@ where
     }
 }
 
+struct CompactCtxt<'a, K, V>
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+{
+    cutoff: Bound<u64>,
+    dels: &'a mut Vec<K>,
+    tree_footprint: isize,
+    reclaim: Vec<Box<Node<K, V>>>,
+}
+
 impl<K, V> Mvcc<K, V>
 where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
 {
-    //fn compact_loop(
-    //    node: Option<&mut Node<K, V>>,
-    //    low: Bound<K>,
-    //    cutoff: Bound<u64>,
-    //    dels: &mut Vec<K>,
-    //    tree_footprint: &mut isize,
-    //    limit: usize,
-    //) -> (Option<K>, usize) {
-    //    use std::ops::Bound::{Excluded, Unbounded};
+    fn compact_loop(
+        &self,
+        node: Option<Box<Node<K, V>>>,
+        low: Bound<K>,
+        cc: &mut CompactCtxt<K, V>,
+        limit: usize,
+    ) -> (Option<Box<Node<K, V>>>, Option<K>, usize) {
+        use std::ops::Bound::{Excluded, Unbounded};
 
-    //    match (node, low) {
-    //        (None, _) => (None, limit),
-    //        // find the starting point
-    //        (Some(node), Excluded(key)) => match key.cmp(node.as_key()) {
-    //            Ordering::Less => match Self::compact_loop(
-    //                node.as_left_deref_mut(),
-    //                Excluded(key),
-    //                cutoff,
-    //                dels,
-    //                tree_footprint,
-    //                limit,
-    //            ) {
-    //                (seen, limit) if limit == 0 => (seen, limit),
-    //                (_, limit) => {
-    //                    *tree_footprint += Self::compact_entry(node, cutoff, dels);
-    //                    match Self::compact_loop(
-    //                        node.as_right_deref_mut(),
-    //                        Unbounded,
-    //                        cutoff,
-    //                        dels,
-    //                        tree_footprint,
-    //                        limit - 1,
-    //                    ) {
-    //                        (None, limit) => (Some(node.to_key()), limit),
-    //                        res => res,
-    //                    }
-    //                }
-    //            },
-    //            _ => Self::compact_loop(
-    //                node.as_right_deref_mut(),
-    //                Excluded(key),
-    //                cutoff,
-    //                dels,
-    //                tree_footprint,
-    //                limit,
-    //            ),
-    //        },
-    //        (Some(node), Unbounded) => {
-    //            match Self::compact_loop(
-    //                node.as_left_deref_mut(),
-    //                Unbounded,
-    //                cutoff,
-    //                dels,
-    //                tree_footprint,
-    //                limit,
-    //            ) {
-    //                (seen, limit) if limit == 0 => (seen, limit),
-    //                (_, limit) => {
-    //                    *tree_footprint += Self::compact_entry(node, cutoff, dels);
-    //                    match Self::compact_loop(
-    //                        node.as_right_deref_mut(),
-    //                        Unbounded,
-    //                        cutoff,
-    //                        dels,
-    //                        tree_footprint,
-    //                        limit - 1,
-    //                    ) {
-    //                        (None, limit) => (Some(node.to_key()), limit),
-    //                        res => res,
-    //                    }
-    //                }
-    //            }
-    //        }
-    //        _ => unreachable!(),
-    //    }
-    //}
+        let mself = unsafe {
+            // caller hold a write latch.
+            (self as *const Self as *mut Self).as_mut().unwrap()
+        };
 
-    //fn compact_entry(node: &mut Node<K, V>, cutoff: Bound<u64>, dels: &mut Vec<K>) -> isize {
-    //    let size = node.entry.footprint().unwrap();
-    //    match node.entry.clone().purge(cutoff) {
-    //        None => {
-    //            dels.push(node.entry.to_key());
-    //            0
-    //        }
-    //        Some(entry) => {
-    //            node.entry = entry;
-    //            node.entry.footprint().unwrap() - size
-    //        }
-    //    }
-    //}
+        match (node, low) {
+            (None, _) => (None, None, limit),
+            // find the starting point
+            (Some(node), Unbounded) => {
+                let mut newn = mself.node_mvcc_clone(&node, &mut cc.reclaim, true);
+                Box::leak(node);
+                match mself.compact_loop(newn.left.take(), Unbounded, cc, limit) {
+                    (left, seen, limit) if limit == 0 => {
+                        newn.left = left;
+                        (Some(newn), seen, limit)
+                    }
+                    (left, _, limit) => {
+                        newn.left = left;
+                        Self::compact_entry(&mut newn, cc);
+                        let (right, low) = (newn.right.take(), Unbounded);
+                        let (right, seen, limit) =
+                            match mself.compact_loop(right, low, cc, limit - 1) {
+                                (right, None, limit) => (right, Some(newn.to_key()), limit),
+                                res => res,
+                            };
+                        newn.right = right;
+                        (Some(newn), seen, limit)
+                    }
+                }
+            }
+            (Some(node), Excluded(key)) => {
+                let mut newn = mself.node_mvcc_clone(&node, &mut cc.reclaim, true);
+                Box::leak(node);
+                match key.cmp(newn.as_key()) {
+                    Ordering::Less => {
+                        let (left, low) = (newn.left.take(), Excluded(key));
+                        match mself.compact_loop(left, low, cc, limit) {
+                            (left, seen, limit) if limit == 0 => {
+                                newn.left = left;
+                                (Some(newn), seen, limit)
+                            }
+                            (left, _, limit) => {
+                                newn.left = left;
+                                Self::compact_entry(&mut newn, cc);
+                                let (right, low) = (newn.right.take(), Unbounded);
+                                let (right, seen, limit) =
+                                    match mself.compact_loop(right, low, cc, limit - 1) {
+                                        (right, None, limit) => (right, Some(newn.to_key()), limit),
+                                        res => res,
+                                    };
+                                newn.right = right;
+                                (Some(newn), seen, limit)
+                            }
+                        }
+                    }
+                    _ => {
+                        let right = newn.right.take();
+                        let (right, seen, limit) =
+                            mself.compact_loop(right, Excluded(key), cc, limit);
+                        newn.right = right;
+                        (Some(newn), seen, limit)
+                    }
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
 
-    //fn delete_index_entry(&self, key: K) {
-    //    let mself = unsafe {
-    //        // caller hold a write latch.
-    //        (self as *const Self as *mut Self).as_mut().unwrap()
-    //    };
+    fn compact_entry(node: &mut Node<K, V>, cc: &mut CompactCtxt<K, V>) {
+        let (size, key) = (node.entry.footprint().unwrap(), node.entry.to_key());
+        cc.tree_footprint += match node.entry.clone().purge(cc.cutoff) {
+            None => {
+                cc.dels.push(key);
+                0
+            }
+            Some(entry) => {
+                node.entry = entry;
+                node.entry.footprint().unwrap() - size
+            }
+        };
+    }
 
-    //    // in non-lsm mode remove the entry from the tree.
-    //    let res = match Mvcc::do_delete(mself.root.take(), key.borrow()) {
-    //        res @ DeleteResult { node: None, .. } => res,
-    //        mut res => {
-    //            res.node.as_mut().map(|node| node.set_black());
-    //            res
-    //        }
-    //    };
-    //    mself.root = res.node;
-    //    mself.key_footprint -= key.footprint().unwrap();
-    //    mself.tree_footprint += res.size;
-    //    mself.n_count -= 1;
-    //    match res.old_entry {
-    //        Some(oe) if oe.is_deleted() => mself.n_deleted -= 1,
-    //        _ => (),
-    //    }
-    //}
+    fn delete_index_entry(&self, key: K) {
+        let mself = unsafe {
+            // caller hold a write latch.
+            (self as *const Self as *mut Self).as_mut().unwrap()
+        };
+
+        // in non-lsm mode remove the entry from the tree.
+        let snapshot: &Arc<Snapshot<K, V>> = mself.snapshot.as_ref();
+        let mut n_count = snapshot.n_count;
+        let root = snapshot.root_duplicate();
+
+        let mut rclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
+        let res = match mself.do_delete(root, key.borrow(), &mut rclm) {
+            res @ DeleteResult { node: None, .. } => res,
+            mut res => {
+                res.node.as_mut().map(|node| node.set_black());
+                res
+            }
+        };
+        if res.old_entry.is_some() {
+            mself.key_footprint += key.footprint().unwrap();
+            mself.tree_footprint += res.size;
+            n_count -= 1;
+        }
+        match res.old_entry {
+            Some(old_entry) if old_entry.is_deleted() => mself.n_deleted -= 1,
+            _ => (),
+        }
+        mself.n_reclaimed += rclm.len();
+        mself
+            .snapshot
+            .shift_snapshot(res.node, snapshot.seqno, n_count, rclm);
+    }
 }
 
 /// Read operations on Mvcc instance.

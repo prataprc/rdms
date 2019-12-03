@@ -2,11 +2,12 @@ use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
 
 use std::ops::Bound;
 
+use super::*;
 use crate::{
     core::{CommitIterator, Index, Reader, Result, Validate, Writer},
     error::Error,
     mvcc::Mvcc,
-    scans::SkipScan,
+    scans::{FilterScan, SkipScan},
     types::Empty,
 };
 
@@ -939,6 +940,166 @@ fn check_commit_nodes(index: &mut Mvcc<i64, i64>, rindex: &mut Mvcc<i64, i64>) {
     }
 }
 
+#[test]
+fn test_compact() {
+    let seed: u128 = random();
+    // let seed: u128 = 2726664888361513285714080784886255657;
+    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    println!("seed {}", seed);
+
+    for _i in 0..50 {
+        let lsm: bool = rng.gen();
+        let sticky: bool = lsm || true;
+
+        let (mut index, mut rindex) = if lsm {
+            (
+                Mvcc::<i64, i64>::new_lsm("test-index"),
+                Mvcc::<i64, i64>::new_lsm("test-ref-index"),
+            )
+        } else {
+            (
+                Mvcc::<i64, i64>::new("test-index"),
+                Mvcc::<i64, i64>::new("test-ref-index"),
+            )
+        };
+        index.set_sticky(sticky);
+        rindex.set_sticky(sticky);
+        let n_ops = rng.gen::<usize>() % 100_000;
+        for _ in 0..n_ops {
+            let key: i64 = rng.gen::<i64>().abs() % (n_ops as i64 / 2);
+            let value: i64 = rng.gen();
+            let op: i64 = (rng.gen::<i64>() % 2).abs();
+            //  println!("target k:{} v:{} {}", key, value, op);
+            match op {
+                0 => {
+                    index.set(key, value).unwrap();
+                    rindex.set(key, value).unwrap();
+                }
+                1 => {
+                    index.delete(&key).unwrap();
+                    rindex.delete(&key).unwrap();
+                }
+                op => panic!("unreachable {}", op),
+            };
+        }
+
+        let cutoff = match rng.gen::<u8>() % 3 {
+            0 => Bound::Excluded(rng.gen::<u64>() % (n_ops as u64) / 2),
+            1 => Bound::Included(rng.gen::<u64>() % (n_ops as u64) / 2),
+            2 => Bound::Unbounded,
+            _ => unreachable!(),
+        };
+        println!(
+            "index-config: lsm:{} sticky:{} n_ops:{} cutoff:{:?}",
+            lsm, sticky, n_ops, cutoff
+        );
+
+        index.compact(cutoff, |metas| metas[0].clone()).unwrap();
+        check_compact_nodes(index.as_mut(), rindex.as_mut(), cutoff);
+    }
+}
+
+fn check_compact_nodes(
+    index: &mut Mvcc<i64, i64>,
+    rindex: &mut Mvcc<i64, i64>,
+    cutoff: Bound<u64>,
+) {
+    // verify root index
+    assert_eq!(index.to_seqno(), rindex.to_seqno());
+
+    let mut n_count = 0;
+    let mut n_deleted = 0;
+    let mut key_footprint = 0;
+    let mut tree_footprint = 0;
+
+    // verify each entry
+    {
+        let mut iter = index.iter().unwrap();
+        let within = match cutoff {
+            Bound::Included(cutoff) => (Bound::Excluded(cutoff), Bound::Unbounded),
+            Bound::Excluded(cutoff) => (Bound::Included(cutoff), Bound::Unbounded),
+            Bound::Unbounded => (Bound::Excluded(rindex.to_seqno()), Bound::Unbounded),
+        };
+        let mut refiter = FilterScan::new(rindex.iter().unwrap(), within);
+        loop {
+            let entry = iter.next().transpose().unwrap();
+            let refentry = refiter.next().transpose().unwrap();
+
+            let (entry, refentry) = match (entry, refentry) {
+                (Some(entry), Some(refentry)) => {
+                    assert!(within.contains(&entry.to_seqno()));
+                    assert!(within.contains(&refentry.to_seqno()));
+                    (entry, refentry)
+                }
+                (Some(entry), None) => {
+                    panic!("unexpected entry {} in compact index", entry.to_seqno())
+                }
+                (None, Some(entry)) => panic!("unexpected entry {} in ref index", entry.to_seqno()),
+                (None, None) => break,
+            };
+
+            n_count += 1;
+            if entry.is_deleted() {
+                n_deleted += 1;
+            }
+            key_footprint += entry.as_key().footprint().unwrap();
+            tree_footprint += {
+                let size = mem::size_of::<Node<i64, i64>>();
+                let overhead: isize = size.try_into().unwrap();
+                overhead + entry.footprint().unwrap()
+            };
+
+            assert_eq!(entry.to_key(), refentry.to_key());
+            let key = entry.to_key();
+            assert_eq!(entry.to_seqno(), refentry.to_seqno(), "key {}", key);
+            assert_eq!(entry.is_deleted(), refentry.is_deleted(), "key {}", key);
+            assert_eq!(
+                entry.to_native_value(),
+                refentry.to_native_value(),
+                "key {}",
+                key
+            );
+
+            let mut di = entry.as_deltas().iter();
+            let mut ri = refentry.as_deltas().iter();
+            loop {
+                let (delta, refdelta) = (di.next(), ri.next());
+
+                let (delta, refdelta) = match (delta, refdelta) {
+                    (Some(delta), Some(refdelta)) => {
+                        assert!(within.contains(&delta.to_seqno()));
+                        assert!(within.contains(&refdelta.to_seqno()));
+                        (delta, refdelta)
+                    }
+                    (Some(delta), None) => {
+                        panic!("unexpected delta {} in compact index", delta.to_seqno())
+                    }
+                    (None, Some(delta)) => {
+                        panic!("unexpected delta {} in ref index", delta.to_seqno())
+                    }
+                    (None, None) => break,
+                };
+                assert_eq!(delta.to_seqno(), refdelta.to_seqno(), "key {}", key);
+                assert_eq!(delta.to_diff(), refdelta.to_diff(), "key {}", key);
+                assert_eq!(delta.is_deleted(), refdelta.is_deleted(), "key {}", key);
+                assert_eq!(
+                    delta.to_seqno_state(),
+                    refdelta.to_seqno_state(),
+                    "key {}",
+                    key
+                );
+            }
+        }
+    }
+    assert_eq!(n_count, index.to_stats().entries);
+    assert_eq!(n_deleted, index.n_deleted);
+    assert_eq!(key_footprint, index.key_footprint);
+    assert_eq!(
+        tree_footprint, index.tree_footprint,
+        "for n_count {} n_deleted {}",
+        n_count, n_deleted
+    );
+}
 #[test]
 fn test_commit_iterator_scan() {
     let seed: u128 = random();

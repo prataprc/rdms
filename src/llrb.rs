@@ -629,7 +629,7 @@ where
     /// shall be ZERO.
     ///
     /// *LSM mode*: Add a new version for the key, perserving the old value.
-    fn set_index(
+    pub fn set_index(
         &mut self,
         key: K,
         value: V,
@@ -684,7 +684,7 @@ where
     /// be ZERO.
     ///
     /// *LSM mode*: Add a new version for the key, perserving the old value.
-    fn set_cas_index(
+    pub fn set_cas_index(
         &mut self,
         key: K,
         value: V,
@@ -741,7 +741,7 @@ where
     /// Delete key from index. Return the seqno (index) for this mutation
     /// and entry if present. If operation was invalid or NOOP, returned
     /// seqno shall be ZERO.
-    fn delete_index<Q>(
+    pub fn delete_index<Q>(
         &mut self,
         key: &Q,
         seqno: Option<u64>, // seqno for this delete
@@ -1202,7 +1202,6 @@ where
     }
 }
 
-/// Create/Update/Delete operations on Llrb index.
 impl<K, V> Llrb<K, V>
 where
     K: Clone + Ord + Footprint,
@@ -1246,7 +1245,13 @@ where
             _ => panic!("set: impossible case, call programmer"),
         }
     }
+}
 
+impl<K, V> Llrb<K, V>
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+{
     fn compact_loop(
         node: Option<&mut Node<K, V>>,
         low: Bound<K>,

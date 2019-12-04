@@ -875,6 +875,142 @@ fn test_pw_scan() {
 }
 
 #[test]
+fn test_mvcc_conversion() {
+    let seed: u128 = random();
+    for i in 0..50 {
+        let seed = seed + (i * 10);
+        let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+
+        let lsm: bool = rng.gen();
+        let sticky: bool = rng.gen();
+        let spin: bool = rng.gen();
+
+        let mut llrb: Box<Llrb<i64, i64>> = if lsm {
+            Llrb::new_lsm("test-llrb")
+        } else {
+            Llrb::new("test-llrb")
+        };
+        llrb.set_sticky(sticky).set_spinlatch(spin);
+
+        let n_ops = match rng.gen::<u8>() % 10 {
+            0 => 0,
+            1 => 1,
+            _ => i64::abs(rng.gen::<i64>() % 60_000),
+        };
+        let key_max = 20_000;
+        random_llrb(n_ops, key_max, seed, &mut llrb);
+        println!(
+            "index-config: lsm:{} sticky:{} spin:{} nops:{} key_max:{}",
+            lsm, sticky, spin, n_ops, key_max
+        );
+
+        let mut refllrb: Box<Llrb<i64, i64>> = llrb.clone();
+        let mut mvcc: Box<Mvcc<i64, i64>> = From::from(*llrb);
+
+        assert_eq!(mvcc.is_lsm(), refllrb.is_lsm());
+        assert_eq!(mvcc.is_sticky(), refllrb.is_sticky());
+        assert_eq!(mvcc.is_spin(), refllrb.is_spin());
+        assert_eq!(mvcc.to_seqno(), refllrb.to_seqno());
+        let (lstats, mstats) = (refllrb.to_stats(), mvcc.to_stats());
+        assert_eq!(lstats.entries, mstats.entries);
+        assert_eq!(lstats.n_deleted, mstats.n_deleted);
+        assert_eq!(lstats.key_footprint, mstats.key_footprint);
+        assert_eq!(lstats.tree_footprint, mstats.tree_footprint);
+        {
+            let mut liter = refllrb.iter().unwrap();
+            let mut miter = mvcc.iter().unwrap();
+            loop {
+                match (liter.next(), miter.next()) {
+                    (Some(Ok(lentry)), Some(Ok(mentry))) => {
+                        check_node1(&lentry, &mentry);
+                    }
+                    (None, None) => break,
+                    _ => unreachable!(),
+                }
+            }
+        }
+
+        let mut refmvcc: Box<Mvcc<i64, i64>> = mvcc.clone();
+        let mut llrb: Box<Llrb<i64, i64>> = From::from(*mvcc);
+
+        assert_eq!(refmvcc.is_lsm(), llrb.is_lsm());
+        assert_eq!(refmvcc.is_sticky(), llrb.is_sticky());
+        assert_eq!(refmvcc.is_spin(), llrb.is_spin());
+        assert_eq!(refmvcc.to_seqno(), llrb.to_seqno());
+        let (lstats, mstats) = (llrb.to_stats(), refmvcc.to_stats());
+        assert_eq!(lstats.entries, mstats.entries);
+        assert_eq!(lstats.n_deleted, mstats.n_deleted);
+        assert_eq!(lstats.key_footprint, mstats.key_footprint);
+        assert_eq!(lstats.tree_footprint, mstats.tree_footprint);
+        {
+            let mut liter = llrb.iter().unwrap();
+            let mut miter = refmvcc.iter().unwrap();
+            loop {
+                match (liter.next(), miter.next()) {
+                    (Some(Ok(lentry)), Some(Ok(mentry))) => {
+                        check_node1(&lentry, &mentry);
+                    }
+                    (None, None) => break,
+                    _ => unreachable!(),
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn test_split() {
+    let seed: u128 = random();
+    let seed: u128 = 169445180909037151706943296461619045538;
+    println!("seed:{}", seed,);
+    for i in 0..50 {
+        let seed = seed + (i * 10);
+        let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+
+        let lsm: bool = rng.gen();
+        let sticky: bool = rng.gen();
+        let spin: bool = rng.gen();
+
+        let mut llrb: Box<Llrb<i64, i64>> = if lsm {
+            Llrb::new_lsm("test-llrb")
+        } else {
+            Llrb::new("test-llrb")
+        };
+        llrb.set_sticky(sticky).set_spinlatch(spin);
+
+        let n_ops = match rng.gen::<u8>() % 10 {
+            0 => 0,
+            1 => 1,
+            _ => i64::abs(rng.gen::<i64>() % 60_000),
+        };
+        let key_max = 20_000;
+        random_llrb(n_ops, key_max, seed, &mut llrb);
+        println!(
+            "index-config: lsm:{} sticky:{} spin:{} nops:{} key_max:{}",
+            lsm, sticky, spin, n_ops, key_max,
+        );
+
+        let mut refllrb = llrb.clone();
+        let (mut first, mut second) = llrb
+            .split("first".to_string(), "second".to_string())
+            .unwrap();
+        assert_eq!(first.to_name(), "first".to_string());
+        assert_eq!(second.to_name(), "second".to_string());
+        let mut iter = first.iter().unwrap().chain(second.iter().unwrap());
+        let mut refiter = refllrb.iter().unwrap();
+        loop {
+            match (iter.next(), refiter.next()) {
+                (Some(Ok(lentry)), Some(Ok(mentry))) => {
+                    check_node1(&lentry, &mentry);
+                }
+                (None, None) => break,
+                _ => unreachable!(),
+            }
+        }
+    }
+}
+
+#[test]
 fn test_commit1() {
     let mut index1: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-index1");
     let mut index2: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-index2");

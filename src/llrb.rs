@@ -375,7 +375,11 @@ where
             None => (),
             Some(root) => {
                 first.root = Self::post_split(root.left.take(), &mut first);
+                first.root.as_mut().map(|n| n.set_black());
+                first.seqno = self.seqno;
                 second.root = Self::post_split(root.right.take(), &mut second);
+                second.root.as_mut().map(|n| n.set_black());
+                second.seqno = self.seqno;
                 (&*second).set_index_entry(root.entry.clone());
             }
         }

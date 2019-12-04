@@ -222,7 +222,6 @@ where
         if n != 0 {
             panic!("leak or double free n_nodes:{}", n);
         }
-
         info!(target: "mvcc  ", "{:?}, dropped ...", self.name);
     }
 }
@@ -236,11 +235,11 @@ where
         let mut mvcc_index = if llrb_index.is_lsm() {
             Mvcc::new_lsm(llrb_index.to_name())
         } else {
-            let mut index = Mvcc::new(llrb_index.to_name());
-            index.set_sticky(llrb_index.is_sticky());
-            index
+            Mvcc::new(llrb_index.to_name())
         };
-        mvcc_index.set_spinlatch(llrb_index.is_spin());
+        mvcc_index
+            .set_sticky(llrb_index.is_sticky())
+            .set_spinlatch(llrb_index.is_spin());
         mvcc_index
             .snapshot
             .n_nodes
@@ -337,7 +336,7 @@ where
     }
 
     /// Squash this index and return the root and its book-keeping.
-    pub(crate) fn squash(self) -> SquashDebris<K, V> {
+    pub(crate) fn squash(mut self) -> SquashDebris<K, V> {
         let n = self.multi_rw();
         if n > Self::CONCUR_REF_COUNT {
             panic!("cannot squash Mvcc with active readers/writer {}", n);
@@ -346,6 +345,8 @@ where
         let snapshot =
             Arc::get_mut(unsafe { self.snapshot.inner.load(SeqCst).as_mut().unwrap() }).unwrap();
 
+        self.n_reclaimed = 0;
+        self.snapshot.n_nodes.store(0, SeqCst);
         SquashDebris {
             root: snapshot.root.take(),
             seqno: snapshot.seqno,
@@ -379,13 +380,19 @@ where
         });
 
         let s: Arc<Snapshot<K, V>> = OuterSnapshot::clone(&self.snapshot);
+        let seqno = OuterSnapshot::clone(&self.snapshot).seqno;
+        let n_count = self.to_stats().entries;
+        cloned
+            .snapshot
+            .n_nodes
+            .store(n_count.try_into().unwrap(), SeqCst);
         let root_node = match s.as_root() {
             None => None,
             Some(n) => Some(Box::new(n.clone())),
         };
         cloned
             .snapshot
-            .shift_snapshot(root_node, s.seqno, s.n_count, vec![]);
+            .shift_snapshot(root_node, seqno, n_count, vec![]);
         cloned
     }
 }
@@ -2467,26 +2474,6 @@ where
         index.pw_scan(from, within)
     }
 }
-
-//impl<K, V> CommitIterator<K, V> for MvccReader<K, V>
-//where
-//    K: Clone + Ord,
-//    V: Clone + Diff,
-//{
-//    type Iter = SkipScan<K, V, MvccReader<K, V>>;
-//
-//    fn iter(self) -> Result<Self::Iter> {
-//        Ok(SkipScan::new(self))
-//    }
-//
-//    fn iters(self, _shards: usize) -> Result<Vec<Self::Iter>> {
-//        panic!("to be implemented") // TODO
-//    }
-//
-//    fn range_iters(self, _ranges: Vec<ops::Range<K>>) -> Result<Vec<Self::Iter>> {
-//        panic!("to be implemented") // TODO
-//    }
-//}
 
 /// Write handle into [Mvcc] index.
 pub struct MvccWriter<K, V>

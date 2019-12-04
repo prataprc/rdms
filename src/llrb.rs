@@ -443,7 +443,7 @@ where
         self.as_mut().commit(scanner, metacb)
     }
 
-    fn compact<F>(&mut self, cutoff: Bound<u64>, metacb: F) -> Result<()>
+    fn compact<F>(&mut self, cutoff: Bound<u64>, metacb: F) -> Result<usize>
     where
         F: Fn(Vec<Vec<u8>>) -> Vec<u8>,
     {
@@ -530,36 +530,34 @@ where
         Ok(())
     }
 
-    fn compact<F>(&mut self, cutoff: Bound<u64>, _metacb: F) -> Result<()>
+    fn compact<F>(&mut self, cutoff: Bound<u64>, _metacb: F) -> Result<usize>
     where
         F: Fn(Vec<Vec<u8>>) -> Vec<u8>,
     {
-        let mut low = Bound::Unbounded;
-        let mut count = 0;
+        let (mut count, mut low) = (0_usize, Bound::Unbounded);
         const LIMIT: usize = 1_000; // TODO: no magic number
         let count = loop {
             let _latch = self.latch.acquire_write(self.spin);
 
-            let mut dels = vec![];
-            let limit = LIMIT;
             let root = self.root.as_mut().map(DerefMut::deref_mut);
             let mut cc = CompactCtxt {
                 cutoff,
-                dels: &mut dels,
+                dels: vec![],
                 tree_footprint: &mut self.tree_footprint,
             };
-            let (seen, limit) = Llrb::<K, V>::compact_loop(root, low, &mut cc, limit);
-            dels.into_iter()
-                .for_each(|key| self.delete_index_entry(key));
+            let (seen, limit) = Llrb::<K, V>::compact_loop(root, low, &mut cc, LIMIT);
+            for key in cc.dels {
+                self.delete_index_entry(key);
+            }
             match (seen, limit) {
                 (_, limit) if limit > 0 => break count + (LIMIT - limit),
-                (Some(lw), _) => low = Bound::Excluded(lw),
+                (Some(key), _) => low = Bound::Excluded(key),
                 _ => unreachable!(),
             }
             count += LIMIT;
         };
         info!(target: "llrb  ", "{:?}, compacted {} items", self.name, count);
-        Ok(())
+        Ok(count)
     }
 }
 
@@ -1227,7 +1225,7 @@ where
     K: Clone + Ord + Footprint,
 {
     cutoff: Bound<u64>,
-    dels: &'a mut Vec<K>,
+    dels: Vec<K>,
     tree_footprint: &'a mut isize,
 }
 

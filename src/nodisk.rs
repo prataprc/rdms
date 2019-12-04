@@ -113,11 +113,11 @@ where
         Ok(())
     }
 
-    fn compact<F>(&mut self, _: Bound<u64>, _: F) -> Result<()>
+    fn compact<F>(&mut self, _: Bound<u64>, _: F) -> Result<usize>
     where
         F: Fn(Vec<Vec<u8>>) -> Vec<u8>,
     {
-        Ok(())
+        Ok(0)
     }
 }
 

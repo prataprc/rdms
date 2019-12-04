@@ -133,7 +133,7 @@ where
         index.commit(scanner, metacb)
     }
 
-    pub fn compact<F>(&mut self, cutoff: Bound<u64>, metacb: F) -> Result<()>
+    pub fn compact<F>(&mut self, cutoff: Bound<u64>, metacb: F) -> Result<usize>
     where
         F: Fn(Vec<Vec<u8>>) -> Vec<u8>,
     {

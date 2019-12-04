@@ -503,7 +503,7 @@ where
         self.as_mut().commit(scanner, metacb)
     }
 
-    fn compact<F>(&mut self, cutoff: Bound<u64>, metacb: F) -> Result<()>
+    fn compact<F>(&mut self, cutoff: Bound<u64>, metacb: F) -> Result<usize>
     where
         F: Fn(Vec<Vec<u8>>) -> Vec<u8>,
     {
@@ -591,41 +591,35 @@ where
         Ok(())
     }
 
-    fn compact<F>(&mut self, cutoff: Bound<u64>, _metacb: F) -> Result<()>
+    fn compact<F>(&mut self, cutoff: Bound<u64>, _metacb: F) -> Result<usize>
     where
         F: Fn(Vec<Vec<u8>>) -> Vec<u8>,
     {
         let (mut low, mut count) = (Bound::Unbounded, 0);
         const LIMIT: usize = 1_000; // TODO: no magic number
         let count = loop {
-            let (dels, seen, limit) = {
+            let (seen, limit) = {
                 let _latch = self.latch.acquire_write(self.spin);
 
                 let snapshot: &Arc<Snapshot<K, V>> = self.snapshot.as_ref();
-                let (mut dels, limit) = (vec![], LIMIT);
                 let root = snapshot.root_duplicate();
                 let mut cc = CompactCtxt {
                     cutoff,
-                    dels: &mut dels,
+                    dels: vec![],
                     tree_footprint: self.tree_footprint,
                     reclaim: vec![],
                 };
-                let seqno = snapshot.seqno;
-                let n_count = snapshot.n_count;
-                let (root, seen, limit) = self.compact_loop(root, low, &mut cc, limit);
+                let (root, seen, limit) = self.compact_loop(root, low, &mut cc, LIMIT);
                 self.n_reclaimed += cc.reclaim.len();
                 self.tree_footprint = cc.tree_footprint;
                 self.snapshot
-                    .shift_snapshot(root, seqno, n_count, cc.reclaim);
-                (dels, seen, limit)
-            };
+                    .shift_snapshot(root, snapshot.seqno, snapshot.n_count, cc.reclaim);
 
-            {
-                let _latch = self.latch.acquire_write(self.spin);
-                for key in dels.into_iter() {
+                for key in cc.dels.into_iter() {
                     self.delete_index_entry(key);
                 }
-            }
+                (seen, limit)
+            };
 
             match (seen, limit) {
                 (_, limit) if limit > 0 => break count + (LIMIT - limit),
@@ -635,7 +629,7 @@ where
             count += LIMIT;
         };
         info!(target: "mvcc  ", "{:?}, compacted {} items", self.name, count);
-        Ok(())
+        Ok(count)
     }
 }
 
@@ -1404,13 +1398,13 @@ where
     }
 }
 
-struct CompactCtxt<'a, K, V>
+struct CompactCtxt<K, V>
 where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
 {
     cutoff: Bound<u64>,
-    dels: &'a mut Vec<K>,
+    dels: Vec<K>,
     tree_footprint: isize,
     reclaim: Vec<Box<Node<K, V>>>,
 }

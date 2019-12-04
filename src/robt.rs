@@ -512,26 +512,29 @@ where
         Ok(())
     }
 
-    fn compact<F>(&mut self, cutoff: Bound<u64>, _metacb: F) -> Result<()>
+    fn compact<F>(&mut self, cutoff: Bound<u64>, _metacb: F) -> Result<usize>
     where
         F: Fn(Vec<Vec<u8>>) -> Vec<u8>,
     {
         let mut inner = self.inner.lock().unwrap();
-        let new_inner = match inner.deref() {
+        let (new_inner, count) = match inner.deref() {
             InnerRobt::Build {
                 dir,
                 name,
                 config,
                 purge_tx,
                 ..
-            } => InnerRobt::Build {
-                dir: dir.clone(),
-                name: name.clone(),
-                config: config.clone(),
-                purge_tx: purge_tx.clone(),
-                _phantom_key: marker::PhantomData,
-                _phantom_val: marker::PhantomData,
-            },
+            } => (
+                InnerRobt::Build {
+                    dir: dir.clone(),
+                    name: name.clone(),
+                    config: config.clone(),
+                    purge_tx: purge_tx.clone(),
+                    _phantom_key: marker::PhantomData,
+                    _phantom_val: marker::PhantomData,
+                },
+                0,
+            ),
             InnerRobt::Snapshot {
                 dir,
                 name,
@@ -584,20 +587,23 @@ where
                     name, footprint, stats.z_bytes + stats.m_bytes + stats.v_bytes + meta_block_bytes
                 );
 
-                InnerRobt::Snapshot {
-                    dir: dir.clone(),
-                    name: name.clone(),
-                    footprint: snapshot.footprint()?,
-                    meta: snapshot.meta.clone(),
-                    config: snapshot.config.clone(),
-                    stats,
-                    bitmap: Arc::new(snapshot.to_bitmap()?),
-                    purge_tx: purge_tx.clone(),
-                }
+                (
+                    InnerRobt::Snapshot {
+                        dir: dir.clone(),
+                        name: name.clone(),
+                        footprint: snapshot.footprint()?,
+                        meta: snapshot.meta.clone(),
+                        config: snapshot.config.clone(),
+                        stats: stats.clone(),
+                        bitmap: Arc::new(snapshot.to_bitmap()?),
+                        purge_tx: purge_tx.clone(),
+                    },
+                    stats.n_count,
+                )
             }
         };
         *inner = new_inner;
-        Ok(())
+        Ok(count.try_into().unwrap())
     }
 }
 

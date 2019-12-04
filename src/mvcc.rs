@@ -37,7 +37,7 @@ use log::{error, info, warn};
 use std::{
     borrow::Borrow,
     cmp::{self, Ord, Ordering},
-    convert::TryInto,
+    convert::{self, TryInto},
     ffi, fmt,
     fmt::Debug,
     hash::Hash,
@@ -595,6 +595,21 @@ where
     where
         F: Fn(Vec<Vec<u8>>) -> Vec<u8>,
     {
+        // before proceeding with compaction, verify the cutoff argument for
+        // unusual values.
+        match cutoff {
+            Bound::Unbounded => {
+                warn!(target: "llrb  ", "compact with unbounded cutoff");
+            }
+            Bound::Included(seqno) if seqno >= self.to_seqno() => {
+                warn!(target: "llrb  ", "compact cutsoff the entire index {}", seqno);
+            }
+            Bound::Excluded(seqno) if seqno > self.to_seqno() => {
+                warn!(target: "llrb  ", "compact cutsoff the entire index {}", seqno);
+            }
+            _ => (),
+        }
+
         let (mut low, mut count) = (Bound::Unbounded, 0);
         const LIMIT: usize = 1_000; // TODO: no magic number
         let count = loop {
@@ -1679,33 +1694,31 @@ where
     }
 
     fn scans(&mut self, shards: usize, from_seqno: Bound<u64>) -> Result<Vec<Self::Iter>> {
+        match shards {
+            0 => return Ok(vec![]),
+            1 => return Ok(vec![self.scan(from_seqno)?]),
+            _ => (),
+        }
+
         let within = (from_seqno, Bound::Included(self.to_seqno()));
-
-        let high_bounds = {
+        let keys = {
             let snapshot: Arc<Snapshot<K, V>> = OuterSnapshot::clone(&self.snapshot);
-            let mut high_bounds = vec![];
-            do_shards(snapshot.as_root(), shards - 1, &mut high_bounds);
-            high_bounds
+            let mut keys = vec![];
+            do_shards(snapshot.as_root(), shards - 1, &mut keys);
+            keys
         };
+        let keys: Vec<K> = keys.into_iter().filter_map(convert::identity).collect();
 
-        let (mut scans, mut low_key) = (vec![], Bound::Unbounded);
-        for high_key in high_bounds {
+        let (mut scans, mut lkey) = (vec![], Bound::Unbounded);
+        for hkey in keys {
             let mut ss = SkipScan::new(self.to_reader()?);
-            low_key = match high_key {
-                Some(high_key) => {
-                    ss.set_key_range((low_key, Bound::Excluded(high_key.clone())))
-                        .set_seqno_range(within.clone());
-                    Bound::Included(high_key)
-                }
-                None => {
-                    ss.set_seqno_range((Bound::Excluded(0), Bound::Excluded(0)));
-                    low_key
-                }
-            };
+            ss.set_key_range((lkey, Bound::Excluded(hkey.clone())))
+                .set_seqno_range(within.clone());
+            lkey = Bound::Included(hkey);
             scans.push(ss);
         }
         let mut ss = SkipScan::new(self.to_reader()?);
-        ss.set_key_range((low_key, Bound::Unbounded))
+        ss.set_key_range((lkey, Bound::Unbounded))
             .set_seqno_range(within.clone());
         scans.push(ss);
         Ok(scans)

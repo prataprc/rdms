@@ -994,7 +994,8 @@ fn test_compact() {
             lsm, sticky, n_ops, cutoff
         );
 
-        index.compact(cutoff, |metas| metas[0].clone()).unwrap();
+        let count = index.compact(cutoff, |metas| metas[0].clone()).unwrap();
+        assert_eq!(count, rindex.to_stats().entries);
         check_compact_nodes(index.as_mut(), rindex.as_mut(), cutoff);
     }
 }

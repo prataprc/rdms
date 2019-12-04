@@ -240,7 +240,7 @@ where
             index.set_sticky(llrb_index.is_sticky());
             index
         };
-        mvcc_index.set_spinlatch(llrb_index.to_spin());
+        mvcc_index.set_spinlatch(llrb_index.is_spin());
         mvcc_index
             .snapshot
             .n_nodes
@@ -336,6 +336,26 @@ where
         self
     }
 
+    /// Squash this index and return the root and its book-keeping.
+    pub(crate) fn squash(self) -> SquashDebris<K, V> {
+        let n = self.multi_rw();
+        if n > Self::CONCUR_REF_COUNT {
+            panic!("cannot squash Mvcc with active readers/writer {}", n);
+        }
+
+        let snapshot =
+            Arc::get_mut(unsafe { self.snapshot.inner.load(SeqCst).as_mut().unwrap() }).unwrap();
+
+        SquashDebris {
+            root: snapshot.root.take(),
+            seqno: snapshot.seqno,
+            n_count: snapshot.n_count,
+            n_deleted: self.n_deleted,
+            key_footprint: self.key_footprint,
+            tree_footprint: self.tree_footprint,
+        }
+    }
+
     pub fn clone(&self) -> Box<Mvcc<K, V>> {
         let n = self.multi_rw();
         if n > Self::CONCUR_REF_COUNT {
@@ -382,6 +402,14 @@ where
     #[inline]
     pub fn is_lsm(&self) -> bool {
         self.lsm
+    }
+
+    pub(crate) fn is_spin(&self) -> bool {
+        self.spin
+    }
+
+    pub(crate) fn is_sticky(&self) -> bool {
+        self.sticky
     }
 
     /// Return number of entries in this instance.
@@ -483,14 +511,10 @@ where
         self.as_mut().set_seqno(seqno)
     }
 
-    /// Create a new reader handle, for multi-threading.
-    /// Llrb uses spin-lock to coordinate between readers and writers.
     fn to_reader(&mut self) -> Result<Self::R> {
         self.as_mut().to_reader()
     }
 
-    /// Create a new writer handle, for multi-threading.
-    /// Llrb uses spin-lock to coordinate between readers and writers.
     fn to_writer(&mut self) -> Result<Self::W> {
         self.as_mut().to_writer()
     }
@@ -599,13 +623,13 @@ where
         // unusual values.
         match cutoff {
             Bound::Unbounded => {
-                warn!(target: "llrb  ", "compact with unbounded cutoff");
+                warn!(target: "mvcc  ", "compact with unbounded cutoff");
             }
             Bound::Included(seqno) if seqno >= self.to_seqno() => {
-                warn!(target: "llrb  ", "compact cutsoff the entire index {}", seqno);
+                warn!(target: "mvcc  ", "compact cutsoff the entire index {}", seqno);
             }
             Bound::Excluded(seqno) if seqno > self.to_seqno() => {
-                warn!(target: "llrb  ", "compact cutsoff the entire index {}", seqno);
+                warn!(target: "mvcc  ", "compact cutsoff the entire index {}", seqno);
             }
             _ => (),
         }

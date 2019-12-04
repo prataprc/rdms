@@ -37,7 +37,6 @@ use std::{
     cmp::{self, Ord, Ordering},
     convert::{self, TryInto},
     ffi, fmt,
-    fmt::Debug,
     hash::Hash,
     marker, mem,
     ops::{Bound, Deref, DerefMut, RangeBounds},
@@ -51,7 +50,7 @@ use crate::{
     core::{Result, ScanEntry, ScanIter, Value, WalWriter, WriteIndexFactory},
     error::Error,
     llrb_node::{LlrbDepth, Node},
-    mvcc::Snapshot,
+    mvcc::{Mvcc, Snapshot},
     scans::SkipScan,
     spinlock::{self, RWSpinlock},
     types::Empty,
@@ -202,17 +201,31 @@ where
     node.right.take().map(|right| drop_tree(right));
 }
 
-pub(crate) struct SquashDebris<K, V>
+impl<K, V> From<Mvcc<K, V>> for Box<Llrb<K, V>>
 where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    pub(crate) root: Option<Box<Node<K, V>>>,
-    pub(crate) seqno: u64,
-    pub(crate) n_count: usize,
-    pub(crate) n_deleted: usize,
-    pub(crate) key_footprint: isize,
-    pub(crate) tree_footprint: isize,
+    fn from(mvcc_index: Mvcc<K, V>) -> Box<Llrb<K, V>> {
+        let mut index = if mvcc_index.is_lsm() {
+            Llrb::new_lsm(mvcc_index.to_name())
+        } else {
+            Llrb::new(mvcc_index.to_name())
+        };
+        index
+            .set_sticky(mvcc_index.is_sticky())
+            .set_spinlatch(mvcc_index.is_spin());
+
+        let debris = mvcc_index.squash();
+        index.root = debris.root;
+        index.seqno = debris.seqno;
+        index.n_count = debris.n_count;
+        index.n_deleted = debris.n_deleted;
+        index.key_footprint = debris.key_footprint;
+        index.tree_footprint = debris.tree_footprint;
+
+        index
+    }
 }
 
 /// Different ways to construct a new Llrb index.
@@ -221,8 +234,6 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    const CONCUR_REF_COUNT: usize = 2;
-
     /// Create an empty Llrb index, identified by `name`.
     /// Applications can choose unique names.
     pub fn new<S: AsRef<str>>(name: S) -> Box<Llrb<K, V>> {
@@ -299,7 +310,6 @@ where
     }
 
     /// Squash this index and return the root and its book-keeping.
-    /// IMPORTANT: after calling this method, value must be dropped.
     pub(crate) fn squash(mut self) -> SquashDebris<K, V> {
         let n = self.multi_rw();
         if n > Self::CONCUR_REF_COUNT {
@@ -333,9 +343,92 @@ where
             writers: Arc::new(0xC0FFEE),
         })
     }
+}
 
-    fn multi_rw(&self) -> usize {
-        Arc::strong_count(&self.readers) + Arc::strong_count(&self.writers)
+impl<K, V> Llrb<K, V>
+where
+    K: Clone + Ord + Footprint + fmt::Debug,
+    V: Clone + Diff + Footprint,
+{
+    pub fn split(
+        mut self,
+        name1: String,
+        name2: String,
+    ) -> Result<(Box<Llrb<K, V>>, Box<Llrb<K, V>>)> {
+        let n = self.multi_rw();
+        if n > Llrb::<K, V>::CONCUR_REF_COUNT {
+            panic!("cannot call llrb.split() with active readers/writers");
+        }
+
+        info!(
+            target: "llrb  ",
+            "{} split in progress ...\n{}", self.name, self.to_stats()
+        );
+
+        let (mut first, mut second) = if self.lsm {
+            (Llrb::new_lsm(&name1), Llrb::new_lsm(&name2))
+        } else {
+            (Llrb::new(&name1), Llrb::new(&name2))
+        };
+
+        match &mut self.root {
+            None => (),
+            Some(root) => {
+                first.root = Self::post_split(root.left.take(), &mut first);
+                second.root = Self::post_split(root.right.take(), &mut second);
+                (&*second).set_index_entry(root.entry.clone());
+            }
+        }
+
+        // validation
+        assert_eq!(cmp::max(first.seqno, second.seqno), self.seqno);
+        let n_count = first.n_count + second.n_count;
+        assert_eq!(n_count, self.n_count);
+        let n_deleted = first.n_deleted + second.n_deleted;
+        assert_eq!(n_deleted, self.n_deleted);
+        let key_footprint = first.key_footprint + second.key_footprint;
+        assert_eq!(key_footprint, self.key_footprint);
+        let tree_footprint = first.tree_footprint + second.tree_footprint;
+        assert_eq!(tree_footprint, self.tree_footprint);
+
+        let (first_stats, second_stats) = if cfg!(debug_assertions) {
+            (first.validate()?, second.validate()?)
+        } else {
+            (first.to_stats(), second.to_stats())
+        };
+
+        info!(
+            target: "llrb  ",
+            "{} first half of the {}\n{}", name1, self.name, first_stats,
+        );
+        info!(
+            target: "llrb  ",
+            "{} second half of the {}\n{}", name2, self.name, second_stats,
+        );
+
+        Ok((first, second))
+    }
+
+    fn post_split(
+        node: Option<Box<Node<K, V>>>,
+        index: &mut Llrb<K, V>,
+    ) -> Option<Box<Node<K, V>>> {
+        match node {
+            None => None,
+            Some(mut node) => {
+                index.seqno = cmp::max(index.seqno, node.to_seqno());
+                index.n_count += 1;
+                if node.is_deleted() {
+                    index.n_deleted += 1;
+                }
+                index.key_footprint += node.as_key().footprint().unwrap();
+                index.tree_footprint += node.footprint().unwrap();
+
+                node.left = Self::post_split(node.left.take(), index);
+                node.right = Self::post_split(node.right.take(), index);
+                Some(node)
+            }
+        }
     }
 }
 
@@ -345,6 +438,8 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
+    const CONCUR_REF_COUNT: usize = 2;
+
     /// Return whether this index support lsm mode.
     #[inline]
     pub fn is_lsm(&self) -> bool {
@@ -355,6 +450,10 @@ where
     #[inline]
     pub fn is_sticky(&self) -> bool {
         self.sticky
+    }
+
+    pub(crate) fn is_spin(&self) -> bool {
+        self.spin
     }
 
     /// Return number of entries in this index.
@@ -384,8 +483,8 @@ where
         stats
     }
 
-    pub(crate) fn to_spin(&self) -> bool {
-        self.spin
+    fn multi_rw(&self) -> usize {
+        Arc::strong_count(&self.readers) + Arc::strong_count(&self.writers)
     }
 }
 
@@ -1558,7 +1657,7 @@ where
 
 impl<K, V> Validate<Stats> for Box<Llrb<K, V>>
 where
-    K: Clone + Ord + Debug,
+    K: Clone + Ord + fmt::Debug,
     V: Clone + Diff,
 {
     fn validate(&mut self) -> Result<Stats> {
@@ -1569,7 +1668,7 @@ where
 /// Deep walk validate of Llrb index.
 impl<K, V> Validate<Stats> for Llrb<K, V>
 where
-    K: Clone + Ord + Debug,
+    K: Clone + Ord + fmt::Debug,
     V: Clone + Diff,
 {
     /// Validate LLRB tree with following rules:

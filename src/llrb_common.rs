@@ -1,5 +1,18 @@
 const MAX_TREE_DEPTH: usize = 100;
 
+pub(crate) struct SquashDebris<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    pub(crate) root: Option<Box<Node<K, V>>>,
+    pub(crate) seqno: u64,
+    pub(crate) n_count: usize,
+    pub(crate) n_deleted: usize,
+    pub(crate) key_footprint: isize,
+    pub(crate) tree_footprint: isize,
+}
+
 #[inline]
 fn is_red<K, V>(node: Option<&Node<K, V>>) -> bool
 where
@@ -70,7 +83,7 @@ fn validate_tree<K, V>(
     depths: &mut LlrbDepth,
 ) -> Result<(usize, usize)>
 where
-    K: Ord + Clone + Debug,
+    K: Ord + Clone + fmt::Debug,
     V: Clone + Diff,
 {
     let red = is_red(node);

@@ -1002,8 +1002,10 @@ where
             panic!("xmerge {} == {}", entry.to_seqno(), self.to_seqno())
         };
 
-        // TODO remove this validation logic once rdms is fully stable.
-        a.validate_xmerge(&b);
+        if cfg!(debug_assertions) {
+            a.validate_xmerge(&b);
+        }
+
         for ne in a.versions().collect::<Vec<Entry<K, V>>>().into_iter().rev() {
             // println!("xmerge {} {}", ne.to_seqno(), ne.is_deleted());
             // TODO: is it okay to ignore the result-err here ?

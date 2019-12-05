@@ -7,7 +7,9 @@ use std::{
     vec,
 };
 
-use crate::core::{Bloom, CommitIterator, Diff, Entry, PiecewiseScan, Result, ScanEntry};
+use crate::core::{
+    Bloom, CommitIterator, Diff, Entry, IndexIter, PiecewiseScan, Result, ScanEntry,
+};
 
 // TODO: benchmark SkipScan and FilterScan and measure the difference.
 
@@ -428,6 +430,44 @@ where
     {
         let entries: Vec<Result<Entry<K, V>>> = self.collect();
         Ok(vec![entries.into_iter()])
+    }
+}
+
+pub(crate) struct ChainScan<'a, K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    iter: Option<IndexIter<'a, K, V>>,
+    iters: Vec<IndexIter<'a, K, V>>,
+}
+
+impl<'a, K, V> ChainScan<'a, K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    pub(crate) fn new(iters: Vec<IndexIter<'a, K, V>>) -> ChainScan<K, V> {
+        ChainScan { iter: None, iters }
+    }
+}
+
+impl<'a, K, V> Iterator for ChainScan<'a, K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    type Item = Result<Entry<K, V>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match &mut self.iter {
+            Some(iter) => iter.next(),
+            None if self.iters.len() == 0 => None,
+            None => {
+                self.iter = Some(self.iters.remove(0));
+                self.iter.as_mut().unwrap().next()
+            }
+        }
     }
 }
 

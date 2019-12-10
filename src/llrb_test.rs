@@ -961,7 +961,7 @@ fn test_mvcc_conversion() {
 #[test]
 fn test_split() {
     let seed: u128 = random();
-    let seed: u128 = 169445180909037151706943296461619045538;
+    // let seed: u128 = 169445180909037151706943296461619045538;
     println!("seed:{}", seed,);
     for i in 0..50 {
         let seed = seed + (i * 10);

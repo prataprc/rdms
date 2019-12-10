@@ -180,7 +180,7 @@ where
     fn drop(&mut self) {
         // validation check 1
         let n = self.multi_rw();
-        if n > Self::CONCUR_REF_COUNT {
+        if n > 0 {
             error!(
                 target: "mvcc  ",
                 "{:?}, dropped before read/write handles {}", self.name, n
@@ -313,7 +313,7 @@ where
     /// creating reader and/or writer handles.
     pub fn set_spinlatch(&mut self, spin: bool) -> &mut Self {
         let n = self.multi_rw();
-        if n > Self::CONCUR_REF_COUNT {
+        if n > 0 {
             panic!("cannot configure Mvcc with active readers/writer {}", n);
         }
         self.spin = spin;
@@ -328,7 +328,7 @@ where
     /// deleted and but its value shall be removed.
     pub fn set_sticky(&mut self, sticky: bool) -> &mut Self {
         let n = self.multi_rw();
-        if n > Self::CONCUR_REF_COUNT {
+        if n > 0 {
             panic!("cannot configure Mvcc with active readers/writers {}", n)
         }
         self.sticky = sticky;
@@ -338,7 +338,7 @@ where
     /// Squash this index and return the root and its book-keeping.
     pub(crate) fn squash(mut self) -> SquashDebris<K, V> {
         let n = self.multi_rw();
-        if n > Self::CONCUR_REF_COUNT {
+        if n > 0 {
             panic!("cannot squash Mvcc with active readers/writer {}", n);
         }
 
@@ -359,7 +359,7 @@ where
 
     pub fn clone(&self) -> Box<Mvcc<K, V>> {
         let n = self.multi_rw();
-        if n > Self::CONCUR_REF_COUNT {
+        if n > 0 {
             panic!("cannot clone Mvcc with active readers/writer {}", n);
         }
 
@@ -403,8 +403,6 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    const CONCUR_REF_COUNT: usize = 2;
-
     /// Return whether this index support lsm mode.
     #[inline]
     pub fn is_lsm(&self) -> bool {
@@ -449,7 +447,7 @@ where
     }
 
     fn multi_rw(&self) -> usize {
-        Arc::strong_count(&self.readers) + Arc::strong_count(&self.writers)
+        Arc::strong_count(&self.readers) + Arc::strong_count(&self.writers) - 2
     }
 }
 
@@ -569,7 +567,7 @@ where
 
     fn set_seqno(&mut self, seqno: u64) {
         let n = self.multi_rw();
-        if n > Mvcc::<K, V>::CONCUR_REF_COUNT {
+        if n > 0 {
             panic!("cannot configure Mvcc with active readers/writer {}", n);
         }
 

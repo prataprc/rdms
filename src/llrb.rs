@@ -49,7 +49,7 @@ use crate::{
     core::{Diff, Entry, Footprint, Index, IndexIter, PiecewiseScan, Reader},
     core::{Result, ScanEntry, ScanIter, Value, WalWriter, WriteIndexFactory},
     error::Error,
-    llrb_node::{LlrbDepth, Node},
+    llrb_node::Node,
     mvcc::{Mvcc, Snapshot},
     scans::SkipScan,
     spinlock::{self, RWSpinlock},
@@ -57,6 +57,8 @@ use crate::{
 };
 
 include!("llrb_common.rs");
+
+pub use crate::llrb_node::LlrbDepth;
 
 /// LlrbFactory captures a set of configuration for creating new Llrb
 /// instances. By implementing `WriteIndexFactory` trait this can be
@@ -176,7 +178,7 @@ where
     fn drop(&mut self) {
         self.root.take().map(drop_tree);
         let n = self.multi_rw();
-        if n > Self::CONCUR_REF_COUNT {
+        if n > 0 {
             error!(
                 target: "llrb  ",
                 "{:?}, dropped before read/write handles {}", self.name, n
@@ -287,7 +289,7 @@ where
     /// creating reader and/or writer handles.
     pub fn set_spinlatch(&mut self, spin: bool) -> &mut Self {
         let n = self.multi_rw();
-        if n > Self::CONCUR_REF_COUNT {
+        if n > 0 {
             panic!("cannot configure Llrb with active readers/writers {}", n)
         }
         self.spin = spin;
@@ -302,7 +304,7 @@ where
     /// deleted and but its value shall be removed.
     pub fn set_sticky(&mut self, sticky: bool) -> &mut Self {
         let n = self.multi_rw();
-        if n > Self::CONCUR_REF_COUNT {
+        if n > 0 {
             panic!("cannot configure Llrb with active readers/writers {}", n)
         }
         self.sticky = sticky;
@@ -312,7 +314,7 @@ where
     /// Squash this index and return the root and its book-keeping.
     pub(crate) fn squash(mut self) -> SquashDebris<K, V> {
         let n = self.multi_rw();
-        if n > Self::CONCUR_REF_COUNT {
+        if n > 0 {
             panic!("cannot squash Llrb with active readers/writer {}", n);
         }
         SquashDebris {
@@ -356,7 +358,7 @@ where
         name2: String,
     ) -> Result<(Box<Llrb<K, V>>, Box<Llrb<K, V>>)> {
         let n = self.multi_rw();
-        if n > Llrb::<K, V>::CONCUR_REF_COUNT {
+        if n > 0 {
             panic!("cannot call llrb.split() with active readers/writers");
         }
 
@@ -442,8 +444,6 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    const CONCUR_REF_COUNT: usize = 2;
-
     /// Return whether this index support lsm mode.
     #[inline]
     pub fn is_lsm(&self) -> bool {
@@ -456,7 +456,7 @@ where
         self.sticky
     }
 
-    pub(crate) fn is_spin(&self) -> bool {
+    pub fn is_spin(&self) -> bool {
         self.spin
     }
 
@@ -488,7 +488,7 @@ where
     }
 
     fn multi_rw(&self) -> usize {
-        Arc::strong_count(&self.readers) + Arc::strong_count(&self.writers)
+        Arc::strong_count(&self.readers) + Arc::strong_count(&self.writers) - 2
     }
 }
 
@@ -582,7 +582,7 @@ where
 
     fn set_seqno(&mut self, seqno: u64) {
         let n = self.multi_rw();
-        if n > Llrb::<K, V>::CONCUR_REF_COUNT {
+        if n > 0 {
             panic!("cannot configure Llrb with active readers/writers {}", n)
         }
         self.seqno = seqno;

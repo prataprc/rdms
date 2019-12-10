@@ -215,11 +215,11 @@ where
 /// leaf-node depth in the LLRB tree.
 #[derive(Clone)]
 pub struct LlrbDepth {
-    samples: usize,
-    min: usize,
-    max: usize,
-    total: usize,
-    depths: [u64; 256],
+    pub samples: usize,
+    pub min: usize,
+    pub max: usize,
+    pub total: usize,
+    pub depths: [u64; 256],
 }
 
 impl LlrbDepth {

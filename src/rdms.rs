@@ -155,16 +155,6 @@ where
     }
 }
 
-//impl<K, V> Rdms<K, V, Box<mvcc::Mvcc<K, V>>>
-//where
-//    K: Clone + Ord + Footprint + fmt::Debug,
-//    V: Clone + Diff + Footprint,
-//{
-//    pub fn validate(&self) -> Result<mvcc::Stats> {
-//        (&*self.index).validate()
-//    }
-//}
-
 fn auto_commit<K, V, I>(index: Arc<sync::Mutex<I>>, interval: Duration)
 where
     K: Clone + Ord + Footprint,

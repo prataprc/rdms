@@ -1709,7 +1709,30 @@ where
     }
 }
 
-impl<K, V> CommitIterator<K, V> for &mut Mvcc<K, V>
+impl<K, V> CommitIterator<K, V> for Box<Mvcc<K, V>>
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+{
+    type Iter = <Mvcc<K, V> as CommitIterator<K, V>>::Iter;
+
+    fn scan(&mut self, from_seqno: Bound<u64>) -> Result<Self::Iter> {
+        self.as_mut().scan(from_seqno)
+    }
+
+    fn scans(&mut self, shards: usize, from_seqno: Bound<u64>) -> Result<Vec<Self::Iter>> {
+        self.as_mut().scans(shards, from_seqno)
+    }
+
+    fn range_scans<G>(&mut self, ranges: Vec<G>, from_seqno: Bound<u64>) -> Result<Vec<Self::Iter>>
+    where
+        G: RangeBounds<K>,
+    {
+        self.as_mut().range_scans(ranges, from_seqno)
+    }
+}
+
+impl<K, V> CommitIterator<K, V> for Mvcc<K, V>
 where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,

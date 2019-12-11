@@ -78,15 +78,15 @@ struct Name(String);
 impl Name {
     fn next(self) -> Name {
         match From::from(self) {
-            Some((s, n)) => From::from((s, n + 1)),
+            Some((s, ver)) => From::from((s, ver + 1)),
             None => unreachable!(),
         }
     }
 }
 
 impl From<(String, usize)> for Name {
-    fn from((s, n): (String, usize)) -> Name {
-        Name(format!("{}-robt-{}", s, n))
+    fn from((s, ver): (String, usize)) -> Name {
+        Name(format!("{}-robt-{:03}", s, ver))
     }
 }
 
@@ -98,9 +98,9 @@ impl From<Name> for Option<(String, usize)> {
         } else if parts[parts.len() - 2] != "robt" {
             None
         } else {
-            let n = parts[parts.len() - 1].parse::<usize>().ok()?;
+            let ver = parts[parts.len() - 1].parse::<usize>().ok()?;
             let s = parts[..(parts.len() - 2)].join("-");
-            Some((s, n))
+            Some((s, ver))
         }
     }
 }

@@ -3,6 +3,7 @@
 
 use std::{
     hash::Hash,
+    marker,
     ops::{Bound, RangeBounds},
     vec,
 };
@@ -428,6 +429,62 @@ where
     {
         let entries: Vec<Result<Entry<K, V>>> = self.collect();
         Ok(vec![entries.into_iter()])
+    }
+}
+
+pub struct CommitWrapper<I, K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+    I: Iterator<Item = Result<Entry<K, V>>>,
+{
+    iter: Option<I>,
+
+    _phantom_key: marker::PhantomData<K>,
+    _phantom_val: marker::PhantomData<V>,
+}
+
+impl<I, K, V> CommitWrapper<I, K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+    I: Iterator<Item = Result<Entry<K, V>>>,
+{
+    pub fn new(iter: I) -> CommitWrapper<I, K, V> {
+        CommitWrapper {
+            iter: Some(iter),
+
+            _phantom_key: marker::PhantomData,
+            _phantom_val: marker::PhantomData,
+        }
+    }
+}
+
+impl<I, K, V> CommitIterator<K, V> for CommitWrapper<I, K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+    I: Iterator<Item = Result<Entry<K, V>>>,
+{
+    type Iter = I;
+
+    fn scan(&mut self, _from_seqno: Bound<u64>) -> Result<Self::Iter> {
+        Ok(self.iter.take().unwrap())
+    }
+
+    fn scans(&mut self, _shards: usize, _from_seqno: Bound<u64>) -> Result<Vec<Self::Iter>> {
+        Ok(vec![self.iter.take().unwrap()])
+    }
+
+    fn range_scans<G>(
+        &mut self,
+        _ranges: Vec<G>,
+        _from_seqno: Bound<u64>,
+    ) -> Result<Vec<Self::Iter>>
+    where
+        G: RangeBounds<K>,
+    {
+        Ok(vec![self.iter.take().unwrap()])
     }
 }
 

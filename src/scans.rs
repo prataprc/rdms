@@ -8,7 +8,9 @@ use std::{
     vec,
 };
 
-use crate::core::{Bloom, CommitIterator, Diff, Entry, PiecewiseScan, Result, ScanEntry};
+use crate::core::{
+    Bloom, CommitIterator, Diff, Entry, IndexIter, PiecewiseScan, Result, ScanEntry,
+};
 
 // TODO: benchmark SkipScan and FilterScan and measure the difference.
 
@@ -407,52 +409,50 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    type Iter = Self;
-
-    fn scan(&mut self, _from_seqno: Bound<u64>) -> Result<Self::Iter> {
+    fn scan(&mut self, _from_seqno: Bound<u64>) -> Result<IndexIter<K, V>> {
         let entries: Vec<Result<Entry<K, V>>> = self.collect();
-        Ok(entries.into_iter())
+        Ok(Box::new(entries.into_iter()))
     }
 
-    fn scans(&mut self, _shards: usize, _from_seqno: Bound<u64>) -> Result<Vec<Self::Iter>> {
+    fn scans(&mut self, _shards: usize, _from_seqno: Bound<u64>) -> Result<Vec<IndexIter<K, V>>> {
         let entries: Vec<Result<Entry<K, V>>> = self.collect();
-        Ok(vec![entries.into_iter()])
+        Ok(vec![Box::new(entries.into_iter())])
     }
 
     fn range_scans<G>(
         &mut self,
         _ranges: Vec<G>,
         _from_seqno: Bound<u64>,
-    ) -> Result<Vec<Self::Iter>>
+    ) -> Result<Vec<IndexIter<K, V>>>
     where
         G: RangeBounds<K>,
     {
         let entries: Vec<Result<Entry<K, V>>> = self.collect();
-        Ok(vec![entries.into_iter()])
+        Ok(vec![Box::new(entries.into_iter())])
     }
 }
 
-pub struct CommitWrapper<I, K, V>
+pub struct CommitWrapper<'a, K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff,
-    I: Iterator<Item = Result<Entry<K, V>>>,
 {
-    iter: Option<I>,
+    iter: Option<IndexIter<'a, K, V>>,
+    iters: Vec<IndexIter<'a, K, V>>,
 
     _phantom_key: marker::PhantomData<K>,
     _phantom_val: marker::PhantomData<V>,
 }
 
-impl<I, K, V> CommitWrapper<I, K, V>
+impl<'a, K, V> CommitWrapper<'a, K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff,
-    I: Iterator<Item = Result<Entry<K, V>>>,
 {
-    pub fn new(iter: I) -> CommitWrapper<I, K, V> {
+    pub fn new(iters: Vec<IndexIter<'a, K, V>>) -> CommitWrapper<'a, K, V> {
         CommitWrapper {
-            iter: Some(iter),
+            iter: None,
+            iters: iters,
 
             _phantom_key: marker::PhantomData,
             _phantom_val: marker::PhantomData,
@@ -460,31 +460,53 @@ where
     }
 }
 
-impl<I, K, V> CommitIterator<K, V> for CommitWrapper<I, K, V>
+impl<'a, K, V> Iterator for CommitWrapper<'a, K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff,
-    I: Iterator<Item = Result<Entry<K, V>>>,
 {
-    type Iter = I;
+    type Item = Result<Entry<K, V>>;
 
-    fn scan(&mut self, _from_seqno: Bound<u64>) -> Result<Self::Iter> {
-        Ok(self.iter.take().unwrap())
+    fn next(&mut self) -> Option<Self::Item> {
+        match &mut self.iter {
+            Some(iter) => match iter.next() {
+                Some(item) => Some(item),
+                None => {
+                    self.iter = None;
+                    self.next()
+                }
+            },
+            None if self.iters.len() == 0 => None,
+            None => {
+                self.iter = Some(self.iters.remove(0));
+                self.iter.as_mut().unwrap().next()
+            }
+        }
+    }
+}
+
+impl<'a, K, V> CommitIterator<K, V> for CommitWrapper<'a, K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    fn scan(&mut self, _from_seqno: Bound<u64>) -> Result<IndexIter<K, V>> {
+        Ok(Box::new(self))
     }
 
-    fn scans(&mut self, _shards: usize, _from_seqno: Bound<u64>) -> Result<Vec<Self::Iter>> {
-        Ok(vec![self.iter.take().unwrap()])
+    fn scans(&mut self, _: usize, _: Bound<u64>) -> Result<Vec<IndexIter<K, V>>> {
+        Ok(vec![Box::new(self)])
     }
 
     fn range_scans<G>(
         &mut self,
         _ranges: Vec<G>,
         _from_seqno: Bound<u64>,
-    ) -> Result<Vec<Self::Iter>>
+    ) -> Result<Vec<IndexIter<K, V>>>
     where
         G: RangeBounds<K>,
     {
-        Ok(vec![self.iter.take().unwrap()])
+        Ok(vec![Box::new(self)])
     }
 }
 

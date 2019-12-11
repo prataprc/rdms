@@ -189,24 +189,26 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    type Iter: Iterator<Item = Result<Entry<K, V>>>;
-
     /// Return a handle for full table iteration. Caller can hold this handle
     /// for a long time, hence implementors should make sure to handle
     /// unwanted side-effects.
-    fn scan(&mut self, from_seqno: Bound<u64>) -> Result<Self::Iter>;
+    fn scan(&mut self, from_seqno: Bound<u64>) -> Result<IndexIter<K, V>>;
 
     /// Return a list of equally balanced handles to iterator on
     /// range-partitioned entries. Note that ``shards`` argument is
     /// only a hint, return array of iterators can be less-than or
     /// equal-to or greater-than the requested shards.
-    fn scans(&mut self, shards: usize, from_seqno: Bound<u64>) -> Result<Vec<Self::Iter>>;
+    fn scans(&mut self, shards: usize, from_seqno: Bound<u64>) -> Result<Vec<IndexIter<K, V>>>;
 
     /// Same as iters() but range partition is decided by the `ranges`
     /// argument. And unlike the ``shards`` argument, ``ranges`` argument
     /// is treated with precision, range.len() is equal-to return array
     /// of iterators.
-    fn range_scans<G>(&mut self, ranges: Vec<G>, from_seqno: Bound<u64>) -> Result<Vec<Self::Iter>>
+    fn range_scans<G>(
+        &mut self,
+        ranges: Vec<G>,
+        from_seqno: Bound<u64>,
+    ) -> Result<Vec<IndexIter<K, V>>>
     where
         G: RangeBounds<K>;
 }

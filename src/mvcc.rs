@@ -1714,17 +1714,19 @@ where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
 {
-    type Iter = <Mvcc<K, V> as CommitIterator<K, V>>::Iter;
-
-    fn scan(&mut self, from_seqno: Bound<u64>) -> Result<Self::Iter> {
+    fn scan(&mut self, from_seqno: Bound<u64>) -> Result<IndexIter<K, V>> {
         self.as_mut().scan(from_seqno)
     }
 
-    fn scans(&mut self, shards: usize, from_seqno: Bound<u64>) -> Result<Vec<Self::Iter>> {
+    fn scans(&mut self, shards: usize, from_seqno: Bound<u64>) -> Result<Vec<IndexIter<K, V>>> {
         self.as_mut().scans(shards, from_seqno)
     }
 
-    fn range_scans<G>(&mut self, ranges: Vec<G>, from_seqno: Bound<u64>) -> Result<Vec<Self::Iter>>
+    fn range_scans<G>(
+        &mut self,
+        ranges: Vec<G>,
+        from_seqno: Bound<u64>,
+    ) -> Result<Vec<IndexIter<K, V>>>
     where
         G: RangeBounds<K>,
     {
@@ -1737,15 +1739,13 @@ where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
 {
-    type Iter = SkipScan<K, V, MvccReader<K, V>>;
-
-    fn scan(&mut self, from_seqno: Bound<u64>) -> Result<Self::Iter> {
+    fn scan(&mut self, from_seqno: Bound<u64>) -> Result<IndexIter<K, V>> {
         let mut ss = SkipScan::new(self.to_reader()?);
         ss.set_seqno_range((from_seqno, Bound::Included(self.to_seqno())));
-        Ok(ss)
+        Ok(Box::new(ss))
     }
 
-    fn scans(&mut self, shards: usize, from_seqno: Bound<u64>) -> Result<Vec<Self::Iter>> {
+    fn scans(&mut self, shards: usize, from_seqno: Bound<u64>) -> Result<Vec<IndexIter<K, V>>> {
         match shards {
             0 => return Ok(vec![]),
             1 => return Ok(vec![self.scan(from_seqno)?]),
@@ -1761,31 +1761,36 @@ where
         };
         let keys: Vec<K> = keys.into_iter().filter_map(convert::identity).collect();
 
-        let (mut scans, mut lkey) = (vec![], Bound::Unbounded);
+        let mut lkey = Bound::Unbounded;
+        let mut scans: Vec<IndexIter<K, V>> = vec![];
         for hkey in keys {
             let mut ss = SkipScan::new(self.to_reader()?);
             ss.set_key_range((lkey, Bound::Excluded(hkey.clone())))
                 .set_seqno_range(within.clone());
             lkey = Bound::Included(hkey);
-            scans.push(ss);
+            scans.push(Box::new(ss));
         }
         let mut ss = SkipScan::new(self.to_reader()?);
         ss.set_key_range((lkey, Bound::Unbounded))
             .set_seqno_range(within.clone());
-        scans.push(ss);
+        scans.push(Box::new(ss));
         Ok(scans)
     }
 
-    fn range_scans<G>(&mut self, ranges: Vec<G>, from_seqno: Bound<u64>) -> Result<Vec<Self::Iter>>
+    fn range_scans<G>(
+        &mut self,
+        ranges: Vec<G>,
+        from_seqno: Bound<u64>,
+    ) -> Result<Vec<IndexIter<K, V>>>
     where
         G: RangeBounds<K>,
     {
-        let mut scans = vec![];
+        let mut scans: Vec<IndexIter<K, V>> = vec![];
         for range in ranges {
             let mut ss = SkipScan::new(self.to_reader()?);
             ss.set_key_range(range)
                 .set_seqno_range((from_seqno, Bound::Included(self.to_seqno())));
-            scans.push(ss);
+            scans.push(Box::new(ss));
         }
         Ok(scans)
     }

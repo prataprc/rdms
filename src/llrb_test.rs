@@ -9,7 +9,7 @@ use crate::{
     core::{CommitIterator, Index, Reader, Validate, Writer},
     error::Error,
     llrb::Llrb,
-    scans::{FilterScan, SkipScan},
+    scans::{CommitWrapper, FilterScan, SkipScan},
     types::Empty,
 };
 
@@ -1013,10 +1013,10 @@ fn test_split() {
 #[test]
 fn test_commit1() {
     let mut index1: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-index1");
-    let mut index2: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-index2");
+    let index2: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-index2");
     let mut rindex: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-ref-index");
 
-    index1.commit(&mut *index2, |meta| meta.clone()).unwrap();
+    index1.commit(index2, |meta| meta.clone()).unwrap();
     check_commit_nodes(index1.as_mut(), rindex.as_mut());
 }
 
@@ -1029,7 +1029,7 @@ fn test_commit2() {
     index2.set(100, 200).unwrap();
     rindex.set(100, 200).unwrap();
 
-    index1.commit(&mut *index2, |meta| meta.clone()).unwrap();
+    index1.commit(index2, |meta| meta.clone()).unwrap();
     check_commit_nodes(index1.as_mut(), rindex.as_mut());
 }
 
@@ -1101,7 +1101,7 @@ fn test_commit3() {
             };
         }
 
-        index1.commit(&mut *index2, |meta| meta.clone()).unwrap();
+        index1.commit(index2, |meta| meta.clone()).unwrap();
         check_commit_nodes(index1.as_mut(), rindex.as_mut());
     }
 }
@@ -1335,11 +1335,11 @@ fn test_commit_iterator_scan() {
             n if n >= 0 => Bound::Excluded(n as u64),
             _ => Bound::Unbounded,
         };
-        let mut iter = (&mut *llrb).scan(from_seqno).unwrap();
         let mut r = llrb.to_reader().unwrap();
         let mut ref_iter = r.iter().unwrap();
         let within = (from_seqno, Bound::Included(llrb.to_seqno()));
         let mut count = 0;
+        let mut iter = llrb.scan(from_seqno).unwrap();
         loop {
             match ref_iter.next() {
                 Some(Ok(ref_entry)) => match ref_entry.filter_within(within.0, within.1) {
@@ -1366,8 +1366,6 @@ fn test_commit_iterator_scan() {
 
 #[test]
 fn test_commit_iterator_scans() {
-    type MyIter = Box<dyn Iterator<Item = Result<Entry<i64, i64>>>>;
-
     let seed: u128 = random();
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
@@ -1382,15 +1380,10 @@ fn test_commit_iterator_scans() {
             n if n >= 0 => Bound::Excluded(n as u64),
             _ => Bound::Unbounded,
         };
-        let mut iters = (&mut *llrb).scans(shards, from_seqno).unwrap();
-        let iter: MyIter = Box::new(iters.remove(0));
-        let mut iter = iters.drain(..).into_iter().fold(iter, |acc, iter| {
-            Box::new(acc.chain(Box::new(iter) as MyIter)) as MyIter
-        });
-
         let mut r = llrb.to_reader().unwrap();
-        let mut ref_iter = r.iter().unwrap();
         let within = (from_seqno, Bound::Included(llrb.to_seqno()));
+        let mut iter = CommitWrapper::new(llrb.scans(shards, from_seqno).unwrap());
+        let mut ref_iter = r.iter().unwrap();
         let mut count = 0;
         loop {
             match ref_iter.next() {
@@ -1420,8 +1413,6 @@ fn test_commit_iterator_scans() {
 fn test_commit_iterator_range_scans() {
     use std::ops::Bound;
 
-    type MyIter = Box<dyn Iterator<Item = Result<Entry<i64, i64>>>>;
-
     let seed: u128 = random();
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
@@ -1442,15 +1433,10 @@ fn test_commit_iterator_range_scans() {
             n if n >= 0 => Bound::Excluded(n as u64),
             _ => Bound::Unbounded,
         };
-        let mut iters = (&mut *llrb).range_scans(ranges, from_seqno).unwrap();
-        let iter: MyIter = Box::new(iters.remove(0));
-        let mut iter = iters.drain(..).into_iter().fold(iter, |acc, iter| {
-            Box::new(acc.chain(Box::new(iter) as MyIter)) as MyIter
-        });
-
         let mut r = llrb.to_reader().unwrap();
-        let mut ref_iter = r.iter().unwrap();
         let within = (from_seqno, Bound::Included(llrb.to_seqno()));
+        let mut iter = CommitWrapper::new(llrb.range_scans(ranges, from_seqno).unwrap());
+        let mut ref_iter = r.iter().unwrap();
         let mut count = 0;
         loop {
             match ref_iter.next() {

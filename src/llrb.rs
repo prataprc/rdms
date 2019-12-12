@@ -1579,7 +1579,7 @@ where
 
     fn range_scans<N, G>(&mut self, ranges: Vec<N>, within: G) -> Result<Vec<IndexIter<K, V>>>
     where
-        N: RangeBounds<K>,
+        N: Clone + RangeBounds<K>,
         G: Clone + RangeBounds<u64>,
     {
         self.as_mut().range_scans(ranges, within)
@@ -1636,7 +1636,7 @@ where
 
     fn range_scans<N, G>(&mut self, ranges: Vec<N>, within: G) -> Result<Vec<IndexIter<K, V>>>
     where
-        N: RangeBounds<K>,
+        N: Clone + RangeBounds<K>,
         G: Clone + RangeBounds<u64>,
     {
         let mut scans: Vec<IndexIter<K, V>> = vec![];

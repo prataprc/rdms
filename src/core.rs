@@ -212,7 +212,7 @@ where
     fn range_scans<N, G>(&mut self, ranges: Vec<N>, within: G) -> Result<Vec<IndexIter<K, V>>>
     where
         G: Clone + RangeBounds<u64>,
-        N: RangeBounds<K>;
+        N: Clone + RangeBounds<K>;
 }
 
 /// Trait implemented by all types of rdms-indexes.
@@ -1305,7 +1305,7 @@ where
 
     pub fn range_scans<N>(&mut self, rs: Vec<N>) -> Result<Vec<IndexIter<K, V>>>
     where
-        N: RangeBounds<K>,
+        N: Clone + RangeBounds<K>,
     {
         let within = (self.start.clone(), self.end.clone());
         self.scanner.range_scans(rs, within)

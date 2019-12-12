@@ -7,7 +7,7 @@ use crate::{
     core::{CommitIterator, Index, Reader, Validate, Writer},
     error::Error,
     mvcc::Mvcc,
-    scans::{CommitWrapper, FilterScan, SkipScan},
+    scans::{CommitChain, FilterScan, SkipScan},
     types::Empty,
 };
 
@@ -1169,7 +1169,7 @@ fn test_commit_iterator_scans() {
         };
         let mut r = mvcc.to_reader().unwrap();
         let within = (from_seqno, Bound::Included(mvcc.to_seqno()));
-        let mut iter = CommitWrapper::new(mvcc.scans(shards, within.clone()).unwrap());
+        let mut iter = CommitChain::new(mvcc.scans(shards, within.clone()).unwrap());
         let mut ref_iter = r.iter().unwrap();
         let mut count = 0;
         loop {
@@ -1222,7 +1222,7 @@ fn test_commit_iterator_range_scans() {
         };
         let mut r = mvcc.to_reader().unwrap();
         let within = (from_seqno, Bound::Included(mvcc.to_seqno()));
-        let mut iter = CommitWrapper::new(mvcc.range_scans(ranges, within.clone()).unwrap());
+        let mut iter = CommitChain::new(mvcc.range_scans(ranges, within.clone()).unwrap());
         let mut ref_iter = r.iter().unwrap();
         let mut count = 0;
         loop {

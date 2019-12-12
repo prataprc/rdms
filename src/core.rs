@@ -1289,6 +1289,10 @@ where
         }
     }
 
+    pub fn to_within(&self) -> (Bound<u64>, Bound<u64>) {
+        (self.start.clone(), self.end.clone())
+    }
+
     pub fn scan(&mut self) -> Result<IndexIter<K, V>> {
         let within = (self.start.clone(), self.end.clone());
         self.scanner.scan(within)

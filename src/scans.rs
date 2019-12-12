@@ -425,7 +425,7 @@ where
     }
 }
 
-pub struct CommitWrapper<K, V, I>
+pub struct CommitChain<K, V, I>
 where
     K: Clone + Ord,
     V: Clone + Diff,
@@ -440,14 +440,14 @@ where
     _phantom_val: marker::PhantomData<V>,
 }
 
-impl<K, V, I> CommitWrapper<K, V, I>
+impl<K, V, I> CommitChain<K, V, I>
 where
     K: Clone + Ord,
     V: Clone + Diff,
     I: Iterator<Item = Result<Entry<K, V>>>,
 {
-    pub fn new(iters: Vec<I>) -> CommitWrapper<K, V, I> {
-        CommitWrapper {
+    pub fn new(iters: Vec<I>) -> CommitChain<K, V, I> {
+        CommitChain {
             iter: None,
             start: Bound::Unbounded,
             end: Bound::Unbounded,
@@ -459,7 +459,7 @@ where
     }
 }
 
-impl<K, V, I> Iterator for CommitWrapper<K, V, I>
+impl<K, V, I> Iterator for CommitChain<K, V, I>
 where
     K: Clone + Ord,
     V: Clone + Diff,
@@ -488,41 +488,49 @@ where
     }
 }
 
-impl<K, V, I> CommitIterator<K, V> for CommitWrapper<K, V, I>
+pub struct CommitWrapper<'a, K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff,
-    I: Iterator<Item = Result<Entry<K, V>>>,
 {
-    fn scan<G>(&mut self, within: G) -> Result<IndexIter<K, V>>
+    iter: Option<IndexIter<'a, K, V>>,
+}
+
+impl<'a, K, V> CommitWrapper<'a, K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    pub fn new(iter: IndexIter<'a, K, V>) -> CommitWrapper<'a, K, V> {
+        CommitWrapper { iter: Some(iter) }
+    }
+}
+
+impl<'a, K, V> CommitIterator<K, V> for CommitWrapper<'a, K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    fn scan<G>(&mut self, _within: G) -> Result<IndexIter<K, V>>
     where
         G: RangeBounds<u64>,
     {
-        let (start, end) = util::to_start_end(within);
-        self.start = start;
-        self.end = end;
-        Ok(Box::new(self))
+        Ok(self.iter.take().unwrap())
     }
 
-    fn scans<G>(&mut self, _: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
+    fn scans<G>(&mut self, _: usize, _within: G) -> Result<Vec<IndexIter<K, V>>>
     where
         G: RangeBounds<u64>,
     {
-        let (start, end) = util::to_start_end(within);
-        self.start = start;
-        self.end = end;
-        Ok(vec![Box::new(self)])
+        Ok(vec![self.iter.take().unwrap()])
     }
 
-    fn range_scans<N, G>(&mut self, _: Vec<N>, within: G) -> Result<Vec<IndexIter<K, V>>>
+    fn range_scans<N, G>(&mut self, _: Vec<N>, _within: G) -> Result<Vec<IndexIter<K, V>>>
     where
         G: RangeBounds<u64>,
         N: RangeBounds<K>,
     {
-        let (start, end) = util::to_start_end(within);
-        self.start = start;
-        self.end = end;
-        Ok(vec![Box::new(self)])
+        Ok(vec![self.iter.take().unwrap()])
     }
 }
 

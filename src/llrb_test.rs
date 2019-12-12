@@ -1016,7 +1016,12 @@ fn test_commit1() {
     let index2: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-index2");
     let mut rindex: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-ref-index");
 
-    index1.commit(index2, |meta| meta.clone()).unwrap();
+    index1
+        .commit(
+            CommitIter::new(index2, (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded)),
+            |meta| meta.clone(),
+        )
+        .unwrap();
     check_commit_nodes(index1.as_mut(), rindex.as_mut());
 }
 
@@ -1029,7 +1034,12 @@ fn test_commit2() {
     index2.set(100, 200).unwrap();
     rindex.set(100, 200).unwrap();
 
-    index1.commit(index2, |meta| meta.clone()).unwrap();
+    index1
+        .commit(
+            CommitIter::new(index2, (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded)),
+            |meta| meta.clone(),
+        )
+        .unwrap();
     check_commit_nodes(index1.as_mut(), rindex.as_mut());
 }
 
@@ -1101,7 +1111,12 @@ fn test_commit3() {
             };
         }
 
-        index1.commit(index2, |meta| meta.clone()).unwrap();
+        index1
+            .commit(
+                CommitIter::new(index2, (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded)),
+                |meta| meta.clone(),
+            )
+            .unwrap();
         check_commit_nodes(index1.as_mut(), rindex.as_mut());
     }
 }
@@ -1339,7 +1354,7 @@ fn test_commit_iterator_scan() {
         let mut ref_iter = r.iter().unwrap();
         let within = (from_seqno, Bound::Included(llrb.to_seqno()));
         let mut count = 0;
-        let mut iter = llrb.scan(from_seqno).unwrap();
+        let mut iter = llrb.scan(within.clone()).unwrap();
         loop {
             match ref_iter.next() {
                 Some(Ok(ref_entry)) => match ref_entry.filter_within(within.0, within.1) {
@@ -1382,7 +1397,7 @@ fn test_commit_iterator_scans() {
         };
         let mut r = llrb.to_reader().unwrap();
         let within = (from_seqno, Bound::Included(llrb.to_seqno()));
-        let mut iter = CommitWrapper::new(llrb.scans(shards, from_seqno).unwrap());
+        let mut iter = CommitWrapper::new(llrb.scans(shards, within.clone()).unwrap());
         let mut ref_iter = r.iter().unwrap();
         let mut count = 0;
         loop {
@@ -1435,7 +1450,7 @@ fn test_commit_iterator_range_scans() {
         };
         let mut r = llrb.to_reader().unwrap();
         let within = (from_seqno, Bound::Included(llrb.to_seqno()));
-        let mut iter = CommitWrapper::new(llrb.range_scans(ranges, from_seqno).unwrap());
+        let mut iter = CommitWrapper::new(llrb.range_scans(ranges, within.clone()).unwrap());
         let mut ref_iter = r.iter().unwrap();
         let mut count = 0;
         loop {

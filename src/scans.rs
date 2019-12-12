@@ -8,8 +8,9 @@ use std::{
     vec,
 };
 
-use crate::core::{
-    Bloom, CommitIterator, Diff, Entry, IndexIter, PiecewiseScan, Result, ScanEntry,
+use crate::{
+    core::{Bloom, CommitIterator, Diff, Entry, IndexIter, PiecewiseScan, Result, ScanEntry},
+    util,
 };
 
 // TODO: benchmark SkipScan and FilterScan and measure the difference.
@@ -98,21 +99,16 @@ where
     where
         G: RangeBounds<u64>,
     {
-        self.seqno_start = match within.start_bound() {
-            Bound::Included(seqno) => Bound::Included(*seqno),
-            Bound::Excluded(seqno) => Bound::Excluded(*seqno),
-            Bound::Unbounded => Bound::Unbounded,
-        };
-        self.seqno_end = match within.end_bound() {
-            Bound::Included(seqno) => Bound::Included(*seqno),
-            Bound::Excluded(seqno) => Bound::Excluded(*seqno),
-            Bound::Unbounded => Bound::Unbounded,
-        };
+        use std::ops::Bound::{Excluded, Included};
+
+        let (start, end) = util::to_start_end(within);
+        self.seqno_start = start;
+        self.seqno_end = end;
         match (self.seqno_start, self.seqno_end) {
-            (Bound::Included(s1), Bound::Included(s2)) if s1 > s2 => self.batch_size = 0,
-            (Bound::Included(s1), Bound::Excluded(s2)) if s1 >= s2 => self.batch_size = 0,
-            (Bound::Excluded(s1), Bound::Included(s2)) if s1 >= s2 => self.batch_size = 0,
-            (Bound::Excluded(s1), Bound::Excluded(s2)) if s1 >= s2 => self.batch_size = 0,
+            (Included(s1), Included(s2)) if s1 > s2 => self.batch_size = 0,
+            (Included(s1), Excluded(s2)) if s1 >= s2 => self.batch_size = 0,
+            (Excluded(s1), Included(s2)) if s1 >= s2 => self.batch_size = 0,
+            (Excluded(s1), Excluded(s2)) if s1 >= s2 => self.batch_size = 0,
             _ => (),
         }
         self
@@ -255,20 +251,11 @@ where
     V: Clone + Diff,
     I: Iterator<Item = Result<Entry<K, V>>>,
 {
-    pub fn new<S>(iter: I, within: S) -> FilterScan<K, V, I>
+    pub fn new<G>(iter: I, within: G) -> FilterScan<K, V, I>
     where
-        S: RangeBounds<u64>,
+        G: RangeBounds<u64>,
     {
-        let start = match within.start_bound() {
-            Bound::Included(start) => Bound::Included(*start),
-            Bound::Excluded(start) => Bound::Excluded(*start),
-            Bound::Unbounded => Bound::Unbounded,
-        };
-        let end = match within.end_bound() {
-            Bound::Included(end) => Bound::Included(*end),
-            Bound::Excluded(end) => Bound::Excluded(*end),
-            Bound::Unbounded => Bound::Unbounded,
-        };
+        let (start, end) = util::to_start_end(within);
         FilterScan { iter, start, end }
     }
 }
@@ -409,49 +396,61 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    fn scan(&mut self, _from_seqno: Bound<u64>) -> Result<IndexIter<K, V>> {
-        let entries: Vec<Result<Entry<K, V>>> = self.collect();
-        Ok(Box::new(entries.into_iter()))
-    }
-
-    fn scans(&mut self, _shards: usize, _from_seqno: Bound<u64>) -> Result<Vec<IndexIter<K, V>>> {
-        let entries: Vec<Result<Entry<K, V>>> = self.collect();
-        Ok(vec![Box::new(entries.into_iter())])
-    }
-
-    fn range_scans<G>(
-        &mut self,
-        _ranges: Vec<G>,
-        _from_seqno: Bound<u64>,
-    ) -> Result<Vec<IndexIter<K, V>>>
+    fn scan<G>(&mut self, within: G) -> Result<IndexIter<K, V>>
     where
-        G: RangeBounds<K>,
+        G: RangeBounds<u64>,
     {
         let entries: Vec<Result<Entry<K, V>>> = self.collect();
-        Ok(vec![Box::new(entries.into_iter())])
+        let iter = entries.into_iter();
+        Ok(Box::new(FilterScan::new(iter, within)))
+    }
+
+    fn scans<G>(&mut self, _shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
+    where
+        G: RangeBounds<u64>,
+    {
+        let entries: Vec<Result<Entry<K, V>>> = self.collect();
+        let iter = entries.into_iter();
+        Ok(vec![Box::new(FilterScan::new(iter, within))])
+    }
+
+    fn range_scans<N, G>(&mut self, _ranges: Vec<N>, within: G) -> Result<Vec<IndexIter<K, V>>>
+    where
+        G: RangeBounds<u64>,
+        N: RangeBounds<K>,
+    {
+        let entries: Vec<Result<Entry<K, V>>> = self.collect();
+        let iter = entries.into_iter();
+        Ok(vec![Box::new(FilterScan::new(iter, within))])
     }
 }
 
-pub struct CommitWrapper<'a, K, V>
+pub struct CommitWrapper<K, V, I>
 where
     K: Clone + Ord,
     V: Clone + Diff,
+    I: Iterator<Item = Result<Entry<K, V>>>,
 {
-    iter: Option<IndexIter<'a, K, V>>,
-    iters: Vec<IndexIter<'a, K, V>>,
+    iter: Option<FilterScan<K, V, I>>,
+    start: Bound<u64>,
+    end: Bound<u64>,
+    iters: Vec<I>,
 
     _phantom_key: marker::PhantomData<K>,
     _phantom_val: marker::PhantomData<V>,
 }
 
-impl<'a, K, V> CommitWrapper<'a, K, V>
+impl<K, V, I> CommitWrapper<K, V, I>
 where
     K: Clone + Ord,
     V: Clone + Diff,
+    I: Iterator<Item = Result<Entry<K, V>>>,
 {
-    pub fn new(iters: Vec<IndexIter<'a, K, V>>) -> CommitWrapper<'a, K, V> {
+    pub fn new(iters: Vec<I>) -> CommitWrapper<K, V, I> {
         CommitWrapper {
             iter: None,
+            start: Bound::Unbounded,
+            end: Bound::Unbounded,
             iters: iters,
 
             _phantom_key: marker::PhantomData,
@@ -460,10 +459,11 @@ where
     }
 }
 
-impl<'a, K, V> Iterator for CommitWrapper<'a, K, V>
+impl<K, V, I> Iterator for CommitWrapper<K, V, I>
 where
     K: Clone + Ord,
     V: Clone + Diff,
+    I: Iterator<Item = Result<Entry<K, V>>>,
 {
     type Item = Result<Entry<K, V>>;
 
@@ -478,34 +478,50 @@ where
             },
             None if self.iters.len() == 0 => None,
             None => {
-                self.iter = Some(self.iters.remove(0));
+                self.iter = Some(FilterScan::new(
+                    self.iters.remove(0),
+                    (self.start.clone(), self.end.clone()),
+                ));
                 self.iter.as_mut().unwrap().next()
             }
         }
     }
 }
 
-impl<'a, K, V> CommitIterator<K, V> for CommitWrapper<'a, K, V>
+impl<K, V, I> CommitIterator<K, V> for CommitWrapper<K, V, I>
 where
     K: Clone + Ord,
     V: Clone + Diff,
+    I: Iterator<Item = Result<Entry<K, V>>>,
 {
-    fn scan(&mut self, _from_seqno: Bound<u64>) -> Result<IndexIter<K, V>> {
+    fn scan<G>(&mut self, within: G) -> Result<IndexIter<K, V>>
+    where
+        G: RangeBounds<u64>,
+    {
+        let (start, end) = util::to_start_end(within);
+        self.start = start;
+        self.end = end;
         Ok(Box::new(self))
     }
 
-    fn scans(&mut self, _: usize, _: Bound<u64>) -> Result<Vec<IndexIter<K, V>>> {
+    fn scans<G>(&mut self, _: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
+    where
+        G: RangeBounds<u64>,
+    {
+        let (start, end) = util::to_start_end(within);
+        self.start = start;
+        self.end = end;
         Ok(vec![Box::new(self)])
     }
 
-    fn range_scans<G>(
-        &mut self,
-        _ranges: Vec<G>,
-        _from_seqno: Bound<u64>,
-    ) -> Result<Vec<IndexIter<K, V>>>
+    fn range_scans<N, G>(&mut self, _: Vec<N>, within: G) -> Result<Vec<IndexIter<K, V>>>
     where
-        G: RangeBounds<K>,
+        G: RangeBounds<u64>,
+        N: RangeBounds<K>,
     {
+        let (start, end) = util::to_start_end(within);
+        self.start = start;
+        self.end = end;
         Ok(vec![Box::new(self)])
     }
 }

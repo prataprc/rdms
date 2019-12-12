@@ -5,13 +5,14 @@ use std::{
     convert::TryInto,
     ffi, fmt, fs,
     hash::Hash,
+    marker,
     mem::{self, ManuallyDrop},
     ops::{Bound, RangeBounds},
     result,
     sync::atomic::{AtomicBool, Ordering::SeqCst},
 };
 
-use crate::{error::Error, vlog};
+use crate::{error::Error, util, vlog};
 
 // TODO: track all footprint calls and handle the Result<> without using
 // a blind unwrap.
@@ -192,25 +193,26 @@ where
     /// Return a handle for full table iteration. Caller can hold this handle
     /// for a long time, hence implementors should make sure to handle
     /// unwanted side-effects.
-    fn scan(&mut self, from_seqno: Bound<u64>) -> Result<IndexIter<K, V>>;
+    fn scan<G>(&mut self, within: G) -> Result<IndexIter<K, V>>
+    where
+        G: Clone + RangeBounds<u64>;
 
     /// Return a list of equally balanced handles to iterator on
     /// range-partitioned entries. Note that ``shards`` argument is
     /// only a hint, return array of iterators can be less-than or
     /// equal-to or greater-than the requested shards.
-    fn scans(&mut self, shards: usize, from_seqno: Bound<u64>) -> Result<Vec<IndexIter<K, V>>>;
+    fn scans<G>(&mut self, shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
+    where
+        G: Clone + RangeBounds<u64>;
 
     /// Same as iters() but range partition is decided by the `ranges`
     /// argument. And unlike the ``shards`` argument, ``ranges`` argument
     /// is treated with precision, range.len() is equal-to return array
     /// of iterators.
-    fn range_scans<G>(
-        &mut self,
-        ranges: Vec<G>,
-        from_seqno: Bound<u64>,
-    ) -> Result<Vec<IndexIter<K, V>>>
+    fn range_scans<N, G>(&mut self, ranges: Vec<N>, within: G) -> Result<Vec<IndexIter<K, V>>>
     where
-        G: RangeBounds<K>;
+        G: Clone + RangeBounds<u64>,
+        N: RangeBounds<K>;
 }
 
 /// Trait implemented by all types of rdms-indexes.
@@ -259,7 +261,7 @@ where
     /// reference, there can be concurrent compact() call. It is upto the
     /// implementing type to synchronize the concurrent commit() and compact()
     /// calls.
-    fn commit<C, F>(&mut self, scan: C, metacb: F) -> Result<()>
+    fn commit<C, F>(&mut self, scanner: CommitIter<K, V, C>, mf: F) -> Result<()>
     where
         C: CommitIterator<K, V>,
         F: Fn(Vec<u8>) -> Vec<u8>;
@@ -271,7 +273,7 @@ where
     /// `cutoff` bound can be purged permenantly.
     ///
     /// Return number of items in index.
-    fn compact<F>(&mut self, cutoff: Bound<u64>, metacb: F) -> Result<usize>
+    fn compact<F>(&mut self, cutoff: Bound<u64>, mf: F) -> Result<usize>
     where
         F: Fn(Vec<Vec<u8>>) -> Vec<u8>;
 }
@@ -1250,6 +1252,60 @@ where
     Found(Entry<K, V>),
     // Refill.
     Retry(K),
+}
+
+/// Container type for CommitIterator types.
+pub struct CommitIter<K, V, C>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+    C: CommitIterator<K, V>,
+{
+    scanner: C,
+    start: Bound<u64>,
+    end: Bound<u64>,
+
+    _phantom_key: marker::PhantomData<K>,
+    _phantom_val: marker::PhantomData<V>,
+}
+
+impl<K, V, C> CommitIter<K, V, C>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+    C: CommitIterator<K, V>,
+{
+    pub fn new<G>(scanner: C, within: G) -> CommitIter<K, V, C>
+    where
+        G: RangeBounds<u64>,
+    {
+        let (start, end) = util::to_start_end(within);
+        CommitIter {
+            scanner,
+            start,
+            end,
+            _phantom_key: marker::PhantomData,
+            _phantom_val: marker::PhantomData,
+        }
+    }
+
+    pub fn scan(&mut self) -> Result<IndexIter<K, V>> {
+        let within = (self.start.clone(), self.end.clone());
+        self.scanner.scan(within)
+    }
+
+    pub fn scans(&mut self, shards: usize) -> Result<Vec<IndexIter<K, V>>> {
+        let within = (self.start.clone(), self.end.clone());
+        self.scanner.scans(shards, within)
+    }
+
+    pub fn range_scans<N>(&mut self, rs: Vec<N>) -> Result<Vec<IndexIter<K, V>>>
+    where
+        N: RangeBounds<K>,
+    {
+        let within = (self.start.clone(), self.end.clone());
+        self.scanner.range_scans(rs, within)
+    }
 }
 
 #[cfg(test)]

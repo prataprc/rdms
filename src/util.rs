@@ -2,6 +2,7 @@ use std::{
     convert::TryInto,
     ffi, fs,
     io::{self, Read, Seek},
+    ops::{Bound, RangeBounds},
     path,
 };
 
@@ -67,6 +68,23 @@ pub(crate) fn check_remaining(buf: &[u8], want: usize, msg: &str) -> Result<()> 
     } else {
         Ok(())
     }
+}
+
+pub(crate) fn to_start_end<G>(within: G) -> (Bound<u64>, Bound<u64>)
+where
+    G: RangeBounds<u64>,
+{
+    let start = match within.start_bound() {
+        Bound::Included(seqno) => Bound::Included(*seqno),
+        Bound::Excluded(seqno) => Bound::Excluded(*seqno),
+        Bound::Unbounded => Bound::Unbounded,
+    };
+    let end = match within.end_bound() {
+        Bound::Included(seqno) => Bound::Included(*seqno),
+        Bound::Excluded(seqno) => Bound::Excluded(*seqno),
+        Bound::Unbounded => Bound::Unbounded,
+    };
+    (start, end)
 }
 
 #[cfg(test)]

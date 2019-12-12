@@ -797,7 +797,9 @@ fn test_commit1() {
     let index2: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-index2");
     let mut rindex: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-ref-index");
 
-    index1.commit(index2, |meta| meta.clone()).unwrap();
+    let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
+    let scanner = CommitIter::new(index2, within);
+    index1.commit(scanner, |meta| meta.clone()).unwrap();
     check_commit_nodes(index1.as_mut(), rindex.as_mut());
 }
 
@@ -810,7 +812,9 @@ fn test_commit2() {
     index2.set(100, 200).unwrap();
     rindex.set(100, 200).unwrap();
 
-    index1.commit(index2, |meta| meta.clone()).unwrap();
+    let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
+    let scanner = CommitIter::new(index2, within);
+    index1.commit(scanner, |meta| meta.clone()).unwrap();
     check_commit_nodes(index1.as_mut(), rindex.as_mut());
 }
 
@@ -882,7 +886,9 @@ fn test_commit3() {
             };
         }
 
-        index1.commit(index2, |meta| meta.clone()).unwrap();
+        let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
+        let scanner = CommitIter::new(index2, within);
+        index1.commit(scanner, |meta| meta.clone()).unwrap();
         check_commit_nodes(index1.as_mut(), rindex.as_mut());
     }
 }
@@ -1118,7 +1124,7 @@ fn test_commit_iterator_scan() {
         };
         let mut r = mvcc.to_reader().unwrap();
         let within = (from_seqno, Bound::Included(mvcc.to_seqno()));
-        let mut iter = mvcc.scan(from_seqno).unwrap();
+        let mut iter = mvcc.scan(within.clone()).unwrap();
         let mut ref_iter = r.iter().unwrap();
         let mut count = 0;
         loop {
@@ -1163,7 +1169,7 @@ fn test_commit_iterator_scans() {
         };
         let mut r = mvcc.to_reader().unwrap();
         let within = (from_seqno, Bound::Included(mvcc.to_seqno()));
-        let mut iter = CommitWrapper::new(mvcc.scans(shards, from_seqno).unwrap());
+        let mut iter = CommitWrapper::new(mvcc.scans(shards, within.clone()).unwrap());
         let mut ref_iter = r.iter().unwrap();
         let mut count = 0;
         loop {
@@ -1216,7 +1222,7 @@ fn test_commit_iterator_range_scans() {
         };
         let mut r = mvcc.to_reader().unwrap();
         let within = (from_seqno, Bound::Included(mvcc.to_seqno()));
-        let mut iter = CommitWrapper::new(mvcc.range_scans(ranges, from_seqno).unwrap());
+        let mut iter = CommitWrapper::new(mvcc.range_scans(ranges, within.clone()).unwrap());
         let mut ref_iter = r.iter().unwrap();
         let mut count = 0;
         loop {

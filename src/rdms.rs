@@ -11,7 +11,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use crate::core::{CommitIterator, Diff, Entry, Footprint, Index, Result, Validate};
+use crate::core::{CommitIter, CommitIterator, Diff, Entry, Footprint, Index, Result, Validate};
 
 /// Default commit interval, in seconds. Refer to set_commit_interval()
 /// method for more detail.
@@ -124,7 +124,7 @@ where
         index.to_writer()
     }
 
-    pub fn commit<C, F>(&mut self, scanner: C, metacb: F) -> Result<()>
+    pub fn commit<C, F>(&mut self, scanner: CommitIter<K, V, C>, metacb: F) -> Result<()>
     where
         C: CommitIterator<K, V>,
         F: Fn(Vec<u8>) -> Vec<u8>,
@@ -175,7 +175,9 @@ where
             let start = SystemTime::now();
             let mut indx = index.lock().unwrap();
             let empty: Vec<Result<Entry<K, V>>> = vec![];
-            indx.commit(empty.into_iter(), convert::identity).unwrap();
+            let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
+            let scanner = CommitIter::new(empty.into_iter(), within);
+            indx.commit(scanner, convert::identity).unwrap();
             start.elapsed().ok().unwrap()
         };
     }

@@ -314,7 +314,14 @@ fn test_commit_scan() {
                 .unwrap()
                 .map(|e| Ok(e.as_ref().unwrap().clone()))
                 .collect();
-            llrb.commit(es.into_iter(), |val| val).unwrap();
+            llrb.commit(
+                CommitIter::new(
+                    es.into_iter(),
+                    (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded),
+                ),
+                |val| val,
+            )
+            .unwrap();
 
             let b = Builder::<i64, i64, NoBitmap>::initial(&dir, "snapshot1", config).unwrap();
             b.build(llrb_snap.iter().unwrap(), app_meta.as_bytes().to_vec())
@@ -335,7 +342,14 @@ fn test_commit_scan() {
                 .unwrap()
                 .map(|e| Ok(e.as_ref().unwrap().clone()))
                 .collect();
-            llrb.commit(es.into_iter(), |val| val).unwrap();
+            llrb.commit(
+                CommitIter::new(
+                    es.into_iter(),
+                    (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded),
+                ),
+                |val| val,
+            )
+            .unwrap();
 
             let b = Builder::<i64, i64, NoBitmap>::initial(&dir, "snapshot2", config).unwrap();
             b.build(llrb_snap.iter().unwrap(), app_meta.as_bytes().to_vec())

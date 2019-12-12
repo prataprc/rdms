@@ -52,15 +52,16 @@ use std::{
 };
 
 use crate::{
+    core::{CommitIter, Result, ScanEntry, ScanIter, Value, WalWriter, WriteIndexFactory},
     core::{CommitIterator, ToJson, Validate, Writer},
     core::{Diff, Entry, Footprint, Index, IndexIter, PiecewiseScan, Reader},
-    core::{Result, ScanEntry, ScanIter, Value, WalWriter, WriteIndexFactory},
     error::Error,
     llrb::Llrb,
     llrb_node::{LlrbDepth, Node},
     scans::SkipScan,
     spinlock::{self, RWSpinlock},
     types::Empty,
+    util,
 };
 
 // TODO: Experiment with different atomic::Ordering to improve performance.
@@ -524,7 +525,7 @@ where
         self.as_mut().to_writer()
     }
 
-    fn commit<C, F>(&mut self, scanner: C, metacb: F) -> Result<()>
+    fn commit<C, F>(&mut self, scanner: CommitIter<K, V, C>, metacb: F) -> Result<()>
     where
         C: CommitIterator<K, V>,
         F: Fn(Vec<u8>) -> Vec<u8>,
@@ -597,14 +598,14 @@ where
         Ok(MvccWriter::<K, V>::new(index, writer))
     }
 
-    fn commit<C, F>(&mut self, mut scanner: C, _metacb: F) -> Result<()>
+    fn commit<C, F>(&mut self, mut scanner: CommitIter<K, V, C>, _metacb: F) -> Result<()>
     where
         C: CommitIterator<K, V>,
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
         warn!(target: "mvcc  ", "{:?}, ignores all metadata", self.name);
 
-        let full_table_iter = scanner.scan(Bound::Unbounded)?;
+        let full_table_iter = scanner.scan()?;
         let count = {
             let _latch = self.latch.acquire_write(self.spin);
 
@@ -1714,23 +1715,26 @@ where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
 {
-    fn scan(&mut self, from_seqno: Bound<u64>) -> Result<IndexIter<K, V>> {
-        self.as_mut().scan(from_seqno)
-    }
-
-    fn scans(&mut self, shards: usize, from_seqno: Bound<u64>) -> Result<Vec<IndexIter<K, V>>> {
-        self.as_mut().scans(shards, from_seqno)
-    }
-
-    fn range_scans<G>(
-        &mut self,
-        ranges: Vec<G>,
-        from_seqno: Bound<u64>,
-    ) -> Result<Vec<IndexIter<K, V>>>
+    fn scan<G>(&mut self, within: G) -> Result<IndexIter<K, V>>
     where
-        G: RangeBounds<K>,
+        G: Clone + RangeBounds<u64>,
     {
-        self.as_mut().range_scans(ranges, from_seqno)
+        self.as_mut().scan(within)
+    }
+
+    fn scans<G>(&mut self, shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
+    where
+        G: Clone + RangeBounds<u64>,
+    {
+        self.as_mut().scans(shards, within)
+    }
+
+    fn range_scans<N, G>(&mut self, ranges: Vec<N>, within: G) -> Result<Vec<IndexIter<K, V>>>
+    where
+        N: RangeBounds<K>,
+        G: Clone + RangeBounds<u64>,
+    {
+        self.as_mut().range_scans(ranges, within)
     }
 }
 
@@ -1739,20 +1743,25 @@ where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
 {
-    fn scan(&mut self, from_seqno: Bound<u64>) -> Result<IndexIter<K, V>> {
+    fn scan<G>(&mut self, within: G) -> Result<IndexIter<K, V>>
+    where
+        G: Clone + RangeBounds<u64>,
+    {
         let mut ss = SkipScan::new(self.to_reader()?);
-        ss.set_seqno_range((from_seqno, Bound::Included(self.to_seqno())));
+        ss.set_seqno_range(within);
         Ok(Box::new(ss))
     }
 
-    fn scans(&mut self, shards: usize, from_seqno: Bound<u64>) -> Result<Vec<IndexIter<K, V>>> {
+    fn scans<G>(&mut self, shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
+    where
+        G: Clone + RangeBounds<u64>,
+    {
         match shards {
             0 => return Ok(vec![]),
-            1 => return Ok(vec![self.scan(from_seqno)?]),
+            1 => return Ok(vec![self.scan(within)?]),
             _ => (),
         }
 
-        let within = (from_seqno, Bound::Included(self.to_seqno()));
         let keys = {
             let snapshot: Arc<Snapshot<K, V>> = OuterSnapshot::clone(&self.snapshot);
             let mut keys = vec![];
@@ -1777,19 +1786,15 @@ where
         Ok(scans)
     }
 
-    fn range_scans<G>(
-        &mut self,
-        ranges: Vec<G>,
-        from_seqno: Bound<u64>,
-    ) -> Result<Vec<IndexIter<K, V>>>
+    fn range_scans<N, G>(&mut self, ranges: Vec<N>, within: G) -> Result<Vec<IndexIter<K, V>>>
     where
-        G: RangeBounds<K>,
+        N: RangeBounds<K>,
+        G: Clone + RangeBounds<u64>,
     {
         let mut scans: Vec<IndexIter<K, V>> = vec![];
         for range in ranges {
             let mut ss = SkipScan::new(self.to_reader()?);
-            ss.set_key_range(range)
-                .set_seqno_range((from_seqno, Bound::Included(self.to_seqno())));
+            ss.set_key_range(range).set_seqno_range(within.clone());
             scans.push(Box::new(ss));
         }
         Ok(scans)
@@ -1809,16 +1814,7 @@ where
         G: Clone + RangeBounds<u64>,
     {
         // validate arguments.
-        let start = match within.start_bound() {
-            Bound::Included(x) => Bound::Included(*x),
-            Bound::Excluded(x) => Bound::Excluded(*x),
-            Bound::Unbounded => Bound::Unbounded,
-        };
-        let end = match within.end_bound() {
-            Bound::Included(x) => Bound::Included(*x),
-            Bound::Excluded(x) => Bound::Excluded(*x),
-            Bound::Unbounded => Bound::Unbounded,
-        };
+        let (start, end) = util::to_start_end(within);
         // similar to range pre-processing
         let mut iter = Box::new(IterPWScan {
             _latch: Default::default(),

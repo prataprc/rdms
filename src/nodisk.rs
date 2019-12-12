@@ -9,7 +9,7 @@ use std::{
 };
 
 use crate::{
-    core::{CommitIterator, Result, Serialize, Writer},
+    core::{CommitIter, CommitIterator, Result, Serialize, Writer},
     core::{Diff, DiskIndexFactory, Entry, Footprint, Index, IndexIter, Reader},
     error::Error,
     panic::Panic,
@@ -105,7 +105,7 @@ where
         Ok(Panic::new("nodisk"))
     }
 
-    fn commit<C, F>(&mut self, _: C, _metadb: F) -> Result<()>
+    fn commit<C, F>(&mut self, _: CommitIter<K, V, C>, _metadb: F) -> Result<()>
     where
         C: CommitIterator<K, V>,
         F: Fn(Vec<u8>) -> Vec<u8>,

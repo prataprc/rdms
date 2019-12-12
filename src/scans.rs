@@ -425,7 +425,7 @@ where
     }
 }
 
-pub struct CommitChain<K, V, I>
+pub struct IterChain<K, V, I>
 where
     K: Clone + Ord,
     V: Clone + Diff,
@@ -440,14 +440,14 @@ where
     _phantom_val: marker::PhantomData<V>,
 }
 
-impl<K, V, I> CommitChain<K, V, I>
+impl<K, V, I> IterChain<K, V, I>
 where
     K: Clone + Ord,
     V: Clone + Diff,
     I: Iterator<Item = Result<Entry<K, V>>>,
 {
-    pub fn new(iters: Vec<I>) -> CommitChain<K, V, I> {
-        CommitChain {
+    pub fn new(iters: Vec<I>) -> IterChain<K, V, I> {
+        IterChain {
             iter: None,
             start: Bound::Unbounded,
             end: Bound::Unbounded,
@@ -459,7 +459,7 @@ where
     }
 }
 
-impl<K, V, I> Iterator for CommitChain<K, V, I>
+impl<K, V, I> Iterator for IterChain<K, V, I>
 where
     K: Clone + Ord,
     V: Clone + Diff,

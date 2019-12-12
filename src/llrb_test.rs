@@ -9,7 +9,7 @@ use crate::{
     core::{CommitIterator, Index, Reader, Validate, Writer},
     error::Error,
     llrb::Llrb,
-    scans::{CommitChain, FilterScan, SkipScan},
+    scans::{FilterScan, IterChain, SkipScan},
     types::Empty,
 };
 
@@ -1397,7 +1397,7 @@ fn test_commit_iterator_scans() {
         };
         let mut r = llrb.to_reader().unwrap();
         let within = (from_seqno, Bound::Included(llrb.to_seqno()));
-        let mut iter = CommitChain::new(llrb.scans(shards, within.clone()).unwrap());
+        let mut iter = IterChain::new(llrb.scans(shards, within.clone()).unwrap());
         let mut ref_iter = r.iter().unwrap();
         let mut count = 0;
         loop {
@@ -1450,7 +1450,7 @@ fn test_commit_iterator_range_scans() {
         };
         let mut r = llrb.to_reader().unwrap();
         let within = (from_seqno, Bound::Included(llrb.to_seqno()));
-        let mut iter = CommitChain::new(llrb.range_scans(ranges, within.clone()).unwrap());
+        let mut iter = IterChain::new(llrb.range_scans(ranges, within.clone()).unwrap());
         let mut ref_iter = r.iter().unwrap();
         let mut count = 0;
         loop {

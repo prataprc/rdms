@@ -76,9 +76,6 @@ pub struct LlrbFactory {
 ///
 /// * *lsm*, spawn Llrb instances in lsm mode, this will preserve the
 ///   entire history of all write operations applied on the index.
-/// * *sticky*, is a shallow variant of lsm, applicable only when
-///   `lsm` option is disabled. For more information refer to
-///   Llrb::set_sticky() method.
 pub fn llrb_factory(lsm: bool) -> LlrbFactory {
     LlrbFactory {
         lsm,

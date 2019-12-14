@@ -431,9 +431,7 @@ where
     V: Clone + Diff,
     I: Iterator<Item = Result<Entry<K, V>>>,
 {
-    iter: Option<FilterScan<K, V, I>>,
-    start: Bound<u64>,
-    end: Bound<u64>,
+    iter: Option<I>,
     iters: Vec<I>,
 
     _phantom_key: marker::PhantomData<K>,
@@ -449,8 +447,6 @@ where
     pub fn new(iters: Vec<I>) -> IterChain<K, V, I> {
         IterChain {
             iter: None,
-            start: Bound::Unbounded,
-            end: Bound::Unbounded,
             iters: iters,
 
             _phantom_key: marker::PhantomData,
@@ -478,10 +474,7 @@ where
             },
             None if self.iters.len() == 0 => None,
             None => {
-                self.iter = Some(FilterScan::new(
-                    self.iters.remove(0),
-                    (self.start.clone(), self.end.clone()),
-                ));
+                self.iter = Some(self.iters.remove(0));
                 self.iter.as_mut().unwrap().next()
             }
         }

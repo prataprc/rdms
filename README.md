@@ -25,6 +25,7 @@ Key Value store
 * [ ] Decentralised version control for index entries.
 * [ ] Value, along with delta, can be stored in separate log files.
 
-TODO: Add a feature for using jemalloc instead of using system allocator.
+[1st-Milestone](https://github.com/bnclabs/rdms/issues/9)
+[2nd-Milestone](https://github.com/bnclabs/rdms/issues/10)
 
 [memory-ordering]: https://doc.rust-lang.org/std/sync/atomic/enum.Ordering.html

@@ -2673,10 +2673,10 @@ where
         key: K,
         value: V,
         seqno: u64, // seqno for this mutation
-    ) -> (u64, Result<Option<Entry<K, V>>>) {
+    ) -> Result<Option<Entry<K, V>>> {
         let index: &mut Mvcc<K, V> = self.as_mut();
-        let (seqno, old_entry) = index.set_index(key, value, Some(seqno));
-        (seqno, Ok(old_entry))
+        let (_seqno, old_entry) = index.set_index(key, value, Some(seqno));
+        Ok(old_entry)
     }
 
     /// Similar to set, but succeeds only when CAS matches with entry's
@@ -2693,9 +2693,10 @@ where
         value: V,
         cas: u64,
         seqno: u64,
-    ) -> (u64, Result<Option<Entry<K, V>>>) {
+    ) -> Result<Option<Entry<K, V>>> {
         let index: &mut Mvcc<K, V> = self.as_mut();
-        index.set_cas_index(key, value, cas, Some(seqno))
+        let (_seqno, res) = index.set_cas_index(key, value, cas, Some(seqno));
+        res
     }
 
     /// Delete key from index. Return the seqno (index) for this mutation
@@ -2705,13 +2706,14 @@ where
         &mut self,
         key: &Q,
         seqno: u64, // seqno for this delete
-    ) -> (u64, Result<Option<Entry<K, V>>>)
+    ) -> Result<Option<Entry<K, V>>>
     where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
     {
         let index: &mut Mvcc<K, V> = self.as_mut();
-        index.delete_index(key, Some(seqno))
+        let (_seqno, res) = index.delete_index(key, Some(seqno));
+        res
     }
 }
 

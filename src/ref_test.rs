@@ -194,6 +194,7 @@ impl RefNodes {
             self.seqno += 1;
             refn
         } else {
+            self.seqno += 1;
             None
         }
     }
@@ -220,6 +221,7 @@ impl RefNodes {
             self.seqno += 1;
             old
         } else {
+            self.seqno += 1;
             None
         }
     }

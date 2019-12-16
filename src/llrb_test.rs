@@ -289,8 +289,10 @@ fn test_cas_lsm() {
     assert!(refns.set_cas(10, 100, 0).is_none());
     // error create
     assert_eq!(llrb.set_cas(10, 100, 0).err(), Some(Error::InvalidCAS(18)));
+    refns.set_cas(10, 100, 0);
     // error insert
     assert_eq!(llrb.set_cas(9, 400, 14).err(), Some(Error::InvalidCAS(17)));
+    refns.set_cas(9, 400, 14);
 
     assert_eq!(llrb.len(), 11);
     assert!(llrb.validate().is_ok());
@@ -961,7 +963,7 @@ fn test_mvcc_conversion() {
 #[test]
 fn test_split() {
     let seed: u128 = random();
-    // let seed: u128 = 169445180909037151706943296461619045538;
+    // let seed: u128 = 329414500652693436592311104669973016490;
     println!("seed:{}", seed,);
     for i in 0..50 {
         let seed = seed + (i * 10);

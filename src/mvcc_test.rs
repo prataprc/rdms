@@ -275,8 +275,10 @@ fn test_cas_lsm() {
     assert!(refns.set_cas(10, 100, 0).is_none());
     // error create
     assert_eq!(mvcc.set_cas(10, 100, 0).err(), Some(Error::InvalidCAS(18)));
+    refns.set_cas(10, 100, 0);
     // error insert
     assert_eq!(mvcc.set_cas(9, 400, 14).err(), Some(Error::InvalidCAS(17)));
+    refns.set_cas(9, 400, 14);
 
     assert_eq!(mvcc.len(), 11);
     assert!(mvcc.validate().is_ok());

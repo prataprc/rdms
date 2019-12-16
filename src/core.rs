@@ -102,12 +102,7 @@ where
     /// shall be ZERO.
     ///
     /// *LSM mode*: Add a new version for the key, perserving the old value.
-    fn set_index(
-        &mut self,
-        key: K,
-        value: V,
-        index: u64,
-    ) -> (Option<u64>, Result<Option<Entry<K, V>>>);
+    fn set_index(&mut self, key: K, value: V, index: u64) -> (u64, Result<Option<Entry<K, V>>>);
 
     /// Set {key, value} in index if an older entry exists with the
     /// same ``cas`` value. To create a fresh entry, pass ``cas`` as ZERO.
@@ -122,7 +117,7 @@ where
         value: V,
         cas: u64,
         index: u64,
-    ) -> (Option<u64>, Result<Option<Entry<K, V>>>);
+    ) -> (u64, Result<Option<Entry<K, V>>>);
 
     /// Delete key from index. Return the seqno (index) for this mutation
     /// and entry if present. If operation was invalid or NOOP, returned
@@ -134,11 +129,7 @@ where
     /// NOTE: K should be borrowable as &Q and Q must be convertable to
     /// owned K. This is require in lsm mode, where owned K must be
     /// inserted into the tree.
-    fn delete_index<Q>(
-        &mut self,
-        key: &Q,
-        index: u64,
-    ) -> (Option<u64>, Result<Option<Entry<K, V>>>)
+    fn delete_index<Q>(&mut self, key: &Q, index: u64) -> (u64, Result<Option<Entry<K, V>>>)
     where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized;

@@ -374,15 +374,15 @@ where
         match &mut self.root {
             None => (),
             Some(root) => {
-                first.root = Self::post_split(root.left.take(), &mut first);
+                first.root = Self::do_split(root.left.take(), &mut first);
                 first.root.as_mut().map(|n| n.set_black());
-                first.seqno = self.seqno;
-                second.root = Self::post_split(root.right.take(), &mut second);
+                second.root = Self::do_split(root.right.take(), &mut second);
                 second.root.as_mut().map(|n| n.set_black());
-                second.seqno = self.seqno;
                 (&*second).set_index_entry(root.entry.clone());
             }
         }
+        first.seqno = self.seqno;
+        second.seqno = self.seqno;
 
         // validation
         assert_eq!(cmp::max(first.seqno, second.seqno), self.seqno);
@@ -413,10 +413,7 @@ where
         Ok((first, second))
     }
 
-    fn post_split(
-        node: Option<Box<Node<K, V>>>,
-        index: &mut Llrb<K, V>,
-    ) -> Option<Box<Node<K, V>>> {
+    fn do_split(node: Option<Box<Node<K, V>>>, index: &mut Llrb<K, V>) -> Option<Box<Node<K, V>>> {
         match node {
             None => None,
             Some(mut node) => {
@@ -428,8 +425,8 @@ where
                 index.key_footprint += node.as_key().footprint().unwrap();
                 index.tree_footprint += node.footprint().unwrap();
 
-                node.left = Self::post_split(node.left.take(), index);
-                node.right = Self::post_split(node.right.take(), index);
+                node.left = Self::do_split(node.left.take(), index);
+                node.right = Self::do_split(node.right.take(), index);
                 Some(node)
             }
         }
@@ -782,7 +779,7 @@ where
         value: V,
         cas: u64,
         seqno: Option<u64>,
-    ) -> (Option<u64>, Result<Option<Entry<K, V>>>) {
+    ) -> (u64, Result<Option<Entry<K, V>>>) {
         let _latch = self.latch.acquire_write(self.spin);
         let seqno = match seqno {
             Some(seqno) => seqno,
@@ -794,6 +791,7 @@ where
             let value = Value::new_upsert_value(value, seqno);
             Entry::new(key, value)
         };
+        self.seqno = seqno;
         match Llrb::upsert_cas(self.root.take(), new_entry, cas, self.lsm) {
             UpsertCasResult {
                 node: root,
@@ -801,7 +799,7 @@ where
                 ..
             } => {
                 self.root = root;
-                (None, Err(err))
+                (self.seqno, Err(err))
             }
             UpsertCasResult {
                 node: Some(mut root),
@@ -821,10 +819,9 @@ where
                 }
                 self.tree_footprint += size;
 
-                self.seqno = seqno;
                 root.set_black();
                 self.root = Some(root);
-                (Some(seqno), Ok(old_entry))
+                (self.seqno, Ok(old_entry))
             }
             _ => panic!("set_cas: impossible case, call programmer"),
         }
@@ -837,7 +834,7 @@ where
         &mut self,
         key: &Q,
         seqno: Option<u64>, // seqno for this delete
-    ) -> (Option<u64>, Result<Option<Entry<K, V>>>)
+    ) -> (u64, Result<Option<Entry<K, V>>>)
     where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
@@ -855,11 +852,11 @@ where
                 Llrb::delete_lsm(self.root.take(), key, seqno)
             } else {
                 let res = Llrb::delete_sticky(self.root.take(), key, seqno);
-                // TODO: verify entry.purge() logic, can be removed once
-                // this code is total - frozen.
-                match &res.old_entry {
-                    Some(oe) => assert_eq!(oe.as_deltas().len(), 0),
-                    _ => (),
+                if cfg!(debug_assertions) {
+                    match &res.old_entry {
+                        Some(oe) => assert_eq!(oe.as_deltas().len(), 0),
+                        _ => (),
+                    }
                 }
                 res
             };
@@ -873,13 +870,13 @@ where
                     self.key_footprint += key_footprint;
                     self.n_count += 1;
                     self.n_deleted += 1;
-                    (Some(seqno), Ok(None))
+                    (seqno, Ok(None))
                 }
                 Some(entry) => {
                     if !entry.is_deleted() {
                         self.n_deleted += 1;
                     }
-                    (Some(seqno), Ok(Some(entry)))
+                    (seqno, Ok(Some(entry)))
                 }
             };
         } else {
@@ -898,9 +895,10 @@ where
 
                 self.n_count -= 1;
                 self.seqno = seqno;
-                (Some(seqno), Ok(res.old_entry))
+                (seqno, Ok(res.old_entry))
             } else {
-                (None, Ok(res.old_entry))
+                self.seqno = seqno;
+                (seqno, Ok(res.old_entry))
             }
         }
     }
@@ -2096,6 +2094,49 @@ where
     }
 }
 
+impl<K, V> LlrbWriter<K, V>
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+{
+    /// Refer Llrb::set_index() for more details.
+    pub fn set_index(
+        &mut self,
+        key: K,
+        value: V,
+        seqno: Option<u64>,
+    ) -> (u64, Option<Entry<K, V>>) {
+        let index: &mut Llrb<K, V> = self.as_mut();
+        index.set_index(key, value, seqno)
+    }
+
+    /// Refer Llrb::set_index() for more details.
+    pub fn set_cas_index(
+        &mut self,
+        key: K,
+        value: V,
+        cas: u64,
+        seqno: Option<u64>,
+    ) -> (u64, Result<Option<Entry<K, V>>>) {
+        let index: &mut Llrb<K, V> = self.as_mut();
+        index.set_cas_index(key, value, cas, seqno)
+    }
+
+    /// Refer Llrb::set_index() for more details.
+    pub fn delete_index<Q>(
+        &mut self,
+        key: &Q,
+        seqno: Option<u64>,
+    ) -> (u64, Result<Option<Entry<K, V>>>)
+    where
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
+    {
+        let index: &mut Llrb<K, V> = self.as_mut();
+        index.delete_index(key, seqno)
+    }
+}
+
 impl<K, V> Writer<K, V> for LlrbWriter<K, V>
 where
     K: Clone + Ord + Footprint,
@@ -2157,15 +2198,10 @@ where
     /// shall be ZERO.
     ///
     /// *LSM mode*: Add a new version for the key, perserving the old value.
-    fn set_index(
-        &mut self,
-        key: K,
-        value: V,
-        seqno: u64, // seqno for this mutation
-    ) -> (Option<u64>, Result<Option<Entry<K, V>>>) {
+    fn set_index(&mut self, key: K, value: V, seqno: u64) -> (u64, Result<Option<Entry<K, V>>>) {
         let index: &mut Llrb<K, V> = self.as_mut();
         let (seqno, old_entry) = index.set_index(key, value, Some(seqno));
-        (Some(seqno), Ok(old_entry))
+        (seqno, Ok(old_entry))
     }
 
     /// Similar to set, but succeeds only when CAS matches with entry's
@@ -2182,7 +2218,7 @@ where
         value: V,
         cas: u64,
         seqno: u64,
-    ) -> (Option<u64>, Result<Option<Entry<K, V>>>) {
+    ) -> (u64, Result<Option<Entry<K, V>>>) {
         let index: &mut Llrb<K, V> = self.as_mut();
         index.set_cas_index(key, value, cas, Some(seqno))
     }
@@ -2194,7 +2230,7 @@ where
         &mut self,
         key: &Q,
         seqno: u64, // seqno for this delete
-    ) -> (Option<u64>, Result<Option<Entry<K, V>>>)
+    ) -> (u64, Result<Option<Entry<K, V>>>)
     where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,

@@ -705,7 +705,12 @@ where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
 {
-    fn set_index(&mut self, key: K, value: V, seqno: Option<u64>) -> (u64, Option<Entry<K, V>>) {
+    pub fn set_index(
+        &mut self,
+        key: K,
+        value: V,
+        seqno: Option<u64>,
+    ) -> (u64, Option<Entry<K, V>>) {
         let _w = self.latch.acquire_write(self.spin);
 
         let entry = {
@@ -725,13 +730,13 @@ where
         (seqno, old_entry)
     }
 
-    fn set_cas_index(
+    pub fn set_cas_index(
         &mut self,
         key: K,
         value: V,
         cas: u64,
         seqno: Option<u64>, // seqno for this mutation
-    ) -> (Option<u64>, Result<Option<Entry<K, V>>>) {
+    ) -> (u64, Result<Option<Entry<K, V>>>) {
         let _w = self.latch.acquire_write(self.spin);
 
         let snapshot: &Arc<Snapshot<K, V>> = self.snapshot.as_ref();
@@ -778,7 +783,7 @@ where
                 ..
             } => {
                 root.set_black();
-                (snapshot.seqno, root, new_node, Err(err))
+                (seqno, root, new_node, Err(err))
             }
             _ => panic!("set_cas: impossible case, call programmer"),
         };
@@ -798,15 +803,14 @@ where
             n_count,
             rclm,
         );
-
-        (Some(seqno), entry)
+        (seqno, entry)
     }
 
-    fn delete_index<Q>(
+    pub fn delete_index<Q>(
         &mut self,
         key: &Q,
         seqno: Option<u64>, // seqno for this mutation
-    ) -> (Option<u64>, Result<Option<Entry<K, V>>>)
+    ) -> (u64, Result<Option<Entry<K, V>>>)
     where
         // TODO: From<Q> and Clone will fail if V=String and Q=str
         K: Borrow<Q>,
@@ -881,14 +885,14 @@ where
                 n_count -= 1;
                 seqno
             } else {
-                snapshot.seqno
+                seqno
             };
             (seqno, res.node, res.old_entry)
         };
 
         self.n_reclaimed += rclm.len();
         self.snapshot.shift_snapshot(root, seqno, n_count, rclm);
-        (Some(seqno), Ok(old_entry))
+        (seqno, Ok(old_entry))
     }
 }
 
@@ -2561,6 +2565,49 @@ where
     }
 }
 
+impl<K, V> MvccWriter<K, V>
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+{
+    /// Refer Llrb::set_index() for more details.
+    pub fn set_index(
+        &mut self,
+        key: K,
+        value: V,
+        seqno: Option<u64>,
+    ) -> (u64, Option<Entry<K, V>>) {
+        let index: &mut Mvcc<K, V> = self.as_mut();
+        index.set_index(key, value, seqno)
+    }
+
+    /// Refer Llrb::set_index() for more details.
+    pub fn set_cas_index(
+        &mut self,
+        key: K,
+        value: V,
+        cas: u64,
+        seqno: Option<u64>,
+    ) -> (u64, Result<Option<Entry<K, V>>>) {
+        let index: &mut Mvcc<K, V> = self.as_mut();
+        index.set_cas_index(key, value, cas, seqno)
+    }
+
+    /// Refer Llrb::set_index() for more details.
+    pub fn delete_index<Q>(
+        &mut self,
+        key: &Q,
+        seqno: Option<u64>,
+    ) -> (u64, Result<Option<Entry<K, V>>>)
+    where
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
+    {
+        let index: &mut Mvcc<K, V> = self.as_mut();
+        index.delete_index(key, seqno)
+    }
+}
+
 impl<K, V> Writer<K, V> for MvccWriter<K, V>
 where
     K: Clone + Ord + Footprint,
@@ -2626,10 +2673,10 @@ where
         key: K,
         value: V,
         seqno: u64, // seqno for this mutation
-    ) -> (Option<u64>, Result<Option<Entry<K, V>>>) {
+    ) -> (u64, Result<Option<Entry<K, V>>>) {
         let index: &mut Mvcc<K, V> = self.as_mut();
         let (seqno, old_entry) = index.set_index(key, value, Some(seqno));
-        (Some(seqno), Ok(old_entry))
+        (seqno, Ok(old_entry))
     }
 
     /// Similar to set, but succeeds only when CAS matches with entry's
@@ -2646,7 +2693,7 @@ where
         value: V,
         cas: u64,
         seqno: u64,
-    ) -> (Option<u64>, Result<Option<Entry<K, V>>>) {
+    ) -> (u64, Result<Option<Entry<K, V>>>) {
         let index: &mut Mvcc<K, V> = self.as_mut();
         index.set_cas_index(key, value, cas, Some(seqno))
     }
@@ -2658,7 +2705,7 @@ where
         &mut self,
         key: &Q,
         seqno: u64, // seqno for this delete
-    ) -> (Option<u64>, Result<Option<Entry<K, V>>>)
+    ) -> (u64, Result<Option<Entry<K, V>>>)
     where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,

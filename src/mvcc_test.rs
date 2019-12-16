@@ -1156,6 +1156,8 @@ fn test_commit_iterator_scan() {
 #[test]
 fn test_commit_iterator_scans() {
     let seed: u128 = random();
+    // let seed: u128 = 81230627573609454272905178397264218863;
+    println!("seed: {}", seed);
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
     let (n_ops, key_max) = (60_000_i64, 20_000);
@@ -1194,7 +1196,10 @@ fn test_commit_iterator_scans() {
                 }
             }
         }
-        println!("{} {:?} {}", i, within, count);
+        println!(
+            "i:{} shards:{} within:{:?} count:{}",
+            i, shards, within, count
+        );
     }
 }
 

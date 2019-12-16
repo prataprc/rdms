@@ -193,6 +193,7 @@ where
                     (entry, Bound::Excluded(key)) if entry.as_key().lt(key) => {
                         break Some(Ok(entry))
                     }
+                    (entry, Bound::Unbounded) => break Some(Ok(entry)),
                     _ => {
                         self.batch_size = 0;
                         self.iter = vec![].into_iter();
@@ -475,7 +476,7 @@ where
             None if self.iters.len() == 0 => None,
             None => {
                 self.iter = Some(self.iters.remove(0));
-                self.iter.as_mut().unwrap().next()
+                self.next()
             }
         }
     }

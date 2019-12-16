@@ -97,18 +97,14 @@ where
     V: Clone + Diff,
 {
     /// Set {key, value} in index. Return older entry if present.
-    /// Return the seqno (index) for this mutation and older entry
-    /// if present. If operation was invalid or NOOP, returned seqno
-    /// shall be ZERO.
+    /// Return older entry if present.
     ///
     /// *LSM mode*: Add a new version for the key, perserving the old value.
     fn set_index(&mut self, key: K, value: V, index: u64) -> Result<Option<Entry<K, V>>>;
 
     /// Set {key, value} in index if an older entry exists with the
     /// same ``cas`` value. To create a fresh entry, pass ``cas`` as ZERO.
-    /// Return the seqno (index) for this mutation and older entry
-    /// if present. If operation was invalid or NOOP, returned seqno shall
-    /// be ZERO.
+    /// Return older entry if present.
     ///
     /// *LSM mode*: Add a new version for the key, perserving the old value.
     fn set_cas_index(
@@ -119,9 +115,7 @@ where
         index: u64,
     ) -> Result<Option<Entry<K, V>>>;
 
-    /// Delete key from index. Return the seqno (index) for this mutation
-    /// and entry if present. If operation was invalid or NOOP, returned
-    /// seqno shall be ZERO.
+    /// Delete key from index. Return old entry if present.
     ///
     /// *LSM mode*: Mark the entry as deleted along with seqno at which it
     /// deleted

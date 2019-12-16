@@ -2662,12 +2662,6 @@ where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
 {
-    /// Set {key, value} in index. Return older entry if present.
-    /// Return the seqno (index) for this mutation and older entry
-    /// if present. If operation was invalid or NOOP, returned seqno
-    /// shall be ZERO.
-    ///
-    /// *LSM mode*: Add a new version for the key, perserving the old value.
     fn set_index(
         &mut self,
         key: K,
@@ -2679,14 +2673,6 @@ where
         Ok(old_entry)
     }
 
-    /// Similar to set, but succeeds only when CAS matches with entry's
-    /// Set {key, value} in index if an older entry exists with the
-    /// same ``cas`` value. To create a fresh entry, pass ``cas`` as ZERO.
-    /// Return the seqno (index) for this mutation and older entry
-    /// if present. If operation was invalid or NOOP, returned seqno shall
-    /// be ZERO.
-    ///
-    /// *LSM mode*: Add a new version for the key, perserving the old value.
     fn set_cas_index(
         &mut self,
         key: K,
@@ -2699,9 +2685,6 @@ where
         res
     }
 
-    /// Delete key from index. Return the seqno (index) for this mutation
-    /// and entry if present. If operation was invalid or NOOP, returned
-    /// seqno shall be ZERO.
     fn delete_index<Q>(
         &mut self,
         key: &Q,

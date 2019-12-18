@@ -482,6 +482,30 @@ where
         stats
     }
 
+    /// Return the first entry in the index. Return None if index is empty.
+    pub fn first(&self) -> Option<Entry<K, V>> {
+        let _latch = self.latch.acquire_read(self.spin);
+        let node = self.root.as_ref().map(Deref::deref);
+        node.map(|mut node| loop {
+            node = match node.as_left_deref() {
+                Some(nref) => nref,
+                None => break node.entry.clone(),
+            };
+        })
+    }
+
+    /// Return the last entry in the index. Return None if index is empty.
+    pub fn last(&self) -> Option<Entry<K, V>> {
+        let _latch = self.latch.acquire_read(self.spin);
+        let node = self.root.as_ref().map(Deref::deref);
+        node.map(|mut node| loop {
+            node = match node.as_right_deref() {
+                Some(nref) => nref,
+                None => break node.entry.clone(),
+            };
+        })
+    }
+
     fn multi_rw(&self) -> usize {
         Arc::strong_count(&self.readers) + Arc::strong_count(&self.writers) - 2
     }

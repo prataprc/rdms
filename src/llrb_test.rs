@@ -37,6 +37,37 @@ fn test_len() {
 }
 
 #[test]
+fn test_first_last() {
+    let seed: u128 = random();
+    for i in 0..500 {
+        let seed = seed + (i * 10);
+        let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+        let mut index: Box<Llrb<i64, i64>> = Llrb::new("test-llrb");
+
+        let mut min_key = std::i64::MAX;
+        let mut max_key = std::i64::MIN;
+        let n_ops = rng.gen::<u8>();
+        for _ in 0..n_ops {
+            let key: i64 = rng.gen::<i64>().abs();
+            let value: i64 = rng.gen();
+            min_key = std::cmp::min(min_key, key);
+            max_key = std::cmp::max(max_key, key);
+            index.set(key, value).unwrap();
+        }
+        match (index.first(), n_ops) {
+            (None, 0) => (),
+            (Some(entry), _) => assert_eq!(entry.to_key(), min_key),
+            _ => unreachable!(),
+        }
+        match (index.last(), n_ops) {
+            (None, 0) => (),
+            (Some(entry), _) => assert_eq!(entry.to_key(), max_key),
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[test]
 fn test_lsm_sticky() {
     let missing_key = 0x123456789;
     let populate = |index: &mut Llrb<i64, i64>| -> i64 {

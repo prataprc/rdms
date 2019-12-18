@@ -347,7 +347,7 @@ where
 
 impl<K, V> Llrb<K, V>
 where
-    K: Clone + Ord + Footprint + fmt::Debug,
+    K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
 {
     pub fn split(
@@ -365,7 +365,7 @@ where
             "{} split in progress ...\n{}", self.name, self.to_stats()
         );
 
-        let (mut first, mut second) = if self.lsm {
+        let (mut one, mut two) = if self.lsm {
             (Llrb::new_lsm(&name1), Llrb::new_lsm(&name2))
         } else {
             (Llrb::new(&name1), Llrb::new(&name2))
@@ -374,32 +374,28 @@ where
         match &mut self.root {
             None => (),
             Some(root) => {
-                first.root = Self::do_split(root.left.take(), &mut first);
-                first.root.as_mut().map(|n| n.set_black());
-                second.root = Self::do_split(root.right.take(), &mut second);
-                second.root.as_mut().map(|n| n.set_black());
-                (&*second).set_index_entry(root.entry.clone());
+                one.root = Self::do_split(root.left.take(), &mut one);
+                one.root.as_mut().map(|n| n.set_black());
+                two.root = Self::do_split(root.right.take(), &mut two);
+                two.root.as_mut().map(|n| n.set_black());
+                (&*two).set_index_entry(root.entry.clone());
             }
         }
-        first.seqno = self.seqno;
-        second.seqno = self.seqno;
+        one.seqno = self.seqno;
+        two.seqno = self.seqno;
 
         // validation
-        assert_eq!(cmp::max(first.seqno, second.seqno), self.seqno);
-        let n_count = first.n_count + second.n_count;
+        assert_eq!(cmp::max(one.seqno, two.seqno), self.seqno);
+        let n_count = one.n_count + two.n_count;
         assert_eq!(n_count, self.n_count);
-        let n_deleted = first.n_deleted + second.n_deleted;
+        let n_deleted = one.n_deleted + two.n_deleted;
         assert_eq!(n_deleted, self.n_deleted);
-        let key_footprint = first.key_footprint + second.key_footprint;
+        let key_footprint = one.key_footprint + two.key_footprint;
         assert_eq!(key_footprint, self.key_footprint);
-        let tree_footprint = first.tree_footprint + second.tree_footprint;
+        let tree_footprint = one.tree_footprint + two.tree_footprint;
         assert_eq!(tree_footprint, self.tree_footprint);
 
-        let (first_stats, second_stats) = if cfg!(debug_assertions) {
-            (first.validate()?, second.validate()?)
-        } else {
-            (first.to_stats(), second.to_stats())
-        };
+        let (first_stats, second_stats) = (one.to_stats(), two.to_stats());
 
         info!(
             target: "llrb  ",
@@ -410,7 +406,7 @@ where
             "{} second half of the {}\n{}", name2, self.name, second_stats,
         );
 
-        Ok((first, second))
+        Ok((one, two))
     }
 
     fn do_split(node: Option<Box<Node<K, V>>>, index: &mut Llrb<K, V>) -> Option<Box<Node<K, V>>> {
@@ -2274,6 +2270,50 @@ impl Stats {
             rw_latch: Default::default(),
             blacks: Default::default(),
             depths: Default::default(),
+        }
+    }
+
+    pub fn merge(self, other: Stats) -> Stats {
+        let rw_latch = spinlock::Stats {
+            value: 0xC0FFEE,
+            read_locks: self.rw_latch.read_locks + other.rw_latch.read_locks,
+            write_locks: self.rw_latch.write_locks + other.rw_latch.write_locks,
+            conflicts: self.rw_latch.conflicts + other.rw_latch.conflicts,
+        };
+        let blacks = match (self.blacks, other.blacks) {
+            (Some(b1), Some(b2)) => Some(b1 + b2),
+            (Some(b1), None) => Some(b1),
+            (None, Some(b2)) => Some(b2),
+            (None, None) => None,
+        };
+        let depths = match (self.depths, other.depths) {
+            (Some(d1), Some(d2)) => {
+                let mut depths = LlrbDepth {
+                    samples: d1.samples + d2.samples,
+                    min: d1.min + d2.min,
+                    max: d1.max + d2.max,
+                    total: d1.total + d2.total,
+                    depths: [0; 256],
+                };
+                for i in 0..depths.depths.len() {
+                    depths.depths[i] = d1.depths[i] + d2.depths[i];
+                }
+                Some(depths)
+            }
+            (Some(d1), None) => Some(d1),
+            (None, Some(d2)) => Some(d2),
+            (None, None) => None,
+        };
+        Stats {
+            name: Default::default(),
+            entries: self.entries + other.entries,
+            n_deleted: self.n_deleted + other.n_deleted,
+            node_size: self.node_size,
+            key_footprint: self.key_footprint + other.key_footprint,
+            tree_footprint: self.tree_footprint + other.tree_footprint,
+            rw_latch,
+            blacks,
+            depths,
         }
     }
 }

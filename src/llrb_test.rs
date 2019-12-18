@@ -37,6 +37,123 @@ fn test_len() {
 }
 
 #[test]
+fn test_stats() {
+    let fns = |value: usize, rwl: spinlock::Stats, depths: LlrbDepth| Stats {
+        name: "name".to_string(),
+        entries: value,
+        n_deleted: value,
+        node_size: value,
+        key_footprint: value as isize,
+        tree_footprint: value as isize,
+        rw_latch: rwl,
+        blacks: Some(value),
+        depths: Some(depths),
+    };
+    let fnl = |value: usize| spinlock::Stats {
+        value: 0xC0FFEE,
+        read_locks: value,
+        write_locks: value,
+        conflicts: value,
+    };
+    let fnd = |value: usize| LlrbDepth {
+        samples: value,
+        min: value,
+        max: value,
+        total: value,
+        depths: [value as u64; 256],
+    };
+    // case 1
+    let s1 = fns(1, fnl(1), fnd(1));
+    let s2 = fns(2, fnl(2), fnd(2));
+    let s = s1.merge(s2);
+    assert_eq!(s.name.len(), 0);
+    assert_eq!(s.entries, 3);
+    assert_eq!(s.n_deleted, 3);
+    assert_eq!(s.node_size, 1);
+    assert_eq!(s.key_footprint, 3);
+    assert_eq!(s.tree_footprint, 3);
+    assert_eq!(s.rw_latch.read_locks, 3);
+    assert_eq!(s.rw_latch.write_locks, 3);
+    assert_eq!(s.rw_latch.conflicts, 3);
+    assert_eq!(s.blacks, Some(3));
+    assert_eq!(s.depths.as_ref().unwrap().samples, 3);
+    assert_eq!(s.depths.as_ref().unwrap().min, 3);
+    assert_eq!(s.depths.as_ref().unwrap().max, 3);
+    assert_eq!(s.depths.as_ref().unwrap().total, 3);
+    assert_eq!(
+        s.depths.as_ref().unwrap().depths.to_vec(),
+        [3; 256].to_vec()
+    );
+    // case 2
+    let mut s1 = fns(1, fnl(1), fnd(1));
+    s1.blacks = None;
+    s1.depths = None;
+    let s2 = fns(2, fnl(2), fnd(2));
+    let s = s1.merge(s2);
+    assert_eq!(s.name.len(), 0);
+    assert_eq!(s.entries, 3);
+    assert_eq!(s.n_deleted, 3);
+    assert_eq!(s.node_size, 1);
+    assert_eq!(s.key_footprint, 3);
+    assert_eq!(s.tree_footprint, 3);
+    assert_eq!(s.rw_latch.read_locks, 3);
+    assert_eq!(s.rw_latch.write_locks, 3);
+    assert_eq!(s.rw_latch.conflicts, 3);
+    assert_eq!(s.blacks, Some(2));
+    assert_eq!(s.depths.as_ref().unwrap().samples, 2);
+    assert_eq!(s.depths.as_ref().unwrap().min, 2);
+    assert_eq!(s.depths.as_ref().unwrap().max, 2);
+    assert_eq!(s.depths.as_ref().unwrap().total, 2);
+    assert_eq!(
+        s.depths.as_ref().unwrap().depths.to_vec(),
+        [2; 256].to_vec()
+    );
+    // case 3
+    let s1 = fns(1, fnl(1), fnd(1));
+    let mut s2 = fns(2, fnl(2), fnd(2));
+    s2.blacks = None;
+    s2.depths = None;
+    let s = s1.merge(s2);
+    assert_eq!(s.name.len(), 0);
+    assert_eq!(s.entries, 3);
+    assert_eq!(s.n_deleted, 3);
+    assert_eq!(s.node_size, 1);
+    assert_eq!(s.key_footprint, 3);
+    assert_eq!(s.tree_footprint, 3);
+    assert_eq!(s.rw_latch.read_locks, 3);
+    assert_eq!(s.rw_latch.write_locks, 3);
+    assert_eq!(s.rw_latch.conflicts, 3);
+    assert_eq!(s.blacks, Some(1));
+    assert_eq!(s.depths.as_ref().unwrap().samples, 1);
+    assert_eq!(s.depths.as_ref().unwrap().min, 1);
+    assert_eq!(s.depths.as_ref().unwrap().max, 1);
+    assert_eq!(s.depths.as_ref().unwrap().total, 1);
+    assert_eq!(
+        s.depths.as_ref().unwrap().depths.to_vec(),
+        [1; 256].to_vec()
+    );
+    // case 4
+    let mut s1 = fns(1, fnl(1), fnd(1));
+    s1.blacks = None;
+    s1.depths = None;
+    let mut s2 = fns(2, fnl(2), fnd(2));
+    s2.blacks = None;
+    s2.depths = None;
+    let s = s1.merge(s2);
+    assert_eq!(s.name.len(), 0);
+    assert_eq!(s.entries, 3);
+    assert_eq!(s.n_deleted, 3);
+    assert_eq!(s.node_size, 1);
+    assert_eq!(s.key_footprint, 3);
+    assert_eq!(s.tree_footprint, 3);
+    assert_eq!(s.rw_latch.read_locks, 3);
+    assert_eq!(s.rw_latch.write_locks, 3);
+    assert_eq!(s.rw_latch.conflicts, 3);
+    assert!(s.blacks.is_none());
+    assert!(s.depths.is_none());
+}
+
+#[test]
 fn test_first_last() {
     let seed: u128 = random();
     for i in 0..500 {

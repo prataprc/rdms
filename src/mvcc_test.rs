@@ -16,7 +16,7 @@ include!("./ref_test.rs");
 // TODO: repeatable randoms.
 
 #[test]
-fn test_id() {
+fn test_name() {
     let mut mvcc: Box<Mvcc<i32, Empty>> = Mvcc::new("test-mvcc");
     assert_eq!(mvcc.to_name(), "test-mvcc".to_string());
     assert!(mvcc.validate().is_ok());

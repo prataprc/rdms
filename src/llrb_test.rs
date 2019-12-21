@@ -23,7 +23,7 @@ fn test_node_size() {
 }
 
 #[test]
-fn test_id() {
+fn test_name() {
     let mut llrb: Box<Llrb<i32, Empty>> = Llrb::new("test-llrb");
     assert_eq!(llrb.to_name(), "test-llrb".to_string());
     assert!(llrb.validate().is_ok());

@@ -9,6 +9,7 @@ use crate::{
     mvcc::Mvcc,
     scans::{FilterScan, IterChain, SkipScan},
     types::Empty,
+    util,
 };
 
 include!("./ref_test.rs");
@@ -951,7 +952,7 @@ fn check_commit_nodes(index: &mut Mvcc<i64, i64>, rindex: &mut Mvcc<i64, i64>) {
 #[test]
 fn test_compact() {
     let seed: u128 = random();
-    // let seed: u128 = 2726664888361513285714080784886255657;
+    let seed: u128 = 145293886525188743719829540001177083863;
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
     println!("seed {}", seed);
 
@@ -1051,7 +1052,7 @@ fn check_compact_nodes(
             if entry.is_deleted() {
                 n_deleted += 1;
             }
-            key_footprint += entry.as_key().footprint().unwrap();
+            key_footprint += util::key_footprint(entry.as_key()).unwrap();
             tree_footprint += {
                 let size = mem::size_of::<Node<i64, i64>>();
                 let overhead: isize = size.try_into().unwrap();

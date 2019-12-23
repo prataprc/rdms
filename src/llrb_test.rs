@@ -11,6 +11,7 @@ use crate::{
     llrb::Llrb,
     scans::{FilterScan, IterChain, SkipScan},
     types::Empty,
+    util,
 };
 
 include!("./ref_test.rs");
@@ -1426,7 +1427,7 @@ fn check_compact_nodes(
             if entry.is_deleted() {
                 n_deleted += 1;
             }
-            key_footprint += entry.as_key().footprint().unwrap();
+            key_footprint += util::key_footprint(entry.as_key()).unwrap();
             tree_footprint += {
                 let size = mem::size_of::<Node<i64, i64>>();
                 let overhead: isize = size.try_into().unwrap();

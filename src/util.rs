@@ -6,7 +6,10 @@ use std::{
     path,
 };
 
-use crate::{core::Result, error::Error};
+use crate::{
+    core::{Footprint, Result},
+    error::Error,
+};
 
 // create a file in append mode for writing.
 pub(crate) fn open_file_cw(file: ffi::OsString) -> Result<fs::File> {
@@ -85,6 +88,15 @@ where
         Bound::Unbounded => Bound::Unbounded,
     };
     (start, end)
+}
+
+pub(crate) fn key_footprint<K>(key: &K) -> Result<isize>
+where
+    K: Footprint,
+{
+    use std::mem::size_of;
+    let footprint: isize = size_of::<K>().try_into().unwrap();
+    Ok(footprint + key.footprint()?)
 }
 
 #[cfg(test)]

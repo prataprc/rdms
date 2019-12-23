@@ -746,7 +746,7 @@ where
             None => snapshot.seqno + 1,
         };
         let lsm = self.lsm;
-        let key_footprint = key.footprint().unwrap();
+        let key_footprint = util::key_footprint(&key).unwrap();
 
         let new_entry = Entry::new(key, Value::new_upsert_value(value, seqno));
 
@@ -823,7 +823,7 @@ where
             Some(seqno) => seqno,
             None => snapshot.seqno + 1,
         };
-        let key_footprint = key.to_owned().footprint().unwrap();
+        let key_footprint = util::key_footprint(&key.to_owned()).unwrap();
 
         let mut n_count = snapshot.n_count;
         let root = snapshot.root_duplicate();
@@ -1402,7 +1402,7 @@ where
         };
 
         let snapshot: &Arc<Snapshot<K, V>> = mself.snapshot.as_ref();
-        let key_footprint = entry.as_key().footprint().unwrap();
+        let key_footprint = util::key_footprint(entry.as_key()).unwrap();
         let (seqno, deleted) = (entry.to_seqno(), entry.is_deleted());
 
         let mut n_count = snapshot.n_count;
@@ -1573,14 +1573,16 @@ where
                 res
             }
         };
-        if res.old_entry.is_some() {
-            mself.key_footprint += key.footprint().unwrap();
-            mself.tree_footprint += res.size;
-            n_count -= 1;
-        }
         match res.old_entry {
-            Some(old_entry) if old_entry.is_deleted() => mself.n_deleted -= 1,
-            _ => (),
+            Some(old_entry) => {
+                mself.key_footprint -= util::key_footprint(&key).unwrap();
+                mself.tree_footprint += res.size;
+                n_count -= 1;
+                if old_entry.is_deleted() {
+                    mself.n_deleted -= 1;
+                }
+            }
+            None => unreachable!(),
         }
         mself.n_reclaimed += rclm.len();
         mself

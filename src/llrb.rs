@@ -418,7 +418,7 @@ where
                 if node.is_deleted() {
                     index.n_deleted += 1;
                 }
-                index.key_footprint += node.as_key().footprint().unwrap();
+                index.key_footprint += util::key_footprint(node.as_key()).unwrap();
                 index.tree_footprint += node.footprint().unwrap();
 
                 node.left = Self::do_split(node.left.take(), index);
@@ -806,7 +806,7 @@ where
             None => self.seqno + 1,
         };
 
-        let key_footprint = key.footprint().unwrap();
+        let key_footprint = util::key_footprint(&key).unwrap();
         let new_entry = {
             let value = Value::new_upsert_value(value, seqno);
             Entry::new(key, value)
@@ -865,7 +865,7 @@ where
             None => self.seqno + 1,
         };
 
-        let key_footprint = key.to_owned().footprint().unwrap();
+        let key_footprint = util::key_footprint(&key.to_owned()).unwrap();
 
         if self.lsm || self.sticky {
             let res = if self.lsm {
@@ -909,15 +909,14 @@ where
                 }
             };
             self.root = res.node;
+            self.seqno = seqno;
             if res.old_entry.is_some() {
                 self.key_footprint -= key_footprint;
                 self.tree_footprint += res.size;
 
                 self.n_count -= 1;
-                self.seqno = seqno;
                 (seqno, Ok(res.old_entry))
             } else {
-                self.seqno = seqno;
                 (seqno, Ok(res.old_entry))
             }
         }
@@ -1323,7 +1322,7 @@ where
             (self as *const Self as *mut Self).as_mut().unwrap()
         };
 
-        let key_footprint = entry.as_key().footprint().unwrap();
+        let key_footprint = util::key_footprint(entry.as_key()).unwrap();
         let (seqno, deleted) = (entry.to_seqno(), entry.is_deleted());
         match Llrb::upsert(mself.root.take(), entry, mself.lsm) {
             UpsertResult {
@@ -1445,12 +1444,16 @@ where
             }
         };
         mself.root = res.node;
-        mself.key_footprint -= key.footprint().unwrap();
-        mself.tree_footprint += res.size;
-        mself.n_count -= 1;
         match res.old_entry {
-            Some(old_entry) if old_entry.is_deleted() => mself.n_deleted -= 1,
-            _ => (),
+            Some(old_entry) => {
+                mself.key_footprint -= util::key_footprint(&key).unwrap();
+                mself.tree_footprint += res.size;
+                mself.n_count -= 1;
+                if old_entry.is_deleted() {
+                    mself.n_deleted -= 1;
+                }
+            }
+            None => unreachable!(),
         }
     }
 }

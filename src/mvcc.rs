@@ -32,7 +32,7 @@
 //! [LSM mode]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
 //!
 
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 
 use std::{
     borrow::Borrow,
@@ -2367,7 +2367,7 @@ where
         };
 
         let index: &mut Mvcc<K, V> = r.as_mut();
-        info!(target: "mvcc  ", "{:?}, new reader {}", index.name, id);
+        debug!(target: "mvcc  ", "{:?}, new reader {}", index.name, id);
         r
     }
 }
@@ -2380,7 +2380,7 @@ where
     fn drop(&mut self) {
         let id = self.id;
         let index: &mut Mvcc<K, V> = self.as_mut();
-        info!(target: "mvcc  ", "{:?}, dropping reader {}", index.name, id);
+        debug!(target: "mvcc  ", "{:?}, dropping reader {}", index.name, id);
 
         // leak this index, it is only a reference
         Box::leak(self.index.take().unwrap());
@@ -2532,7 +2532,7 @@ where
         };
 
         let index: &mut Mvcc<K, V> = w.as_mut();
-        info!(target: "mvcc  ", "{:?}, new writer {}", index.name, id);
+        debug!(target: "mvcc  ", "{:?}, new writer {}", index.name, id);
         w
     }
 }
@@ -2545,7 +2545,7 @@ where
     fn drop(&mut self) {
         let id = self.id;
         let index: &mut Mvcc<K, V> = self.as_mut();
-        info!(target: "mvcc  ", "{:?}, dropping writer {}", index.name, id);
+        debug!(target: "mvcc  ", "{:?}, dropping writer {}", index.name, id);
 
         // leak this index, it is only a reference
         Box::leak(self.index.take().unwrap());

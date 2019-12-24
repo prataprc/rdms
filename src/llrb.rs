@@ -30,7 +30,7 @@
 //! [LSM mode]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
 //!
 
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 
 use std::{
     borrow::Borrow,
@@ -397,14 +397,8 @@ where
 
         let (first_stats, second_stats) = (one.to_stats(), two.to_stats());
 
-        info!(
-            target: "llrb  ",
-            "{} first half of the {}\n{}", name1, self.name, first_stats,
-        );
-        info!(
-            target: "llrb  ",
-            "{} second half of the {}\n{}", name2, self.name, second_stats,
-        );
+        info!(target: "llrb  ", "{} first half\n{}", name1, first_stats);
+        info!(target: "llrb  ", "{} second half\n{}", name2, second_stats);
 
         Ok((one, two))
     }
@@ -1917,7 +1911,8 @@ where
         };
 
         let index: &mut Llrb<K, V> = r.as_mut();
-        info!( target: "llrb  ", "{:?}, creating a new reader {} ...", index.name, id);
+        debug!( target: "llrb  ", "{:?}, creating a new reader {} ...", index.name, id);
+
         r
     }
 }
@@ -1930,7 +1925,7 @@ where
     fn drop(&mut self) {
         let id = self.id;
         let index: &mut Llrb<K, V> = self.as_mut();
-        info!(target: "llrb  ", "{:?}, dropping reader {}", index.name, id);
+        debug!(target: "llrb  ", "{:?}, dropping reader {}", index.name, id);
 
         // leak this index, it is only a reference
         Box::leak(self.index.take().unwrap());
@@ -2082,7 +2077,8 @@ where
         };
 
         let index: &mut Llrb<K, V> = w.as_mut();
-        info!(target: "llrb  ", "{:?}, creating a new writer {}", index.name, id);
+        debug!(target: "llrb  ", "{:?}, creating a new writer {}", index.name, id);
+
         w
     }
 }
@@ -2095,7 +2091,7 @@ where
     fn drop(&mut self) {
         let id = self.id;
         let index: &mut Llrb<K, V> = self.as_mut();
-        info!(target: "llrb  ", "{:?}, dropping writer {}", index.name, id);
+        debug!(target: "llrb  ", "{:?}, dropping writer {}", index.name, id);
 
         // leak this index, it is only a reference
         Box::leak(self.index.take().unwrap());

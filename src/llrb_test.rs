@@ -20,7 +20,32 @@ include!("./ref_test.rs");
 
 #[test]
 fn test_node_size() {
+    use crate::{core, vlog};
+
     assert_eq!(std::mem::size_of::<Node<i64, i64>>(), 80);
+
+    assert_eq!(32, std::mem::size_of::<vlog::Value<Empty>>());
+    assert_eq!(24, std::mem::size_of::<core::Value<Empty>>());
+    assert_eq!(32, std::mem::size_of::<vlog::Delta<Empty>>());
+    assert_eq!(48, std::mem::size_of::<core::Delta<Empty>>());
+    assert_eq!(24, std::mem::size_of::<Vec<Empty>>());
+    assert_eq!(48, std::mem::size_of::<Entry<Empty, Empty>>());
+    assert_eq!(72, std::mem::size_of::<Node<Empty, Empty>>());
+
+    assert_eq!(32, std::mem::size_of::<vlog::Value<i64>>());
+    assert_eq!(24, std::mem::size_of::<core::Value<i64>>());
+    assert_eq!(32, std::mem::size_of::<vlog::Delta<i64>>());
+    assert_eq!(48, std::mem::size_of::<core::Delta<i64>>());
+    assert_eq!(24, std::mem::size_of::<Vec<i64>>());
+    assert_eq!(72, std::mem::size_of::<Entry<[u8; 20], i64>>());
+    assert_eq!(96, std::mem::size_of::<Node<[u8; 20], i64>>());
+
+    let key: [u8; 20] = Default::default();
+    let value: Vec<u8> = vec![Default::default(); 400];
+    let value = core::Value::new_upsert(Box::new(vlog::Value::new_native(value)), 0);
+    let entry = Entry::new(key, value);
+    let node: Node<[u8; 20], Vec<u8>> = entry.into();
+    assert_eq!(520, node.footprint().unwrap());
 }
 
 #[test]

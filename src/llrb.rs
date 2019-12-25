@@ -360,11 +360,6 @@ where
             panic!("cannot call llrb.split() with active readers/writers");
         }
 
-        info!(
-            target: "llrb  ",
-            "{} split in progress ...\n{}", self.name, self.to_stats()
-        );
-
         let (mut one, mut two) = if self.lsm {
             (Llrb::new_lsm(&name1), Llrb::new_lsm(&name2))
         } else {
@@ -394,11 +389,6 @@ where
         assert_eq!(key_footprint, self.key_footprint);
         let tree_footprint = one.tree_footprint + two.tree_footprint;
         assert_eq!(tree_footprint, self.tree_footprint);
-
-        let (first_stats, second_stats) = (one.to_stats(), two.to_stats());
-
-        info!(target: "llrb  ", "{} first half\n{}", name1, first_stats);
-        info!(target: "llrb  ", "{} second half\n{}", name2, second_stats);
 
         Ok((one, two))
     }

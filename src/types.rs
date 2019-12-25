@@ -13,7 +13,7 @@ use crate::{
 
 /// Empty value, can be used for indexing entries that have a
 /// key but no value.
-#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq, PartialOrd, Ord)]
 pub struct Empty;
 
 //-------------------------------------------------------------------

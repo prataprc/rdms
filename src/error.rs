@@ -41,6 +41,8 @@ pub enum Error {
     /// argument contains more details.
     ValidationFail(String),
     /// Index has failed.
+    MemIndexFail(String),
+    /// Index has failed.
     DiskIndexFail(String),
     /// Expected a native value. TODO: hide this ?
     NotNativeValue,

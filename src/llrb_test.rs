@@ -341,7 +341,7 @@ fn test_n_deleted() {
         for key in keys.iter() {
             index.delete(key).unwrap();
         }
-        index.delete(&missing_key);
+        assert!(index.delete(&missing_key).unwrap().is_none());
     };
 
     // without lsm

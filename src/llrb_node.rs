@@ -1,4 +1,5 @@
 use std::{
+    cmp,
     convert::TryInto,
     fmt,
     ops::{Deref, DerefMut},
@@ -266,6 +267,20 @@ impl LlrbDepth {
             }
         }
         percentiles
+    }
+
+    pub fn merge(self, other: Self) -> Self {
+        let mut depths = LlrbDepth {
+            samples: self.samples + other.samples,
+            min: cmp::min(self.min, other.min),
+            max: cmp::max(self.max, other.max),
+            total: self.total + other.total,
+            depths: [0; 256],
+        };
+        for i in 0..depths.depths.len() {
+            depths.depths[i] = self.depths[i] + other.depths[i];
+        }
+        depths
     }
 }
 

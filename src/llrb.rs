@@ -2262,7 +2262,7 @@ impl Stats {
         }
     }
 
-    pub fn merge(self, other: Stats) -> Stats {
+    pub fn merge(self, other: Self) -> Self {
         let rw_latch = spinlock::Stats {
             value: 0xC0FFEE,
             read_locks: self.rw_latch.read_locks + other.rw_latch.read_locks,
@@ -2270,25 +2270,13 @@ impl Stats {
             conflicts: self.rw_latch.conflicts + other.rw_latch.conflicts,
         };
         let blacks = match (self.blacks, other.blacks) {
-            (Some(b1), Some(b2)) => Some(b1 + b2),
+            (Some(b1), Some(b2)) => Some((b1 + b2) / 2),
             (Some(b1), None) => Some(b1),
             (None, Some(b2)) => Some(b2),
             (None, None) => None,
         };
         let depths = match (self.depths, other.depths) {
-            (Some(d1), Some(d2)) => {
-                let mut depths = LlrbDepth {
-                    samples: d1.samples + d2.samples,
-                    min: d1.min + d2.min,
-                    max: d1.max + d2.max,
-                    total: d1.total + d2.total,
-                    depths: [0; 256],
-                };
-                for i in 0..depths.depths.len() {
-                    depths.depths[i] = d1.depths[i] + d2.depths[i];
-                }
-                Some(depths)
-            }
+            (Some(d1), Some(d2)) => Some(d1.merge(d2)),
             (Some(d1), None) => Some(d1),
             (None, Some(d2)) => Some(d2),
             (None, None) => None,

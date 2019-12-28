@@ -210,7 +210,7 @@ fn test_zentry_deltas() {
         .prepend_version(core::Entry::new(100, value), true)
         .ok();
 
-    entry.delete(12);
+    entry.delete(12).unwrap();
 
     let value = core::Value::new_upsert_value(30000, 13);
     entry
@@ -260,7 +260,7 @@ fn test_zentry_l() {
         .prepend_version(core::Entry::new(100, value), true)
         .ok();
 
-    entry.delete(12);
+    entry.delete(12).unwrap();
 
     let value = core::Value::new_upsert_value(30000, 13);
     entry
@@ -300,7 +300,7 @@ fn test_zentry_ld() {
         .prepend_version(core::Entry::new(100, value), true)
         .ok();
 
-    entry.delete(12);
+    entry.delete(12).unwrap();
 
     let value = core::Value::new_upsert_value(30000, 13);
     entry
@@ -420,7 +420,7 @@ fn test_zentry_lv() {
         .prepend_version(core::Entry::new(100, value), true)
         .ok();
 
-    entry.delete(12);
+    entry.delete(12).unwrap();
 
     let value = core::Value::new_upsert_value(30000, 13);
     entry
@@ -496,7 +496,7 @@ fn test_zentry_lvd() {
         .prepend_version(core::Entry::new(100, value), true)
         .ok();
 
-    entry.delete(12);
+    entry.delete(12).unwrap();
 
     let value = core::Value::new_upsert_value(30000, 13);
     entry

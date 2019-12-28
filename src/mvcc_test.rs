@@ -157,7 +157,7 @@ fn test_n_deleted() {
         for key in keys.iter() {
             index.delete(key).unwrap();
         }
-        index.delete(&missing_key);
+        assert!(index.delete(&missing_key).unwrap().is_none());
     };
 
     // without lsm
@@ -952,7 +952,7 @@ fn check_commit_nodes(index: &mut Mvcc<i64, i64>, rindex: &mut Mvcc<i64, i64>) {
 #[test]
 fn test_compact() {
     let seed: u128 = random();
-    let seed: u128 = 145293886525188743719829540001177083863;
+    // let seed: u128 = 145293886525188743719829540001177083863;
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
     println!("seed {}", seed);
 

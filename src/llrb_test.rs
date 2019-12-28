@@ -101,10 +101,10 @@ fn test_stats() {
     assert_eq!(s.rw_latch.read_locks, 3);
     assert_eq!(s.rw_latch.write_locks, 3);
     assert_eq!(s.rw_latch.conflicts, 3);
-    assert_eq!(s.blacks, Some(3));
+    assert_eq!(s.blacks, Some(1));
     assert_eq!(s.depths.as_ref().unwrap().samples, 3);
-    assert_eq!(s.depths.as_ref().unwrap().min, 3);
-    assert_eq!(s.depths.as_ref().unwrap().max, 3);
+    assert_eq!(s.depths.as_ref().unwrap().min, 1);
+    assert_eq!(s.depths.as_ref().unwrap().max, 2);
     assert_eq!(s.depths.as_ref().unwrap().total, 3);
     assert_eq!(
         s.depths.as_ref().unwrap().depths.to_vec(),

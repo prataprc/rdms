@@ -466,7 +466,7 @@ fn run_robt_llrb(name: &str, n_ops: u64, key_max: i64, repeat: usize, seed: u128
 
         let mut snap = robt::Snapshot::<i64, i64, CRoaring>::open(&dir, name).unwrap();
         snap.validate().unwrap();
-        snap.set_mmap(mmap);
+        snap.set_mmap(mmap).unwrap();
         assert_eq!(snap.len(), refs.len());
         assert_eq!(snap.to_seqno(), llrb.to_seqno());
         assert_eq!(snap.to_app_meta().unwrap(), app_meta.as_bytes().to_vec());

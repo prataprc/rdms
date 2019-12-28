@@ -705,7 +705,7 @@ fn gen_entries(n: usize, mut seqno: u64) -> Vec<core::Entry<i32, i32>> {
                     .ok();
             }
             2 => {
-                entry.delete(seqno);
+                entry.delete(seqno).unwrap();
             }
             _ => unreachable!(),
         }

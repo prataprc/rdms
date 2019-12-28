@@ -880,7 +880,7 @@ where
                 }
             };
             let seqno = if res.old_entry.is_some() {
-                self.key_footprint += key_footprint;
+                self.key_footprint -= key_footprint;
                 self.tree_footprint += res.size;
                 n_count -= 1;
                 seqno

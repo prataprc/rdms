@@ -13,7 +13,7 @@ use crate::llrb::Llrb;
 
 /// Node corresponds to a single entry in Llrb instance.
 #[derive(Clone)]
-pub(crate) struct Node<K, V>
+pub struct Node<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff,

@@ -53,7 +53,7 @@ pub mod spinlock;
 pub mod sync;
 mod sync_writer;
 pub mod types;
-mod util;
+pub mod util;
 mod vlog;
 
 // support modules

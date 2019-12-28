@@ -90,7 +90,7 @@ where
     (start, end)
 }
 
-pub(crate) fn key_footprint<K>(key: &K) -> Result<isize>
+pub fn key_footprint<K>(key: &K) -> Result<isize>
 where
     K: Footprint,
 {

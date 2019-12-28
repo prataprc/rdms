@@ -49,13 +49,14 @@ use crate::{
     core::{CommitIterator, ToJson, Validate, Writer},
     core::{Diff, Entry, Footprint, Index, IndexIter, PiecewiseScan, Reader},
     error::Error,
-    llrb_node::Node,
     mvcc::{Mvcc, Snapshot},
     scans::SkipScan,
     spinlock::{self, RWSpinlock},
     types::Empty,
     util,
 };
+// re-export
+pub use crate::llrb_node::Node;
 
 include!("llrb_common.rs");
 

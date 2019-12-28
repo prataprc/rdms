@@ -892,10 +892,10 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    // Pick all versions whose seqno is within the specified range.
-    // Note that, by rdms-design only memory-indexes ingesting new
-    // mutations are subjected to this filter function.
-    pub(crate) fn filter_within(
+    /// Pick all versions whose seqno is within the specified range.
+    /// Note that, by rdms-design only memory-indexes ingesting new
+    /// mutations are subjected to this filter function.
+    pub fn filter_within(
         &self,
         start: Bound<u64>, // filter from
         end: Bound<u64>,   // filter till

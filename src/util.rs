@@ -12,7 +12,7 @@ use crate::{
 };
 
 // create a file in append mode for writing.
-pub(crate) fn open_file_cw(file: ffi::OsString) -> Result<fs::File> {
+pub fn open_file_cw(file: ffi::OsString) -> Result<fs::File> {
     let os_file = {
         let os_file = path::Path::new(&file);
         fs::remove_file(os_file).ok(); // NOTE: ignore remove errors.
@@ -31,14 +31,14 @@ pub(crate) fn open_file_cw(file: ffi::OsString) -> Result<fs::File> {
 }
 
 // open existing file in append mode for writing.
-pub(crate) fn open_file_w(file: &ffi::OsString) -> Result<fs::File> {
+pub fn open_file_w(file: &ffi::OsString) -> Result<fs::File> {
     let os_file = path::Path::new(file);
     let mut opts = fs::OpenOptions::new();
     Ok(opts.append(true).open(os_file)?)
 }
 
 // open file for reading.
-pub(crate) fn open_file_r(file: &ffi::OsStr) -> Result<fs::File> {
+pub fn open_file_r(file: &ffi::OsStr) -> Result<fs::File> {
     let os_file = path::Path::new(file);
     Ok(fs::OpenOptions::new().read(true).open(os_file)?)
 }

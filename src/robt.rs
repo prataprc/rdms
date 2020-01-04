@@ -2306,6 +2306,64 @@ where
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
 {
+    pub fn first(&mut self) -> Result<Entry<K, V>> {
+        let zfpos = self.first_zpos(self.to_root().unwrap())?;
+
+        let z_blocksize = self.config.z_blocksize;
+        let zblock = ZBlock::<K, V>::new_decode(self.index_fd.read_buffer(
+            zfpos,
+            z_blocksize,
+            "first(), reading zblock",
+        )?)?;
+
+        Ok(zblock.to_entry(0)?.1)
+    }
+
+    pub fn last(&mut self) -> Result<Entry<K, V>> {
+        let zfpos = self.last_zfpos(self.to_root().unwrap())?;
+
+        let z_blocksize = self.config.z_blocksize;
+        let zblock = ZBlock::<K, V>::new_decode(self.index_fd.read_buffer(
+            zfpos,
+            z_blocksize,
+            "last(), reading zblock",
+        )?)?;
+
+        Ok(zblock.last()?.1)
+    }
+
+    fn first_zpos(&mut self, fpos: u64) -> Result<u64> {
+        let m_blocksize = self.config.m_blocksize;
+        let mblock = MBlock::<K, V>::new_decode(self.index_fd.read_buffer(
+            fpos,
+            m_blocksize,
+            "first_zpos, reading mblock",
+        )?)?;
+
+        let mentry = mblock.to_entry(0)?;
+        if mentry.is_zblock() {
+            Ok(mentry.to_fpos())
+        } else {
+            self.first_zpos(mentry.to_fpos())
+        }
+    }
+
+    fn last_zfpos(&mut self, fpos: u64) -> Result<u64> {
+        let m_blocksize = self.config.m_blocksize;
+        let mblock = MBlock::<K, V>::new_decode(self.index_fd.read_buffer(
+            fpos,
+            m_blocksize,
+            "last_zpos, reading mblock",
+        )?)?;
+
+        let mentry = mblock.last()?;
+        if mentry.is_zblock() {
+            Ok(mentry.to_fpos())
+        } else {
+            self.last_zfpos(mentry.to_fpos())
+        }
+    }
+
     fn get_zpos<Q>(&mut self, key: &Q, fpos: u64) -> Result<u64>
     where
         K: Borrow<Q>,

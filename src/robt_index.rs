@@ -316,6 +316,28 @@ where
         }
     }
 
+    pub(crate) fn last(&self) -> Result<MEntry<K>> {
+        let (block, count, offsets) = match self {
+            MBlock::Decode {
+                block,
+                count,
+                offsets,
+                ..
+            } => (block, *count, offsets),
+            MBlock::Encode { .. } => unreachable!(),
+        };
+        if count > 0 {
+            let index = count - 1;
+            let idx = index * 4;
+            let offset: usize = u32::from_be_bytes(offsets[idx..idx + 4].try_into().unwrap())
+                .try_into()
+                .unwrap();
+            Ok(MEntry::decode_entry(&block[offset..], index))
+        } else {
+            Err(Error::__MBlockExhausted(count))
+        }
+    }
+
     fn to_key(&self, index: usize) -> Result<K> {
         let (block, count, offsets) = match self {
             MBlock::Decode {
@@ -656,6 +678,29 @@ where
             Ok((index, ZEntry::decode_entry(entry)?))
         } else {
             Err(Error::__ZBlockExhausted(index))
+        }
+    }
+
+    pub fn last(&self) -> Result<(usize, core::Entry<K, V>)> {
+        let (block, count, offsets) = match self {
+            ZBlock::Decode {
+                block,
+                count,
+                offsets,
+                ..
+            } => (block, *count, offsets),
+            ZBlock::Encode { .. } => unreachable!(),
+        };
+        if count > 0 {
+            let index = count - 1;
+            let idx = index * 4;
+            let offset: usize = u32::from_be_bytes(offsets[idx..idx + 4].try_into().unwrap())
+                .try_into()
+                .unwrap();
+            let entry = &block[offset..];
+            Ok((index, ZEntry::decode_entry(entry)?))
+        } else {
+            Err(Error::__ZBlockExhausted(count))
         }
     }
 

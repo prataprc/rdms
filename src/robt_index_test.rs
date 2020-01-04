@@ -65,6 +65,7 @@ fn test_mblock_m() {
             }
             _ => unreachable!(),
         }
+
         assert_eq!(mb.to_key(i).unwrap(), entry.0);
 
         let r = random::<u8>() % 3;
@@ -105,6 +106,18 @@ fn test_mblock_m() {
             _ => unreachable!(),
         }
     }
+
+    // test case for last() method
+    let last_i = keys.len() - 1;
+    let me = mb.last().unwrap();
+    match me {
+        MEntry::DecM { fpos, index } => {
+            assert_eq!(index, last_i);
+            assert_eq!(fpos, (last_i * 4096) as u64);
+        }
+        _ => unreachable!(),
+    }
+
     let index = keys.len();
     match mb.to_entry(index) {
         Err(Error::__MBlockExhausted(n)) => assert_eq!(index, n),
@@ -216,6 +229,7 @@ fn test_mblock_z() {
             _ => unreachable!(),
         }
     }
+
     let index = keys.len();
     match mb.to_entry(index) {
         Err(Error::__MBlockExhausted(n)) => assert_eq!(index, n),
@@ -283,15 +297,18 @@ fn test_zblock1() {
         file
     };
 
+    let zbs = config.z_blocksize as u64;
     let zb = {
         let (mut fd, fpos) = (util::open_file_r(&file).unwrap(), 0);
         ZBlock::<i32, i32>::new_decode(
-            util::read_buffer(&mut fd, fpos, config.z_blocksize as u64, "reading zblock").unwrap(),
+            util::read_buffer(&mut fd, fpos, zbs, "reading zblock").unwrap(),
         )
         .unwrap()
     };
     assert_eq!(zb.len(), entries.len());
 
+    let mut last_entry: Option<core::Entry<i32, i32>> = None;
+    let mut last_index: Option<usize> = None;
     for (i, entry) in entries.iter().enumerate() {
         let (index, e) = zb
             .find(&entry.to_key(), Bound::Unbounded, Bound::Unbounded)
@@ -301,7 +318,18 @@ fn test_zblock1() {
         assert_eq!(e.to_native_value(), entry.to_native_value());
         assert_eq!(e.to_seqno(), entry.to_seqno());
         assert_eq!(e.to_delta_count(), 0);
+
+        last_entry = Some(e);
+        last_index = Some(i);
     }
+
+    let (last_entry, last_index) = (last_entry.unwrap(), last_index.unwrap());
+    let (index, e) = zb.last().unwrap();
+    assert_eq!(index, last_index);
+    assert_eq!(e.to_key(), last_entry.to_key());
+    assert_eq!(e.to_native_value(), last_entry.to_native_value());
+    assert_eq!(e.to_seqno(), last_entry.to_seqno());
+
     let key = entries[0].to_key() - 1;
     match zb.find(&key, Bound::Unbounded, Bound::Unbounded) {
         Err(Error::__LessThan) => (),

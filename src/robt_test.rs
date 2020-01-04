@@ -485,6 +485,11 @@ fn run_robt_llrb(name: &str, n_ops: u64, key_max: i64, repeat: usize, seed: u128
             let e = snap.get(entry.as_key()).unwrap();
             check_entry1(&entry, &e);
         }
+
+        // test first and last
+        check_entry1(&snap.first().unwrap(), &refs.first().unwrap());
+        check_entry1(&snap.last().unwrap(), &refs.last().unwrap());
+
         // test get_with_versions
         for entry in refs.iter() {
             let e = snap.get_with_versions(entry.as_key()).unwrap();

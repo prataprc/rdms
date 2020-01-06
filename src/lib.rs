@@ -48,7 +48,7 @@
 // core modules
 pub mod core;
 pub mod error;
-mod panic;
+pub mod panic;
 pub mod spinlock;
 pub mod sync;
 mod sync_writer;

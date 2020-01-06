@@ -14,9 +14,9 @@ use crate::{
 #[test]
 fn test_name() {
     let name = Name("somename-0-robt-000".to_string());
-    let parts: Option<(String, usize)> = name.clone().into();
-    assert!(parts.is_some());
-    let (s, n) = parts.unwrap();
+    assert_eq!(name.to_string(), "somename-0-robt-000".to_string());
+
+    let (s, n): (String, usize) = TryFrom::try_from(name.clone()).unwrap();
     assert_eq!(s, "somename-0".to_string());
     assert_eq!(n, 0);
 
@@ -24,6 +24,67 @@ fn test_name() {
     assert_eq!(name.0, name1.0);
 
     assert_eq!(name1.next().0, "somename-0-robt-001".to_string());
+}
+
+#[test]
+fn test_index_file_name() {
+    let name = Name("somename-0-robt-000".to_string());
+    let iname: IndexFileName = name.clone().into();
+    assert_eq!(iname.to_string(), "somename-0-robt-000.indx".to_string());
+
+    let name1: Name = TryFrom::try_from(iname.clone()).unwrap();
+    assert_eq!(name.0, name1.0);
+
+    let file_name: ffi::OsString = iname.into();
+    let ref_name: &ffi::OsStr = "somename-0-robt-000.indx".as_ref();
+    assert_eq!(file_name, ref_name.to_os_string());
+}
+
+#[test]
+fn test_vlog_file_name() {
+    let name = Name("somename-0-robt-000".to_string());
+    let iname: VlogFileName = name.into();
+    assert_eq!(iname.to_string(), "somename-0-robt-000.vlog".to_string());
+    let ref_name: &ffi::OsStr = "somename-0-robt-000.vlog".as_ref();
+    assert_eq!(iname.0, ref_name.to_os_string());
+}
+
+#[test]
+fn test_version() {
+    use crate::nobitmap::NoBitmap;
+
+    for i in 0..1000 {
+        let name = Name(format!("somename-0-robt-{:03}", i));
+        let inner = InnerRobt::<i64, i64, NoBitmap>::Build {
+            dir: Default::default(),
+            name: name.clone(),
+            config: Default::default(),
+            purge_tx: Default::default(),
+            _phantom_key: marker::PhantomData,
+            _phantom_val: marker::PhantomData,
+        };
+        let index = Robt {
+            inner: sync::Mutex::new(inner),
+            purger: None,
+        };
+        assert_eq!(index.version(), i);
+
+        let inner = InnerRobt::<i64, i64, NoBitmap>::Snapshot {
+            dir: Default::default(),
+            name,
+            footprint: Default::default(),
+            meta: Default::default(),
+            config: Default::default(),
+            stats: Default::default(),
+            bitmap: Arc::new(NoBitmap),
+            purge_tx: Default::default(),
+        };
+        let index = Robt {
+            inner: sync::Mutex::new(inner),
+            purger: None,
+        };
+        assert_eq!(index.version(), i);
+    }
 }
 
 #[test]
@@ -77,6 +138,86 @@ fn test_stats() {
     let s = stats1.to_json();
     let stats2: Stats = s.parse().unwrap();
     assert!(stats1 == stats2);
+}
+
+#[test]
+fn test_stats_merge() {
+    let stats1 = Stats {
+        name: "test_stats".to_string(),
+        z_blocksize: 16384,
+        m_blocksize: 4096,
+        v_blocksize: 65536,
+        delta_ok: true,
+        vlog_file: None,
+        value_in_vlog: true,
+
+        n_count: 1,
+        n_deleted: 1,
+        seqno: 1,
+        key_mem: 1,
+        diff_mem: 1,
+        val_mem: 1,
+        z_bytes: 1,
+        v_bytes: 1,
+        m_bytes: 1,
+        mem_bitmap: 1,
+        n_bitmap: 1,
+        padding: 1,
+        n_abytes: 2,
+
+        build_time: 1,
+        epoch: 1,
+    };
+    let stats2 = Stats {
+        name: "test_stats".to_string(),
+        z_blocksize: 16384,
+        m_blocksize: 4096,
+        v_blocksize: 65536,
+        delta_ok: true,
+        vlog_file: None,
+        value_in_vlog: true,
+
+        n_count: 2,
+        n_deleted: 2,
+        seqno: 2,
+        key_mem: 2,
+        diff_mem: 2,
+        val_mem: 2,
+        z_bytes: 2,
+        v_bytes: 2,
+        m_bytes: 2,
+        mem_bitmap: 2,
+        n_bitmap: 2,
+        padding: 2,
+        n_abytes: 2,
+
+        build_time: 2,
+        epoch: 2,
+    };
+
+    let stats = stats1.merge(stats2);
+    assert_eq!(stats.z_blocksize, 16384);
+    assert_eq!(stats.m_blocksize, 4096);
+    assert_eq!(stats.v_blocksize, 65536);
+    assert_eq!(stats.delta_ok, true);
+    assert_eq!(stats.vlog_file, None);
+    assert_eq!(stats.value_in_vlog, true);
+
+    assert_eq!(stats.n_count, 3);
+    assert_eq!(stats.n_deleted, 3);
+    assert_eq!(stats.seqno, 2);
+    assert_eq!(stats.key_mem, 3);
+    assert_eq!(stats.diff_mem, 3);
+    assert_eq!(stats.val_mem, 3);
+    assert_eq!(stats.z_bytes, 3);
+    assert_eq!(stats.v_bytes, 3);
+    assert_eq!(stats.m_bytes, 3);
+    assert_eq!(stats.mem_bitmap, 3);
+    assert_eq!(stats.n_bitmap, 3);
+    assert_eq!(stats.padding, 3);
+    assert_eq!(stats.n_abytes, 0);
+    assert_eq!(stats.build_time, 0);
+    assert_eq!(stats.epoch, 0);
 }
 
 #[test]
@@ -486,9 +627,32 @@ fn run_robt_llrb(name: &str, n_ops: u64, key_max: i64, repeat: usize, seed: u128
             check_entry1(&entry, &e);
         }
 
-        // test first and last
-        check_entry1(&snap.first().unwrap(), &refs.first().unwrap());
-        check_entry1(&snap.last().unwrap(), &refs.last().unwrap());
+        // test first entry
+        let ref_entry = refs.first().unwrap();
+        let ref_entry = ref_entry
+            .clone()
+            .purge(Bound::Excluded(ref_entry.to_seqno()))
+            .unwrap();
+        let entry = snap.first().unwrap();
+        let entry = entry
+            .clone()
+            .purge(Bound::Excluded(entry.to_seqno()))
+            .unwrap();
+        check_entry1(&entry, &ref_entry);
+        check_entry1(&snap.first_versions().unwrap(), &refs.first().unwrap());
+        // test last entry
+        let ref_entry = refs.last().unwrap();
+        let ref_entry = ref_entry
+            .clone()
+            .purge(Bound::Excluded(ref_entry.to_seqno()))
+            .unwrap();
+        let entry = snap.last().unwrap();
+        let entry = entry
+            .clone()
+            .purge(Bound::Excluded(entry.to_seqno()))
+            .unwrap();
+        check_entry1(&entry, &ref_entry);
+        check_entry1(&snap.last_versions().unwrap(), &refs.last().unwrap());
 
         // test get_with_versions
         for entry in refs.iter() {

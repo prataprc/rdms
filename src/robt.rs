@@ -47,7 +47,7 @@ use log::{debug, error, info};
 use std::{
     borrow::Borrow,
     cmp,
-    convert::TryInto,
+    convert::{TryFrom, TryInto},
     ffi, fmt, fs,
     hash::Hash,
     io::Write,
@@ -77,10 +77,8 @@ struct Name(String);
 
 impl Name {
     fn next(self) -> Name {
-        match From::from(self) {
-            Some((s, ver)) => From::from((s, ver + 1)),
-            None => unreachable!(),
-        }
+        let (s, ver): (String, usize) = TryFrom::try_from(self).unwrap();
+        From::from((s, ver + 1))
     }
 }
 
@@ -90,26 +88,24 @@ impl From<(String, usize)> for Name {
     }
 }
 
-impl From<Name> for Option<(String, usize)> {
-    fn from(name: Name) -> Option<(String, usize)> {
+impl TryFrom<Name> for (String, usize) {
+    type Error = Error;
+
+    fn try_from(name: Name) -> Result<(String, usize)> {
+        use crate::error::Error::InvalidFile;
+
         let parts: Vec<&str> = name.0.split('-').collect();
         if parts.len() < 3 {
-            None
+            Err(InvalidFile(format!("not robt index")))
         } else if parts[parts.len() - 2] != "robt" {
-            None
+            Err(InvalidFile(format!("not robt index")))
         } else {
-            let ver = parts[parts.len() - 1].parse::<usize>().ok()?;
+            let ver = parts[parts.len() - 1]
+                .parse::<usize>()
+                .map_err(|_| InvalidFile(format!("not robt index")))?;
             let s = parts[..(parts.len() - 2)].join("-");
-            Some((s, ver))
+            Ok((s, ver))
         }
-    }
-}
-
-impl From<Name> for ffi::OsString {
-    fn from(name: Name) -> ffi::OsString {
-        let file_name = format!("{}.indx", name.0);
-        let file_name: &ffi::OsStr = file_name.as_ref();
-        file_name.to_os_string()
     }
 }
 
@@ -122,6 +118,66 @@ impl fmt::Display for Name {
 impl fmt::Debug for Name {
     fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
         write!(f, "{:?}", self.0)
+    }
+}
+
+#[derive(Clone)]
+pub struct IndexFileName(ffi::OsString);
+
+impl From<Name> for IndexFileName {
+    fn from(name: Name) -> IndexFileName {
+        let file_name = format!("{}.indx", name.0);
+        let name: &ffi::OsStr = file_name.as_ref();
+        IndexFileName(name.to_os_string())
+    }
+}
+
+impl TryFrom<IndexFileName> for Name {
+    type Error = Error;
+
+    fn try_from(fname: IndexFileName) -> Result<Name> {
+        use crate::error::Error::InvalidFile;
+        let err = format!("not robt index");
+
+        let fname = path::Path::new(&fname.0);
+        let ext = fname.extension().ok_or(InvalidFile(err.clone()))?;
+        if ext.to_str().ok_or(InvalidFile(err.clone()))? == "indx" {
+            let stem = fname.file_stem().ok_or(InvalidFile(err.clone()))?;
+            Ok(Name(
+                stem.to_str().ok_or(InvalidFile(err.clone()))?.to_string(),
+            ))
+        } else {
+            Err(InvalidFile(err))
+        }
+    }
+}
+
+impl From<IndexFileName> for ffi::OsString {
+    fn from(name: IndexFileName) -> ffi::OsString {
+        name.0
+    }
+}
+
+impl fmt::Display for IndexFileName {
+    fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
+        write!(f, "{}", self.0.to_str().unwrap())
+    }
+}
+
+#[derive(Clone)]
+pub struct VlogFileName(ffi::OsString);
+
+impl From<Name> for VlogFileName {
+    fn from(name: Name) -> VlogFileName {
+        let file_name = format!("{}.vlog", name.0);
+        let name: &ffi::OsStr = file_name.as_ref();
+        VlogFileName(name.to_os_string())
+    }
+}
+
+impl fmt::Display for VlogFileName {
+    fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
+        write!(f, "{}", self.0.to_str().unwrap())
     }
 }
 
@@ -151,25 +207,6 @@ where
     _phantom_key: marker::PhantomData<K>,
     _phantom_val: marker::PhantomData<V>,
     _phantom_bitmap: marker::PhantomData<B>,
-}
-
-impl<K, V, B> RobtFactory<K, V, B>
-where
-    K: Clone + Ord + Serialize,
-    V: Clone + Diff + Serialize,
-    <V as Diff>::D: Serialize,
-{
-    // file name should match the following criteria.
-    // a. must have a `.indx` suffix.
-    // b. must have the robt naming convention, refer `Name` type for details.
-    fn to_name(file_name: &ffi::OsStr) -> Option<Name> {
-        let stem = match path::Path::new(file_name).extension() {
-            Some(ext) if ext.to_str() == Some("indx") => path::Path::new(file_name).file_stem(),
-            Some(_) | None => None,
-        }?;
-        let parts: Option<(String, usize)> = Name(stem.to_str()?.to_string()).into();
-        Some(parts?.into())
-    }
 }
 
 impl<K, V, B> DiskIndexFactory<K, V> for RobtFactory<K, V, B>
@@ -205,12 +242,12 @@ where
     }
 
     fn open(&self, dir: &ffi::OsStr, root: ffi::OsString) -> Result<Robt<K, V, B>> {
-        let name = Self::to_name(&root).ok_or(Error::InvalidFile(format!(
-            "open robt {:?}/{:?}",
-            dir, root
-        )))?;
+        let name: Name = TryFrom::try_from(IndexFileName(root))?;
 
-        info!(target: "robtfc", "{:?}, open from {:?}/{} with config ...", name, dir, name);
+        info!(
+            target: "robtfc",
+            "{:?}, open from {:?}/{} with config ...", name, dir, name
+        );
 
         let snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
         snapshot.log()?;
@@ -257,11 +294,14 @@ where
         {
             let inner = self.inner.get_mut().unwrap();
             let _purge_tx = match inner {
-                InnerRobt::Build { purge_tx, .. } => purge_tx.take().unwrap(),
-                InnerRobt::Snapshot { purge_tx, .. } => purge_tx.take().unwrap(),
+                InnerRobt::Build { purge_tx, .. } => purge_tx.take(),
+                InnerRobt::Snapshot { purge_tx, .. } => purge_tx.take(),
             };
         }
-        self.purger.take().unwrap().join().ok(); // TODO: log message
+        match self.purger.take() {
+            Some(purger) => purger.join().ok(), // TODO: log message
+            None => None,
+        };
     }
 }
 
@@ -276,6 +316,18 @@ where
             inner: sync::Mutex::new(inner),
             purger: Some(purger),
         }
+    }
+
+    /// Return Index's version number, every commit and compact shall increment
+    /// the version number.
+    pub fn version(&self) -> usize {
+        let inner = self.inner.lock().unwrap();
+        let name = match inner.deref() {
+            InnerRobt::Build { name, .. } => name.clone(),
+            InnerRobt::Snapshot { name, .. } => name.clone(),
+        };
+        let parts: (String, usize) = TryFrom::try_from(name).unwrap();
+        parts.1 // version
     }
 }
 
@@ -324,16 +376,19 @@ where
             InnerRobt::Build { name, .. } => name.clone(),
             InnerRobt::Snapshot { name, .. } => name.clone(),
         };
-        let parts: Option<(String, usize)> = name.into();
-        parts.unwrap().0 // just the name as passed to new().
+        let parts: (String, usize) = TryFrom::try_from(name).unwrap();
+        parts.0 // just the name as passed to new().
     }
 
     fn to_root(&self) -> ffi::OsString {
         let inner = self.inner.lock().unwrap();
-        match inner.deref() {
-            InnerRobt::Build { name, .. } => name.clone().into(),
-            InnerRobt::Snapshot { name, .. } => name.clone().into(),
-        }
+        let name: Name = match inner.deref() {
+            InnerRobt::Build { name, .. } => name.clone(),
+            InnerRobt::Snapshot { name, .. } => name.clone(),
+        };
+
+        let index_file: IndexFileName = name.into();
+        index_file.into()
     }
 
     fn to_metadata(&self) -> Result<Vec<u8>> {
@@ -409,16 +464,24 @@ where
                 };
                 let stats = snapshot.to_stats()?;
                 let footprint = snapshot.footprint()?;
+
                 info!(
                     target: "robt  ",
-                    "{:?}, flushed to index file {:?}", name, snapshot.index_fd.to_file()
+                    "{:?}, flushed to index file {:?}",
+                    name, snapshot.index_fd.to_file()
                 );
+
                 if let Some((vlog_file, _)) = &snapshot.valog_fd {
-                    info!(target: "robt  ", "{:?}, flushed to valog file {:?}", name, vlog_file);
+                    info!(
+                        target: "robt  ",
+                        "{:?}, flushed to valog file {:?}", name, vlog_file
+                    );
                 }
+
                 info!(
                     target: "robt  ",
-                    "{:?}, footprint {}, wrote {} bytes", name, footprint, footprint
+                    "{:?}, footprint {}, wrote {} bytes",
+                    name, footprint, footprint
                 );
 
                 InnerRobt::Snapshot {
@@ -793,32 +856,20 @@ impl From<Stats> for Config {
 }
 
 impl Config {
-    fn make_index_file(name: &str) -> String {
-        format!("{}.indx", name)
+    fn stitch_index_file(dir: &ffi::OsStr, name: &str) -> ffi::OsString {
+        let index_file: IndexFileName = Name(name.to_string()).into();
+
+        let mut index_path = path::PathBuf::from(dir);
+        index_path.push(index_file.to_string());
+        index_path.into_os_string()
     }
 
-    fn make_vlog_file(name: &str) -> String {
-        format!("{}.vlog", name)
-    }
+    fn stitch_vlog_file(dir: &ffi::OsStr, name: &str) -> ffi::OsString {
+        let vlog_file: VlogFileName = Name(name.to_string()).into();
 
-    fn stitch_index_file(
-        dir: &ffi::OsStr, // directory can be os-native string
-        name: &str,       // but name must be a valid utf8 string
-    ) -> ffi::OsString {
-        let mut index_file = path::PathBuf::from(dir);
-        index_file.push(Self::make_index_file(name));
-        let index_file: &ffi::OsStr = index_file.as_ref();
-        index_file.to_os_string()
-    }
-
-    fn stitch_vlog_file(
-        dir: &ffi::OsStr, // directory can be os-native string
-        name: &str,       // but name must be a valid utf8 string
-    ) -> ffi::OsString {
-        let mut vlog_file = path::PathBuf::from(dir);
-        vlog_file.push(Self::make_vlog_file(name));
-        let vlog_file: &ffi::OsStr = vlog_file.as_ref();
-        vlog_file.to_os_string()
+        let mut vlog_path = path::PathBuf::from(dir);
+        vlog_path.push(vlog_file.to_string());
+        vlog_path.into_os_string()
     }
 
     fn compute_root_block(n: usize) -> usize {
@@ -1066,6 +1117,37 @@ pub struct Stats {
     pub build_time: u64,
     /// Timestamp for this index.
     pub epoch: i128,
+}
+
+impl Stats {
+    pub fn merge(self, other: Stats) -> Stats {
+        Stats {
+            name: self.name.clone(),
+            z_blocksize: self.z_blocksize,
+            m_blocksize: self.m_blocksize,
+            v_blocksize: self.v_blocksize,
+            delta_ok: self.delta_ok,
+            vlog_file: None,
+            value_in_vlog: self.value_in_vlog,
+
+            n_count: self.n_count + other.n_count,
+            n_deleted: self.n_deleted + other.n_deleted,
+            seqno: cmp::max(self.seqno, other.seqno),
+            key_mem: self.key_mem + other.key_mem,
+            diff_mem: self.diff_mem + other.diff_mem,
+            val_mem: self.val_mem + other.val_mem,
+            z_bytes: self.z_bytes + other.z_bytes,
+            m_bytes: self.m_bytes + other.m_bytes,
+            v_bytes: self.v_bytes + other.v_bytes,
+            padding: self.padding + other.padding,
+            n_abytes: Default::default(),
+            mem_bitmap: self.mem_bitmap + other.mem_bitmap,
+            n_bitmap: self.n_bitmap + other.n_bitmap,
+
+            build_time: Default::default(),
+            epoch: Default::default(),
+        }
+    }
 }
 
 impl fmt::Display for Stats {
@@ -1989,7 +2071,9 @@ where
     }
 
     pub fn is_snapshot(file_name: &ffi::OsStr) -> bool {
-        RobtFactory::<K, V, B>::to_name(&file_name).is_some()
+        let file_name = file_name.to_os_string();
+        let name: Result<Name> = TryFrom::try_from(IndexFileName(file_name));
+        name.is_ok()
     }
 
     fn log(&self) -> Result<()> {
@@ -2306,6 +2390,7 @@ where
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
 {
+    /// Return the first entry in index, with only latest value.
     pub fn first(&mut self) -> Result<Entry<K, V>> {
         let zfpos = self.first_zpos(self.to_root().unwrap())?;
 
@@ -2316,9 +2401,24 @@ where
             "first(), reading zblock",
         )?)?;
 
-        Ok(zblock.to_entry(0)?.1)
+        self.fetch(zblock.to_entry(0)?.1, false, false)
     }
 
+    /// Return the first entry in index, with all versions.
+    pub fn first_versions(&mut self) -> Result<Entry<K, V>> {
+        let zfpos = self.first_zpos(self.to_root().unwrap())?;
+
+        let z_blocksize = self.config.z_blocksize;
+        let zblock = ZBlock::<K, V>::new_decode(self.index_fd.read_buffer(
+            zfpos,
+            z_blocksize,
+            "first(), reading zblock",
+        )?)?;
+
+        self.fetch(zblock.to_entry(0)?.1, false, true)
+    }
+
+    /// Return the last entry in index, with only latest value.
     pub fn last(&mut self) -> Result<Entry<K, V>> {
         let zfpos = self.last_zfpos(self.to_root().unwrap())?;
 
@@ -2329,7 +2429,21 @@ where
             "last(), reading zblock",
         )?)?;
 
-        Ok(zblock.last()?.1)
+        self.fetch(zblock.last()?.1, false, false)
+    }
+
+    /// Return the last entry in index, with all versions.
+    pub fn last_versions(&mut self) -> Result<Entry<K, V>> {
+        let zfpos = self.last_zfpos(self.to_root().unwrap())?;
+
+        let z_blocksize = self.config.z_blocksize;
+        let zblock = ZBlock::<K, V>::new_decode(self.index_fd.read_buffer(
+            zfpos,
+            z_blocksize,
+            "last(), reading zblock",
+        )?)?;
+
+        self.fetch(zblock.last()?.1, false, true)
     }
 
     fn first_zpos(&mut self, fpos: u64) -> Result<u64> {

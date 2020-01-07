@@ -739,6 +739,34 @@ where
     }
 }
 
+impl<K, V> Borrow<K> for Entry<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    fn borrow(&self) -> &K {
+        self.as_key()
+    }
+}
+
+impl<K, V> Footprint for Entry<K, V>
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+{
+    /// Return the previous versions of this entry as Deltas.
+    fn footprint(&self) -> Result<isize> {
+        let mut fp = self.key.footprint()?;
+        if !self.is_deleted() {
+            fp += self.value.footprint()?;
+        }
+        for delta in self.deltas.iter() {
+            fp += delta.footprint()?;
+        }
+        Ok(fp)
+    }
+}
+
 // Entry construction methods.
 impl<K, V> Entry<K, V>
 where
@@ -1126,24 +1154,6 @@ where
     /// in lsm mode.
     pub fn is_deleted(&self) -> bool {
         self.value.is_deleted()
-    }
-}
-
-impl<K, V> Footprint for Entry<K, V>
-where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
-{
-    /// Return the previous versions of this entry as Deltas.
-    fn footprint(&self) -> Result<isize> {
-        let mut fp = self.key.footprint()?;
-        if !self.is_deleted() {
-            fp += self.value.footprint()?;
-        }
-        for delta in self.deltas.iter() {
-            fp += delta.footprint()?;
-        }
-        Ok(fp)
     }
 }
 

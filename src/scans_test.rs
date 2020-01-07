@@ -9,6 +9,125 @@ use crate::{
 };
 
 #[test]
+fn test_into_iter_scan() {
+    use std::vec::IntoIter;
+    let seed: u128 = random();
+
+    let test_cases = [(6_000_i64, 2_000), (0, 2_000)];
+    let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
+    for (n_ops, key_max) in test_cases.into_iter() {
+        let mut llrb: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
+        random_llrb(*n_ops, *key_max, seed, &mut llrb);
+
+        let ref_entries: Vec<Result<Entry<i64, i64>>> = llrb.iter().unwrap().collect();
+        let mut into_iter = ref_entries.into_iter();
+        let entries: Vec<Entry<i64, i64>> = <IntoIter<Result<Entry<i64, i64>>> as CommitIterator<
+            i64,
+            i64,
+        >>::scan(&mut into_iter, within.clone())
+        .unwrap()
+        .map(|e| e.unwrap())
+        .collect();
+
+        let ref_entries: Vec<Entry<i64, i64>> = llrb.iter().unwrap().map(|e| e.unwrap()).collect();
+        assert_eq!(ref_entries.len(), entries.len());
+        entries
+            .iter()
+            .zip(ref_entries.iter())
+            .for_each(|(e, re)| check_node(e, re));
+    }
+}
+
+#[test]
+fn test_into_iter_scans() {
+    use std::vec::IntoIter;
+    let seed: u128 = random();
+    println!("seed {}", seed);
+
+    let test_cases = [(6_000_i64, 2_000), (0, 2_000)];
+    let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
+    for (n_ops, key_max) in test_cases.into_iter() {
+        let mut llrb: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
+        random_llrb(*n_ops, *key_max, seed, &mut llrb);
+
+        for shards in 1..10 {
+            println!("n_ops:{} key_max:{} shards:{}", n_ops, key_max, shards);
+            let ref_entries: Vec<Result<Entry<i64, i64>>> = llrb.iter().unwrap().collect();
+            let mut into_iter = ref_entries.into_iter();
+            let entries: Vec<Entry<i64, i64>> = IterChain::new(
+                <IntoIter<Result<Entry<i64, i64>>> as CommitIterator<i64, i64>>::scans(
+                    &mut into_iter,
+                    shards,
+                    within.clone(),
+                )
+                .unwrap(),
+            )
+            .map(|e| e.unwrap())
+            .collect();
+
+            let ref_entries: Vec<Entry<i64, i64>> =
+                llrb.iter().unwrap().map(|e| e.unwrap()).collect();
+            assert_eq!(ref_entries.len(), entries.len());
+            entries
+                .iter()
+                .zip(ref_entries.iter())
+                .for_each(|(e, re)| check_node(e, re));
+        }
+    }
+}
+
+#[test]
+fn test_into_iter_range_scans() {
+    use std::ops::Bound::{Excluded, Included, Unbounded};
+    use std::vec::IntoIter;
+
+    let seed: u128 = random();
+    println!("seed {}", seed);
+
+    let test_cases = [(6_000_i64, 2_000)];
+    let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
+    for (n_ops, key_max) in test_cases.into_iter() {
+        let mut llrb: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
+        random_llrb(*n_ops, *key_max, seed, &mut llrb);
+
+        for shards in 1..10 {
+            println!("n_ops:{} key_max:{} shards:{}", n_ops, key_max, shards);
+            let (last_hk, mut ranges) = llrb
+                .scans(shards, within.clone())
+                .unwrap()
+                .into_iter()
+                .fold((Unbounded, vec![]), |(lk, mut acc), mut iter| {
+                    let hk = iter.next().unwrap().unwrap().to_key();
+                    acc.push((lk, Excluded(hk.clone())));
+                    (Included(hk), acc)
+                });
+            ranges.push((last_hk, Unbounded));
+
+            let ref_entries: Vec<Result<Entry<i64, i64>>> = llrb.iter().unwrap().collect();
+            let mut into_iter = ref_entries.into_iter();
+            let entries: Vec<Entry<i64, i64>> = IterChain::new(
+                <IntoIter<Result<Entry<i64, i64>>> as CommitIterator<i64, i64>>::range_scans(
+                    &mut into_iter,
+                    ranges,
+                    within.clone(),
+                )
+                .unwrap(),
+            )
+            .map(|e| e.unwrap())
+            .collect();
+
+            let ref_entries: Vec<Entry<i64, i64>> =
+                llrb.iter().unwrap().map(|e| e.unwrap()).collect();
+            assert_eq!(ref_entries.len(), entries.len());
+            entries
+                .iter()
+                .zip(ref_entries.iter())
+                .for_each(|(e, re)| check_node(e, re));
+        }
+    }
+}
+
+#[test]
 fn test_skip_scan() {
     use std::ops::Bound;
 

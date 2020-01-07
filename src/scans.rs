@@ -392,40 +392,6 @@ where
     }
 }
 
-impl<K, V> CommitIterator<K, V> for std::vec::IntoIter<Result<Entry<K, V>>>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-{
-    fn scan<G>(&mut self, within: G) -> Result<IndexIter<K, V>>
-    where
-        G: RangeBounds<u64>,
-    {
-        let entries: Vec<Result<Entry<K, V>>> = self.collect();
-        let iter = entries.into_iter();
-        Ok(Box::new(FilterScan::new(iter, within)))
-    }
-
-    fn scans<G>(&mut self, _shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
-    where
-        G: RangeBounds<u64>,
-    {
-        let entries: Vec<Result<Entry<K, V>>> = self.collect();
-        let iter = entries.into_iter();
-        Ok(vec![Box::new(FilterScan::new(iter, within))])
-    }
-
-    fn range_scans<N, G>(&mut self, _ranges: Vec<N>, within: G) -> Result<Vec<IndexIter<K, V>>>
-    where
-        G: RangeBounds<u64>,
-        N: RangeBounds<K>,
-    {
-        let entries: Vec<Result<Entry<K, V>>> = self.collect();
-        let iter = entries.into_iter();
-        Ok(vec![Box::new(FilterScan::new(iter, within))])
-    }
-}
-
 pub struct IterChain<K, V, I>
 where
     K: Clone + Ord,
@@ -528,6 +494,64 @@ where
         N: RangeBounds<K>,
     {
         Ok(vec![self.iter.take().unwrap()])
+    }
+}
+
+impl<K, V> CommitIterator<K, V> for std::vec::IntoIter<Result<Entry<K, V>>>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    fn scan<G>(&mut self, within: G) -> Result<IndexIter<K, V>>
+    where
+        G: Clone + RangeBounds<u64>,
+    {
+        let entries: Vec<Result<Entry<K, V>>> = self.collect();
+        let iter = entries.into_iter();
+        Ok(Box::new(FilterScan::new(iter, within)))
+    }
+
+    fn scans<G>(&mut self, shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
+    where
+        G: Clone + RangeBounds<u64>,
+    {
+        let mut entries = vec![];
+        for e in self {
+            entries.push(e?)
+        }
+
+        Ok(util::as_sharded_array(&entries, shards)
+            .into_iter()
+            .map(|shard| {
+                let iter: IndexIter<K, V> = Box::new(FilterScan::new(
+                    shard.to_vec().into_iter().map(|e| Ok(e)).into_iter(),
+                    within.clone(),
+                ));
+                iter
+            })
+            .collect())
+    }
+
+    fn range_scans<N, G>(&mut self, ranges: Vec<N>, within: G) -> Result<Vec<IndexIter<K, V>>>
+    where
+        G: Clone + RangeBounds<u64>,
+        N: Clone + RangeBounds<K>,
+    {
+        let mut entries = vec![];
+        for e in self {
+            entries.push(e?)
+        }
+
+        Ok(util::as_part_array(&entries, ranges)
+            .into_iter()
+            .map(|shard| {
+                let iter: IndexIter<K, V> = Box::new(FilterScan::new(
+                    shard.into_iter().map(|e| Ok(e)).into_iter(),
+                    within.clone(),
+                ));
+                iter
+            })
+            .collect())
     }
 }
 

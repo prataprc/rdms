@@ -66,7 +66,7 @@ use crate::{
     panic::Panic,
     robt_entry::MEntry,
     robt_index::{MBlock, ZBlock},
-    scans::{BitmappedScan, CompactScan},
+    scans::{BitmappedScan, CompactScan, FilterScan},
     util,
 };
 
@@ -587,17 +587,24 @@ where
                 config,
                 purge_tx,
                 ..
-            } => (
-                InnerRobt::Build {
-                    dir: dir.clone(),
-                    name: name.clone(),
-                    config: config.clone(),
-                    purge_tx: purge_tx.clone(),
-                    _phantom_key: marker::PhantomData,
-                    _phantom_val: marker::PhantomData,
-                },
-                0,
-            ),
+            } => {
+                error!(
+                    target: "robt  ",
+                    "{:?}, cannot compact in build state ...", name
+                );
+
+                (
+                    InnerRobt::Build {
+                        dir: dir.clone(),
+                        name: name.clone(),
+                        config: config.clone(),
+                        purge_tx: purge_tx.clone(),
+                        _phantom_key: marker::PhantomData,
+                        _phantom_val: marker::PhantomData,
+                    },
+                    0,
+                )
+            }
             InnerRobt::Snapshot {
                 dir,
                 name,
@@ -611,6 +618,7 @@ where
                     let iter = CompactScan::new(old_snapshot.iter_with_versions()?, cutoff);
 
                     info!(target: "robt  ", "{:?}, compact ...", name);
+
                     let name = name.clone().next();
                     let mut conf = config.clone();
                     conf.vlog_file = None; // use a new vlog file as the target.
@@ -635,8 +643,10 @@ where
 
                     (name, snapshot, meta_block_bytes)
                 };
+
                 let stats = snapshot.to_stats()?;
                 let footprint = snapshot.footprint()?;
+
                 info!(
                     target: "robt  ",
                     "{:?}, compacted to index file {:?}", name, snapshot.index_fd.to_file()
@@ -654,7 +664,7 @@ where
                     InnerRobt::Snapshot {
                         dir: dir.clone(),
                         name: name.clone(),
-                        footprint: snapshot.footprint()?,
+                        footprint,
                         meta: snapshot.meta.clone(),
                         config: snapshot.config.clone(),
                         stats: stats.clone(),
@@ -667,6 +677,128 @@ where
         };
         *inner = new_inner;
         Ok(count.try_into().unwrap())
+    }
+}
+
+impl<K, V, B> CommitIterator<K, V> for Robt<K, V, B>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Serialize,
+    B: Bloom,
+{
+    fn scan<G>(&mut self, within: G) -> Result<IndexIter<K, V>>
+    where
+        G: Clone + RangeBounds<u64>,
+    {
+        let inner = self.inner.lock().unwrap();
+        match inner.deref() {
+            InnerRobt::Snapshot { dir, name, .. } => {
+                let mut snapshot = Arc::new(Snapshot::<K, V, B>::open(dir, &name.0)?);
+                let snap = unsafe {
+                    (Arc::get_mut(&mut snapshot).unwrap() as *mut Snapshot<K, V, B>)
+                        .as_mut()
+                        .unwrap()
+                };
+
+                let iter = SnapshotScan::new(snapshot, vec![snap.iter_with_versions()?]);
+                Ok(Box::new(FilterScan::new(iter, within)))
+            }
+            InnerRobt::Build { .. } => {
+                let err = "cannot scan robt in build state".to_string();
+                Err(Error::InvalidSnapshot(err))
+            }
+        }
+    }
+
+    fn scans<G>(&mut self, shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
+    where
+        G: Clone + RangeBounds<u64>,
+    {
+        let inner = self.inner.lock().unwrap();
+        match inner.deref() {
+            InnerRobt::Snapshot { dir, name, .. } => {
+                let mut snapshot = Arc::new(Snapshot::<K, V, B>::open(dir, &name.0)?);
+
+                let ranges = Arc::get_mut(&mut snapshot).unwrap().do_shards(shards)?;
+
+                let mut mut_snaps = vec![];
+                for _ in 0..ranges.len() {
+                    mut_snaps.push(unsafe {
+                        (Arc::get_mut(&mut snapshot).unwrap() as *mut Snapshot<K, V, B>)
+                            .as_mut()
+                            .unwrap()
+                    })
+                }
+
+                let mut iters = vec![];
+                for (range, snap) in ranges.into_iter().zip(mut_snaps.into_iter()) {
+                    let iter: IndexIter<K, V> = Box::new(FilterScan::new(
+                        SnapshotScan::new(
+                            Arc::clone(&snapshot),
+                            vec![snap.range_with_versions(range)?],
+                        ),
+                        within.clone(),
+                    ));
+                    iters.push(iter)
+                }
+                Ok(iters)
+            }
+            InnerRobt::Build { .. } => {
+                let err = "cannot scan robt in build state".to_string();
+                Err(Error::InvalidSnapshot(err))
+            }
+        }
+    }
+
+    fn range_scans<N, G>(&mut self, ranges: Vec<N>, within: G) -> Result<Vec<IndexIter<K, V>>>
+    where
+        G: Clone + RangeBounds<u64>,
+        N: Clone + RangeBounds<K>,
+    {
+        let inner = self.inner.lock().unwrap();
+        match inner.deref() {
+            InnerRobt::Snapshot { dir, name, .. } => {
+                let mut snapshot = Arc::new(Snapshot::<K, V, B>::open(dir, &name.0)?);
+
+                let mut mut_snaps = vec![];
+                for _ in 0..ranges.len() {
+                    mut_snaps.push(unsafe {
+                        (Arc::get_mut(&mut snapshot).unwrap() as *mut Snapshot<K, V, B>)
+                            .as_mut()
+                            .unwrap()
+                    })
+                }
+
+                let mut iters = vec![];
+                for (range, snap) in ranges.into_iter().zip(mut_snaps.into_iter()) {
+                    let start = match range.start_bound() {
+                        Bound::Unbounded => Bound::Unbounded,
+                        Bound::Included(key) => Bound::Included(key.clone()),
+                        Bound::Excluded(key) => Bound::Excluded(key.clone()),
+                    };
+                    let end = match range.end_bound() {
+                        Bound::Unbounded => Bound::Unbounded,
+                        Bound::Included(key) => Bound::Included(key.clone()),
+                        Bound::Excluded(key) => Bound::Excluded(key.clone()),
+                    };
+
+                    let iter: IndexIter<K, V> = Box::new(FilterScan::new(
+                        SnapshotScan::new(
+                            Arc::clone(&snapshot),
+                            vec![snap.range_with_versions((start, end))?],
+                        ),
+                        within.clone(),
+                    ));
+                    iters.push(iter)
+                }
+                Ok(iters)
+            }
+            InnerRobt::Build { .. } => {
+                let err = "cannot scan robt in build state".to_string();
+                Err(Error::InvalidSnapshot(err))
+            }
+        }
     }
 }
 
@@ -1776,6 +1908,58 @@ where
     }
 }
 
+struct SnapshotScan<'a, K, V, B>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+{
+    _snapshot: Arc<Snapshot<K, V, B>>,
+    iter: Option<IndexIter<'a, K, V>>,
+    iters: Vec<IndexIter<'a, K, V>>,
+}
+
+impl<'a, K, V, B> SnapshotScan<'a, K, V, B>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+{
+    pub fn new(
+        _snapshot: Arc<Snapshot<K, V, B>>,
+        iters: Vec<IndexIter<'a, K, V>>,
+    ) -> SnapshotScan<'a, K, V, B> {
+        SnapshotScan {
+            _snapshot,
+            iter: None,
+            iters,
+        }
+    }
+}
+
+impl<'a, K, V, B> Iterator for SnapshotScan<'a, K, V, B>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+{
+    type Item = Result<Entry<K, V>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match &mut self.iter {
+            Some(iter) => match iter.next() {
+                Some(item) => Some(item),
+                None => {
+                    self.iter = None;
+                    self.next()
+                }
+            },
+            None if self.iters.len() == 0 => None,
+            None => {
+                self.iter = Some(self.iters.remove(0));
+                self.next()
+            }
+        }
+    }
+}
+
 #[allow(dead_code)] // TODO: remove this.
 fn bitmap_index<B>(bitmap_rx: mpsc::Receiver<u32>) -> B
 where
@@ -2292,9 +2476,8 @@ where
             return Err(Error::KeyNotFound);
         }
         // println!("robt get ..");
-        let snap = unsafe { (self as *mut Snapshot<K, V, B>).as_mut().unwrap() };
         let versions = false;
-        snap.do_get(key, versions)
+        self.do_get(key, versions)
     }
 
     fn iter(&mut self) -> Result<IndexIter<K, V>> {
@@ -2337,9 +2520,8 @@ where
             return Err(Error::KeyNotFound);
         }
 
-        let snap = unsafe { (self as *mut Snapshot<K, V, B>).as_mut().unwrap() };
         let versions = true;
-        snap.do_get(key, versions)
+        self.do_get(key, versions)
     }
 
     /// Iterate over all entries in this index. Returned entry shall
@@ -2476,6 +2658,51 @@ where
         } else {
             self.last_zfpos(mentry.to_fpos())
         }
+    }
+
+    fn do_shards(&mut self, shards: usize) -> Result<Vec<(Bound<K>, Bound<K>)>> {
+        let m_blocksize = self.config.m_blocksize;
+        let fpos = self.to_root().unwrap();
+
+        let mblock = MBlock::<K, V>::new_decode(self.index_fd.read_buffer(
+            fpos,
+            m_blocksize,
+            "do_shards, reading root",
+        )?)?;
+
+        let mut keys = vec![];
+        let mut lk = Bound::<K>::Unbounded;
+        for index in 0..mblock.len() {
+            let mentry = mblock.to_entry(index)?;
+
+            if mentry.is_zblock() {
+                continue;
+            }
+
+            let mblock1 = MBlock::<K, V>::new_decode(self.index_fd.read_buffer(
+                mentry.to_fpos(),
+                m_blocksize,
+                "do_shards, reading mblock",
+            )?)?;
+
+            for index in 0..mblock1.len() {
+                let hk = mblock1.to_key(index)?;
+                keys.push((lk, Bound::Excluded(hk.clone())));
+                lk = Bound::Included(hk);
+            }
+        }
+        keys.push((lk, Bound::<K>::Unbounded));
+
+        let mut partitions = vec![];
+        for part in util::as_sharded_array(&keys, shards) {
+            if part.len() == 0 {
+                continue;
+            }
+            let (lk, _) = part.first().unwrap();
+            let (_, hk) = part.last().unwrap();
+            partitions.push((lk.clone(), hk.clone()));
+        }
+        Ok(partitions)
     }
 
     fn get_zpos<Q>(&mut self, key: &Q, fpos: u64) -> Result<u64>
@@ -2884,17 +3111,22 @@ where
             None => None,
             Some(mut z) => match z.next() {
                 Some(Ok(entry)) => {
+                    // println!("one {}", entry.to_seqno());
                     self.mzs.push(z);
                     Some(self.snap.fetch(entry, self.shallow, self.versions))
                 }
                 Some(Err(err)) => {
+                    // println!("two {:?}", err);
                     self.mzs.truncate(0);
                     Some(Err(err))
                 }
-                None => match self.snap.rebuild_fwd(&mut self.mzs) {
-                    Err(err) => Some(Err(err)),
-                    Ok(_) => self.next(),
-                },
+                None => {
+                    // println!("three none");
+                    match self.snap.rebuild_fwd(&mut self.mzs) {
+                        Err(err) => Some(Err(err)),
+                        Ok(_) => self.next(),
+                    }
+                }
             },
         }
     }

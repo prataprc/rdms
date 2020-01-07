@@ -8,7 +8,7 @@ use crate::{
     llrb::Llrb,
     nobitmap::NoBitmap,
     robt,
-    scans::{FilterScan, SkipScan},
+    scans::{FilterScan, IterChain, SkipScan},
 };
 
 #[test]
@@ -522,6 +522,191 @@ fn test_commit_scan() {
 
         let mut iter = snap.iter_with_versions().unwrap();
         for ref_entry in llrb.iter().unwrap() {
+            let ref_entry = ref_entry.unwrap();
+            match iter.next() {
+                Some(Ok(entry)) => {
+                    check_entry1(&entry, &ref_entry);
+                    check_entry2(&entry, &ref_entry);
+                }
+                Some(Err(err)) => panic!("{:?}", err),
+                None => panic!("entry key:{} not found", ref_entry.to_key()),
+            }
+        }
+        assert!(iter.next().is_none());
+    }
+}
+
+#[test]
+fn test_commit_iterator_scan() {
+    let seed: u128 = random();
+    // let seed: u128 = 329574334243588244341656545742438834233;
+    println!("seed:{}", seed);
+    let dir = {
+        let mut dir = std::env::temp_dir();
+        dir.push("test-commit-iterator-scan");
+        println!("temp dir {:?}", dir);
+        dir.into_os_string()
+    };
+    let mut config: robt::Config = Default::default();
+    config.delta_ok = true;
+    config.value_in_vlog = true;
+    let robtf = robt_factory::<i64, i64, NoBitmap>(config);
+
+    for i in 0..50 {
+        let (n_ops, key_max) = (30_000_i64, 20_000);
+        let mut llrb_snap: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
+        random_llrb(n_ops, key_max, seed + (i + 1) * 10, &mut llrb_snap);
+        println!("n_ops:{}, key_max:{}", n_ops, key_max);
+
+        let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
+
+        let mut index = robtf.new(&dir, "snapshot").unwrap();
+        let c_entries: Vec<Result<Entry<i64, i64>>> = llrb_snap
+            .to_reader()
+            .unwrap()
+            .iter_with_versions()
+            .unwrap()
+            .collect();
+        index
+            .commit(
+                CommitIter::new(c_entries.into_iter(), within.clone()),
+                std::convert::identity,
+            )
+            .unwrap();
+
+        let mut iter = index.scan(within).unwrap();
+
+        let mut r = llrb_snap.to_reader().unwrap();
+        let ref_iter = r.iter_with_versions().unwrap();
+        for ref_entry in ref_iter {
+            let ref_entry = ref_entry.unwrap();
+            match iter.next() {
+                Some(Ok(entry)) => {
+                    check_entry1(&entry, &ref_entry);
+                    check_entry2(&entry, &ref_entry);
+                }
+                Some(Err(err)) => panic!("{:?}", err),
+                None => panic!("entry key:{} not found", ref_entry.to_key()),
+            }
+        }
+        assert!(iter.next().is_none());
+    }
+}
+
+#[test]
+fn test_commit_iterator_scans() {
+    let seed: u128 = random();
+    // let seed: u128 = 329574334243588244341656545742438834233;
+    println!("seed:{}", seed);
+    let dir = {
+        let mut dir = std::env::temp_dir();
+        dir.push("test-commit-iterator-scans");
+        println!("temp dir {:?}", dir);
+        dir.into_os_string()
+    };
+    let mut config: robt::Config = Default::default();
+    config.delta_ok = true;
+    config.value_in_vlog = true;
+    let robtf = robt_factory::<i64, i64, NoBitmap>(config);
+
+    for i in 0..50 {
+        let (n_ops, key_max) = (30_000_i64, 20_000);
+        let mut llrb_snap: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
+        random_llrb(n_ops, key_max, seed + (i + 1) * 10, &mut llrb_snap);
+        println!("i:{} n_ops:{}, key_max:{}", i, n_ops, key_max);
+
+        let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
+
+        let mut index = robtf.new(&dir, "snapshot").unwrap();
+        let c_entries: Vec<Result<Entry<i64, i64>>> = llrb_snap
+            .to_reader()
+            .unwrap()
+            .iter_with_versions()
+            .unwrap()
+            .collect();
+        index
+            .commit(
+                CommitIter::new(c_entries.into_iter(), within.clone()),
+                std::convert::identity,
+            )
+            .unwrap();
+
+        let shards = (i + 1) as usize;
+        let iters = index.scans(shards, within).unwrap();
+        let mut iter = IterChain::new(iters);
+
+        let mut r = llrb_snap.to_reader().unwrap();
+        let ref_iter = r.iter_with_versions().unwrap();
+        for ref_entry in ref_iter {
+            let ref_entry = ref_entry.unwrap();
+            match iter.next() {
+                Some(Ok(entry)) => {
+                    check_entry1(&entry, &ref_entry);
+                    check_entry2(&entry, &ref_entry);
+                }
+                Some(Err(err)) => panic!("{:?}", err),
+                None => panic!("entry key:{} not found", ref_entry.to_key()),
+            }
+        }
+        assert!(iter.next().is_none());
+    }
+}
+
+#[test]
+fn test_commit_iterator_range_scans() {
+    let seed: u128 = random();
+    // let seed: u128 = 329574334243588244341656545742438834233;
+    println!("seed:{}", seed);
+    let dir = {
+        let mut dir = std::env::temp_dir();
+        dir.push("test-commit-iterator-range-scans");
+        println!("temp dir {:?}", dir);
+        dir.into_os_string()
+    };
+    let mut config: robt::Config = Default::default();
+    config.delta_ok = true;
+    config.value_in_vlog = true;
+    let robtf = robt_factory::<i64, i64, NoBitmap>(config);
+
+    for i in 0..50 {
+        let (n_ops, key_max) = (30_000_i64, 20_000);
+        let mut llrb_snap: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
+        random_llrb(n_ops, key_max, seed + (i + 1) * 10, &mut llrb_snap);
+        println!("i:{} n_ops:{}, key_max:{}", i, n_ops, key_max);
+
+        let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
+
+        let mut index = robtf.new(&dir, "snapshot").unwrap();
+        let c_entries: Vec<Result<Entry<i64, i64>>> = llrb_snap
+            .to_reader()
+            .unwrap()
+            .iter_with_versions()
+            .unwrap()
+            .collect();
+        index
+            .commit(
+                CommitIter::new(c_entries.into_iter(), within.clone()),
+                std::convert::identity,
+            )
+            .unwrap();
+
+        let shards = (i + 1) as usize;
+        let (last_hk, mut ranges) = llrb_snap
+            .scans(shards, within.clone())
+            .unwrap()
+            .into_iter()
+            .fold((Bound::Unbounded, vec![]), |(lk, mut acc), mut iter| {
+                let hk = iter.next().unwrap().unwrap().to_key();
+                acc.push((lk, Bound::Excluded(hk.clone())));
+                (Bound::Included(hk), acc)
+            });
+        ranges.push((last_hk, Bound::Unbounded));
+        let iters = index.range_scans(ranges, within).unwrap();
+        let mut iter = IterChain::new(iters);
+
+        let mut r = llrb_snap.to_reader().unwrap();
+        let ref_iter = r.iter_with_versions().unwrap();
+        for ref_entry in ref_iter {
             let ref_entry = ref_entry.unwrap();
             match iter.next() {
                 Some(Ok(entry)) => {

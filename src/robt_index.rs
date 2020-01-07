@@ -338,7 +338,7 @@ where
         }
     }
 
-    fn to_key(&self, index: usize) -> Result<K> {
+    pub(crate) fn to_key(&self, index: usize) -> Result<K> {
         let (block, count, offsets) = match self {
             MBlock::Decode {
                 block,

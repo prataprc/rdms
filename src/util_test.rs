@@ -4,20 +4,22 @@ use std::{
     path::PathBuf,
 };
 
-use crate::{error::Error, util};
+use crate::error::Error;
+
+use super::*;
 
 #[test]
 fn test_open_file_rw() {
     // case 1: try to create empty file.
     let dir = PathBuf::new();
-    let fd = util::open_file_cw(dir.as_os_str().to_os_string());
+    let fd = open_file_cw(dir.as_os_str().to_os_string());
     let err = fd.expect_err("expected invalid-file");
     assert_eq!(err, Error::InvalidFile("".to_string()));
 
     // case 2: try to create root dir as file.
     let mut dir = PathBuf::new();
     dir.push("/");
-    let fd = util::open_file_cw(dir.as_os_str().to_os_string());
+    let fd = open_file_cw(dir.as_os_str().to_os_string());
     let err = fd.expect_err("expected invalid-file");
     assert_eq!(err, Error::InvalidFile("/".to_string()));
 
@@ -29,7 +31,7 @@ fn test_open_file_rw() {
     fs::remove_file(file).ok();
 
     let file = file.as_os_str().to_os_string();
-    let mut fd = util::open_file_cw(file.clone()).expect("open-write");
+    let mut fd = open_file_cw(file.clone()).expect("open-write");
     fd.write("hello world".as_bytes()).expect("write failed");
     fd.seek(io::SeekFrom::Start(1)).expect("seek failed");
     fd.write("i world".as_bytes()).expect("write failed");
@@ -43,7 +45,7 @@ fn test_open_file_rw() {
     let file = dir.as_path();
 
     let file = file.as_os_str().to_os_string();
-    let mut fd = util::open_file_cw(file.clone()).expect("open-write");
+    let mut fd = open_file_cw(file.clone()).expect("open-write");
     fd.write("hello world".as_bytes()).expect("write failed");
     fd.seek(io::SeekFrom::Start(1)).expect("seek failed");
     fd.write("i world".as_bytes()).expect("write failed");
@@ -57,7 +59,7 @@ fn test_open_file_rw() {
     let file = dir.as_path();
 
     let file = file.as_os_str().to_os_string();
-    let mut fd = util::open_file_w(&file).expect("open-write");
+    let mut fd = open_file_w(&file).expect("open-write");
     fd.write("hello world".as_bytes()).expect("write failed");
     fd.seek(io::SeekFrom::Start(1)).expect("seek failed");
     fd.write("i world".as_bytes()).expect("write failed");
@@ -69,7 +71,7 @@ fn test_open_file_rw() {
     );
 
     // case 6: read file.
-    let mut fd = util::open_file_r(file.as_ref()).expect("open-read");
+    let mut fd = open_file_r(file.as_ref()).expect("open-read");
     let mut txt = [0_u8; 36];
     fd.read(&mut txt).expect("read failed");
     assert_eq!(
@@ -86,4 +88,19 @@ fn test_open_file_rw() {
 
     fd.write("hello world".as_bytes())
         .expect_err("expected write error");
+}
+
+#[test]
+fn test_as_sharded_array() {
+    for i in 0..100 {
+        let array: Vec<i32> = (0..i).collect();
+        for shards in 0..100 {
+            let acc = as_sharded_array(&array, shards);
+            assert_eq!(acc.len(), shards);
+            if shards > 0 {
+                let res: Vec<i32> = acc.iter().flat_map(|shard| shard.to_vec()).collect();
+                assert_eq!(array, res);
+            }
+        }
+    }
 }

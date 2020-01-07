@@ -1,4 +1,5 @@
 use std::{
+    borrow::Borrow,
     convert::TryInto,
     ffi, fs,
     io::{self, Read, Seek},
@@ -97,6 +98,44 @@ where
     use std::mem::size_of;
     let footprint: isize = size_of::<K>().try_into().unwrap();
     Ok(footprint + key.footprint()?)
+}
+
+pub fn as_sharded_array<T>(array: &Vec<T>, mut shards: usize) -> Vec<&[T]>
+where
+    T: Clone,
+{
+    let mut n = array.len();
+    let mut begin = 0;
+    let mut acc = vec![];
+    while (begin < array.len()) && (shards > 0) {
+        let m: usize = ((n as f64) / (shards as f64)).ceil() as usize;
+        acc.push(&array[begin..(begin + m)]);
+        begin = begin + m;
+        n -= m;
+        shards -= 1;
+    }
+
+    (0..shards).for_each(|_| acc.push(&array[..0]));
+
+    acc
+}
+
+pub fn as_part_array<T, K, N>(array: &Vec<T>, ranges: Vec<N>) -> Vec<Vec<T>>
+where
+    T: Clone + Borrow<K>,
+    K: Clone + PartialOrd,
+    N: Clone + RangeBounds<K>,
+{
+    let mut partitions: Vec<Vec<T>> = vec![vec![]; ranges.len()];
+    for item in array.iter() {
+        for (i, r) in ranges.iter().enumerate() {
+            if r.contains(item.borrow()) {
+                partitions[i].push(item.clone());
+                break;
+            }
+        }
+    }
+    partitions
 }
 
 #[cfg(test)]

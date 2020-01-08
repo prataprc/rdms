@@ -1,6 +1,6 @@
 use std::{borrow::Borrow, ops::RangeBounds};
 
-use crate::core::{Diff, Entry, Footprint, IndexIter, Reader, Result, Writer};
+use crate::core::{Diff, Entry, IndexIter, Reader, Result, Writer};
 
 pub struct Panic(String);
 
@@ -13,8 +13,8 @@ impl Panic {
 // Write methods
 impl<K, V> Writer<K, V> for Panic
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
+    K: Clone + Ord,
+    V: Clone + Diff,
 {
     fn set(&mut self, _key: K, _value: V) -> Result<Option<Entry<K, V>>> {
         panic!("set operation not supported by {} !!", self.0);

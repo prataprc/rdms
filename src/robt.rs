@@ -26,7 +26,7 @@
 //! *------------------------------------------* 0
 //! ```
 //!
-//! Tip of the index file contain 32-byte header providing
+//! Tip of the index file contain 40-byte header providing
 //! following details:
 //! * Index statistics
 //! * Application metadata
@@ -55,7 +55,7 @@ use std::{
     ops::{Bound, Deref, RangeBounds},
     path, result,
     str::FromStr,
-    sync::{self, mpsc, Arc},
+    sync::{self, mpsc, Arc, MutexGuard},
     thread, time,
 };
 
@@ -92,19 +92,20 @@ impl TryFrom<Name> for (String, usize) {
     type Error = Error;
 
     fn try_from(name: Name) -> Result<(String, usize)> {
-        use crate::error::Error::InvalidFile;
-
         let parts: Vec<&str> = name.0.split('-').collect();
-        if parts.len() < 3 {
-            Err(InvalidFile(format!("not robt index")))
-        } else if parts[parts.len() - 2] != "robt" {
-            Err(InvalidFile(format!("not robt index")))
+        let err = Error::InvalidFile(format!("not robt index"));
+
+        if parts.len() >= 3 {
+            match &parts[parts.len() - 2..] {
+                ["robt", ver] => {
+                    let ver = ver.parse::<usize>().map_err(|_| err)?;
+                    let s = parts[..(parts.len() - 2)].join("-");
+                    Ok((s, ver))
+                }
+                _ => Err(err),
+            }
         } else {
-            let ver = parts[parts.len() - 1]
-                .parse::<usize>()
-                .map_err(|_| InvalidFile(format!("not robt index")))?;
-            let s = parts[..(parts.len() - 2)].join("-");
-            Ok((s, ver))
+            Err(err)
         }
     }
 }
@@ -122,7 +123,7 @@ impl fmt::Debug for Name {
 }
 
 #[derive(Clone)]
-pub struct IndexFileName(ffi::OsString);
+struct IndexFileName(ffi::OsString);
 
 impl From<Name> for IndexFileName {
     fn from(name: Name) -> IndexFileName {
@@ -139,16 +140,16 @@ impl TryFrom<IndexFileName> for Name {
         use crate::error::Error::InvalidFile;
         let err = format!("not robt index");
 
-        let fname = path::Path::new(&fname.0);
-        let ext = fname.extension().ok_or(InvalidFile(err.clone()))?;
-        if ext.to_str().ok_or(InvalidFile(err.clone()))? == "indx" {
-            let stem = fname.file_stem().ok_or(InvalidFile(err.clone()))?;
-            Ok(Name(
-                stem.to_str().ok_or(InvalidFile(err.clone()))?.to_string(),
-            ))
-        } else {
-            Err(InvalidFile(err))
-        }
+        let check_file = |fname: IndexFileName| -> Option<String> {
+            let fname = path::Path::new(&fname.0);
+            match fname.extension()?.to_str()? {
+                "indx" => Some(fname.file_stem()?.to_str()?.to_string()),
+                _ => None,
+            }
+        };
+
+        let name = check_file(fname.clone()).ok_or(InvalidFile(err.clone()))?;
+        Ok(Name(name))
     }
 }
 
@@ -160,12 +161,15 @@ impl From<IndexFileName> for ffi::OsString {
 
 impl fmt::Display for IndexFileName {
     fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
-        write!(f, "{}", self.0.to_str().unwrap())
+        match self.0.to_str() {
+            Some(s) => write!(f, "{}", s),
+            None => write!(f, "{:?}", self.0),
+        }
     }
 }
 
 #[derive(Clone)]
-pub struct VlogFileName(ffi::OsString);
+struct VlogFileName(ffi::OsString);
 
 impl From<Name> for VlogFileName {
     fn from(name: Name) -> VlogFileName {
@@ -177,10 +181,15 @@ impl From<Name> for VlogFileName {
 
 impl fmt::Display for VlogFileName {
     fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
-        write!(f, "{}", self.0.to_str().unwrap())
+        match self.0.to_str() {
+            Some(s) => write!(f, "{}", s),
+            None => write!(f, "{:?}", self.0),
+        }
     }
 }
 
+/// Returns a factory to construct Robt instances with given ``config``.
+/// Refer [DiskIndexFactory] for more details.
 pub fn robt_factory<K, V, B>(config: Config) -> RobtFactory<K, V, B>
 where
     K: Clone + Ord + Serialize,
@@ -196,6 +205,8 @@ where
     }
 }
 
+/// Factory type for Robt instances. Refer [DiskIndexFactory] for
+/// more details.
 pub struct RobtFactory<K, V, B>
 where
     K: Clone + Ord + Serialize,
@@ -221,6 +232,7 @@ where
     fn new(&self, dir: &ffi::OsStr, name: &str) -> Result<Robt<K, V, B>> {
         let mut config = self.config.clone();
         config.name = name.to_string();
+
         info!(
             target: "robtfc",
             "{:?}, new index at {:?} with config ...\n{}", name, dir, config
@@ -236,8 +248,10 @@ where
             _phantom_key: marker::PhantomData,
             _phantom_val: marker::PhantomData,
         };
+
         let name = name.to_string();
         let handle = thread::spawn(|| purger(name, rx));
+
         Ok(Robt::new(inner, handle))
     }
 
@@ -263,8 +277,10 @@ where
             bitmap: Arc::new(snapshot.to_bitmap()?),
             purge_tx: Some(tx),
         };
+
         let name = name.0.clone();
         let handle = thread::spawn(|| purger(name, rx));
+
         Ok(Robt::new(inner, handle))
     }
 
@@ -320,14 +336,22 @@ where
 
     /// Return Index's version number, every commit and compact shall increment
     /// the version number.
-    pub fn version(&self) -> usize {
-        let inner = self.inner.lock().unwrap();
+    pub fn version(&self) -> Result<usize> {
+        let inner = self.as_inner()?;
         let name = match inner.deref() {
             InnerRobt::Build { name, .. } => name.clone(),
             InnerRobt::Snapshot { name, .. } => name.clone(),
         };
-        let parts: (String, usize) = TryFrom::try_from(name).unwrap();
-        parts.1 // version
+        let parts: (String, usize) = TryFrom::try_from(name)?;
+        Ok(parts.1) // version
+    }
+
+    fn as_inner(&self) -> Result<MutexGuard<InnerRobt<K, V, B>>> {
+        use crate::error::Error::ThreadFail;
+
+        self.inner
+            .lock()
+            .map_err(|err| ThreadFail(format!("robt lock poisened: {:?}", err)))
     }
 }
 
@@ -371,7 +395,7 @@ where
     type O = ffi::OsString;
 
     fn to_name(&self) -> String {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.as_inner().unwrap();
         let name = match inner.deref() {
             InnerRobt::Build { name, .. } => name.clone(),
             InnerRobt::Snapshot { name, .. } => name.clone(),
@@ -380,8 +404,8 @@ where
         parts.0 // just the name as passed to new().
     }
 
-    fn to_root(&self) -> ffi::OsString {
-        let inner = self.inner.lock().unwrap();
+    fn to_root(&self) -> Self::O {
+        let inner = self.as_inner().unwrap();
         let name: Name = match inner.deref() {
             InnerRobt::Build { name, .. } => name.clone(),
             InnerRobt::Snapshot { name, .. } => name.clone(),
@@ -392,7 +416,7 @@ where
     }
 
     fn to_metadata(&self) -> Result<Vec<u8>> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.as_inner().unwrap();
         match inner.deref() {
             InnerRobt::Snapshot { meta, .. } => {
                 if let MetaItem::AppMetadata(data) = &meta[2] {
@@ -407,10 +431,10 @@ where
 
     /// Return the current seqno tracked by this index.
     fn to_seqno(&self) -> u64 {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.as_inner().unwrap();
         match inner.deref() {
-            InnerRobt::Build { .. } => 0,
             InnerRobt::Snapshot { stats, .. } => stats.seqno,
+            InnerRobt::Build { .. } => unreachable!(),
         }
     }
 
@@ -420,12 +444,13 @@ where
     }
 
     fn to_reader(&mut self) -> Result<Self::R> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.as_inner()?;
         match inner.deref() {
             InnerRobt::Snapshot {
                 dir, name, bitmap, ..
             } => {
                 info!(target: "robt  ", "{:?}, new reader ...", name);
+
                 let mut snapshot = Snapshot::open(dir, &name.0)?;
                 assert!(snapshot.set_bitmap(Arc::clone(bitmap)));
                 snapshot.log()?;
@@ -444,7 +469,7 @@ where
         C: CommitIterator<K, V>,
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.as_inner()?;
         let new_inner = match inner.deref() {
             InnerRobt::Build {
                 dir,
@@ -456,7 +481,8 @@ where
                 info!(target: "robt  ", "{:?}, flush commit ...", name);
 
                 let snapshot = {
-                    let b = Builder::<K, V, B>::initial(dir, &name.0, config.clone())?;
+                    let config = config.clone();
+                    let b = Builder::<K, V, B>::initial(dir, &name.0, config)?;
                     b.build(scanner.scan()?, metacb(vec![]))?;
                     let snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
                     snapshot.log()?;
@@ -505,54 +531,66 @@ where
                 info!(target: "robt  ", "{:?}, incremental commit ...", name);
 
                 let (name, snapshot, meta_block_bytes) = {
-                    let scanner = scanner.scan()?;
-                    let bitmap_iter = BitmappedScan::new(scanner);
+                    let bitmap_iter = BitmappedScan::new(scanner.scan()?);
 
-                    let mut old_snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
-                    let index_file = old_snapshot.index_fd.to_file();
-                    let old_meta = old_snapshot.to_app_meta()?;
-                    let (name, b, root, bitmap_iter) = {
-                        let commit_scanner = {
-                            let mut mzs = vec![];
-                            old_snapshot.build_fwd(old_snapshot.to_root().unwrap(), &mut mzs)?;
-                            let old_iter = Iter::new_shallow(&mut old_snapshot, mzs);
-                            CommitScan::new(bitmap_iter, old_iter)
-                        };
-                        let mut build_scanner = BuildScan::new(commit_scanner);
-                        let name = name.clone().next();
-                        let mut b = Builder::<K, V, B>::incremental(dir, &name.0, config.clone())?;
-                        let root = b.build_tree(&mut build_scanner)?;
-                        let commit_scanner = build_scanner.update_stats(&mut b.stats)?;
-                        let (bitmap_iter, _) = commit_scanner.close()?;
-                        (name, b, root, bitmap_iter)
+                    let mut old = Snapshot::<K, V, B>::open(dir, &name.0)?;
+                    let old_bitmap = old.to_bitmap()?;
+
+                    let commit_iter = {
+                        let mut mzs = vec![];
+                        old.build_fwd(old.to_root()?, &mut mzs)?;
+                        let old_iter = Iter::new_shallow(&mut old, mzs);
+                        CommitScan::new(bitmap_iter, old_iter)
                     };
+                    let mut build_iter = BuildScan::new(commit_iter);
 
-                    let old_bitmap = old_snapshot.to_bitmap()?;
-                    let m = old_bitmap.len();
+                    let (name, mut b) = {
+                        let name = name.clone().next();
+                        let config = config.clone();
+                        let b = Builder::<K, V, B>::incremental(dir, &name.0, config)?;
+                        (name, b)
+                    };
+                    let root = b.build_tree(&mut build_iter)?;
+
+                    let commit_iter = build_iter.update_stats(&mut b.stats)?;
+                    let (bitmap_iter, _) = commit_iter.close()?;
                     let (_, new_bitmap): (_, B) = bitmap_iter.close()?;
-                    let n = new_bitmap.len();
+
                     let bitmap = old_bitmap.or(&new_bitmap)?;
-                    let x = bitmap.len();
-                    info!(target: "robt  ", "{:?}, old_bitmap({}) + new_bitmap({}) = {}", name, m, n, x);
-                    let meta_block_bytes = b.build_finish(metacb(old_meta), bitmap, root)?;
+
+                    info!(
+                        target: "robt  ",
+                        "{:?}, old_bitmap({}) + new_bitmap({}) = {}",
+                        name, old_bitmap.len(), new_bitmap.len(), bitmap.len()
+                    );
+
+                    let meta_block_bytes =
+                        b.build_finish(metacb(old.to_app_meta()?), bitmap, root)?;
 
                     let snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
                     snapshot.log()?;
 
                     // purge old snapshots file(s).
-                    purge_tx.as_ref().unwrap().send(index_file)?;
+                    purge_tx.as_ref().unwrap().send(old.index_fd.to_file())?;
 
                     (name, snapshot, meta_block_bytes)
                 };
+
                 let stats = snapshot.to_stats()?;
                 let footprint = snapshot.footprint()?;
+
                 info!(
                     target: "robt  ",
-                    "{:?}, commited to index file {:?}", name, snapshot.index_fd.to_file()
+                    "{:?}, commited to index file {:?}",
+                    name, snapshot.index_fd.to_file()
                 );
                 if let Some((vlog_file, _)) = &snapshot.valog_fd {
-                    info!(target: "robt  ", "{:?}, commited to valog file {:?}", name, vlog_file);
+                    info!(
+                        target: "robt  ",
+                        "{:?}, commited to valog file {:?}", name, vlog_file
+                    );
                 }
+
                 info!(
                     target: "robt  ",
                     "{:?}, footprint {}, wrote {} bytes",
@@ -579,7 +617,7 @@ where
     where
         F: Fn(Vec<Vec<u8>>) -> Vec<u8>,
     {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.as_inner()?;
         let (new_inner, count) = match inner.deref() {
             InnerRobt::Build {
                 dir,
@@ -614,30 +652,37 @@ where
                 ..
             } => {
                 let (name, snapshot, meta_block_bytes) = {
-                    let mut old_snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
-                    let iter = CompactScan::new(old_snapshot.iter_with_versions()?, cutoff);
+                    let mut old = Snapshot::<K, V, B>::open(dir, &name.0)?;
+                    let compact_iter = {
+                        let iter = old.iter_with_versions()?;
+                        CompactScan::new(iter, cutoff)
+                    };
 
                     info!(target: "robt  ", "{:?}, compact ...", name);
 
                     let name = name.clone().next();
-                    let mut conf = config.clone();
-                    conf.vlog_file = None; // use a new vlog file as the target.
-                    let meta = match &meta[2] {
-                        MetaItem::AppMetadata(data) => data.clone(),
-                        _ => unreachable!(),
+                    let (meta_block_bytes, snapshot) = {
+                        let conf = {
+                            let mut conf = config.clone();
+                            conf.vlog_file = None; // use a new vlog file.
+                            conf
+                        };
+                        let meta = match &meta[2] {
+                            MetaItem::AppMetadata(data) => data.clone(),
+                            _ => unreachable!(),
+                        };
+                        let b = Builder::<K, V, B>::initial(dir, &name.0, conf)?;
+                        let mbbytes = b.build(compact_iter, meta)?;
+                        (mbbytes, Snapshot::<K, V, B>::open(dir, &name.0)?)
                     };
-                    let b = Builder::<K, V, B>::initial(dir, &name.0, conf)?;
-                    let meta_block_bytes = b.build(iter, meta)?;
-                    let snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
                     snapshot.log()?;
 
                     // purge old snapshots file(s).
-                    purge_tx
-                        .as_ref()
-                        .unwrap()
-                        .send(old_snapshot.index_fd.to_file())?;
-                    match &old_snapshot.valog_fd {
-                        Some((file, _)) => purge_tx.as_ref().unwrap().send(file.clone())?,
+                    purge_tx.as_ref().unwrap().send(old.index_fd.to_file())?;
+                    match &old.valog_fd {
+                        Some((file, _)) => {
+                            purge_tx.as_ref().unwrap().send(file.clone())?;
+                        }
                         None => (),
                     }
 
@@ -649,10 +694,15 @@ where
 
                 info!(
                     target: "robt  ",
-                    "{:?}, compacted to index file {:?}", name, snapshot.index_fd.to_file()
+                    "{:?}, compacted to index file {:?}",
+                    name, snapshot.index_fd.to_file()
                 );
                 if let Some((vlog_file, _)) = &snapshot.valog_fd {
-                    info!(target: "robt  ", "{:?}, compacted to valog file {:?}", name, vlog_file);
+                    info!(
+                        target: "robt  ",
+                        "{:?}, compacted to valog file {:?}",
+                        name, vlog_file
+                    );
                 }
                 info!(
                     target: "robt  ",
@@ -691,7 +741,7 @@ where
     where
         G: Clone + RangeBounds<u64>,
     {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.as_inner()?;
         match inner.deref() {
             InnerRobt::Snapshot { dir, name, .. } => {
                 let mut snapshot = Arc::new(Snapshot::<K, V, B>::open(dir, &name.0)?);
@@ -715,7 +765,7 @@ where
     where
         G: Clone + RangeBounds<u64>,
     {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.as_inner()?;
         match inner.deref() {
             InnerRobt::Snapshot { dir, name, .. } => {
                 let mut snapshot = Arc::new(Snapshot::<K, V, B>::open(dir, &name.0)?);
@@ -756,7 +806,7 @@ where
         G: Clone + RangeBounds<u64>,
         N: Clone + RangeBounds<K>,
     {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.as_inner()?;
         match inner.deref() {
             InnerRobt::Snapshot { dir, name, .. } => {
                 let mut snapshot = Arc::new(Snapshot::<K, V, B>::open(dir, &name.0)?);
@@ -809,7 +859,7 @@ where
     <V as Diff>::D: Serialize + Footprint,
 {
     fn footprint(&self) -> Result<isize> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.as_inner()?;
         match inner.deref() {
             InnerRobt::Snapshot { footprint, .. } => Ok(*footprint),
             InnerRobt::Build { .. } => unreachable!(),
@@ -2250,7 +2300,12 @@ where
     }
 
     pub fn set_bitmap(&mut self, bitmap: Arc<B>) -> bool {
-        let res = bitmap.to_vec() == self.bitmap.to_vec();
+        let res = if cfg!(debug_assertions) {
+            bitmap.to_vec() == self.bitmap.to_vec()
+        } else {
+            true
+        };
+
         self.bitmap = bitmap;
         res
     }

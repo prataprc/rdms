@@ -67,7 +67,7 @@ fn test_version() {
             inner: sync::Mutex::new(inner),
             purger: None,
         };
-        assert_eq!(index.version(), i);
+        assert_eq!(index.version().unwrap(), i);
 
         let inner = InnerRobt::<i64, i64, NoBitmap>::Snapshot {
             dir: Default::default(),
@@ -83,7 +83,7 @@ fn test_version() {
             inner: sync::Mutex::new(inner),
             purger: None,
         };
-        assert_eq!(index.version(), i);
+        assert_eq!(index.version().unwrap(), i);
     }
 }
 

@@ -451,6 +451,7 @@ where
         }
     }
 
+    // TODO: make unwrap into valid error.
     pub(crate) fn as_first_key(&self) -> &K {
         match self {
             ZBlock::Encode { first_key, .. } => first_key.as_ref().unwrap(),

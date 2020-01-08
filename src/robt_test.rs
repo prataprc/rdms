@@ -541,6 +541,8 @@ fn test_commit_iterator_scan() {
     let seed: u128 = random();
     // let seed: u128 = 329574334243588244341656545742438834233;
     println!("seed:{}", seed);
+    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+
     let dir = {
         let mut dir = std::env::temp_dir();
         dir.push("test-commit-iterator-scan");
@@ -553,14 +555,23 @@ fn test_commit_iterator_scan() {
     let robtf = robt_factory::<i64, i64, NoBitmap>(config);
 
     for i in 0..50 {
-        let (n_ops, key_max) = (30_000_i64, 20_000);
+        let (n_ops, key_max) = match rng.gen::<u8>() % 3 {
+            1 => (1_i64, 20_000),
+            _n => {
+                let n_ops = i64::abs(rng.gen::<i64>()) % 30_000;
+                let key_max = (i64::abs(rng.gen::<i64>()) % n_ops) + n_ops;
+                (n_ops, key_max)
+            }
+        };
+
         let mut llrb_snap: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
         random_llrb(n_ops, key_max, seed + (i + 1) * 10, &mut llrb_snap);
         println!("n_ops:{}, key_max:{}", n_ops, key_max);
 
         let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
 
-        let mut index = robtf.new(&dir, "snapshot").unwrap();
+        let mut index = robtf.new(&dir, "snapshot-scan").unwrap();
+
         let c_entries: Vec<Result<Entry<i64, i64>>> = llrb_snap
             .to_reader()
             .unwrap()
@@ -598,26 +609,37 @@ fn test_commit_iterator_scans() {
     let seed: u128 = random();
     // let seed: u128 = 329574334243588244341656545742438834233;
     println!("seed:{}", seed);
+    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+
     let dir = {
         let mut dir = std::env::temp_dir();
         dir.push("test-commit-iterator-scans");
         println!("temp dir {:?}", dir);
         dir.into_os_string()
     };
+
     let mut config: robt::Config = Default::default();
     config.delta_ok = true;
     config.value_in_vlog = true;
     let robtf = robt_factory::<i64, i64, NoBitmap>(config);
 
     for i in 0..50 {
-        let (n_ops, key_max) = (30_000_i64, 20_000);
+        let (n_ops, key_max) = match rng.gen::<u8>() % 3 {
+            1 => (1_i64, 20_000),
+            _n => {
+                let n_ops = i64::abs(rng.gen::<i64>()) % 30_000;
+                let key_max = (i64::abs(rng.gen::<i64>()) % n_ops) + n_ops;
+                (n_ops, key_max)
+            }
+        };
+
         let mut llrb_snap: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
         random_llrb(n_ops, key_max, seed + (i + 1) * 10, &mut llrb_snap);
         println!("i:{} n_ops:{}, key_max:{}", i, n_ops, key_max);
 
         let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
 
-        let mut index = robtf.new(&dir, "snapshot").unwrap();
+        let mut index = robtf.new(&dir, "snapshot-scans").unwrap();
         let c_entries: Vec<Result<Entry<i64, i64>>> = llrb_snap
             .to_reader()
             .unwrap()
@@ -657,26 +679,37 @@ fn test_commit_iterator_range_scans() {
     let seed: u128 = random();
     // let seed: u128 = 329574334243588244341656545742438834233;
     println!("seed:{}", seed);
+    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+
     let dir = {
         let mut dir = std::env::temp_dir();
         dir.push("test-commit-iterator-range-scans");
         println!("temp dir {:?}", dir);
         dir.into_os_string()
     };
+
     let mut config: robt::Config = Default::default();
     config.delta_ok = true;
     config.value_in_vlog = true;
     let robtf = robt_factory::<i64, i64, NoBitmap>(config);
 
     for i in 0..50 {
-        let (n_ops, key_max) = (30_000_i64, 20_000);
+        let (n_ops, key_max) = match rng.gen::<u8>() % 3 {
+            1 => (1_i64, 20_000),
+            _n => {
+                let n_ops = i64::abs(rng.gen::<i64>()) % 30_000;
+                let key_max = (i64::abs(rng.gen::<i64>()) % n_ops) + n_ops;
+                (n_ops, key_max)
+            }
+        };
+
         let mut llrb_snap: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
         random_llrb(n_ops, key_max, seed + (i + 1) * 10, &mut llrb_snap);
         println!("i:{} n_ops:{}, key_max:{}", i, n_ops, key_max);
 
         let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
 
-        let mut index = robtf.new(&dir, "snapshot").unwrap();
+        let mut index = robtf.new(&dir, "snapshot-range-scans").unwrap();
         let c_entries: Vec<Result<Entry<i64, i64>>> = llrb_snap
             .to_reader()
             .unwrap()

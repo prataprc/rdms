@@ -1650,6 +1650,7 @@ where
                     c.zfpos = c.fpos;
                     c.z.reset(c.vfpos);
 
+                    // TODO: make unwrap into valid error.
                     c.z.insert(&entry, &mut self.stats).unwrap();
                 }
                 Err(err) => return Err(err),

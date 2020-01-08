@@ -1624,16 +1624,22 @@ where
         let mut scans: Vec<IndexIter<K, V>> = vec![];
         let mut lkey = Bound::Unbounded;
         for hkey in keys {
+            let range = (lkey.clone(), Bound::Excluded(hkey.clone()));
+            if self.range(range.clone())?.next().is_some() {
+                let mut ss = SkipScan::new(self.to_reader()?);
+                ss.set_key_range(range).set_seqno_range(within.clone());
+                lkey = Bound::Included(hkey);
+                scans.push(Box::new(ss));
+            }
+        }
+
+        let range = (lkey, Bound::Unbounded);
+        if self.range(range.clone())?.next().is_some() {
             let mut ss = SkipScan::new(self.to_reader()?);
-            ss.set_key_range((lkey, Bound::Excluded(hkey.clone())))
-                .set_seqno_range(within.clone());
-            lkey = Bound::Included(hkey);
+            ss.set_key_range(range).set_seqno_range(within);
             scans.push(Box::new(ss));
         }
-        let mut ss = SkipScan::new(self.to_reader()?);
-        ss.set_key_range((lkey, Bound::Unbounded))
-            .set_seqno_range(within);
-        scans.push(Box::new(ss));
+
         Ok(scans)
     }
 

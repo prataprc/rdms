@@ -10,6 +10,7 @@ use std::{
 
 use crate::{
     core::{Bloom, CommitIterator, Diff, Entry, IndexIter, PiecewiseScan, Result, ScanEntry},
+    error::Error,
     util,
 };
 
@@ -478,14 +479,26 @@ where
     where
         G: RangeBounds<u64>,
     {
-        Ok(self.iter.take().unwrap())
+        match self.iter.take() {
+            Some(iter) => Ok(iter),
+            None => {
+                let msg = format!("CommitIterator::scan() malformed");
+                Err(Error::UnInitialized(msg))
+            }
+        }
     }
 
     fn scans<G>(&mut self, _: usize, _within: G) -> Result<Vec<IndexIter<K, V>>>
     where
         G: RangeBounds<u64>,
     {
-        Ok(vec![self.iter.take().unwrap()])
+        match self.iter.take() {
+            Some(iter) => Ok(vec![iter]),
+            None => {
+                let msg = format!("CommitIterator::scans() malformed");
+                Err(Error::UnInitialized(msg))
+            }
+        }
     }
 
     fn range_scans<N, G>(&mut self, _: Vec<N>, _within: G) -> Result<Vec<IndexIter<K, V>>>
@@ -493,7 +506,13 @@ where
         G: RangeBounds<u64>,
         N: RangeBounds<K>,
     {
-        Ok(vec![self.iter.take().unwrap()])
+        match self.iter.take() {
+            Some(iter) => Ok(vec![iter]),
+            None => {
+                let msg = format!("CommitIterator::range_scans() malformed");
+                Err(Error::UnInitialized(msg))
+            }
+        }
     }
 }
 

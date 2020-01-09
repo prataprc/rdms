@@ -40,12 +40,12 @@
 
 use std::{
     convert::TryInto,
-    fmt,
+    fmt, result,
     sync::atomic::{AtomicU64, Ordering::SeqCst},
     thread,
 };
 
-use crate::core::ToJson;
+use crate::core::{Result, ToJson};
 
 // TODO: Experiment with different atomic::Ordering to improve performance.
 
@@ -139,13 +139,13 @@ impl RWSpinlock {
         }
     }
 
-    pub fn to_stats(&self) -> Stats {
-        Stats {
+    pub fn to_stats(&self) -> Result<Stats> {
+        Ok(Stats {
             value: self.value.load(SeqCst),
-            read_locks: self.read_locks.load(SeqCst).try_into().unwrap(),
-            write_locks: self.write_locks.load(SeqCst).try_into().unwrap(),
-            conflicts: self.conflicts.load(SeqCst).try_into().unwrap(),
-        }
+            read_locks: self.read_locks.load(SeqCst).try_into()?,
+            write_locks: self.write_locks.load(SeqCst).try_into()?,
+            conflicts: self.conflicts.load(SeqCst).try_into()?,
+        })
     }
 }
 
@@ -184,7 +184,7 @@ pub struct Stats {
 }
 
 impl fmt::Display for Stats {
-    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
         write!(
             f,
             concat!(

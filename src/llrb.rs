@@ -459,7 +459,7 @@ where
         stats.node_size = mem::size_of::<Node<K, V>>();
         stats.key_footprint = self.key_footprint;
         stats.tree_footprint = self.tree_footprint;
-        stats.rw_latch = self.latch.to_stats();
+        stats.rw_latch = self.latch.to_stats()?;
         Ok(stats)
     }
 
@@ -1749,7 +1749,7 @@ where
         stats.node_size = mem::size_of::<Node<K, V>>();
         stats.key_footprint = self.key_footprint;
         stats.tree_footprint = self.tree_footprint;
-        stats.rw_latch = self.latch.to_stats();
+        stats.rw_latch = self.latch.to_stats()?;
         stats.blacks = Some(ss.0);
         stats.depths = Some(depths);
         Ok(stats)

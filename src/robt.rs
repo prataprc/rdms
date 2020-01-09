@@ -307,16 +307,25 @@ where
     <V as Diff>::D: Serialize,
 {
     fn drop(&mut self) {
-        {
+        let name = {
             let inner = self.inner.get_mut().unwrap();
+            let name = match &inner {
+                InnerRobt::Build { name, .. } => name.clone(),
+                InnerRobt::Snapshot { name, .. } => name.clone(),
+            };
             let _purge_tx = match inner {
                 InnerRobt::Build { purge_tx, .. } => purge_tx.take(),
                 InnerRobt::Snapshot { purge_tx, .. } => purge_tx.take(),
             };
-        }
+            name
+        };
         match self.purger.take() {
-            Some(purger) => purger.join().ok(), // TODO: log message
-            None => None,
+            Some(purger) => {
+                if let Err(err) = purger.join() {
+                    error!(target: "robt  ", "{:?}, purger failed {:?}", name, err);
+                }
+            }
+            None => (),
         };
     }
 }
@@ -571,7 +580,12 @@ where
                     snapshot.log()?;
 
                     // purge old snapshots file(s).
-                    purge_tx.as_ref().unwrap().send(old.index_fd.to_file())?;
+                    purge_tx
+                        .as_ref()
+                        .ok_or(Error::UnexpectedFail(format!(
+                            "Robt::commit() missing purge_tx"
+                        )))?
+                        .send(old.index_fd.to_file())?;
 
                     (name, snapshot, meta_block_bytes)
                 };
@@ -678,10 +692,20 @@ where
                     snapshot.log()?;
 
                     // purge old snapshots file(s).
-                    purge_tx.as_ref().unwrap().send(old.index_fd.to_file())?;
+                    purge_tx
+                        .as_ref()
+                        .ok_or(Error::UnexpectedFail(format!(
+                            "Robt::compact() missing purge_tx"
+                        )))?
+                        .send(old.index_fd.to_file())?;
                     match &old.valog_fd {
                         Some((file, _)) => {
-                            purge_tx.as_ref().unwrap().send(file.clone())?;
+                            purge_tx
+                                .as_ref()
+                                .ok_or(Error::UnexpectedFail(format!(
+                                    "Robt::compact() missing purge_tx"
+                                )))?
+                                .send(file.clone())?;
                         }
                         None => (),
                     }
@@ -726,7 +750,7 @@ where
             }
         };
         *inner = new_inner;
-        Ok(count.try_into().unwrap())
+        Ok(count.try_into()?)
     }
 }
 
@@ -1102,25 +1126,26 @@ pub(crate) fn write_meta_items(
                 hdr[0..8].copy_from_slice(&fpos.to_be_bytes());
             }
             (1, MetaItem::Bitmap(bitmap)) => {
-                let ln = bitmap.len() as u64;
+                let ln: u64 = bitmap.len().try_into()?;
                 debug!(target: "robt  ", "{:?}, writing bitmap {} bytes ...", file, ln);
                 hdr[8..16].copy_from_slice(&ln.to_be_bytes());
                 block.extend_from_slice(&bitmap);
             }
             (2, MetaItem::AppMetadata(md)) => {
-                let ln = md.len() as u64;
+                let ln: u64 = md.len().try_into()?;
                 debug!(target: "robt  ", "{:?}, writing app-meta {} bytes ...", file, ln);
                 hdr[16..24].copy_from_slice(&ln.to_be_bytes());
                 block.extend_from_slice(&md);
             }
             (3, MetaItem::Stats(s)) => {
-                let ln = s.len() as u64;
+                let ln: u64 = s.len().try_into()?;
                 debug!(target: "robt  ", "{:?}, writing stats {} bytes ...", file, ln);
                 hdr[24..32].copy_from_slice(&ln.to_be_bytes());
                 block.extend_from_slice(s.as_bytes());
             }
             (4, MetaItem::Marker(data)) => {
-                hdr[32..40].copy_from_slice(&(data.len() as u64).to_be_bytes());
+                let ln: u64 = data.len().try_into()?;
+                hdr[32..40].copy_from_slice(&ln.to_be_bytes());
                 block.extend_from_slice(&data);
             }
             (i, m) => panic!("unreachable arm at {} {}", i, m),
@@ -1137,7 +1162,7 @@ pub(crate) fn write_meta_items(
     let n = fd.write(&block)?;
     fd.sync_all()?;
     if n == ln {
-        Ok(n.try_into().unwrap())
+        Ok(n.try_into()?)
     } else {
         let msg = format!("robt write_meta_items: {:?} {}/{}...", &file, ln, n);
         Err(Error::PartialWrite(msg))
@@ -1162,15 +1187,14 @@ pub fn read_meta_items(
 
     // read header
     let hdr = util::read_buffer(&mut fd, m - 40, 40, "read root-block header")?;
-    let root = u64::from_be_bytes(hdr[..8].try_into().unwrap());
-    let n_bmap = u64::from_be_bytes(hdr[8..16].try_into().unwrap()) as usize;
-    let n_md = u64::from_be_bytes(hdr[16..24].try_into().unwrap()) as usize;
-    let n_stats = u64::from_be_bytes(hdr[24..32].try_into().unwrap()) as usize;
-    let n_marker = u64::from_be_bytes(hdr[32..40].try_into().unwrap()) as usize;
+    let root = u64::from_be_bytes(hdr[..8].try_into()?);
+    let n_bmap: usize = u64::from_be_bytes(hdr[8..16].try_into()?).try_into()?;
+    let n_md: usize = u64::from_be_bytes(hdr[16..24].try_into()?).try_into()?;
+    let n_stats: usize = u64::from_be_bytes(hdr[24..32].try_into()?).try_into()?;
+    let n_marker: usize = u64::from_be_bytes(hdr[32..40].try_into()?).try_into()?;
     // read block
-    let meta_block_bytes = Config::compute_root_block(n_bmap + n_md + n_stats + n_marker + 40)
-        .try_into()
-        .unwrap();
+    let meta_block_bytes =
+        Config::compute_root_block(n_bmap + n_md + n_stats + n_marker + 40).try_into()?;
     let block: Vec<u8> = util::read_buffer(
         &mut fd,
         m - meta_block_bytes,
@@ -1181,7 +1205,10 @@ pub fn read_meta_items(
     .collect();
 
     let mut meta_items: Vec<MetaItem> = vec![];
-    let z = (meta_block_bytes as usize) - 40;
+    let z = {
+        let z: usize = meta_block_bytes.try_into()?;
+        z - 40
+    };
 
     let (x, y) = (z - n_marker, z);
     let marker = block[x..y].to_vec();
@@ -1210,12 +1237,15 @@ pub fn read_meta_items(
 
     // validate and return
     let stats: Stats = stats.parse()?;
-    let at = m - meta_block_bytes - (stats.m_blocksize as u64);
+    let at = {
+        let at: u64 = stats.m_blocksize.try_into()?;
+        m - meta_block_bytes - at
+    };
     if at != root {
         let msg = format!("robt expected root at {}, found {}", at, root);
         Err(Error::InvalidSnapshot(msg))
     } else {
-        Ok((meta_items, meta_block_bytes as usize))
+        Ok((meta_items, meta_block_bytes.try_into()?))
     }
 }
 
@@ -1430,12 +1460,24 @@ impl FromStr for Stats {
 
     fn from_str(s: &str) -> Result<Stats> {
         let js: Json = s.parse()?;
+        let err1 = format!("string-to-robt-stats, not an integer");
+        let err2 = format!("string-to-robt-stats, not string");
+        let err3 = format!("string-to-robt-stats, not boolean");
+
         let to_usize = |key: &str| -> Result<usize> {
-            let n: usize = js.get(key)?.integer().unwrap().try_into().unwrap();
+            let n: usize = js
+                .get(key)?
+                .integer()
+                .ok_or(Error::UnexpectedFail(err1.clone()))?
+                .try_into()?;
             Ok(n)
         };
         let to_u64 = |key: &str| -> Result<u64> {
-            let n: u64 = js.get(key)?.integer().unwrap().try_into().unwrap();
+            let n: u64 = js
+                .get(key)?
+                .integer()
+                .ok_or(Error::UnexpectedFail(err1.clone()))?
+                .try_into()?;
             Ok(n)
         };
         let vlog_file = match js.get("/vlog_file")?.string() {
@@ -1448,14 +1490,23 @@ impl FromStr for Stats {
         };
 
         Ok(Stats {
-            name: js.get("/name")?.string().unwrap(),
+            name: js
+                .get("/name")?
+                .string()
+                .ok_or(Error::UnexpectedFail(err2))?,
             // config fields.
             z_blocksize: to_usize("/z_blocksize")?,
             m_blocksize: to_usize("/m_blocksize")?,
             v_blocksize: to_usize("/v_blocksize")?,
-            delta_ok: js.get("/delta_ok")?.boolean().unwrap(),
+            delta_ok: js
+                .get("/delta_ok")?
+                .boolean()
+                .ok_or(Error::UnexpectedFail(err3.clone()))?,
             vlog_file: vlog_file,
-            value_in_vlog: js.get("/value_in_vlog")?.boolean().unwrap(),
+            value_in_vlog: js
+                .get("/value_in_vlog")?
+                .boolean()
+                .ok_or(Error::UnexpectedFail(err3))?,
             // statitics fields.
             n_count: to_u64("/n_count")?,
             n_deleted: to_usize("/n_deleted")?,
@@ -1472,7 +1523,10 @@ impl FromStr for Stats {
             n_abytes: to_usize("/n_abytes")?,
 
             build_time: to_u64("/build_time")?,
-            epoch: js.get("/epoch")?.integer().unwrap(),
+            epoch: js
+                .get("/epoch")?
+                .integer()
+                .ok_or(Error::UnexpectedFail(err1))?,
         })
     }
 }
@@ -1565,7 +1619,8 @@ where
             .transpose()?;
 
         let mut stats: Stats = From::from(config.clone());
-        stats.n_abytes += vflusher.as_ref().map_or(0, |vf| vf.fpos) as usize;
+        let vf_fpos: usize = vflusher.as_ref().map_or(0, |x| x.fpos).try_into()?;
+        stats.n_abytes += vf_fpos;
 
         Ok(Builder {
             config: config.clone(),
@@ -1633,7 +1688,7 @@ where
         self.vflusher.take().map(|x| x.close_wait()).transpose()?;
         // flush meta items to disk and close
         let meta_block_bytes = write_meta_items(index_file, meta_items)?;
-        Ok(meta_block_bytes.try_into().unwrap())
+        Ok(meta_block_bytes.try_into()?)
     }
 
     // return root, iter
@@ -1651,7 +1706,7 @@ where
             ms: Vec<MBlock<K, V>>,
         };
         let mut c = {
-            let vfpos = self.stats.n_abytes.try_into().unwrap();
+            let vfpos: u64 = self.stats.n_abytes.try_into()?;
             Context {
                 fpos: 0,
                 zfpos: 0,
@@ -1687,7 +1742,7 @@ where
                             c.fpos = r.1;
 
                             m.reset();
-                            m.insertz(c.z.as_first_key(), c.zfpos).unwrap();
+                            m.insertz(c.z.as_first_key(), c.zfpos)?;
                             c.ms.push(m)
                         }
                         Err(err) => return Err(err),
@@ -1696,8 +1751,7 @@ where
                     c.zfpos = c.fpos;
                     c.z.reset(c.vfpos);
 
-                    // TODO: make unwrap into valid error.
-                    c.z.insert(&entry, &mut self.stats).unwrap();
+                    c.z.insert(&entry, &mut self.stats)?;
                 }
                 Err(err) => return Err(err),
             };
@@ -1751,7 +1805,7 @@ where
                 c.fpos = res.1
             }
         }
-        let n: u64 = self.config.m_blocksize.try_into().unwrap();
+        let n: u64 = self.config.m_blocksize.try_into()?;
         Ok(c.fpos - n)
     }
 
@@ -1768,7 +1822,7 @@ where
             None => {
                 // println!("new mblock for {:?} {}", key, mfpos);
                 let mut m0 = MBlock::new_encode(self.config.clone());
-                m0.insertm(key, mfpos).unwrap();
+                m0.insertm(key, mfpos)?;
                 m0
             }
             Some(mut m0) => match m0.insertm(key, mfpos) {
@@ -1784,7 +1838,7 @@ where
                     fpos = res.1;
 
                     m0.reset();
-                    m0.insertm(key, mfpos).unwrap();
+                    m0.insertm(key, mfpos)?;
                     m0
                 }
                 Err(err) => return Err(err),
@@ -1829,16 +1883,11 @@ where
     }
 
     fn update_stats(self, stats: &mut Stats) -> Result<I> {
-        stats.build_time = self.start.elapsed().unwrap().as_nanos().try_into().unwrap();
+        stats.build_time = self.start.elapsed()?.as_nanos().try_into()?;
         stats.seqno = self.seqno;
         stats.n_count = self.n_count;
         stats.n_deleted = self.n_deleted;
-        stats.epoch = time::UNIX_EPOCH
-            .elapsed()
-            .unwrap()
-            .as_nanos()
-            .try_into()
-            .unwrap();
+        stats.epoch = time::UNIX_EPOCH.elapsed()?.as_nanos().try_into()?;
         Ok(self.iter)
     }
 }
@@ -2155,11 +2204,11 @@ impl IndexFile {
     fn read_buffer(&mut self, fpos: u64, n: usize, msg: &str) -> Result<Vec<u8>> {
         Ok(match self {
             IndexFile::Block { fd, .. } => {
-                let n: u64 = n.try_into().unwrap();
+                let n: u64 = n.try_into()?;
                 util::read_buffer(fd, fpos, n, msg)?
             }
             IndexFile::Mmap { mmap, .. } => {
-                let start: usize = fpos.try_into().unwrap();
+                let start: usize = fpos.try_into()?;
                 mmap[start..(start + n)].to_vec()
             }
         })
@@ -2184,7 +2233,7 @@ impl IndexFile {
             IndexFile::Block { file, .. } => file,
             IndexFile::Mmap { file, .. } => file,
         };
-        Ok(fs::metadata(file)?.len().try_into().unwrap())
+        Ok(fs::metadata(file)?.len().try_into()?)
     }
 }
 
@@ -2216,9 +2265,19 @@ where
     V: Clone + Diff + Serialize,
 {
     fn drop(&mut self) {
-        self.index_fd.as_fd().unlock().ok();
+        match self.index_fd.as_fd().unlock() {
+            Ok(_) => (),
+            Err(err) => error!(
+                target: "robt  ", "{:?}, unlock index file {}", self.name, err
+            ),
+        }
         if let Some((_, fd)) = &self.valog_fd {
-            fd.unlock().ok();
+            match fd.unlock() {
+                Ok(_) => (),
+                Err(err) => error!(
+                    target: "robt  ", "{:?}, unlock vlog file {}", self.name, err
+                ),
+            }
         }
     }
 }
@@ -2261,10 +2320,11 @@ where
         // open optional value log file.
         let valog_fd = match config.vlog_file {
             Some(vfile) => {
+                let err = Error::InvalidSnapshot("robt snapshot bad vlog file-name".to_string());
                 // stem the file name.
                 let mut vpath = path::PathBuf::new();
                 vpath.push(path::Path::new(dir));
-                vpath.push(path::Path::new(&vfile).file_name().unwrap());
+                vpath.push(path::Path::new(&vfile).file_name().ok_or(err)?);
                 let vlog_file = vpath.as_os_str().to_os_string();
                 let fd = util::open_file_r(&vlog_file)?;
                 fd.lock_shared()?;
@@ -2421,7 +2481,7 @@ where
 
     fn do_shards(&mut self, shards: usize) -> Result<Vec<(Bound<K>, Bound<K>)>> {
         let m_blocksize = self.config.m_blocksize;
-        let fpos = self.to_root().unwrap();
+        let fpos = self.to_root()?;
 
         let mblock = MBlock::<K, V>::new_decode(self.index_fd.read_buffer(
             fpos,
@@ -2476,9 +2536,9 @@ where
     V: Clone + Diff + Serialize,
 {
     fn footprint(&self) -> Result<isize> {
-        let i_footprint: isize = self.index_fd.footprint()?.try_into().unwrap();
+        let i_footprint: isize = self.index_fd.footprint()?.try_into()?;
         let v_footprint: isize = match &self.valog_fd {
-            Some((vlog_file, _)) => fs::metadata(vlog_file)?.len().try_into().unwrap(),
+            Some((vlog_file, _)) => fs::metadata(vlog_file)?.len().try_into()?,
             None => 0,
         };
         Ok(i_footprint + v_footprint)
@@ -2519,12 +2579,13 @@ where
             return Err(Error::ValidationFail(msg));
         }
 
-        let mut footprint: isize = (s.m_bytes + s.z_bytes + s.v_bytes + s.n_abytes)
-            .try_into()
-            .unwrap();
+        let mut footprint: isize = (s.m_bytes + s.z_bytes + s.v_bytes + s.n_abytes).try_into()?;
         let (_, meta_block_bytes) = read_meta_items(&self.dir, &self.name)?;
-        footprint += meta_block_bytes as isize;
-        assert_eq!(footprint, self.footprint().unwrap());
+        footprint += {
+            let n: isize = meta_block_bytes.try_into()?;
+            n
+        };
+        assert_eq!(footprint, self.footprint()?);
 
         let iter = self.iter()?;
         let mut prev_key: Option<K> = None;
@@ -2586,7 +2647,7 @@ where
     fn iter(&mut self) -> Result<IndexIter<K, V>> {
         let snap = unsafe { (self as *mut Snapshot<K, V, B>).as_mut().unwrap() };
         let mut mzs = vec![];
-        snap.build_fwd(snap.to_root().unwrap(), &mut mzs)?;
+        snap.build_fwd(snap.to_root()?, &mut mzs)?;
         Ok(Iter::new(snap, mzs))
     }
 
@@ -2632,7 +2693,7 @@ where
     fn iter_with_versions(&mut self) -> Result<IndexIter<K, V>> {
         let snap = unsafe { (self as *mut Snapshot<K, V, B>).as_mut().unwrap() };
         let mut mzs = vec![];
-        snap.build_fwd(snap.to_root().unwrap(), &mut mzs)?;
+        snap.build_fwd(snap.to_root()?, &mut mzs)?;
         Ok(Iter::new_versions(snap, mzs))
     }
 
@@ -2677,7 +2738,7 @@ where
 {
     /// Return the first entry in index, with only latest value.
     pub fn first(&mut self) -> Result<Entry<K, V>> {
-        let zfpos = self.first_zpos(self.to_root().unwrap())?;
+        let zfpos = self.first_zpos(self.to_root()?)?;
 
         let z_blocksize = self.config.z_blocksize;
         let zblock = ZBlock::<K, V>::new_decode(self.index_fd.read_buffer(
@@ -2691,7 +2752,7 @@ where
 
     /// Return the first entry in index, with all versions.
     pub fn first_versions(&mut self) -> Result<Entry<K, V>> {
-        let zfpos = self.first_zpos(self.to_root().unwrap())?;
+        let zfpos = self.first_zpos(self.to_root()?)?;
 
         let z_blocksize = self.config.z_blocksize;
         let zblock = ZBlock::<K, V>::new_decode(self.index_fd.read_buffer(
@@ -2705,7 +2766,7 @@ where
 
     /// Return the last entry in index, with only latest value.
     pub fn last(&mut self) -> Result<Entry<K, V>> {
-        let zfpos = self.last_zfpos(self.to_root().unwrap())?;
+        let zfpos = self.last_zfpos(self.to_root()?)?;
 
         let z_blocksize = self.config.z_blocksize;
         let zblock = ZBlock::<K, V>::new_decode(self.index_fd.read_buffer(
@@ -2719,7 +2780,7 @@ where
 
     /// Return the last entry in index, with all versions.
     pub fn last_versions(&mut self) -> Result<Entry<K, V>> {
-        let zfpos = self.last_zfpos(self.to_root().unwrap())?;
+        let zfpos = self.last_zfpos(self.to_root()?)?;
 
         let z_blocksize = self.config.z_blocksize;
         let zblock = ZBlock::<K, V>::new_decode(self.index_fd.read_buffer(
@@ -2786,7 +2847,7 @@ where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        let zfpos = self.get_zpos(key, self.to_root().unwrap())?;
+        let zfpos = self.get_zpos(key, self.to_root()?)?;
 
         // println!("do_get {}", zfpos);
         let zblock: ZBlock<K, V> = ZBlock::new_decode(self.index_fd.read_buffer(
@@ -2821,7 +2882,7 @@ where
         let mut mzs = vec![];
         let skip_one = match range.start_bound() {
             Bound::Unbounded => {
-                self.build_fwd(self.to_root().unwrap(), &mut mzs)?;
+                self.build_fwd(self.to_root()?, &mut mzs)?;
                 false
             }
             Bound::Included(key) => {
@@ -2859,7 +2920,7 @@ where
         let mut mzs = vec![];
         let skip_one = match range.end_bound() {
             Bound::Unbounded => {
-                self.build_rev(self.to_root().unwrap(), &mut mzs)?;
+                self.build_rev(self.to_root()?, &mut mzs)?;
                 false
             }
             Bound::Included(key) => {
@@ -2982,7 +3043,7 @@ where
             config.z_blocksize,
             "build_rev(), reading zblock",
         )?)?;
-        let index: isize = (zblock.len() - 1).try_into().unwrap();
+        let index: isize = (zblock.len() - 1).try_into()?;
         mzs.push(MZ::Z { zblock, index });
         Ok(())
     }
@@ -3009,7 +3070,7 @@ where
                             config.z_blocksize,
                             "rebuild_rev(), reading zblock",
                         )?)?;
-                        let idx: isize = (zblock.len() - 1).try_into().unwrap();
+                        let idx: isize = (zblock.len() - 1).try_into()?;
                         mzs.push(MZ::Z { zblock, index: idx });
                         Ok(())
                     }
@@ -3034,7 +3095,7 @@ where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        let mut fpos = self.to_root().unwrap();
+        let mut fpos = self.to_root()?;
         let config = &self.config;
         let (from_min, to_max) = (Bound::Unbounded, Bound::Unbounded);
 
@@ -3073,7 +3134,7 @@ where
         }?;
         mzs.push(MZ::Z {
             zblock,
-            index: index.try_into().unwrap(),
+            index: index.try_into()?,
         });
         Ok(entry)
     }

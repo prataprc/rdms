@@ -442,8 +442,8 @@ where
         stats.tree_footprint = self.tree_footprint;
         stats.n_deleted = self.n_deleted;
         stats.n_reclaimed = self.n_reclaimed;
-        stats.rw_latch = self.latch.to_stats();
-        stats.snapshot_latch = self.snapshot.ulatch.to_stats();
+        stats.rw_latch = self.latch.to_stats()?;
+        stats.snapshot_latch = self.snapshot.ulatch.to_stats()?;
         Ok(stats)
     }
 
@@ -1905,8 +1905,8 @@ where
         stats.n_deleted = self.n_deleted;
         stats.n_reclaimed = self.n_reclaimed;
         stats.node_size = mem::size_of::<Node<K, V>>();
-        stats.rw_latch = self.latch.to_stats();
-        stats.snapshot_latch = self.snapshot.ulatch.to_stats();
+        stats.rw_latch = self.latch.to_stats()?;
+        stats.snapshot_latch = self.snapshot.ulatch.to_stats()?;
         stats.blacks = Some(ss.0);
         stats.depths = Some(depths);
         Ok(stats)

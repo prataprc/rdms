@@ -17,6 +17,8 @@ use std::{any, ffi, io, sync::mpsc};
 pub enum Error {
     /// API / function not supported
     NotSupported(String),
+    /// Error because the value was not initialized as expected.
+    UnInitialized(String),
     /// Supplied key is not found in the index.
     KeyNotFound,
     /// Can be returned by set_cas() API when:
@@ -102,6 +104,13 @@ impl From<std::num::TryFromIntError> for Error {
 impl From<std::array::TryFromSliceError> for Error {
     fn from(err: std::array::TryFromSliceError) -> Error {
         let msg = format!("TryFromSliceError: {:?}", err);
+        Error::ConversionError(msg)
+    }
+}
+
+impl From<std::time::SystemTimeError> for Error {
+    fn from(err: std::time::SystemTimeError) -> Error {
+        let msg = format!("SystemTimeError: {:?}", err);
         Error::ConversionError(msg)
     }
 }

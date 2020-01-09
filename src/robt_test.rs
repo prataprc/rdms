@@ -424,8 +424,8 @@ fn test_build_scan() {
             stats
         };
         assert_eq!(stats.seqno, llrb.to_seqno().unwrap());
-        assert_eq!(stats.n_count as usize, llrb.to_stats().entries);
-        assert_eq!(stats.n_deleted, llrb.to_stats().n_deleted);
+        assert_eq!(stats.n_count as usize, llrb.to_stats().unwrap().entries);
+        assert_eq!(stats.n_deleted, llrb.to_stats().unwrap().n_deleted);
     }
 }
 

@@ -347,7 +347,7 @@ fn test_n_deleted() {
     // without lsm
     let mut index: Box<Llrb<i64, i64>> = Llrb::new("test-llrb");
     populate(&mut index);
-    assert_eq!(index.to_stats().n_deleted, 0);
+    assert_eq!(index.to_stats().unwrap().n_deleted, 0);
 
     // validate will make sure the that n_deleted count is correct.
     assert!(index.validate().is_ok());
@@ -1087,7 +1087,7 @@ fn test_mvcc_conversion() {
         assert_eq!(mvcc.is_sticky(), refllrb.is_sticky());
         assert_eq!(mvcc.is_spin(), refllrb.is_spin());
         assert_eq!(mvcc.to_seqno().unwrap(), refllrb.to_seqno().unwrap());
-        let (lstats, mstats) = (refllrb.to_stats(), mvcc.to_stats());
+        let (lstats, mstats) = (refllrb.to_stats().unwrap(), mvcc.to_stats().unwrap());
         assert_eq!(lstats.entries, mstats.entries);
         assert_eq!(lstats.n_deleted, mstats.n_deleted);
         assert_eq!(lstats.key_footprint, mstats.key_footprint);
@@ -1113,7 +1113,7 @@ fn test_mvcc_conversion() {
         assert_eq!(refmvcc.is_sticky(), llrb.is_sticky());
         assert_eq!(refmvcc.is_spin(), llrb.is_spin());
         assert_eq!(refmvcc.to_seqno().unwrap(), llrb.to_seqno().unwrap());
-        let (lstats, mstats) = (llrb.to_stats(), refmvcc.to_stats());
+        let (lstats, mstats) = (llrb.to_stats().unwrap(), refmvcc.to_stats().unwrap());
         assert_eq!(lstats.entries, mstats.entries);
         assert_eq!(lstats.n_deleted, mstats.n_deleted);
         assert_eq!(lstats.key_footprint, mstats.key_footprint);
@@ -1404,7 +1404,7 @@ fn test_compact() {
         );
 
         let count = index.compact(cutoff, |metas| metas[0].clone()).unwrap();
-        assert_eq!(count, rindex.to_stats().entries);
+        assert_eq!(count, rindex.to_stats().unwrap().entries);
         check_compact_nodes(index.as_mut(), rindex.as_mut(), cutoff);
     }
 }

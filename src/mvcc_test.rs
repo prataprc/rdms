@@ -163,7 +163,7 @@ fn test_n_deleted() {
     // without lsm
     let mut index: Box<Mvcc<i64, i64>> = Mvcc::new("test-mvcc");
     populate(&mut index);
-    assert_eq!(index.to_stats().n_deleted, 0);
+    assert_eq!(index.to_stats().unwrap().n_deleted, 0);
 
     // validate will make sure the that n_deleted count is correct.
     assert!(index.validate().is_ok());
@@ -899,7 +899,7 @@ fn test_commit3() {
 fn check_commit_nodes(index: &mut Mvcc<i64, i64>, rindex: &mut Mvcc<i64, i64>) {
     // verify root index
     assert_eq!(index.to_seqno(), rindex.to_seqno());
-    let (stats, rstats) = (index.to_stats(), rindex.to_stats());
+    let (stats, rstats) = (index.to_stats().unwrap(), rindex.to_stats().unwrap());
     assert_eq!(stats.entries, rstats.entries);
     assert_eq!(stats.n_deleted, rstats.n_deleted);
     assert_eq!(stats.key_footprint, rstats.key_footprint);
@@ -1004,7 +1004,7 @@ fn test_compact() {
         );
 
         let count = index.compact(cutoff, |metas| metas[0].clone()).unwrap();
-        assert_eq!(count, rindex.to_stats().entries);
+        assert_eq!(count, rindex.to_stats().unwrap().entries);
         check_compact_nodes(index.as_mut(), rindex.as_mut(), cutoff);
     }
 }
@@ -1104,7 +1104,7 @@ fn check_compact_nodes(
             }
         }
     }
-    assert_eq!(n_count, index.to_stats().entries);
+    assert_eq!(n_count, index.to_stats().unwrap().entries);
     assert_eq!(n_deleted, index.n_deleted);
     assert_eq!(key_footprint, index.key_footprint);
     assert_eq!(

@@ -96,7 +96,7 @@ where
                 buf.resize(m + 8, 0);
 
                 let vlen = {
-                    let vlen = value.encode(buf);
+                    let vlen = value.encode(buf)?;
                     if vlen > core::Entry::<i32, i32>::VALUE_SIZE_LIMIT {
                         return Err(Error::ValueSizeExceeded(vlen));
                     };
@@ -120,7 +120,7 @@ where
     pub(crate) fn encode_leaf(&self, buf: &mut Vec<u8>) -> Result<usize> {
         match self {
             Value::Native { value } => {
-                let vlen = value.encode(buf);
+                let vlen = value.encode(buf)?;
                 if vlen > core::Entry::<i32, i32>::VALUE_SIZE_LIMIT {
                     return Err(Error::ValueSizeExceeded(vlen));
                 };
@@ -225,7 +225,7 @@ where
                 buf.resize(m + 8, 0);
 
                 let dlen = {
-                    let dlen = diff.encode(buf);
+                    let dlen = diff.encode(buf)?;
                     if dlen > core::Entry::<i32, i32>::DIFF_SIZE_LIMIT {
                         return Err(Error::DiffSizeExceeded(dlen));
                     };

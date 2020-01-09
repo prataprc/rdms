@@ -398,7 +398,7 @@ where
 pub trait Serialize: Sized {
     /// Convert this value into binary equivalent. Encoded bytes shall
     /// be appended to the input-buffer `buf`. Return bytes encoded.
-    fn encode(&self, buf: &mut Vec<u8>) -> usize;
+    fn encode(&self, buf: &mut Vec<u8>) -> Result<usize>;
 
     /// Reverse process of encode, given the binary equivalent `buf`,
     /// construct ``self``.

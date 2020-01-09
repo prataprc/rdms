@@ -54,12 +54,12 @@ where
         // encode key
         let (hdr1, klen, fpos) = match self {
             MEntry::EncM { fpos, key, .. } => {
-                let klen: u64 = key.encode(buf).try_into().unwrap();
+                let klen: u64 = key.encode(buf)?.try_into().unwrap();
                 let hdr1 = klen.to_be_bytes();
                 (hdr1, klen, fpos)
             }
             MEntry::EncZ { fpos, key, .. } => {
-                let klen: u64 = key.encode(buf).try_into().unwrap();
+                let klen: u64 = key.encode(buf)?.try_into().unwrap();
                 let hdr1 = (klen | Self::ZBLOCK_FLAG).to_be_bytes();
                 (hdr1, klen, fpos)
             }
@@ -464,7 +464,7 @@ where
     }
 
     fn encode_key(key: &K, buf: &mut Vec<u8>) -> Result<usize> {
-        let n = key.encode(buf);
+        let n = key.encode(buf)?;
         if n > core::Entry::<i32, i32>::KEY_SIZE_LIMIT {
             Err(Error::KeySizeExceeded(n))
         } else {

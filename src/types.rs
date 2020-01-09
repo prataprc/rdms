@@ -33,8 +33,8 @@ impl Diff for Empty {
 }
 
 impl Serialize for Empty {
-    fn encode(&self, _buf: &mut Vec<u8>) -> usize {
-        0
+    fn encode(&self, _buf: &mut Vec<u8>) -> Result<usize> {
+        Ok(0)
     }
 
     fn decode(&mut self, _buf: &[u8]) -> Result<usize> {
@@ -72,11 +72,11 @@ impl Diff for [u8; 20] {
 }
 
 impl Serialize for [u8; 20] {
-    fn encode(&self, buf: &mut Vec<u8>) -> usize {
+    fn encode(&self, buf: &mut Vec<u8>) -> Result<usize> {
         let m = buf.len();
         buf.resize(m + 20, 0);
         buf[m..(m + 20)].copy_from_slice(self);
-        20
+        Ok(20)
     }
 
     fn decode(&mut self, buf: &[u8]) -> Result<usize> {
@@ -110,7 +110,7 @@ impl Diff for Vec<u8> {
 // 4 byte header, encoding the length of payload followed by
 // the actual payload.
 impl Serialize for Vec<u8> {
-    fn encode(&self, buf: &mut Vec<u8>) -> usize {
+    fn encode(&self, buf: &mut Vec<u8>) -> Result<usize> {
         let hdr1: u32 = self.len().try_into().unwrap();
         let scratch = hdr1.to_be_bytes();
 
@@ -119,7 +119,7 @@ impl Serialize for Vec<u8> {
         buf[m..m + scratch.len()].copy_from_slice(&scratch);
         m += scratch.len();
         buf[m..(m + self.len())].copy_from_slice(self);
-        scratch.len() + self.len()
+        Ok(scratch.len() + self.len())
     }
 
     fn decode(&mut self, buf: &[u8]) -> Result<usize> {
@@ -163,11 +163,11 @@ impl Diff for i32 {
 }
 
 impl Serialize for i32 {
-    fn encode(&self, buf: &mut Vec<u8>) -> usize {
+    fn encode(&self, buf: &mut Vec<u8>) -> Result<usize> {
         let m = buf.len();
         buf.resize(m + 4, 0);
         buf[m..m + 4].copy_from_slice(&self.to_be_bytes());
-        4
+        Ok(4)
     }
 
     fn decode(&mut self, buf: &[u8]) -> Result<usize> {
@@ -206,11 +206,11 @@ impl Diff for i64 {
 }
 
 impl Serialize for i64 {
-    fn encode(&self, buf: &mut Vec<u8>) -> usize {
+    fn encode(&self, buf: &mut Vec<u8>) -> Result<usize> {
         let n = buf.len();
         buf.resize(n + 8, 0);
         buf[n..n + 8].copy_from_slice(&self.to_be_bytes());
-        8
+        Ok(8)
     }
 
     fn decode(&mut self, buf: &[u8]) -> Result<usize> {

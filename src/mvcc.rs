@@ -382,7 +382,7 @@ where
 
         let s: Arc<Snapshot<K, V>> = OuterSnapshot::clone(&self.snapshot);
         let seqno = OuterSnapshot::clone(&self.snapshot).seqno;
-        let n_count = self.to_stats().entries;
+        let n_count = self.to_stats().unwrap().entries;
         cloned
             .snapshot
             .n_nodes
@@ -433,7 +433,7 @@ where
 
     /// Return quickly with basic statisics, only entries() method is valid
     /// with this statisics.
-    pub fn to_stats(&self) -> Stats {
+    pub fn to_stats(&self) -> Result<Stats> {
         let _r = self.latch.acquire_read(true /*spin*/);
 
         let mut stats = Stats::new(&self.name);
@@ -444,7 +444,7 @@ where
         stats.n_reclaimed = self.n_reclaimed;
         stats.rw_latch = self.latch.to_stats();
         stats.snapshot_latch = self.snapshot.ulatch.to_stats();
-        stats
+        Ok(stats)
     }
 
     fn multi_rw(&self) -> usize {

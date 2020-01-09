@@ -384,14 +384,14 @@ fn test_batch() {
     // encode/decode config
     let mut buf = vec![];
     let config = vec!["node1".to_string(), "node2".to_string()];
-    let n = Batch::<i32, i32>::encode_config(&config, &mut buf);
+    let n = Batch::<i32, i32>::encode_config(&config, &mut buf).unwrap();
     assert_eq!(n, 16);
     let (config_out, m) = Batch::<i32, i32>::decode_config(&buf).unwrap();
     assert_eq!(config, config_out);
     assert_eq!(n, m);
     // encode/decode votedfor
     let mut buf = vec![];
-    let n = Batch::<i32, i32>::encode_votedfor("node1", &mut buf);
+    let n = Batch::<i32, i32>::encode_votedfor("node1", &mut buf).unwrap();
     assert_eq!(n, 7);
     let (votedfor, m) = Batch::<i32, i32>::decode_votedfor(&buf).unwrap();
     assert_eq!("node1", &votedfor);
@@ -449,7 +449,7 @@ fn test_batch() {
 
     // encode / decode active
     let mut buf = vec![];
-    let n = batch.encode_active(&mut buf);
+    let n = batch.encode_active(&mut buf).unwrap();
     assert_eq!(n, 293);
     let mut batch_out: Batch<i32, i32> = unsafe { mem::zeroed() };
     let m = batch_out
@@ -501,7 +501,7 @@ fn test_entry() {
     let op = Op::new_set(10, 20);
     let r_entry = Entry::new_term(op, 23, 45);
     let mut buf = vec![];
-    let n = r_entry.encode(&mut buf);
+    let n = r_entry.encode(&mut buf).unwrap();
     assert_eq!(n, 48);
     match Entry::<i32, i32>::entry_type(&buf).unwrap() {
         EntryType::Term => (),
@@ -529,7 +529,7 @@ fn test_entry() {
     let op = Op::new_set(10, 20);
     let r_entry = Entry::new_client(op, 23, 45, 100, 200);
     let mut buf = vec![];
-    let n = r_entry.encode(&mut buf);
+    let n = r_entry.encode(&mut buf).unwrap();
     assert_eq!(n, 64);
     match Entry::<i32, i32>::entry_type(&buf).unwrap() {
         EntryType::Client => (),
@@ -561,7 +561,7 @@ fn test_entry_term() {
     let mut buf = vec![];
     let r_op = Op::new_set(10, 20);
     let (r_term, r_index) = (23, 45);
-    let n = Entry::encode_term(&r_op, r_term, r_index, &mut buf);
+    let n = Entry::encode_term(&r_op, r_term, r_index, &mut buf).unwrap();
     assert_eq!(n, 48);
 
     let mut op: Op<i32, i32> = unsafe { mem::zeroed() };
@@ -581,7 +581,7 @@ fn test_entry_client() {
     let mut buf = vec![];
     let r_op = Op::new_set(10, 20);
     let (r_term, r_index, r_id, r_ceqno) = (23, 45, 54, 65);
-    let n = Entry::encode_client(&r_op, r_term, r_index, r_id, r_ceqno, &mut buf);
+    let n = Entry::encode_client(&r_op, r_term, r_index, r_id, r_ceqno, &mut buf).unwrap();
     assert_eq!(n, 64);
 
     let mut op: Op<i32, i32> = unsafe { mem::zeroed() };
@@ -620,7 +620,7 @@ fn test_op() {
     let mut res: Op<i32, i32> = unsafe { mem::zeroed() };
 
     let op: Op<i32, i32> = Op::new_set(34, 43);
-    op.encode(&mut out);
+    op.encode(&mut out).unwrap();
     assert_eq!(Op::<i32, i32>::op_type(&out).unwrap(), OpType::Set);
     let n = res.decode(&out).expect("op-set decode failed");
     assert_eq!(n, 24);
@@ -631,7 +631,7 @@ fn test_op() {
 
     let op: Op<i32, i32> = Op::new_set_cas(-34, -43, 100);
     out.resize(0, 0);
-    op.encode(&mut out);
+    op.encode(&mut out).unwrap();
     assert_eq!(Op::<i32, i32>::op_type(&out).unwrap(), OpType::SetCAS);
     let n = res.decode(&out).expect("op-set-cas decode failed");
     assert_eq!(n, 32);
@@ -646,7 +646,7 @@ fn test_op() {
 
     let op: Op<i32, i32> = Op::new_delete(34);
     out.resize(0, 0);
-    op.encode(&mut out);
+    op.encode(&mut out).unwrap();
     assert_eq!(Op::<i32, i32>::op_type(&out).unwrap(), OpType::Delete);
     let n = res.decode(&out).expect("op-delete decode failed");
     assert_eq!(n, 12);

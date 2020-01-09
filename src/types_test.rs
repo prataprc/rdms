@@ -17,7 +17,7 @@ fn test_bytes_diff() {
 fn test_bytes_serialize() {
     let value = "hello world".as_bytes().to_vec();
     let mut buf = vec![];
-    value.encode(&mut buf);
+    value.encode(&mut buf).unwrap();
     let value_ref = [
         0, 0, 0, 11, 104, 101, 108, 108, 111, 32, 119, 111, 114, 108, 100,
     ];
@@ -51,7 +51,7 @@ fn test_empty_diff() {
 fn test_empty_serialize() {
     let value = Empty;
     let mut buf = vec![];
-    value.encode(&mut buf);
+    value.encode(&mut buf).unwrap();
 
     let mut out = Empty;
     out.decode(&buf).expect("failed decode");
@@ -78,7 +78,7 @@ fn test_i32_diff() {
 fn test_i32_serialize() {
     let value = 10_i32;
     let mut buf = vec![];
-    value.encode(&mut buf);
+    value.encode(&mut buf).unwrap();
 
     let mut out: i32 = Default::default();
     out.decode(&buf).expect("failed decode");
@@ -105,7 +105,7 @@ fn test_i64_diff() {
 fn test_i64_serialize() {
     let value = 10_i64;
     let mut buf = vec![];
-    value.encode(&mut buf);
+    value.encode(&mut buf).unwrap();
 
     let mut out: i64 = Default::default();
     out.decode(&buf).expect("failed decode");

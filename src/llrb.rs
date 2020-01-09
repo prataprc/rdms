@@ -452,7 +452,7 @@ where
 
     /// Return quickly with basic statisics, only entries() method is valid
     /// with this statisics.
-    pub fn to_stats(&self) -> Stats {
+    pub fn to_stats(&self) -> Result<Stats> {
         let mut stats = Stats::new(&self.name);
         stats.entries = self.len();
         stats.n_deleted = self.n_deleted;
@@ -460,7 +460,7 @@ where
         stats.key_footprint = self.key_footprint;
         stats.tree_footprint = self.tree_footprint;
         stats.rw_latch = self.latch.to_stats();
-        stats
+        Ok(stats)
     }
 
     /// Return the first entry in the index. Return None if index is empty.

@@ -21,9 +21,10 @@ pub fn open_file_cw(file: ffi::OsString) -> Result<fs::File> {
     };
 
     {
-        let parent = os_file
-            .parent()
-            .ok_or(Error::InvalidFile(file.clone().into_string()?))?;
+        let parent = {
+            let err = Error::InvalidFile(file.clone().into_string()?);
+            os_file.parent().ok_or(err)?
+        };
         fs::create_dir_all(parent)?;
     };
 
@@ -49,7 +50,7 @@ pub(crate) fn read_buffer(fd: &mut fs::File, fpos: u64, n: u64, msg: &str) -> Re
     fd.seek(io::SeekFrom::Start(fpos))?;
 
     let mut buf = {
-        let mut buf = Vec::with_capacity(n.try_into().unwrap());
+        let mut buf = Vec::with_capacity(n.try_into()?);
         buf.resize(buf.capacity(), 0);
         buf
     };
@@ -96,7 +97,7 @@ where
     K: Footprint,
 {
     use std::mem::size_of;
-    let footprint: isize = size_of::<K>().try_into().unwrap();
+    let footprint: isize = size_of::<K>().try_into()?;
     Ok(footprint + key.footprint()?)
 }
 

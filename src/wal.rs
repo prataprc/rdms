@@ -81,8 +81,7 @@ use crate::{
     {error::Error, util},
 };
 
-// TODO: replace unwrap() and ok() with error handling.
-// TODO: replace `as` conversion to try_into() conversion.
+// TODO: review unwrap() and ok() and `as` conversion code.
 
 include!("wal_marker.rs");
 
@@ -687,11 +686,15 @@ where
         let mut active = self.active.take().unwrap();
         active.freeze();
         self.journals.push(active);
+
         // new journal file.
-        let name = self.name.clone();
-        let num = self.next_journal_num(1 /*start*/);
-        let (id, dir) = (self.id, self.dir.clone());
-        let j = Journal::create(dir, name, id, num)?;
+        let j = {
+            let name = self.name.clone();
+            let num = self.next_journal_num(1 /*start*/);
+            let (id, dir) = (self.id, self.dir.clone());
+            Journal::create(dir, name, id, num)?
+        };
+
         self.active = Some(j);
         Ok(())
     }
@@ -975,7 +978,7 @@ where
     }
 
     fn exceed_limit(&self, journal_limit: usize) -> Result<bool> {
-        let limit: u64 = journal_limit.try_into().unwrap();
+        let limit: u64 = journal_limit.try_into()?;
         Ok(self.fd.as_ref().unwrap().metadata()?.len() > limit)
     }
 
@@ -1050,7 +1053,7 @@ where
 
     fn flush1(&mut self, lmt: usize) -> Result<Option<(Vec<u8>, Batch<K, V>)>> {
         let mut buffer = Vec::with_capacity(FLUSH_SIZE);
-        let want = self.active.encode_active(&mut buffer);
+        let want = self.active.encode_active(&mut buffer)?;
 
         match self.exceed_limit(lmt - want) {
             Ok(true) if self.active.len() > 0 => {
@@ -1305,7 +1308,7 @@ where
     fn into_active(self, fd: &mut fs::File) -> Result<Batch<K, V>> {
         match self {
             Batch::Refer { fpos, length, .. } => {
-                let n: u64 = length.try_into().unwrap();
+                let n: u64 = length.try_into()?;
                 let buf = util::read_buffer(fd, fpos, n, "fetching batch")?;
                 let mut batch: Batch<K, V> = unsafe { mem::zeroed() };
                 batch.decode_active(&buf)?;
@@ -1348,7 +1351,7 @@ where
     K: Serialize,
     V: Serialize,
 {
-    fn encode_active(&self, buf: &mut Vec<u8>) -> usize {
+    fn encode_active(&self, buf: &mut Vec<u8>) -> Result<usize> {
         match self {
             Batch::Active {
                 term,
@@ -1366,22 +1369,25 @@ where
                 buf.extend_from_slice(&sindex.to_be_bytes());
                 let lindex = entries.last().map(|e| e.to_index()).unwrap_or(0);
                 buf.extend_from_slice(&lindex.to_be_bytes());
-                let nentries: u64 = entries.len().try_into().unwrap();
+                let nentries: u64 = entries.len().try_into()?;
                 buf.extend_from_slice(&nentries.to_be_bytes());
 
-                let mut m = Self::encode_config(config, buf);
-                m += Self::encode_votedfor(votedfor, buf);
+                let mut m = Self::encode_config(config, buf)?;
+                m += Self::encode_votedfor(votedfor, buf)?;
 
-                m += entries.iter().map(|e| e.encode(buf)).sum::<usize>();
+                for entry in entries.iter() {
+                    m += entry.encode(buf)?;
+                }
+                // m += entries.iter().map(|e| e.encode(buf)?).sum::<usize>();
 
                 buf.extend_from_slice(BATCH_MARKER.as_ref());
 
                 let n = 56 + m + BATCH_MARKER.len() + 8;
-                let length: u64 = n.try_into().unwrap();
+                let length: u64 = n.try_into()?;
                 buf[..8].copy_from_slice(&length.to_be_bytes());
                 buf.extend_from_slice(&length.to_be_bytes());
 
-                n
+                Ok(n)
             }
             _ => unreachable!(),
         }
@@ -1390,8 +1396,8 @@ where
     fn decode_refer(&mut self, buf: &[u8], fpos: u64) -> Result<usize> {
         util::check_remaining(buf, 56, "wal batch-refer-hdr")?;
         let length = Self::validate(buf)?;
-        let start_index = u64::from_be_bytes(buf[32..40].try_into().unwrap());
-        let last_index = u64::from_be_bytes(buf[40..48].try_into().unwrap());
+        let start_index = u64::from_be_bytes(buf[32..40].try_into()?);
+        let last_index = u64::from_be_bytes(buf[40..48].try_into()?);
         *self = Batch::Refer {
             fpos,
             length,
@@ -1404,12 +1410,12 @@ where
     fn decode_active(&mut self, buf: &[u8]) -> Result<usize> {
         util::check_remaining(buf, 48, "wal batch-active-hdr")?;
         let length = Self::validate(buf)?;
-        let term = u64::from_be_bytes(buf[8..16].try_into().unwrap());
-        let committed = u64::from_be_bytes(buf[16..24].try_into().unwrap());
-        let persisted = u64::from_be_bytes(buf[24..32].try_into().unwrap());
-        let _start_index = u64::from_be_bytes(buf[32..40].try_into().unwrap());
-        let _last_index = u64::from_be_bytes(buf[40..48].try_into().unwrap());
-        let nentries = u64::from_be_bytes(buf[48..56].try_into().unwrap());
+        let term = u64::from_be_bytes(buf[8..16].try_into()?);
+        let committed = u64::from_be_bytes(buf[16..24].try_into()?);
+        let persisted = u64::from_be_bytes(buf[24..32].try_into()?);
+        let _start_index = u64::from_be_bytes(buf[32..40].try_into()?);
+        let _last_index = u64::from_be_bytes(buf[40..48].try_into()?);
+        let nentries = u64::from_be_bytes(buf[48..56].try_into()?);
         let mut n = 56;
 
         let (config, m) = Self::decode_config(&buf[n..])?;
@@ -1418,7 +1424,7 @@ where
         n += m;
 
         let entries = {
-            let mut entries = Vec::with_capacity(nentries.try_into().unwrap());
+            let mut entries = Vec::with_capacity(nentries.try_into()?);
             for _i in 0..entries.capacity() {
                 let mut entry: Entry<K, V> = unsafe { mem::zeroed() };
                 n += entry.decode(&buf[n..])?;
@@ -1444,29 +1450,29 @@ where
     K: Serialize,
     V: Serialize,
 {
-    fn encode_config(config: &Vec<String>, buf: &mut Vec<u8>) -> usize {
-        let count: u16 = config.len().try_into().unwrap();
+    fn encode_config(config: &Vec<String>, buf: &mut Vec<u8>) -> Result<usize> {
+        let count: u16 = config.len().try_into()?;
         buf.extend_from_slice(&count.to_be_bytes());
         let mut n = mem::size_of_val(&count);
 
         for c in config {
-            let len: u16 = c.as_bytes().len().try_into().unwrap();
+            let len: u16 = c.as_bytes().len().try_into()?;
             buf.extend_from_slice(&len.to_be_bytes());
             buf.extend_from_slice(c.as_bytes());
             n += mem::size_of_val(&len) + c.as_bytes().len();
         }
-        n
+        Ok(n)
     }
 
     fn decode_config(buf: &[u8]) -> Result<(Vec<String>, usize)> {
         util::check_remaining(buf, 2, "wal batch-config")?;
-        let count = u16::from_be_bytes(buf[..2].try_into().unwrap());
-        let mut config = Vec::with_capacity(count.try_into().unwrap());
+        let count = u16::from_be_bytes(buf[..2].try_into()?);
+        let mut config = Vec::with_capacity(count.try_into()?);
         let mut n = 2;
 
         for _i in 0..count {
             util::check_remaining(buf, n + 2, "wal batch-config")?;
-            let len = u16::from_be_bytes(buf[n..n + 2].try_into().unwrap());
+            let len = u16::from_be_bytes(buf[n..n + 2].try_into()?);
             n += 2;
 
             let m = len as usize;
@@ -1478,34 +1484,27 @@ where
         Ok((config, n))
     }
 
-    fn encode_votedfor(s: &str, buf: &mut Vec<u8>) -> usize {
-        let len: u16 = s.as_bytes().len().try_into().unwrap();
+    fn encode_votedfor(s: &str, buf: &mut Vec<u8>) -> Result<usize> {
+        let len: u16 = s.as_bytes().len().try_into()?;
         buf.extend_from_slice(&len.to_be_bytes());
         buf.extend_from_slice(s.as_bytes());
-        mem::size_of_val(&len) + s.as_bytes().len()
+        Ok(mem::size_of_val(&len) + s.as_bytes().len())
     }
 
     fn decode_votedfor(buf: &[u8]) -> Result<(String, usize)> {
         util::check_remaining(buf, 2, "wal batch-votedfor")?;
-        let len = u16::from_be_bytes(buf[..2].try_into().unwrap());
+        let len = u16::from_be_bytes(buf[..2].try_into()?);
         let n = 2;
 
-        let len: usize = len.try_into().unwrap();
+        let len: usize = len.try_into()?;
         util::check_remaining(buf, n + len, "wal batch-votedfor")?;
         Ok((std::str::from_utf8(&buf[n..n + len])?.to_string(), n + len))
     }
 
     fn validate(buf: &[u8]) -> Result<usize> {
         let (a, z): (usize, usize) = {
-            let n = u64::from_be_bytes(buf[..8].try_into().unwrap())
-                .try_into()
-                .unwrap();
-            (
-                n,
-                u64::from_be_bytes(buf[n - 8..n].try_into().unwrap())
-                    .try_into()
-                    .unwrap(),
-            )
+            let n = u64::from_be_bytes(buf[..8].try_into()?).try_into()?;
+            (n, u64::from_be_bytes(buf[n - 8..n].try_into()?).try_into()?)
         };
         if a != z {
             let msg = format!("batch length mismatch, {} {}", a, z);
@@ -1663,7 +1662,7 @@ where
 
     fn entry_type(buf: &[u8]) -> Result<EntryType> {
         util::check_remaining(buf, 8, "wal entry-type")?;
-        let hdr1 = u64::from_be_bytes(buf[..8].try_into().unwrap());
+        let hdr1 = u64::from_be_bytes(buf[..8].try_into()?);
         Ok((hdr1 & 0x00000000000000FF).into())
     }
 
@@ -1687,10 +1686,10 @@ where
     K: Serialize,
     V: Serialize,
 {
-    fn encode(&self, buf: &mut Vec<u8>) -> usize {
-        match self {
+    fn encode(&self, buf: &mut Vec<u8>) -> Result<usize> {
+        Ok(match self {
             Entry::Term { op, term, index } => {
-                let n = Self::encode_term(op, *term, *index, buf);
+                let n = Self::encode_term(op, *term, *index, buf)?;
                 n
             }
             Entry::Client {
@@ -1700,10 +1699,10 @@ where
                 id,
                 ceqno,
             } => {
-                let n = Self::encode_client(op, *term, *index, *id, *ceqno, buf);
+                let n = Self::encode_client(op, *term, *index, *id, *ceqno, buf)?;
                 n
             }
-        }
+        })
     }
 
     fn decode(&mut self, buf: &[u8]) -> Result<usize> {
@@ -1762,11 +1761,11 @@ where
         term: u64,
         index: u64,
         buf: &mut Vec<u8>,
-    ) -> usize {
+    ) -> Result<usize> {
         buf.extend_from_slice(&(EntryType::Term as u64).to_be_bytes());
         buf.extend_from_slice(&term.to_be_bytes());
         buf.extend_from_slice(&index.to_be_bytes());
-        24 + op.encode(buf)
+        Ok(24 + op.encode(buf)?)
     }
 
     fn decode_term(
@@ -1776,8 +1775,8 @@ where
         index: &mut u64,
     ) -> Result<usize> {
         util::check_remaining(buf, 24, "wal entry-term-hdr")?;
-        *term = u64::from_be_bytes(buf[8..16].try_into().unwrap());
-        *index = u64::from_be_bytes(buf[16..24].try_into().unwrap());
+        *term = u64::from_be_bytes(buf[8..16].try_into()?);
+        *index = u64::from_be_bytes(buf[16..24].try_into()?);
         Ok(24 + op.decode(&buf[24..])?)
     }
 }
@@ -1807,13 +1806,13 @@ where
         id: u64,
         ceqno: u64,
         buf: &mut Vec<u8>,
-    ) -> usize {
+    ) -> Result<usize> {
         buf.extend_from_slice(&(EntryType::Client as u64).to_be_bytes());
         buf.extend_from_slice(&term.to_be_bytes());
         buf.extend_from_slice(&index.to_be_bytes());
         buf.extend_from_slice(&id.to_be_bytes());
         buf.extend_from_slice(&ceqno.to_be_bytes());
-        40 + op.encode(buf)
+        Ok(40 + op.encode(buf)?)
     }
 
     fn decode_client(
@@ -1825,10 +1824,10 @@ where
         ceqno: &mut u64,
     ) -> Result<usize> {
         util::check_remaining(buf, 40, "wal entry-client-hdr")?;
-        *term = u64::from_be_bytes(buf[8..16].try_into().unwrap());
-        *index = u64::from_be_bytes(buf[16..24].try_into().unwrap());
-        *id = u64::from_be_bytes(buf[24..32].try_into().unwrap());
-        *ceqno = u64::from_be_bytes(buf[32..40].try_into().unwrap());
+        *term = u64::from_be_bytes(buf[8..16].try_into()?);
+        *index = u64::from_be_bytes(buf[16..24].try_into()?);
+        *id = u64::from_be_bytes(buf[24..32].try_into()?);
+        *ceqno = u64::from_be_bytes(buf[32..40].try_into()?);
         Ok(40 + op.decode(&buf[40..])?)
     }
 }
@@ -1942,7 +1941,7 @@ where
 
     fn op_type(buf: &[u8]) -> Result<OpType> {
         util::check_remaining(buf, 8, "wal op-type")?;
-        let hdr1 = u64::from_be_bytes(buf[..8].try_into().unwrap());
+        let hdr1 = u64::from_be_bytes(buf[..8].try_into()?);
         Ok(((hdr1 >> 32) & 0x00FFFFFF).into())
     }
 }
@@ -1952,21 +1951,21 @@ where
     K: Serialize,
     V: Serialize,
 {
-    fn encode(&self, buf: &mut Vec<u8>) -> usize {
-        match self {
+    fn encode(&self, buf: &mut Vec<u8>) -> Result<usize> {
+        Ok(match self {
             Op::Set { key, value } => {
-                let n = Self::encode_set(buf, key, value);
+                let n = Self::encode_set(buf, key, value)?;
                 n
             }
             Op::SetCAS { key, value, cas } => {
-                let n = Self::encode_set_cas(buf, key, value, *cas);
+                let n = Self::encode_set_cas(buf, key, value, *cas)?;
                 n
             }
             Op::Delete { key } => {
-                let n = Self::encode_delete(buf, key);
+                let n = Self::encode_delete(buf, key)?;
                 n
             }
-        }
+        })
     }
 
     fn decode(&mut self, buf: &[u8]) -> Result<usize> {
@@ -2023,28 +2022,28 @@ where
     K: Serialize,
     V: Serialize,
 {
-    fn encode_set(buf: &mut Vec<u8>, key: &K, value: &V) -> usize {
+    fn encode_set(buf: &mut Vec<u8>, key: &K, value: &V) -> Result<usize> {
         let n = buf.len();
         buf.resize(n + 16, 0);
 
-        let klen: u64 = key.encode(buf).try_into().unwrap();
+        let klen: u64 = key.encode(buf)?.try_into()?;
         let hdr1: u64 = ((OpType::Set as u64) << 32) | klen;
-        let vlen: u64 = value.encode(buf).try_into().unwrap();
+        let vlen: u64 = value.encode(buf)?.try_into()?;
 
         buf[n..n + 8].copy_from_slice(&hdr1.to_be_bytes());
         buf[n + 8..n + 16].copy_from_slice(&vlen.to_be_bytes());
 
-        (klen + vlen + 16).try_into().unwrap()
+        Ok((klen + vlen + 16).try_into()?)
     }
 
     fn decode_set(buf: &[u8], k: &mut K, v: &mut V) -> Result<usize> {
         let mut n = 16;
         let (klen, vlen) = {
             util::check_remaining(buf, 16, "wal op-set-hdr")?;
-            let hdr1 = u64::from_be_bytes(buf[..8].try_into().unwrap());
-            let klen: usize = (hdr1 & 0xFFFFFFFF).try_into().unwrap();
-            let vlen = u64::from_be_bytes(buf[8..16].try_into().unwrap());
-            let vlen: usize = vlen.try_into().unwrap();
+            let hdr1 = u64::from_be_bytes(buf[..8].try_into()?);
+            let klen: usize = (hdr1 & 0xFFFFFFFF).try_into()?;
+            let vlen = u64::from_be_bytes(buf[8..16].try_into()?);
+            let vlen: usize = vlen.try_into()?;
             (klen, vlen)
         };
 
@@ -2060,7 +2059,7 @@ where
             vlen
         };
 
-        Ok(n.try_into().unwrap())
+        Ok(n)
     }
 }
 
@@ -2091,19 +2090,19 @@ where
         key: &K,
         value: &V,
         cas: u64, // cas is seqno
-    ) -> usize {
+    ) -> Result<usize> {
         let n = buf.len();
         buf.resize(n + 24, 0);
 
-        let klen: u64 = key.encode(buf).try_into().unwrap();
+        let klen: u64 = key.encode(buf)?.try_into()?;
         let hdr1: u64 = ((OpType::SetCAS as u64) << 32) | klen;
-        let vlen: u64 = value.encode(buf).try_into().unwrap();
+        let vlen: u64 = value.encode(buf)?.try_into()?;
 
         buf[n..n + 8].copy_from_slice(&hdr1.to_be_bytes());
         buf[n + 8..n + 16].copy_from_slice(&vlen.to_be_bytes());
         buf[n + 16..n + 24].copy_from_slice(&cas.to_be_bytes());
 
-        (klen + vlen + 24).try_into().unwrap()
+        Ok((klen + vlen + 24).try_into()?)
     }
 
     fn decode_set_cas(
@@ -2115,11 +2114,11 @@ where
         let mut n = 24;
         let (klen, vlen, cas_seqno) = {
             util::check_remaining(buf, n, "wal op-setcas-hdr")?;
-            let hdr1 = u64::from_be_bytes(buf[..8].try_into().unwrap());
-            let klen: usize = (hdr1 & 0xFFFFFFFF).try_into().unwrap();
-            let vlen = u64::from_be_bytes(buf[8..16].try_into().unwrap());
-            let vlen: usize = vlen.try_into().unwrap();
-            let cas = u64::from_be_bytes(buf[16..24].try_into().unwrap());
+            let hdr1 = u64::from_be_bytes(buf[..8].try_into()?);
+            let klen: usize = (hdr1 & 0xFFFFFFFF).try_into()?;
+            let vlen = u64::from_be_bytes(buf[8..16].try_into()?);
+            let vlen: usize = vlen.try_into()?;
+            let cas = u64::from_be_bytes(buf[16..24].try_into()?);
             (klen, vlen, cas)
         };
         *cas = cas_seqno;
@@ -2136,7 +2135,7 @@ where
             vlen
         };
 
-        Ok(n.try_into().unwrap())
+        Ok(n)
     }
 }
 
@@ -2155,26 +2154,26 @@ where
     K: Serialize,
     V: Serialize,
 {
-    fn encode_delete(buf: &mut Vec<u8>, key: &K) -> usize {
+    fn encode_delete(buf: &mut Vec<u8>, key: &K) -> Result<usize> {
         let n = buf.len();
         buf.resize(n + 8, 0);
 
         let klen = {
-            let klen: u64 = key.encode(buf).try_into().unwrap();
+            let klen: u64 = key.encode(buf)?.try_into()?;
             let hdr1: u64 = ((OpType::Delete as u64) << 32) | klen;
             buf[n..n + 8].copy_from_slice(&hdr1.to_be_bytes());
             klen
         };
 
-        (klen + 8).try_into().unwrap()
+        Ok((klen + 8).try_into()?)
     }
 
     fn decode_delete(buf: &[u8], key: &mut K) -> Result<usize> {
         let mut n = 8;
         let klen: usize = {
             util::check_remaining(buf, n, "wal op-delete-hdr1")?;
-            let hdr1 = u64::from_be_bytes(buf[..n].try_into().unwrap());
-            (hdr1 & 0xFFFFFFFF).try_into().unwrap()
+            let hdr1 = u64::from_be_bytes(buf[..n].try_into()?);
+            (hdr1 & 0xFFFFFFFF).try_into()?
         };
 
         n += {
@@ -2183,7 +2182,7 @@ where
             klen
         };
 
-        Ok(n.try_into().unwrap())
+        Ok(n)
     }
 }
 

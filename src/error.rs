@@ -99,6 +99,20 @@ impl From<std::num::TryFromIntError> for Error {
     }
 }
 
+impl From<std::array::TryFromSliceError> for Error {
+    fn from(err: std::array::TryFromSliceError) -> Error {
+        let msg = format!("TryFromSliceError: {:?}", err);
+        Error::ConversionError(msg)
+    }
+}
+
+impl From<std::convert::Infallible> for Error {
+    fn from(err: std::convert::Infallible) -> Error {
+        let msg = format!("Infallible: {:?}", err);
+        Error::ConversionError(msg)
+    }
+}
+
 impl From<ffi::OsString> for Error {
     fn from(err: ffi::OsString) -> Error {
         Error::InvalidFile(format!("{:?}", err))

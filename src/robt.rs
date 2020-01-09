@@ -1724,25 +1724,25 @@ where
                 Ok(_) => (),
                 Err(Error::__ZBlockOverflow(_)) => {
                     // zbytes is z_blocksize
-                    let (zbytes, vbytes) = c.z.finalize(&mut self.stats);
+                    let (zbytes, vbytes) = c.z.finalize(&mut self.stats)?;
                     c.z.flush(&mut self.iflusher, self.vflusher.as_mut())?;
                     c.fpos += zbytes;
                     c.vfpos += vbytes;
 
                     let mut m = c.ms.pop().unwrap();
-                    match m.insertz(c.z.as_first_key(), c.zfpos) {
+                    match m.insertz(c.z.as_first_key()?, c.zfpos) {
                         Ok(_) => c.ms.push(m),
                         Err(Error::__MBlockOverflow(_)) => {
                             // x is m_blocksize
-                            let x = m.finalize(&mut self.stats);
+                            let x = m.finalize(&mut self.stats)?;
                             m.flush(&mut self.iflusher)?;
-                            let k = m.as_first_key();
+                            let k = m.as_first_key()?;
                             let r = self.insertms(c.ms, c.fpos + x, k, c.fpos)?;
                             c.ms = r.0;
                             c.fpos = r.1;
 
                             m.reset();
-                            m.insertz(c.z.as_first_key(), c.zfpos)?;
+                            m.insertz(c.z.as_first_key()?, c.zfpos)?;
                             c.ms.push(m)
                         }
                         Err(err) => return Err(err),
@@ -1761,24 +1761,24 @@ where
         // flush final z-block
         if c.z.has_first_key() {
             // println!(" flush final zblock: {:?}", c.z.as_first_key());
-            let (zbytes, vbytes) = c.z.finalize(&mut self.stats);
+            let (zbytes, vbytes) = c.z.finalize(&mut self.stats)?;
             c.z.flush(&mut self.iflusher, self.vflusher.as_mut())?;
             c.fpos += zbytes;
             c.vfpos += vbytes;
 
             let mut m = c.ms.pop().unwrap();
-            match m.insertz(c.z.as_first_key(), c.zfpos) {
+            match m.insertz(c.z.as_first_key()?, c.zfpos) {
                 Ok(_) => c.ms.push(m),
                 Err(Error::__MBlockOverflow(_)) => {
-                    let x = m.finalize(&mut self.stats);
+                    let x = m.finalize(&mut self.stats)?;
                     m.flush(&mut self.iflusher)?;
-                    let mkey = m.as_first_key();
+                    let mkey = m.as_first_key()?;
                     let res = self.insertms(c.ms, c.fpos + x, mkey, c.fpos)?;
                     c.ms = res.0;
                     c.fpos = res.1;
 
                     m.reset();
-                    m.insertz(c.z.as_first_key(), c.zfpos)?;
+                    m.insertz(c.z.as_first_key()?, c.zfpos)?;
                     c.ms.push(m);
                 }
                 Err(err) => return Err(err),
@@ -1792,14 +1792,14 @@ where
         while let Some(mut m) = c.ms.pop() {
             let is_root = m.has_first_key() && c.ms.len() == 0;
             if is_root {
-                let x = m.finalize(&mut self.stats);
+                let x = m.finalize(&mut self.stats)?;
                 m.flush(&mut self.iflusher)?;
                 c.fpos += x;
             } else if m.has_first_key() {
                 // x is m_blocksize
-                let x = m.finalize(&mut self.stats);
+                let x = m.finalize(&mut self.stats)?;
                 m.flush(&mut self.iflusher)?;
-                let mkey = m.as_first_key();
+                let mkey = m.as_first_key()?;
                 let res = self.insertms(c.ms, c.fpos + x, mkey, c.fpos)?;
                 c.ms = res.0;
                 c.fpos = res.1
@@ -1830,9 +1830,9 @@ where
                 Err(Error::__MBlockOverflow(_)) => {
                     // println!("overflow for {:?} {}", key, mfpos);
                     // x is m_blocksize
-                    let x = m0.finalize(&mut self.stats);
+                    let x = m0.finalize(&mut self.stats)?;
                     m0.flush(&mut self.iflusher)?;
-                    let mkey = m0.as_first_key();
+                    let mkey = m0.as_first_key()?;
                     let res = self.insertms(ms, fpos + x, mkey, fpos)?;
                     ms = res.0;
                     fpos = res.1;

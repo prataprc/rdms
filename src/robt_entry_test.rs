@@ -20,7 +20,7 @@ fn test_mentry() {
     assert_eq!(MEntry::<i32>::decode_key(&buf).unwrap(), 100);
     assert_eq!(me.is_zblock(), false);
     let index = 0x987;
-    match MEntry::<i32>::decode_entry(&buf, index) {
+    match MEntry::<i32>::decode_entry(&buf, index).unwrap() {
         MEntry::DecM { fpos, index } => {
             assert_eq!(fpos, 0x1234567);
             assert_eq!(index, 0x987);
@@ -46,7 +46,7 @@ fn test_mentry() {
     assert_eq!(MEntry::<i32>::decode_key(&buf).unwrap(), 100);
     assert_eq!(me.is_zblock(), true);
     let index = 0x987;
-    match MEntry::<i32>::decode_entry(&buf, index) {
+    match MEntry::<i32>::decode_entry(&buf, index).unwrap() {
         MEntry::DecZ { fpos, index } => {
             assert_eq!(fpos, 0x1234567);
             assert_eq!(index, 0x987);
@@ -80,7 +80,7 @@ fn test_disk_delta() {
     assert_eq!(blob, blob_ref);
 
     // test re-encode
-    DiskDelta::<i32>::re_encode_fpos(&mut leaf, 0x1234);
+    DiskDelta::<i32>::re_encode_fpos(&mut leaf, 0x1234).unwrap();
     let leaf_ref = vec![
         0x10, 0, 0, 0, 0, 0, 0x00, 0x0c, // dlen
         0x00, 0, 0, 0, 0, 0, 0x00, 0x65, // seqno
@@ -168,7 +168,7 @@ fn test_zentry_header() {
     let mut leaf = vec![];
     for (k, d, v, del, vlog, seqno, ref_out) in test_cases.into_iter() {
         leaf.resize(24, 0);
-        ZEntry::<i32, i32>::encode_header(k, d, v, del, vlog, seqno, &mut leaf);
+        ZEntry::<i32, i32>::encode_header(k, d, v, del, vlog, seqno, &mut leaf).unwrap();
         assert_eq!(leaf, ref_out);
         leaf.truncate(0);
     }
@@ -384,7 +384,7 @@ fn test_zentry_ld() {
     }
 
     // re-encode fpos
-    ze.re_encode_fpos(&mut leaf, 100);
+    ze.re_encode_fpos(&mut leaf, 100).unwrap();
     let leaf_ref = vec![
         0x00, 0, 0, 4, 0, 0, 0x00, 0x03, // klen + n_deltas
         0x10, 0, 0, 0, 0, 0, 0x00, 0x04, // vlen
@@ -474,7 +474,7 @@ fn test_zentry_lv() {
     }
 
     // re-encode fpos
-    ze.re_encode_fpos(&mut leaf, 200);
+    ze.re_encode_fpos(&mut leaf, 200).unwrap();
     let leaf_ref = vec![
         0x00, 0, 0, 4, 0, 0, 0x00, 0x00, // klen + n_deltas
         0x30, 0, 0, 0, 0, 0, 0x00, 0x0c, // vlen
@@ -595,7 +595,7 @@ fn test_zentry_lvd() {
     }
 
     // re-encode fpos
-    ze.re_encode_fpos(&mut leaf, 200);
+    ze.re_encode_fpos(&mut leaf, 200).unwrap();
     let leaf_ref = vec![
         0x00, 0, 0, 4, 0, 0, 0x00, 0x03, // klen + n_deltas
         0x30, 0, 0, 0, 0, 0, 0x00, 0x0c, // vlen

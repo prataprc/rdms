@@ -26,9 +26,9 @@ fn test_mblock_m() {
         }
         assert_eq!(mb.has_first_key(), true);
     }
-    assert_eq!(keys[0].0, *mb.as_first_key());
+    assert_eq!(keys[0].0, *mb.as_first_key().unwrap());
 
-    let m_bytes = mb.finalize(&mut stats);
+    let m_bytes = mb.finalize(&mut stats).unwrap();
     assert_eq!(m_bytes, 4096);
     assert_eq!(stats.val_mem, 0);
     assert_eq!(stats.key_mem, 0);
@@ -151,9 +151,9 @@ fn test_mblock_z() {
         }
         assert_eq!(mb.has_first_key(), true);
     }
-    assert_eq!(keys[0].0, *mb.as_first_key());
+    assert_eq!(keys[0].0, *mb.as_first_key().unwrap());
 
-    let m_bytes = mb.finalize(&mut stats);
+    let m_bytes = mb.finalize(&mut stats).unwrap();
     assert_eq!(m_bytes, 4096);
     assert_eq!(stats.val_mem, 0);
     assert_eq!(stats.key_mem, 0);
@@ -268,7 +268,7 @@ fn test_zblock1() {
             val_mem += 4;
         }
     }
-    assert_eq!(entries[0].as_key(), zb.as_first_key());
+    assert_eq!(entries[0].as_key(), zb.as_first_key().unwrap());
     assert_eq!(stats.val_mem, val_mem);
     assert_eq!(stats.key_mem, entries.len() * 4);
     assert_eq!(stats.diff_mem, 0);
@@ -277,7 +277,7 @@ fn test_zblock1() {
     assert_eq!(stats.z_bytes, 0);
     assert_eq!(stats.v_bytes, 0);
 
-    let (z_bytes, v_bytes) = zb.finalize(&mut stats);
+    let (z_bytes, v_bytes) = zb.finalize(&mut stats).unwrap();
     assert_eq!(z_bytes, 4096);
     assert_eq!(v_bytes, 0);
     assert_eq!(stats.val_mem, val_mem);
@@ -375,7 +375,7 @@ fn test_zblock2() {
             .sum();
         diff_mem += dmem;
     }
-    assert_eq!(entries[0].as_key(), zb.as_first_key());
+    assert_eq!(entries[0].as_key(), zb.as_first_key().unwrap());
     assert_eq!(stats.val_mem, val_mem);
     assert_eq!(stats.key_mem, entries.len() * 4);
     assert_eq!(stats.diff_mem, diff_mem);
@@ -384,7 +384,7 @@ fn test_zblock2() {
     assert_eq!(stats.z_bytes, 0);
     assert_eq!(stats.v_bytes, 0);
 
-    let (z_bytes, v_bytes) = zb.finalize(&mut stats);
+    let (z_bytes, v_bytes) = zb.finalize(&mut stats).unwrap();
     assert_eq!(z_bytes, 4096);
     assert_eq!(v_bytes, diff_mem as u64);
     assert_eq!(stats.val_mem, val_mem);
@@ -490,7 +490,7 @@ fn test_zblock3() {
             val_mem += 12;
         }
     }
-    assert_eq!(entries[0].as_key(), zb.as_first_key());
+    assert_eq!(entries[0].as_key(), zb.as_first_key().unwrap());
     assert_eq!(stats.val_mem, val_mem);
     assert_eq!(stats.key_mem, entries.len() * 4);
     assert_eq!(stats.diff_mem, 0);
@@ -499,7 +499,7 @@ fn test_zblock3() {
     assert_eq!(stats.z_bytes, 0);
     assert_eq!(stats.v_bytes, 0);
 
-    let (z_bytes, v_bytes) = zb.finalize(&mut stats);
+    let (z_bytes, v_bytes) = zb.finalize(&mut stats).unwrap();
     assert_eq!(z_bytes, 4096);
     assert_eq!(v_bytes, val_mem as u64);
     assert_eq!(stats.val_mem, val_mem);
@@ -599,7 +599,7 @@ fn test_zblock4() {
             .sum();
         diff_mem += dmem;
     }
-    assert_eq!(entries[0].as_key(), zb.as_first_key());
+    assert_eq!(entries[0].as_key(), zb.as_first_key().unwrap());
     assert_eq!(stats.val_mem, val_mem);
     assert_eq!(stats.key_mem, entries.len() * 4);
     assert_eq!(stats.diff_mem, diff_mem);
@@ -608,7 +608,7 @@ fn test_zblock4() {
     assert_eq!(stats.z_bytes, 0);
     assert_eq!(stats.v_bytes, 0);
 
-    let (z_bytes, v_bytes) = zb.finalize(&mut stats);
+    let (z_bytes, v_bytes) = zb.finalize(&mut stats).unwrap();
     assert_eq!(z_bytes, 4096);
     assert_eq!(v_bytes, (diff_mem + val_mem) as u64);
     assert_eq!(stats.val_mem, val_mem);

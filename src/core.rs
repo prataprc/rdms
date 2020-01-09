@@ -220,16 +220,16 @@ where
     type O: From<ffi::OsString>;
 
     /// Return the name of the index.
-    fn to_name(&self) -> String;
+    fn to_name(&self) -> Result<String>;
 
     /// Applicable only to disk index, identifies the index's master file.
-    fn to_root(&self) -> Self::O;
+    fn to_root(&self) -> Result<Self::O>;
 
     /// Return application metadata, that was previously commited into index.
     fn to_metadata(&self) -> Result<Vec<u8>>;
 
     /// Return the current seqno tracked by this index.
-    fn to_seqno(&self) -> u64;
+    fn to_seqno(&self) -> Result<u64>;
 
     /// Application can set the start sequence number for this index.
     fn set_seqno(&mut self, seqno: u64);

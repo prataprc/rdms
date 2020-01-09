@@ -394,29 +394,29 @@ where
     type W = Panic;
     type O = ffi::OsString;
 
-    fn to_name(&self) -> String {
-        let inner = self.as_inner().unwrap();
+    fn to_name(&self) -> Result<String> {
+        let inner = self.as_inner()?;
         let name = match inner.deref() {
             InnerRobt::Build { name, .. } => name.clone(),
             InnerRobt::Snapshot { name, .. } => name.clone(),
         };
-        let parts: (String, usize) = TryFrom::try_from(name).unwrap();
-        parts.0 // just the name as passed to new().
+        let parts: (String, usize) = TryFrom::try_from(name)?;
+        Ok(parts.0) // just the name as passed to new().
     }
 
-    fn to_root(&self) -> Self::O {
-        let inner = self.as_inner().unwrap();
+    fn to_root(&self) -> Result<Self::O> {
+        let inner = self.as_inner()?;
         let name: Name = match inner.deref() {
             InnerRobt::Build { name, .. } => name.clone(),
             InnerRobt::Snapshot { name, .. } => name.clone(),
         };
 
         let index_file: IndexFileName = name.into();
-        index_file.into()
+        Ok(index_file.into())
     }
 
     fn to_metadata(&self) -> Result<Vec<u8>> {
-        let inner = self.as_inner().unwrap();
+        let inner = self.as_inner()?;
         match inner.deref() {
             InnerRobt::Snapshot { meta, .. } => {
                 if let MetaItem::AppMetadata(data) = &meta[2] {
@@ -430,10 +430,10 @@ where
     }
 
     /// Return the current seqno tracked by this index.
-    fn to_seqno(&self) -> u64 {
-        let inner = self.as_inner().unwrap();
+    fn to_seqno(&self) -> Result<u64> {
+        let inner = self.as_inner()?;
         match inner.deref() {
-            InnerRobt::Snapshot { stats, .. } => stats.seqno,
+            InnerRobt::Snapshot { stats, .. } => Ok(stats.seqno),
             InnerRobt::Build { .. } => unreachable!(),
         }
     }
@@ -744,14 +744,14 @@ where
         let inner = self.as_inner()?;
         match inner.deref() {
             InnerRobt::Snapshot { dir, name, .. } => {
-                let mut snapshot = Arc::new(Snapshot::<K, V, B>::open(dir, &name.0)?);
-                let snap = unsafe {
-                    (Arc::get_mut(&mut snapshot).unwrap() as *mut Snapshot<K, V, B>)
+                let mut ss = Arc::new(Snapshot::<K, V, B>::open(dir, &name.0)?);
+                let s = unsafe {
+                    (Arc::get_mut(&mut ss).unwrap() as *mut Snapshot<K, V, B>)
                         .as_mut()
                         .unwrap()
                 };
 
-                let iter = SnapshotScan::new(snapshot, vec![snap.iter_with_versions()?]);
+                let iter = SnapshotScan::new(ss, vec![s.iter_with_versions()?]);
                 Ok(Box::new(FilterScan::new(iter, within)))
             }
             InnerRobt::Build { .. } => {
@@ -768,26 +768,22 @@ where
         let inner = self.as_inner()?;
         match inner.deref() {
             InnerRobt::Snapshot { dir, name, .. } => {
-                let mut snapshot = Arc::new(Snapshot::<K, V, B>::open(dir, &name.0)?);
+                let mut ss = Arc::new(Snapshot::<K, V, B>::open(dir, &name.0)?);
 
-                let ranges = Arc::get_mut(&mut snapshot).unwrap().do_shards(shards)?;
-
+                let ranges = Arc::get_mut(&mut ss).unwrap().do_shards(shards)?;
                 let mut mut_snaps = vec![];
                 for _ in 0..ranges.len() {
                     mut_snaps.push(unsafe {
-                        (Arc::get_mut(&mut snapshot).unwrap() as *mut Snapshot<K, V, B>)
+                        (Arc::get_mut(&mut ss).unwrap() as *mut Snapshot<K, V, B>)
                             .as_mut()
                             .unwrap()
-                    })
+                    });
                 }
 
                 let mut iters = vec![];
                 for (range, snap) in ranges.into_iter().zip(mut_snaps.into_iter()) {
                     let iter: IndexIter<K, V> = Box::new(FilterScan::new(
-                        SnapshotScan::new(
-                            Arc::clone(&snapshot),
-                            vec![snap.range_with_versions(range)?],
-                        ),
+                        SnapshotScan::new(Arc::clone(&ss), vec![snap.range_with_versions(range)?]),
                         within.clone(),
                     ));
                     iters.push(iter)
@@ -2411,6 +2407,7 @@ impl<K, V, B> Snapshot<K, V, B>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
     B: Bloom,
 {
     fn to_bitmap(&self) -> Result<B> {
@@ -2420,6 +2417,56 @@ where
             let msg = "robt snapshot app-bitmap missing".to_string();
             Err(Error::InvalidSnapshot(msg))
         }
+    }
+
+    fn do_shards(&mut self, shards: usize) -> Result<Vec<(Bound<K>, Bound<K>)>> {
+        let m_blocksize = self.config.m_blocksize;
+        let fpos = self.to_root().unwrap();
+
+        let mblock = MBlock::<K, V>::new_decode(self.index_fd.read_buffer(
+            fpos,
+            m_blocksize,
+            "do_shards, reading root",
+        )?)?;
+
+        let mut keys = vec![];
+        let mut lk = Bound::<K>::Unbounded;
+        for index in 0..mblock.len() {
+            let mentry = mblock.to_entry(index)?;
+
+            if mentry.is_zblock() {
+                continue;
+            }
+
+            let mblock1 = MBlock::<K, V>::new_decode(self.index_fd.read_buffer(
+                mentry.to_fpos(),
+                m_blocksize,
+                "do_shards, reading mblock",
+            )?)?;
+
+            for index in 0..mblock1.len() {
+                let hk = mblock1.to_key(index)?;
+                let range = (lk.clone(), Bound::Excluded(hk.clone()));
+                if self.range(range)?.next().is_none() {
+                    continue;
+                }
+
+                keys.push((lk, Bound::Excluded(hk.clone())));
+                lk = Bound::Included(hk);
+            }
+        }
+        keys.push((lk, Bound::<K>::Unbounded));
+
+        let mut partitions = vec![];
+        for part in util::as_sharded_array(&keys, shards) {
+            if part.len() == 0 {
+                continue;
+            }
+            let (lk, _) = part.first().unwrap();
+            let (_, hk) = part.last().unwrap();
+            partitions.push((lk.clone(), hk.clone()));
+        }
+        Ok(partitions)
     }
 }
 
@@ -2714,51 +2761,6 @@ where
         } else {
             self.last_zfpos(mentry.to_fpos())
         }
-    }
-
-    fn do_shards(&mut self, shards: usize) -> Result<Vec<(Bound<K>, Bound<K>)>> {
-        let m_blocksize = self.config.m_blocksize;
-        let fpos = self.to_root().unwrap();
-
-        let mblock = MBlock::<K, V>::new_decode(self.index_fd.read_buffer(
-            fpos,
-            m_blocksize,
-            "do_shards, reading root",
-        )?)?;
-
-        let mut keys = vec![];
-        let mut lk = Bound::<K>::Unbounded;
-        for index in 0..mblock.len() {
-            let mentry = mblock.to_entry(index)?;
-
-            if mentry.is_zblock() {
-                continue;
-            }
-
-            let mblock1 = MBlock::<K, V>::new_decode(self.index_fd.read_buffer(
-                mentry.to_fpos(),
-                m_blocksize,
-                "do_shards, reading mblock",
-            )?)?;
-
-            for index in 0..mblock1.len() {
-                let hk = mblock1.to_key(index)?;
-                keys.push((lk, Bound::Excluded(hk.clone())));
-                lk = Bound::Included(hk);
-            }
-        }
-        keys.push((lk, Bound::<K>::Unbounded));
-
-        let mut partitions = vec![];
-        for part in util::as_sharded_array(&keys, shards) {
-            if part.len() == 0 {
-                continue;
-            }
-            let (lk, _) = part.first().unwrap();
-            let (_, hk) = part.last().unwrap();
-            partitions.push((lk.clone(), hk.clone()));
-        }
-        Ok(partitions)
     }
 
     fn get_zpos<Q>(&mut self, key: &Q, fpos: u64) -> Result<u64>

@@ -60,6 +60,8 @@ pub enum Error {
     ThreadFail(String),
     /// On disk snapshot is invalid.
     InvalidSnapshot(String),
+    /// Execution flow entered into an un-expected situation.
+    UnexpectedFail(String),
     /// Inter-Process-Communication error from std::mpsc
     IPCFail(String),
     /// Invalid WAL

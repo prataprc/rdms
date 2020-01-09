@@ -77,20 +77,20 @@ where
     type W = Panic;
     type O = Empty;
 
-    fn to_name(&self) -> String {
-        "no-disk mama !!".to_string()
+    fn to_name(&self) -> Result<String> {
+        Ok("no-disk mama !!".to_string())
     }
 
-    fn to_root(&self) -> Empty {
-        Empty
+    fn to_root(&self) -> Result<Empty> {
+        Ok(Empty)
     }
 
     fn to_metadata(&self) -> Result<Vec<u8>> {
         Ok(vec![])
     }
 
-    fn to_seqno(&self) -> u64 {
-        0
+    fn to_seqno(&self) -> Result<u64> {
+        Ok(0)
     }
 
     fn set_seqno(&mut self, _seqno: u64) {

@@ -502,12 +502,12 @@ where
     type O = Empty;
 
     #[inline]
-    fn to_name(&self) -> String {
-        self.as_ref().to_name()
+    fn to_name(&self) -> Result<String> {
+        Ok(self.as_ref().to_name())
     }
 
     #[inline]
-    fn to_root(&self) -> Empty {
+    fn to_root(&self) -> Result<Empty> {
         self.as_ref().to_root()
     }
 
@@ -517,7 +517,7 @@ where
     }
 
     #[inline]
-    fn to_seqno(&self) -> u64 {
+    fn to_seqno(&self) -> Result<u64> {
         self.as_ref().to_seqno()
     }
 
@@ -563,21 +563,21 @@ where
     type R = LlrbReader<K, V>;
     type O = Empty;
 
-    fn to_name(&self) -> String {
-        self.name.clone()
+    fn to_name(&self) -> Result<String> {
+        Ok(self.name.clone())
     }
 
-    fn to_root(&self) -> Empty {
-        Empty
+    fn to_root(&self) -> Result<Empty> {
+        Ok(Empty)
     }
 
     fn to_metadata(&self) -> Result<Vec<u8>> {
         Ok(vec![])
     }
 
-    fn to_seqno(&self) -> u64 {
+    fn to_seqno(&self) -> Result<u64> {
         let _latch = self.latch.acquire_read(self.spin);
-        self.seqno
+        Ok(self.seqno)
     }
 
     fn set_seqno(&mut self, seqno: u64) {
@@ -647,10 +647,10 @@ where
             Bound::Unbounded => {
                 warn!(target: "llrb  ", "compact with unbounded cutoff");
             }
-            Bound::Included(seqno) if seqno >= self.to_seqno() => {
+            Bound::Included(seqno) if seqno >= self.to_seqno()? => {
                 warn!(target: "llrb  ", "compact cutsoff the entire index {}", seqno);
             }
-            Bound::Excluded(seqno) if seqno > self.to_seqno() => {
+            Bound::Excluded(seqno) if seqno > self.to_seqno()? => {
                 warn!(target: "llrb  ", "compact cutsoff the entire index {}", seqno);
             }
             _ => (),

@@ -607,7 +607,7 @@ fn test_commit_iterator_scan() {
 #[test]
 fn test_commit_iterator_scans() {
     let seed: u128 = random();
-    // let seed: u128 = 329574334243588244341656545742438834233;
+    let seed: u128 = 35667521011555069800221219023406283992;
     println!("seed:{}", seed);
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 

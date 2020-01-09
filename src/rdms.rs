@@ -95,8 +95,8 @@ where
     V: Clone + Diff + Footprint,
     I: Index<K, V>,
 {
-    pub fn to_name(&self) -> String {
-        self.name.to_string()
+    pub fn to_name(&self) -> Result<String> {
+        Ok(self.name.to_string())
     }
 
     pub fn to_metadata(&self) -> Result<Vec<u8>> {
@@ -104,7 +104,7 @@ where
         index.to_metadata()
     }
 
-    pub fn to_seqno(&self) -> u64 {
+    pub fn to_seqno(&self) -> Result<u64> {
         let index = self.index.lock().unwrap();
         index.to_seqno()
     }

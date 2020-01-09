@@ -103,14 +103,15 @@ where
                     vlen
                 };
 
-                let mut hdr1: u64 = vlen.try_into().unwrap();
+                let mut hdr1: u64 = vlen.try_into()?;
                 hdr1 |= Value::<V>::VALUE_FLAG;
                 buf[m..m + 8].copy_from_slice(&hdr1.to_be_bytes());
 
                 Ok((None, vlen + 8))
             }
             Value::Reference { fpos, length, .. } => {
-                Ok((Some(*fpos), (*length).try_into().unwrap()))
+                let length: usize = (*length).try_into()?;
+                Ok((Some(*fpos), length))
             }
         }
     }
@@ -231,7 +232,7 @@ where
                     dlen
                 };
 
-                let hdr1: u64 = dlen.try_into().unwrap();
+                let hdr1: u64 = dlen.try_into()?;
                 buf[m..m + 8].copy_from_slice(&hdr1.to_be_bytes());
 
                 Ok(dlen + 8)

@@ -72,6 +72,8 @@ pub enum Error {
     JsonError(jsondata::Error),
     /// String conversion error from std::String, str::str
     Utf8Error(std::str::Utf8Error),
+    /// Error converting from one type to another.
+    ConversionError(String),
     // internal error, given key is less than the entire data set.
     __LessThan,
     // internal error, z-block of robt index has overflowed.
@@ -87,6 +89,13 @@ pub enum Error {
 impl From<io::Error> for Error {
     fn from(err: io::Error) -> Error {
         Error::IoError(err)
+    }
+}
+
+impl From<std::num::TryFromIntError> for Error {
+    fn from(err: std::num::TryFromIntError) -> Error {
+        let msg = format!("TryFromIntError: {:?}", err);
+        Error::ConversionError(msg)
     }
 }
 

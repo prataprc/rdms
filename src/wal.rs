@@ -81,6 +81,9 @@ use crate::{
     {error::Error, util},
 };
 
+// TODO: replace unwrap() and ok() with error handling.
+// TODO: replace `as` conversion to try_into() conversion.
+
 include!("wal_marker.rs");
 
 // default node name.
@@ -358,6 +361,7 @@ where
         // when close() was called on WAL or Writer, or due panic or error.
         while let Some(tx) = self.shards.pop() {
             // ignore if send returns an error
+            // TODO: log error here.
             tx.send(OpRequest::new_close()).ok();
         }
         // wait for the threads to exit.

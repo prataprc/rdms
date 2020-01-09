@@ -423,7 +423,7 @@ fn test_build_scan() {
             assert!(iter.next().is_none());
             stats
         };
-        assert_eq!(stats.seqno, llrb.to_seqno());
+        assert_eq!(stats.seqno, llrb.to_seqno().unwrap());
         assert_eq!(stats.n_count as usize, llrb.to_stats().entries);
         assert_eq!(stats.n_deleted, llrb.to_stats().n_deleted);
     }
@@ -476,7 +476,7 @@ fn test_commit_scan() {
         let mut snap2 = {
             let (n_ops, key_max, config) = (30_000_i64, 20_000, config.clone());
             let mut llrb_snap: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
-            llrb_snap.set_seqno(llrb.to_seqno());
+            llrb_snap.set_seqno(llrb.to_seqno().unwrap());
             random_llrb(n_ops, key_max, seed + (i + 1) * 20, &mut llrb_snap);
             let es: Vec<Result<Entry<i64, i64>>> = llrb_snap
                 .iter()
@@ -607,7 +607,7 @@ fn test_commit_iterator_scan() {
 #[test]
 fn test_commit_iterator_scans() {
     let seed: u128 = random();
-    let seed: u128 = 35667521011555069800221219023406283992;
+    // let seed: u128 = 35667521011555069800221219023406283992;
     println!("seed:{}", seed);
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
@@ -826,8 +826,8 @@ fn run_robt_llrb(name: &str, n_ops: u64, key_max: i64, repeat: usize, seed: u128
         let mut snap = robt::Snapshot::<i64, i64, CRoaring>::open(&dir, name).unwrap();
         snap.validate().unwrap();
         snap.set_mmap(mmap).unwrap();
-        assert_eq!(snap.len(), refs.len());
-        assert_eq!(snap.to_seqno(), llrb.to_seqno());
+        assert_eq!(snap.len().unwrap(), refs.len());
+        assert_eq!(snap.to_seqno().unwrap(), llrb.to_seqno().unwrap());
         assert_eq!(snap.to_app_meta().unwrap(), app_meta.as_bytes().to_vec());
         let stats = snap.to_stats().unwrap();
         assert_eq!(stats.z_blocksize, config.z_blocksize);

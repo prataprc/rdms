@@ -28,28 +28,28 @@ fn test_lsm_get1() {
     let (n_ops, key_max) = random_ops_keys(seed, 600, 200);
     println!("mvcc2 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc2: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc2");
-    mvcc2.set_seqno(mvcc1.to_seqno());
+    mvcc2.set_seqno(mvcc1.to_seqno().unwrap());
     random_mvcc(n_ops, key_max, seed, &mut mvcc2, &mut refi);
 
     let (n_ops, key_max) = random_ops_keys(seed, 6_000, 2_000);
     println!("mvcc3 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc3: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc3");
-    mvcc3.set_seqno(mvcc2.to_seqno());
+    mvcc3.set_seqno(mvcc2.to_seqno().unwrap());
     random_mvcc(n_ops, key_max, seed, &mut mvcc3, &mut refi);
 
     let (n_ops, key_max) = random_ops_keys(seed, 60_000, 20_000);
     println!("mvcc4 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc4: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc4");
-    mvcc4.set_seqno(mvcc3.to_seqno());
+    mvcc4.set_seqno(mvcc3.to_seqno().unwrap());
     random_mvcc(n_ops, key_max, seed, &mut mvcc4, &mut refi);
 
     let (n_ops, key_max) = random_ops_keys(seed, 600_000, 200_000);
     println!("mvcc5 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc5: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc5");
-    mvcc5.set_seqno(mvcc4.to_seqno());
+    mvcc5.set_seqno(mvcc4.to_seqno().unwrap());
     random_mvcc(n_ops, key_max, seed, &mut mvcc5, &mut refi);
 
-    let seqno = mvcc5.to_seqno();
+    let seqno = mvcc5.to_seqno().unwrap();
 
     {
         let mut yget = y_get(
@@ -114,7 +114,10 @@ fn test_lsm_get2() {
     let (name, delta_ok) = ("test_lsm_get2-2", false);
     let mut disk2 = {
         let mut iter = Box::new(SkipScan::new(llrb.to_reader().unwrap()));
-        iter.set_seqno_range((Bound::Excluded(disk1.to_seqno()), Bound::<u64>::Unbounded));
+        iter.set_seqno_range((
+            Bound::Excluded(disk1.to_seqno().unwrap()),
+            Bound::<u64>::Unbounded,
+        ));
         random_robt(name, seed, delta_ok, iter)
     };
     println!("disk2 n_ops: {} key_max: {}", n_ops, key_max);
@@ -125,7 +128,7 @@ fn test_lsm_get2() {
     random_mvcc(n_ops, key_max, seed, mvcc.as_mut(), &mut refi);
     println!("mvcc n_ops: {} key_max: {}", n_ops, key_max);
 
-    let seqno = mvcc.to_seqno();
+    let seqno = mvcc.to_seqno().unwrap();
     let w = mvcc.to_writer().unwrap();
     let r = mvcc.to_reader().unwrap();
     let t_handle = {
@@ -175,29 +178,29 @@ fn test_lsm_get_versions1() {
     let (n_ops, key_max) = random_ops_keys(seed, 600, 200);
     println!("mvcc2 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc2: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc2");
-    mvcc2.set_seqno(mvcc1.to_seqno());
+    mvcc2.set_seqno(mvcc1.to_seqno().unwrap());
     random_mvcc(n_ops, key_max, seed, &mut mvcc2, &mut refi);
 
     let (n_ops, key_max) = random_ops_keys(seed, 6_000, 2_000);
     println!("mvcc3 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc3: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc3");
-    mvcc3.set_seqno(mvcc2.to_seqno());
+    mvcc3.set_seqno(mvcc2.to_seqno().unwrap());
     random_mvcc(n_ops, key_max, seed, &mut mvcc3, &mut refi);
 
     let (n_ops, key_max) = random_ops_keys(seed, 60_000, 20_000);
     println!("mvcc4 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc4: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc4");
-    mvcc4.set_seqno(mvcc3.to_seqno());
+    mvcc4.set_seqno(mvcc3.to_seqno().unwrap());
     random_mvcc(n_ops, key_max, seed, &mut mvcc4, &mut refi);
 
     let (n_ops, key_max) = random_ops_keys(seed, 600_000, 200_000);
     let n_ops = n_ops + 1;
     println!("mvcc5 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc5: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc5");
-    mvcc5.set_seqno(mvcc4.to_seqno());
+    mvcc5.set_seqno(mvcc4.to_seqno().unwrap());
     random_mvcc(n_ops, key_max, seed, &mut mvcc5, &mut refi);
 
-    let seqno = mvcc5.to_seqno();
+    let seqno = mvcc5.to_seqno().unwrap();
 
     {
         let mut yget = y_get_versions(
@@ -266,7 +269,7 @@ fn test_lsm_get_versions2() {
         iter.set_seqno_range((Bound::<u64>::Unbounded, Bound::<u64>::Unbounded));
         random_robt(name, seed, delta_ok, iter)
     };
-    let d1_seqno = disk1.to_seqno();
+    let d1_seqno = disk1.to_seqno().unwrap();
     println!(
         "disk1 n_ops:{} key_max:{} seqno:{}",
         n_ops, key_max, d1_seqno
@@ -281,7 +284,7 @@ fn test_lsm_get_versions2() {
         iter.set_seqno_range((Bound::Excluded(d1_seqno), Bound::<u64>::Unbounded));
         random_robt(name, seed, delta_ok, iter)
     };
-    let d2_seqno = disk2.to_seqno();
+    let d2_seqno = disk2.to_seqno().unwrap();
     println!(
         "disk2 n_ops:{} key_max:{} seqno:{}",
         n_ops, key_max, d2_seqno
@@ -293,7 +296,7 @@ fn test_lsm_get_versions2() {
     random_mvcc(n_ops, key_max, seed, mvcc.as_mut(), &mut refi);
     println!("mvcc n_ops: {} key_max: {}", n_ops, key_max);
 
-    let seqno = mvcc.to_seqno();
+    let seqno = mvcc.to_seqno().unwrap();
     let w = mvcc.to_writer().unwrap();
     let r = mvcc.to_reader().unwrap();
     let t_handle = {
@@ -354,28 +357,28 @@ fn test_lsm_iter1() {
     let (n_ops, key_max) = random_ops_keys(seed, 600, 200);
     println!("mvcc2 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc2: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc2");
-    mvcc2.set_seqno(mvcc1.to_seqno());
+    mvcc2.set_seqno(mvcc1.to_seqno().unwrap());
     random_mvcc(n_ops, key_max, seed, &mut mvcc2, &mut refi);
 
     let (n_ops, key_max) = random_ops_keys(seed, 6_000, 2_000);
     println!("mvcc3 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc3: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc3");
-    mvcc3.set_seqno(mvcc2.to_seqno());
+    mvcc3.set_seqno(mvcc2.to_seqno().unwrap());
     random_mvcc(n_ops, key_max, seed, &mut mvcc3, &mut refi);
 
     let (n_ops, key_max) = random_ops_keys(seed, 60_000, 20_000);
     println!("mvcc4 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc4: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc4");
-    mvcc4.set_seqno(mvcc3.to_seqno());
+    mvcc4.set_seqno(mvcc3.to_seqno().unwrap());
     random_mvcc(n_ops, key_max, seed, &mut mvcc4, &mut refi);
 
     let (n_ops, key_max) = random_ops_keys(seed, 600_000, 200_000);
     println!("mvcc5 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc5: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc5");
-    mvcc5.set_seqno(mvcc4.to_seqno());
+    mvcc5.set_seqno(mvcc4.to_seqno().unwrap());
     random_mvcc(n_ops, key_max, seed, &mut mvcc5, &mut refi);
 
-    let seqno = mvcc5.to_seqno();
+    let seqno = mvcc5.to_seqno().unwrap();
 
     let revr = false;
     let yiter = y_iter(
@@ -433,7 +436,7 @@ fn test_lsm_iter2() {
         iter.set_seqno_range((Bound::<u64>::Unbounded, Bound::<u64>::Unbounded));
         random_robt(name, seed, delta_ok, iter)
     };
-    let d1_seqno = disk1.to_seqno();
+    let d1_seqno = disk1.to_seqno().unwrap();
     println!(
         "disk1 n_ops:{} key_max:{} seqno:{}",
         n_ops, key_max, d1_seqno
@@ -449,7 +452,7 @@ fn test_lsm_iter2() {
         random_robt(name, seed, delta_ok, iter)
     };
     println!("disk2 n_ops: {} key_max: {}", n_ops, key_max);
-    let d2_seqno = disk2.to_seqno();
+    let d2_seqno = disk2.to_seqno().unwrap();
 
     assert!(llrb.validate().is_ok());
     let (n_ops, key_max) = random_ops_keys(seed, 200_000, 60_000);
@@ -457,7 +460,7 @@ fn test_lsm_iter2() {
     random_mvcc(n_ops, key_max, seed, mvcc.as_mut(), &mut refi);
     println!("mvcc n_ops: {} key_max: {}", n_ops, key_max);
 
-    let seqno = mvcc.to_seqno();
+    let seqno = mvcc.to_seqno().unwrap();
     let w = mvcc.to_writer().unwrap();
     let r = mvcc.to_reader().unwrap();
     let t_handle = {
@@ -514,29 +517,29 @@ fn test_lsm_iter_versions1() {
     let (n_ops, key_max) = random_ops_keys(seed, 600, 200);
     println!("mvcc2 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc2: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc2");
-    mvcc2.set_seqno(mvcc1.to_seqno());
+    mvcc2.set_seqno(mvcc1.to_seqno().unwrap());
     random_mvcc(n_ops, key_max, seed, &mut mvcc2, &mut refi);
 
     let (n_ops, key_max) = random_ops_keys(seed, 6_000, 2_000);
     println!("mvcc3 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc3: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc3");
-    mvcc3.set_seqno(mvcc2.to_seqno());
+    mvcc3.set_seqno(mvcc2.to_seqno().unwrap());
     random_mvcc(n_ops, key_max, seed, &mut mvcc3, &mut refi);
 
     let (n_ops, key_max) = random_ops_keys(seed, 60_000, 20_000);
     println!("mvcc4 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc4: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc4");
-    mvcc4.set_seqno(mvcc3.to_seqno());
+    mvcc4.set_seqno(mvcc3.to_seqno().unwrap());
     random_mvcc(n_ops, key_max, seed, &mut mvcc4, &mut refi);
 
     let (n_ops, key_max) = random_ops_keys(seed, 600_000, 200_000);
     let n_ops = n_ops + 1;
     println!("mvcc5 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc5: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc5");
-    mvcc5.set_seqno(mvcc4.to_seqno());
+    mvcc5.set_seqno(mvcc4.to_seqno().unwrap());
     random_mvcc(n_ops, key_max, seed, &mut mvcc5, &mut refi);
 
-    let seqno = mvcc5.to_seqno();
+    let seqno = mvcc5.to_seqno().unwrap();
 
     let revr = false;
     let yiter = y_iter_versions(
@@ -609,7 +612,7 @@ fn test_lsm_iter_versions2() {
         iter.set_seqno_range((Bound::<u64>::Unbounded, Bound::<u64>::Unbounded));
         random_robt(name, seed, delta_ok, iter)
     };
-    let d1_seqno = disk1.to_seqno();
+    let d1_seqno = disk1.to_seqno().unwrap();
     println!(
         "disk1 n_ops:{} key_max:{} seqno:{}",
         n_ops, key_max, d1_seqno
@@ -624,7 +627,7 @@ fn test_lsm_iter_versions2() {
         iter.set_seqno_range((Bound::Excluded(d1_seqno), Bound::<u64>::Unbounded));
         random_robt(name, seed, delta_ok, iter)
     };
-    let d2_seqno = disk2.to_seqno();
+    let d2_seqno = disk2.to_seqno().unwrap();
     println!(
         "disk2 n_ops:{} key_max:{} d1_seqno:{}",
         n_ops, key_max, d2_seqno
@@ -636,7 +639,7 @@ fn test_lsm_iter_versions2() {
     random_mvcc(n_ops, key_max, seed, mvcc.as_mut(), &mut refi);
     println!("mvcc n_ops: {} key_max: {}", n_ops, key_max);
 
-    let seqno = mvcc.to_seqno();
+    let seqno = mvcc.to_seqno().unwrap();
     let w = mvcc.to_writer().unwrap();
     let r = mvcc.to_reader().unwrap();
     let t_handle = {
@@ -706,29 +709,29 @@ fn test_lsm_range1() {
     let (n_ops, key_max) = random_ops_keys(seed, 600, 200);
     println!("mvcc2 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc2: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc2");
-    mvcc2.set_seqno(mvcc1.to_seqno());
+    mvcc2.set_seqno(mvcc1.to_seqno().unwrap());
     random_mvcc(n_ops, key_max, seed, &mut mvcc2, &mut refi);
 
     let (n_ops, key_max) = random_ops_keys(seed, 6_000, 2_000);
     println!("mvcc3 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc3: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc3");
-    mvcc3.set_seqno(mvcc2.to_seqno());
+    mvcc3.set_seqno(mvcc2.to_seqno().unwrap());
     random_mvcc(n_ops, key_max, seed, &mut mvcc3, &mut refi);
 
     let (n_ops, key_max) = random_ops_keys(seed, 60_000, 20_000);
     println!("mvcc4 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc4: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc4");
-    mvcc4.set_seqno(mvcc3.to_seqno());
+    mvcc4.set_seqno(mvcc3.to_seqno().unwrap());
     random_mvcc(n_ops, key_max, seed, &mut mvcc4, &mut refi);
 
     let (n_ops, key_max) = random_ops_keys(seed, 600_000, 200_000);
     let n_ops = n_ops + 1;
     println!("mvcc5 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc5: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc5");
-    mvcc5.set_seqno(mvcc4.to_seqno());
+    mvcc5.set_seqno(mvcc4.to_seqno().unwrap());
     random_mvcc(n_ops, key_max, seed, &mut mvcc5, &mut refi);
 
-    let seqno = mvcc5.to_seqno();
+    let seqno = mvcc5.to_seqno().unwrap();
     let r = (Bound::<i64>::Unbounded, Bound::<i64>::Unbounded);
     let key_max = refi.reverse(r).unwrap().next().unwrap().unwrap().to_key();
     let key_max = (key_max as usize) + 10;
@@ -799,7 +802,7 @@ fn test_lsm_range2() {
         iter.set_seqno_range((Bound::<u64>::Unbounded, Bound::<u64>::Unbounded));
         random_robt(name, seed, delta_ok, iter)
     };
-    let d1_seqno = disk1.to_seqno();
+    let d1_seqno = disk1.to_seqno().unwrap();
     println!(
         "disk1 n_ops:{} key_max:{} seqno:{}",
         n_ops, key_max, d1_seqno
@@ -814,7 +817,7 @@ fn test_lsm_range2() {
         iter.set_seqno_range((Bound::Excluded(d1_seqno), Bound::<u64>::Unbounded));
         random_robt(name, seed, delta_ok, iter)
     };
-    let d2_seqno = disk2.to_seqno();
+    let d2_seqno = disk2.to_seqno().unwrap();
     println!(
         "disk2 n_ops:{} key_max:{} seqno: {}",
         n_ops, key_max, d2_seqno
@@ -826,7 +829,7 @@ fn test_lsm_range2() {
     random_mvcc(n_ops, key_max, seed, mvcc.as_mut(), &mut refi);
     println!("mvcc n_ops: {} key_max: {}", n_ops, key_max);
 
-    let seqno = mvcc.to_seqno();
+    let seqno = mvcc.to_seqno().unwrap();
     let w = mvcc.to_writer().unwrap();
     let r = mvcc.to_reader().unwrap();
     let t_handle = {
@@ -901,29 +904,29 @@ fn test_lsm_range_versions1() {
     let (n_ops, key_max) = random_ops_keys(seed, 600, 200);
     println!("mvcc2 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc2: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc2");
-    mvcc2.set_seqno(mvcc1.to_seqno());
+    mvcc2.set_seqno(mvcc1.to_seqno().unwrap());
     random_mvcc(n_ops, key_max, seed, &mut mvcc2, &mut refi);
 
     let (n_ops, key_max) = random_ops_keys(seed, 6_000, 2_000);
     println!("mvcc3 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc3: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc3");
-    mvcc3.set_seqno(mvcc2.to_seqno());
+    mvcc3.set_seqno(mvcc2.to_seqno().unwrap());
     random_mvcc(n_ops, key_max, seed, &mut mvcc3, &mut refi);
 
     let (n_ops, key_max) = random_ops_keys(seed, 60_000, 20_000);
     println!("mvcc4 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc4: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc4");
-    mvcc4.set_seqno(mvcc3.to_seqno());
+    mvcc4.set_seqno(mvcc3.to_seqno().unwrap());
     random_mvcc(n_ops, key_max, seed, &mut mvcc4, &mut refi);
 
     let (n_ops, key_max) = random_ops_keys(seed, 600_000, 200_000);
     let n_ops = n_ops + 1;
     println!("mvcc5 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc5: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc5");
-    mvcc5.set_seqno(mvcc4.to_seqno());
+    mvcc5.set_seqno(mvcc4.to_seqno().unwrap());
     random_mvcc(n_ops, key_max, seed, &mut mvcc5, &mut refi);
 
-    let seqno = mvcc5.to_seqno();
+    let seqno = mvcc5.to_seqno().unwrap();
     let r = (Bound::<i64>::Unbounded, Bound::<i64>::Unbounded);
     let key_max = refi.reverse(r).unwrap().next().unwrap().unwrap().to_key();
     let key_max = (key_max as usize) + 10;
@@ -1004,7 +1007,7 @@ fn test_lsm_range_versions2() {
         iter.set_seqno_range((Bound::<u64>::Unbounded, Bound::<u64>::Unbounded));
         random_robt(name, seed, delta_ok, iter)
     };
-    let d1_seqno = disk1.to_seqno();
+    let d1_seqno = disk1.to_seqno().unwrap();
     println!(
         "disk1 n_ops:{} key_max:{} seqno:{}",
         n_ops, key_max, d1_seqno
@@ -1019,7 +1022,7 @@ fn test_lsm_range_versions2() {
         iter.set_seqno_range((Bound::Excluded(d1_seqno), Bound::<u64>::Unbounded));
         random_robt(name, seed, delta_ok, iter)
     };
-    let d2_seqno = disk2.to_seqno();
+    let d2_seqno = disk2.to_seqno().unwrap();
     println!(
         "disk2 n_ops:{} key_max:{} seqno:{}",
         n_ops, key_max, d2_seqno
@@ -1031,7 +1034,7 @@ fn test_lsm_range_versions2() {
     random_mvcc(n_ops, key_max, seed, mvcc.as_mut(), &mut refi);
     println!("mvcc n_ops: {} key_max: {}", n_ops, key_max);
 
-    let seqno = mvcc.to_seqno();
+    let seqno = mvcc.to_seqno().unwrap();
     let w = mvcc.to_writer().unwrap();
     let r = mvcc.to_reader().unwrap();
     let t_handle = {
@@ -1111,29 +1114,29 @@ fn test_lsm_reverse1() {
     let (n_ops, key_max) = random_ops_keys(seed, 600, 200);
     println!("mvcc2 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc2: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc2");
-    mvcc2.set_seqno(mvcc1.to_seqno());
+    mvcc2.set_seqno(mvcc1.to_seqno().unwrap());
     random_mvcc(n_ops, key_max, seed, &mut mvcc2, &mut refi);
 
     let (n_ops, key_max) = random_ops_keys(seed, 6_000, 2_000);
     println!("mvcc3 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc3: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc3");
-    mvcc3.set_seqno(mvcc2.to_seqno());
+    mvcc3.set_seqno(mvcc2.to_seqno().unwrap());
     random_mvcc(n_ops, key_max, seed, &mut mvcc3, &mut refi);
 
     let (n_ops, key_max) = random_ops_keys(seed, 60_000, 20_000);
     println!("mvcc4 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc4: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc4");
-    mvcc4.set_seqno(mvcc3.to_seqno());
+    mvcc4.set_seqno(mvcc3.to_seqno().unwrap());
     random_mvcc(n_ops, key_max, seed, &mut mvcc4, &mut refi);
 
     let (n_ops, key_max) = random_ops_keys(seed, 600_000, 200_000);
     let n_ops = n_ops + 1;
     println!("mvcc5 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc5: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc5");
-    mvcc5.set_seqno(mvcc4.to_seqno());
+    mvcc5.set_seqno(mvcc4.to_seqno().unwrap());
     random_mvcc(n_ops, key_max, seed, &mut mvcc5, &mut refi);
 
-    let seqno = mvcc5.to_seqno();
+    let seqno = mvcc5.to_seqno().unwrap();
     let r = (Bound::<i64>::Unbounded, Bound::<i64>::Unbounded);
     let key_max = refi.reverse(r).unwrap().next().unwrap().unwrap().to_key();
     let key_max = (key_max as usize) + 10;
@@ -1205,7 +1208,7 @@ fn test_lsm_reverse2() {
         iter.set_seqno_range((Bound::<u64>::Unbounded, Bound::<u64>::Unbounded));
         random_robt(name, seed, delta_ok, iter)
     };
-    let d1_seqno = disk1.to_seqno();
+    let d1_seqno = disk1.to_seqno().unwrap();
     println!(
         "disk1 n_ops:{} key_max:{} seqno:{}",
         n_ops, key_max, d1_seqno
@@ -1220,7 +1223,7 @@ fn test_lsm_reverse2() {
         iter.set_seqno_range((Bound::Excluded(d1_seqno), Bound::<u64>::Unbounded));
         random_robt(name, seed, delta_ok, iter)
     };
-    let d2_seqno = disk2.to_seqno();
+    let d2_seqno = disk2.to_seqno().unwrap();
     println!(
         "disk2 n_ops:{} key_max:{} seqno:{}",
         n_ops, key_max, d2_seqno
@@ -1232,7 +1235,7 @@ fn test_lsm_reverse2() {
     random_mvcc(n_ops, key_max, seed, mvcc.as_mut(), &mut refi);
     println!("mvcc n_ops:{} key_max:{}", n_ops, key_max);
 
-    let seqno = mvcc.to_seqno();
+    let seqno = mvcc.to_seqno().unwrap();
     let w = mvcc.to_writer().unwrap();
     let r = mvcc.to_reader().unwrap();
     let t_handle = {
@@ -1304,29 +1307,29 @@ fn test_lsm_reverse_versions1() {
     let (n_ops, key_max) = random_ops_keys(seed, 600, 200);
     println!("mvcc2 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc2: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc2");
-    mvcc2.set_seqno(mvcc1.to_seqno());
+    mvcc2.set_seqno(mvcc1.to_seqno().unwrap());
     random_mvcc(n_ops, key_max, seed, &mut mvcc2, &mut refi);
 
     let (n_ops, key_max) = random_ops_keys(seed, 6_000, 2_000);
     println!("mvcc3 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc3: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc3");
-    mvcc3.set_seqno(mvcc2.to_seqno());
+    mvcc3.set_seqno(mvcc2.to_seqno().unwrap());
     random_mvcc(n_ops, key_max, seed, &mut mvcc3, &mut refi);
 
     let (n_ops, key_max) = random_ops_keys(seed, 60_000, 20_000);
     println!("mvcc4 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc4: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc4");
-    mvcc4.set_seqno(mvcc3.to_seqno());
+    mvcc4.set_seqno(mvcc3.to_seqno().unwrap());
     random_mvcc(n_ops, key_max, seed, &mut mvcc4, &mut refi);
 
     let (n_ops, key_max) = random_ops_keys(seed, 600_000, 200_000);
     let n_ops = n_ops + 1;
     println!("mvcc5 n_ops: {} key_max: {}", n_ops, key_max);
     let mut mvcc5: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc5");
-    mvcc5.set_seqno(mvcc4.to_seqno());
+    mvcc5.set_seqno(mvcc4.to_seqno().unwrap());
     random_mvcc(n_ops, key_max, seed, &mut mvcc5, &mut refi);
 
-    let seqno = mvcc5.to_seqno();
+    let seqno = mvcc5.to_seqno().unwrap();
     let r = (Bound::<i64>::Unbounded, Bound::<i64>::Unbounded);
     let key_max = refi.reverse(r).unwrap().next().unwrap().unwrap().to_key();
     let key_max = (key_max as usize) + 10;
@@ -1408,7 +1411,7 @@ fn test_lsm_reverse_versions2() {
         iter.set_seqno_range((Bound::<u64>::Unbounded, Bound::<u64>::Unbounded));
         random_robt(name, seed, delta_ok, iter)
     };
-    let d1_seqno = disk1.to_seqno();
+    let d1_seqno = disk1.to_seqno().unwrap();
     println!(
         "disk1 n_ops:{} key_max:{} seqno:{}",
         n_ops, key_max, d1_seqno
@@ -1423,7 +1426,7 @@ fn test_lsm_reverse_versions2() {
         iter.set_seqno_range((Bound::Excluded(d1_seqno), Bound::<u64>::Unbounded));
         random_robt(name, seed, delta_ok, iter)
     };
-    let d2_seqno = disk2.to_seqno();
+    let d2_seqno = disk2.to_seqno().unwrap();
     println!(
         "disk2 n_ops:{} key_max:{} seqno:{}",
         n_ops, key_max, d2_seqno
@@ -1435,7 +1438,7 @@ fn test_lsm_reverse_versions2() {
     random_mvcc(n_ops, key_max, seed, mvcc.as_mut(), &mut refi);
     println!("mvcc n_ops: {} key_max: {}", n_ops, key_max);
 
-    let seqno = mvcc.to_seqno();
+    let seqno = mvcc.to_seqno().unwrap();
     let w = mvcc.to_writer().unwrap();
     let r = mvcc.to_reader().unwrap();
     let t_handle = {
@@ -1552,7 +1555,7 @@ fn random_llrb(
             _ => unreachable!(),
         }
     }
-    println!("random_llrb {}", llrb.to_seqno());
+    println!("random_llrb {}", llrb.to_seqno().unwrap());
 }
 
 fn random_mvcc(

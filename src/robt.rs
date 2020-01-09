@@ -2348,13 +2348,13 @@ where
     V: Clone + Diff + Serialize,
 {
     /// Return number of entries in the snapshot.
-    pub fn len(&self) -> usize {
-        self.to_stats().unwrap().n_count.try_into().unwrap()
+    pub fn len(&self) -> Result<usize> {
+        Ok(self.to_stats()?.n_count.try_into()?)
     }
 
     /// Return the last seqno found in this snapshot.
-    pub fn to_seqno(&self) -> u64 {
-        self.to_stats().unwrap().seqno
+    pub fn to_seqno(&self) -> Result<u64> {
+        Ok(self.to_stats()?.seqno)
     }
 
     /// Return the file-position for Btree's root node.

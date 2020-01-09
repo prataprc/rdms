@@ -19,7 +19,7 @@ include!("./ref_test.rs");
 #[test]
 fn test_name() {
     let mut mvcc: Box<Mvcc<i32, Empty>> = Mvcc::new("test-mvcc");
-    assert_eq!(mvcc.to_name(), "test-mvcc".to_string());
+    assert_eq!(mvcc.to_name().unwrap(), "test-mvcc".to_string());
     assert!(mvcc.validate().is_ok());
 }
 
@@ -198,7 +198,7 @@ fn test_set() {
     assert_eq!(mvcc.len(), 10);
     assert!(mvcc.validate().is_ok());
 
-    assert_eq!(refns.to_seqno(), mvcc.to_seqno());
+    assert_eq!(refns.to_seqno(), mvcc.to_seqno().unwrap());
     // test get
     for i in 0..10 {
         let entry = mvcc.get(&i);
@@ -284,7 +284,7 @@ fn test_cas_lsm() {
     assert_eq!(mvcc.len(), 11);
     assert!(mvcc.validate().is_ok());
 
-    assert_eq!(refns.to_seqno(), mvcc.to_seqno());
+    assert_eq!(refns.to_seqno(), mvcc.to_seqno().unwrap());
     // test get
     for i in 0..11 {
         let entry = mvcc.get(&i);
@@ -334,7 +334,7 @@ fn test_delete() {
     assert_eq!(mvcc.len(), 10);
     assert!(mvcc.validate().is_ok());
 
-    assert_eq!(refns.to_seqno(), mvcc.to_seqno());
+    assert_eq!(refns.to_seqno(), mvcc.to_seqno().unwrap());
     // test iter
     {
         let (mut iter, mut iter_ref) = (mvcc.iter().unwrap(), refns.iter());
@@ -352,7 +352,7 @@ fn test_delete() {
         let refn = refns.delete(i);
         check_node(node, refn);
     }
-    assert_eq!(refns.to_seqno(), mvcc.to_seqno());
+    assert_eq!(refns.to_seqno(), mvcc.to_seqno().unwrap());
     assert_eq!(mvcc.len(), 0);
     assert!(mvcc.validate().is_ok());
     // test iter
@@ -388,7 +388,7 @@ fn test_iter() {
     assert_eq!(mvcc.len(), 10);
     assert!(mvcc.validate().is_ok());
 
-    assert_eq!(refns.to_seqno(), mvcc.to_seqno());
+    assert_eq!(refns.to_seqno(), mvcc.to_seqno().unwrap());
     // test iter
     let (mut iter, mut iter_ref) = (mvcc.iter().unwrap(), refns.iter());
     loop {
@@ -432,7 +432,7 @@ fn test_range() {
     assert_eq!(mvcc.len(), 10);
     assert!(mvcc.validate().is_ok());
 
-    assert_eq!(refns.to_seqno(), mvcc.to_seqno());
+    assert_eq!(refns.to_seqno(), mvcc.to_seqno().unwrap());
     // test range
     for _ in 0..1_000 {
         let (low, high) = random_low_high(mvcc.len());
@@ -516,7 +516,7 @@ fn test_crud() {
 
     //println!("len {}", mvcc.len());
 
-    assert_eq!(refns.to_seqno(), mvcc.to_seqno());
+    assert_eq!(refns.to_seqno(), mvcc.to_seqno().unwrap());
     // test iter
     {
         let (mut iter, mut iter_ref) = (mvcc.iter().unwrap(), refns.iter());
@@ -604,7 +604,7 @@ fn test_crud_lsm() {
 
     //println!("len {}", mvcc.len());
 
-    assert_eq!(refns.to_seqno(), mvcc.to_seqno());
+    assert_eq!(refns.to_seqno(), mvcc.to_seqno().unwrap());
     // test iter
     {
         let (mut iter, mut iter_ref) = (mvcc.iter().unwrap(), refns.iter());
@@ -655,8 +655,8 @@ fn test_pw_scan() {
     }
 
     assert_eq!(index.len(), 10000);
-    assert_eq!(index.to_seqno(), 10000);
-    let seqno1 = index.to_seqno();
+    assert_eq!(index.to_seqno().unwrap(), 10000);
+    let seqno1 = index.to_seqno().unwrap();
 
     let mut iter = SkipScan::new(index.to_reader().unwrap());
     iter.set_seqno_range(..=seqno1);
@@ -674,7 +674,7 @@ fn test_pw_scan() {
         assert!(index.set(key, value).unwrap().is_some());
     }
     assert_eq!(index.len(), 10000);
-    assert_eq!(index.to_seqno(), 10334);
+    assert_eq!(index.to_seqno().unwrap(), 10334);
 
     // skip scan after first-inject.
     let mut iter = SkipScan::new(index.to_reader().unwrap());
@@ -702,9 +702,9 @@ fn test_pw_scan() {
     }
 
     assert_eq!(index.len(), 10000);
-    assert_eq!(index.to_seqno(), 10868);
+    assert_eq!(index.to_seqno().unwrap(), 10868);
 
-    let seqno2 = index.to_seqno();
+    let seqno2 = index.to_seqno().unwrap();
 
     // third-inject.
     for key in (0..1000).step_by(15) {
@@ -712,7 +712,7 @@ fn test_pw_scan() {
         assert!(index.set(key, value).unwrap().is_some());
     }
     assert_eq!(index.len(), 10000);
-    assert_eq!(index.to_seqno(), 10935);
+    assert_eq!(index.to_seqno().unwrap(), 10935);
 
     // skip scan in-between.
     let mut iter = SkipScan::new(index.to_reader().unwrap());
@@ -868,7 +868,7 @@ fn test_commit3() {
                 op => panic!("unreachable {}", op),
             };
         }
-        index2.set_seqno(index1.to_seqno());
+        index2.set_seqno(index1.to_seqno().unwrap());
 
         let n_ops = rng.gen::<usize>() % 1000;
         for _ in 0..n_ops {
@@ -1028,7 +1028,10 @@ fn check_compact_nodes(
         let within = match cutoff {
             Bound::Included(cutoff) => (Bound::Excluded(cutoff), Bound::Unbounded),
             Bound::Excluded(cutoff) => (Bound::Included(cutoff), Bound::Unbounded),
-            Bound::Unbounded => (Bound::Excluded(rindex.to_seqno()), Bound::Unbounded),
+            Bound::Unbounded => (
+                Bound::Excluded(rindex.to_seqno().unwrap()),
+                Bound::Unbounded,
+            ),
         };
         let mut refiter = FilterScan::new(rindex.iter().unwrap(), within);
         loop {
@@ -1126,7 +1129,7 @@ fn test_commit_iterator_scan() {
             _ => Bound::Unbounded,
         };
         let mut r = mvcc.to_reader().unwrap();
-        let within = (from_seqno, Bound::Included(mvcc.to_seqno()));
+        let within = (from_seqno, Bound::Included(mvcc.to_seqno().unwrap()));
         let mut iter = mvcc.scan(within.clone()).unwrap();
         let mut ref_iter = r.iter().unwrap();
         let mut count = 0;
@@ -1173,7 +1176,7 @@ fn test_commit_iterator_scans() {
             _ => Bound::Unbounded,
         };
         let mut r = mvcc.to_reader().unwrap();
-        let within = (from_seqno, Bound::Included(mvcc.to_seqno()));
+        let within = (from_seqno, Bound::Included(mvcc.to_seqno().unwrap()));
         let mut iter = IterChain::new(mvcc.scans(shards, within.clone()).unwrap());
         let mut ref_iter = r.iter().unwrap();
         let mut count = 0;
@@ -1229,7 +1232,7 @@ fn test_commit_iterator_range_scans() {
             _ => Bound::Unbounded,
         };
         let mut r = mvcc.to_reader().unwrap();
-        let within = (from_seqno, Bound::Included(mvcc.to_seqno()));
+        let within = (from_seqno, Bound::Included(mvcc.to_seqno().unwrap()));
         let mut iter = IterChain::new(mvcc.range_scans(ranges, within.clone()).unwrap());
         let mut ref_iter = r.iter().unwrap();
         let mut count = 0;

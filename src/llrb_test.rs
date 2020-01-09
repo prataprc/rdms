@@ -51,7 +51,7 @@ fn test_node_size() {
 #[test]
 fn test_name() {
     let mut llrb: Box<Llrb<i32, Empty>> = Llrb::new("test-llrb");
-    assert_eq!(llrb.to_name(), "test-llrb".to_string());
+    assert_eq!(llrb.to_name().unwrap(), "test-llrb".to_string());
     assert!(llrb.validate().is_ok());
 }
 
@@ -382,7 +382,7 @@ fn test_set() {
     assert_eq!(llrb.len(), 10);
     assert!(llrb.validate().is_ok());
 
-    assert_eq!(refns.to_seqno(), llrb.to_seqno());
+    assert_eq!(refns.to_seqno(), llrb.to_seqno().unwrap());
     // test get
     for i in 0..10 {
         let entry = llrb.get(&i);
@@ -471,7 +471,7 @@ fn test_cas_lsm() {
     assert_eq!(llrb.len(), 11);
     assert!(llrb.validate().is_ok());
 
-    assert_eq!(refns.to_seqno(), llrb.to_seqno());
+    assert_eq!(refns.to_seqno(), llrb.to_seqno().unwrap());
     // test get
     for i in 0..11 {
         let entry = llrb.get(&i);
@@ -521,7 +521,7 @@ fn test_delete() {
     assert_eq!(llrb.len(), 10);
     assert!(llrb.validate().is_ok());
 
-    assert_eq!(refns.to_seqno(), llrb.to_seqno());
+    assert_eq!(refns.to_seqno(), llrb.to_seqno().unwrap());
     // test iter
     //println!("start loop");
     {
@@ -542,7 +542,7 @@ fn test_delete() {
         let refn = refns.delete(i);
         check_node(entry, refn);
     }
-    assert_eq!(refns.to_seqno(), llrb.to_seqno());
+    assert_eq!(refns.to_seqno(), llrb.to_seqno().unwrap());
     assert_eq!(llrb.len(), 0);
     assert!(llrb.validate().is_ok());
     // test iter
@@ -578,7 +578,7 @@ fn test_iter() {
     assert_eq!(llrb.len(), 10);
     assert!(llrb.validate().is_ok());
 
-    assert_eq!(refns.to_seqno(), llrb.to_seqno());
+    assert_eq!(refns.to_seqno(), llrb.to_seqno().unwrap());
     // test iter
     let (mut iter, mut iter_ref) = (llrb.iter().unwrap(), refns.iter());
     loop {
@@ -622,7 +622,7 @@ fn test_range() {
     assert_eq!(llrb.len(), 10);
     assert!(llrb.validate().is_ok());
 
-    assert_eq!(refns.to_seqno(), llrb.to_seqno());
+    assert_eq!(refns.to_seqno(), llrb.to_seqno().unwrap());
     // test range
     for _ in 0..1_000 {
         let (low, high) = random_low_high(llrb.len());
@@ -769,7 +769,7 @@ fn test_crud() {
     }
 
     //println!("len {}", llrb.len());
-    assert_eq!(refns.to_seqno(), llrb.to_seqno());
+    assert_eq!(refns.to_seqno(), llrb.to_seqno().unwrap());
 
     {
         // test iter
@@ -852,13 +852,13 @@ fn test_crud_lsm() {
             }
             op => panic!("unreachable {}", op),
         };
-        assert_eq!(llrb.to_seqno(), refns.to_seqno());
+        assert_eq!(llrb.to_seqno().unwrap(), refns.to_seqno());
 
         assert!(llrb.validate().is_ok());
     }
 
     // println!("len {}", llrb.len());
-    assert_eq!(refns.to_seqno(), llrb.to_seqno());
+    assert_eq!(refns.to_seqno(), llrb.to_seqno().unwrap());
 
     {
         // test iter
@@ -911,8 +911,8 @@ fn test_pw_scan() {
     }
 
     assert_eq!(llrb.len(), 10000);
-    assert_eq!(llrb.to_seqno(), 10000);
-    let seqno1 = llrb.to_seqno();
+    assert_eq!(llrb.to_seqno().unwrap(), 10000);
+    let seqno1 = llrb.to_seqno().unwrap();
 
     let mut iter = SkipScan::new(llrb.to_reader().unwrap());
     iter.set_seqno_range(..=seqno1);
@@ -930,7 +930,7 @@ fn test_pw_scan() {
         assert!(llrb.set(key, value).unwrap().is_some());
     }
     assert_eq!(llrb.len(), 10000);
-    assert_eq!(llrb.to_seqno(), 10334);
+    assert_eq!(llrb.to_seqno().unwrap(), 10334);
 
     // skip scan after first-inject.
     let mut iter = SkipScan::new(llrb.to_reader().unwrap());
@@ -958,9 +958,9 @@ fn test_pw_scan() {
     }
 
     assert_eq!(llrb.len(), 10000);
-    assert_eq!(llrb.to_seqno(), 10868);
+    assert_eq!(llrb.to_seqno().unwrap(), 10868);
 
-    let seqno2 = llrb.to_seqno();
+    let seqno2 = llrb.to_seqno().unwrap();
 
     // third-inject.
     for key in (0..1000).step_by(15) {
@@ -968,7 +968,7 @@ fn test_pw_scan() {
         assert!(llrb.set(key, value).unwrap().is_some());
     }
     assert_eq!(llrb.len(), 10000);
-    assert_eq!(llrb.to_seqno(), 10935);
+    assert_eq!(llrb.to_seqno().unwrap(), 10935);
 
     // skip scan in-between.
     let mut iter = SkipScan::new(llrb.to_reader().unwrap());
@@ -1086,7 +1086,7 @@ fn test_mvcc_conversion() {
         assert_eq!(mvcc.is_lsm(), refllrb.is_lsm());
         assert_eq!(mvcc.is_sticky(), refllrb.is_sticky());
         assert_eq!(mvcc.is_spin(), refllrb.is_spin());
-        assert_eq!(mvcc.to_seqno(), refllrb.to_seqno());
+        assert_eq!(mvcc.to_seqno().unwrap(), refllrb.to_seqno().unwrap());
         let (lstats, mstats) = (refllrb.to_stats(), mvcc.to_stats());
         assert_eq!(lstats.entries, mstats.entries);
         assert_eq!(lstats.n_deleted, mstats.n_deleted);
@@ -1112,7 +1112,7 @@ fn test_mvcc_conversion() {
         assert_eq!(refmvcc.is_lsm(), llrb.is_lsm());
         assert_eq!(refmvcc.is_sticky(), llrb.is_sticky());
         assert_eq!(refmvcc.is_spin(), llrb.is_spin());
-        assert_eq!(refmvcc.to_seqno(), llrb.to_seqno());
+        assert_eq!(refmvcc.to_seqno().unwrap(), llrb.to_seqno().unwrap());
         let (lstats, mstats) = (llrb.to_stats(), refmvcc.to_stats());
         assert_eq!(lstats.entries, mstats.entries);
         assert_eq!(lstats.n_deleted, mstats.n_deleted);
@@ -1170,8 +1170,8 @@ fn test_split() {
         let (mut first, mut second) = llrb
             .split("first".to_string(), "second".to_string())
             .unwrap();
-        assert_eq!(first.to_name(), "first".to_string());
-        assert_eq!(second.to_name(), "second".to_string());
+        assert_eq!(first.to_name().unwrap(), "first".to_string());
+        assert_eq!(second.to_name().unwrap(), "second".to_string());
         let mut iter = first.iter().unwrap().chain(second.iter().unwrap());
         let mut refiter = refllrb.iter().unwrap();
         loop {
@@ -1266,7 +1266,7 @@ fn test_commit3() {
                 op => panic!("unreachable {}", op),
             };
         }
-        index2.set_seqno(index1.to_seqno());
+        index2.set_seqno(index1.to_seqno().unwrap());
 
         let n_ops = rng.gen::<usize>() % 1000;
         for _ in 0..n_ops {
@@ -1428,7 +1428,10 @@ fn check_compact_nodes(
         let within = match cutoff {
             Bound::Included(cutoff) => (Bound::Excluded(cutoff), Bound::Unbounded),
             Bound::Excluded(cutoff) => (Bound::Included(cutoff), Bound::Unbounded),
-            Bound::Unbounded => (Bound::Excluded(rindex.to_seqno()), Bound::Unbounded),
+            Bound::Unbounded => (
+                Bound::Excluded(rindex.to_seqno().unwrap()),
+                Bound::Unbounded,
+            ),
         };
         let mut refiter = FilterScan::new(rindex.iter().unwrap(), within);
         loop {
@@ -1528,7 +1531,7 @@ fn test_commit_iterator_scan() {
         };
         let mut r = llrb.to_reader().unwrap();
         let mut ref_iter = r.iter().unwrap();
-        let within = (from_seqno, Bound::Included(llrb.to_seqno()));
+        let within = (from_seqno, Bound::Included(llrb.to_seqno().unwrap()));
         let mut count = 0;
         let mut iter = llrb.scan(within.clone()).unwrap();
         loop {
@@ -1572,7 +1575,7 @@ fn test_commit_iterator_scans() {
             _ => Bound::Unbounded,
         };
         let mut r = llrb.to_reader().unwrap();
-        let within = (from_seqno, Bound::Included(llrb.to_seqno()));
+        let within = (from_seqno, Bound::Included(llrb.to_seqno().unwrap()));
         let mut iter = IterChain::new(llrb.scans(shards, within.clone()).unwrap());
         let mut ref_iter = r.iter().unwrap();
         let mut count = 0;
@@ -1625,7 +1628,7 @@ fn test_commit_iterator_range_scans() {
             _ => Bound::Unbounded,
         };
         let mut r = llrb.to_reader().unwrap();
-        let within = (from_seqno, Bound::Included(llrb.to_seqno()));
+        let within = (from_seqno, Bound::Included(llrb.to_seqno().unwrap()));
         let mut iter = IterChain::new(llrb.range_scans(ranges, within.clone()).unwrap());
         let mut ref_iter = r.iter().unwrap();
         let mut count = 0;

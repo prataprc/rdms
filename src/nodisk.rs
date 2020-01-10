@@ -93,8 +93,9 @@ where
         Ok(0)
     }
 
-    fn set_seqno(&mut self, _seqno: u64) {
+    fn set_seqno(&mut self, _seqno: u64) -> Result<()> {
         // noop
+        Ok(())
     }
 
     fn to_reader(&mut self) -> Result<Self::R> {

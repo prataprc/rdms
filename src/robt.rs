@@ -448,8 +448,9 @@ where
     }
 
     /// Application can set the start sequence number for this index.
-    fn set_seqno(&mut self, _seqno: u64) {
+    fn set_seqno(&mut self, _seqno: u64) -> Result<()> {
         // noop
+        Ok(())
     }
 
     fn to_reader(&mut self) -> Result<Self::R> {

@@ -94,6 +94,13 @@ impl From<io::Error> for Error {
     }
 }
 
+impl From<std::num::ParseIntError> for Error {
+    fn from(err: std::num::ParseIntError) -> Error {
+        let msg = format!("ParseIntError: {:?}", err);
+        Error::ConversionError(msg)
+    }
+}
+
 impl From<std::num::TryFromIntError> for Error {
     fn from(err: std::num::TryFromIntError) -> Error {
         let msg = format!("TryFromIntError: {:?}", err);

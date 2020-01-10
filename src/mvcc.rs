@@ -515,7 +515,7 @@ where
     }
 
     #[inline]
-    fn set_seqno(&mut self, seqno: u64) {
+    fn set_seqno(&mut self, seqno: u64) -> Result<()> {
         self.as_mut().set_seqno(seqno)
     }
 
@@ -568,7 +568,7 @@ where
         Ok(OuterSnapshot::clone(&self.snapshot).seqno)
     }
 
-    fn set_seqno(&mut self, seqno: u64) {
+    fn set_seqno(&mut self, seqno: u64) -> Result<()> {
         let n = self.multi_rw();
         if n > 0 {
             panic!("cannot configure Mvcc with active readers/writer {}", n);
@@ -577,6 +577,8 @@ where
         let s = OuterSnapshot::clone(&self.snapshot);
         let root = s.root_duplicate();
         self.snapshot.shift_snapshot(root, seqno, s.n_count, vec![]);
+
+        Ok(())
     }
 
     /// Lockless concurrent readers are supported

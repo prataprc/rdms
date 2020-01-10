@@ -1266,7 +1266,7 @@ fn test_commit3() {
                 op => panic!("unreachable {}", op),
             };
         }
-        index2.set_seqno(index1.to_seqno().unwrap());
+        index2.set_seqno(index1.to_seqno().unwrap()).unwrap();
 
         let n_ops = rng.gen::<usize>() % 1000;
         for _ in 0..n_ops {

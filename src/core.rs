@@ -229,7 +229,7 @@ where
     fn to_seqno(&self) -> Result<u64>;
 
     /// Application can set the start sequence number for this index.
-    fn set_seqno(&mut self, seqno: u64);
+    fn set_seqno(&mut self, seqno: u64) -> Result<()>;
 
     /// Create a new read handle, for multi-threading. Note that not all
     /// indexes allow concurrent readers. Refer to index API for more details.

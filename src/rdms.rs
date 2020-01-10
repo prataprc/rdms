@@ -117,8 +117,7 @@ where
 
     pub fn set_seqno(&mut self, seqno: u64) -> Result<()> {
         let mut index = self.as_index()?;
-        index.set_seqno(seqno);
-        Ok(())
+        index.set_seqno(seqno)
     }
 
     pub fn to_reader(&mut self) -> Result<<I as Index<K, V>>::R> {

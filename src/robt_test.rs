@@ -476,7 +476,7 @@ fn test_commit_scan() {
         let mut snap2 = {
             let (n_ops, key_max, config) = (30_000_i64, 20_000, config.clone());
             let mut llrb_snap: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
-            llrb_snap.set_seqno(llrb.to_seqno().unwrap());
+            llrb_snap.set_seqno(llrb.to_seqno().unwrap()).unwrap();
             random_llrb(n_ops, key_max, seed + (i + 1) * 20, &mut llrb_snap);
             let es: Vec<Result<Entry<i64, i64>>> = llrb_snap
                 .iter()

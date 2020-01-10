@@ -525,7 +525,7 @@ where
     }
 
     #[inline]
-    fn set_seqno(&mut self, seqno: u64) {
+    fn set_seqno(&mut self, seqno: u64) -> Result<()> {
         self.as_mut().set_seqno(seqno)
     }
 
@@ -583,12 +583,13 @@ where
         Ok(self.seqno)
     }
 
-    fn set_seqno(&mut self, seqno: u64) {
+    fn set_seqno(&mut self, seqno: u64) -> Result<()> {
         let n = self.multi_rw();
         if n > 0 {
             panic!("cannot configure Llrb with active readers/writers {}", n)
         }
         self.seqno = seqno;
+        Ok(())
     }
 
     /// Create a new reader handle, for multi-threading.

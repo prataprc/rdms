@@ -48,7 +48,7 @@ where
     Box::new(move |key: &Q| -> Result<Entry<K, V>> {
         match y(key) {
             Ok(y_entry) => match x(key) {
-                Ok(x_entry) => Ok(x_entry.xmerge(y_entry)),
+                Ok(x_entry) => x_entry.xmerge(y_entry),
                 Err(Error::KeyNotFound) => Ok(y_entry),
                 res => res,
             },
@@ -209,7 +209,7 @@ where
                         // held by each index are mutually exclusive.
                         self.x_entry = self.x.next();
                         self.y_entry = self.y.next();
-                        Some(Ok(xe.xmerge(ye)))
+                        Some(xe.xmerge(ye))
                     }
                 }
             }

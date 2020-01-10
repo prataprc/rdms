@@ -2,7 +2,7 @@
 
 use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
 
-use std::{mem, ops::Bound};
+use std::{convert::TryFrom, mem, ops::Bound};
 
 use super::*;
 use crate::{
@@ -1081,7 +1081,7 @@ fn test_mvcc_conversion() {
         );
 
         let mut refllrb: Box<Llrb<i64, i64>> = llrb.clone();
-        let mut mvcc: Box<Mvcc<i64, i64>> = From::from(*llrb);
+        let mut mvcc: Box<Mvcc<i64, i64>> = TryFrom::try_from(*llrb).unwrap();
 
         assert_eq!(mvcc.is_lsm(), refllrb.is_lsm());
         assert_eq!(mvcc.is_sticky(), refllrb.is_sticky());

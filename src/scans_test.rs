@@ -400,9 +400,9 @@ fn test_bitmapped_scan() {
         println!("entries:{}", es.len());
         assert!(es.len() == llrb.len());
         assert!(
-            bitmap.len() <= llrb.len(),
+            bitmap.len().unwrap() <= llrb.len(),
             "{}/{}",
-            bitmap.len(),
+            bitmap.len().unwrap(),
             llrb.len()
         );
         for _j in 0..10000 {

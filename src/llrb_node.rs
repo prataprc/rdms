@@ -34,7 +34,7 @@ where
         use std::mem::size_of;
 
         let size = size_of::<Node<K, V>>();
-        let overhead: isize = size.try_into().unwrap();
+        let overhead: isize = size.try_into()?;
         Ok(overhead + self.entry.footprint()?)
     }
 }

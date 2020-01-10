@@ -11,8 +11,8 @@ impl Bloom for NoBitmap {
     }
 
     #[inline]
-    fn len(&self) -> usize {
-        0
+    fn len(&self) -> Result<usize> {
+        Ok(0)
     }
 
     #[inline]

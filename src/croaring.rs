@@ -28,8 +28,8 @@ impl Bloom for CRoaring {
     }
 
     #[inline]
-    fn len(&self) -> usize {
-        self.bitmap.cardinality().try_into().unwrap()
+    fn len(&self) -> Result<usize> {
+        Ok(self.bitmap.cardinality().try_into()?)
     }
 
     #[inline]

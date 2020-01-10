@@ -3,10 +3,12 @@
 //! [Rdms] can be composed using underlying components and mechanisms defined
 //! in `core` module.
 
+use log::error;
+
 use std::{
     convert, fmt, marker,
     ops::Bound,
-    sync::{self, Arc},
+    sync::{self, Arc, MutexGuard},
     thread,
     time::{Duration, SystemTime},
 };
@@ -78,14 +80,18 @@ where
     }
 }
 
-impl<K, V, I> AsRef<sync::Mutex<I>> for Rdms<K, V, I>
+impl<K, V, I> Rdms<K, V, I>
 where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
     I: Index<K, V>,
 {
-    fn as_ref(&self) -> &sync::Mutex<I> {
-        &self.index
+    fn as_index(&self) -> Result<MutexGuard<I>> {
+        use crate::error::Error::ThreadFail;
+
+        self.index
+            .lock()
+            .map_err(|err| ThreadFail(format!("rdms lock poisened, {:?}", err)))
     }
 }
 
@@ -100,27 +106,28 @@ where
     }
 
     pub fn to_metadata(&self) -> Result<Vec<u8>> {
-        let index = self.index.lock().unwrap();
+        let index = self.as_index()?;
         index.to_metadata()
     }
 
     pub fn to_seqno(&self) -> Result<u64> {
-        let index = self.index.lock().unwrap();
+        let index = self.as_index()?;
         index.to_seqno()
     }
 
-    pub fn set_seqno(&mut self, seqno: u64) {
-        let mut index = self.index.lock().unwrap();
-        index.set_seqno(seqno)
+    pub fn set_seqno(&mut self, seqno: u64) -> Result<()> {
+        let mut index = self.as_index()?;
+        index.set_seqno(seqno);
+        Ok(())
     }
 
     pub fn to_reader(&mut self) -> Result<<I as Index<K, V>>::R> {
-        let mut index = self.index.lock().unwrap();
+        let mut index = self.as_index()?;
         index.to_reader()
     }
 
     pub fn to_writer(&mut self) -> Result<<I as Index<K, V>>::W> {
-        let mut index = self.index.lock().unwrap();
+        let mut index = self.as_index()?;
         index.to_writer()
     }
 
@@ -129,7 +136,7 @@ where
         C: CommitIterator<K, V>,
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
-        let mut index = self.index.lock().unwrap();
+        let mut index = self.as_index()?;
         index.commit(scanner, metacb)
     }
 
@@ -137,7 +144,7 @@ where
     where
         F: Fn(Vec<Vec<u8>>) -> Vec<u8>,
     {
-        let mut index = self.index.lock().unwrap();
+        let mut index = self.as_index()?;
         index.compact(cutoff, metacb)
     }
 }
@@ -150,17 +157,19 @@ where
     T: fmt::Display,
 {
     fn validate(&mut self) -> Result<T> {
-        let mut index = self.index.lock().unwrap();
+        let mut index = self.as_index()?;
         index.validate()
     }
 }
 
-fn auto_commit<K, V, I>(index: Arc<sync::Mutex<I>>, interval: Duration)
+fn auto_commit<K, V, I>(index: Arc<sync::Mutex<I>>, interval: Duration) -> Result<()>
 where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
     I: Index<K, V>,
 {
+    use crate::error::Error::ThreadFail;
+
     let mut elapsed = Duration::new(0, 0);
     let initial_count = Arc::strong_count(&index);
     loop {
@@ -168,17 +177,44 @@ where
             thread::sleep(interval - elapsed);
         }
         if Arc::strong_count(&index) < initial_count {
-            break; // cascading quite,
+            break Ok(()); // cascading quite,
         }
 
         elapsed = {
             let start = SystemTime::now();
-            let mut indx = index.lock().unwrap();
-            let empty: Vec<Result<Entry<K, V>>> = vec![];
-            let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
-            let scanner = CommitIter::new(empty.into_iter(), within);
-            indx.commit(scanner, convert::identity).unwrap();
-            start.elapsed().ok().unwrap()
+
+            let mut indx = match index.lock() {
+                Ok(index) => index,
+                Err(err) => {
+                    let msg = format!("rdms lock poisened, {:?}", err);
+                    return Err(ThreadFail(msg));
+                }
+            };
+
+            let scanner = {
+                let empty: Vec<Result<Entry<K, V>>> = vec![];
+                let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
+                CommitIter::new(empty.into_iter(), within)
+            };
+            match indx.commit(scanner, convert::identity) {
+                Ok(_) => (),
+                Err(err) => {
+                    error!(target: "rdms  ", "commit failed {:?}", err);
+                    break Err(err);
+                }
+            }
+
+            let compute_elapsed = || -> Result<Duration> {
+                Ok(match start.elapsed() {
+                    Ok(elapsed) => Ok(elapsed),
+                    Err(err) => {
+                        error!(target: "rdms  ", "elapsed failed {:?}", err);
+                        Err(err)
+                    }
+                }?)
+            };
+
+            compute_elapsed()?
         };
     }
 }

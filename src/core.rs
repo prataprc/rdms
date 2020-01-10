@@ -14,9 +14,6 @@ use std::{
 
 use crate::{error::Error, util, vlog};
 
-// TODO: track all footprint calls and handle the Result<> without using
-// a blind unwrap.
-
 /// Type alias for all results returned by `rdms` methods.
 pub type Result<T> = result::Result<T, Error>;
 
@@ -275,7 +272,7 @@ pub trait Bloom: Sized {
     fn create() -> Self;
 
     /// Return the number of items in the bitmap.
-    fn len(&self) -> usize;
+    fn len(&self) -> Result<usize>;
 
     /// Add key into the index.
     fn add_key<Q: ?Sized + Hash>(&mut self, element: &Q);
@@ -476,7 +473,7 @@ where
     fn footprint(&self) -> Result<isize> {
         use std::mem::size_of;
 
-        let fp: isize = size_of::<Delta<V>>().try_into().unwrap();
+        let fp: isize = size_of::<Delta<V>>().try_into()?;
         Ok(fp
             + match &self.data {
                 InnerDelta::U { delta, .. } => delta.footprint()?,
@@ -700,8 +697,7 @@ where
 
         Ok(match self {
             Value::U { value, .. } => {
-                // TODO: measure the isize to usize conversion cost ??
-                let size: isize = size_of::<V>().try_into().unwrap();
+                let size: isize = size_of::<V>().try_into()?;
                 size + value.footprint()?
             }
             Value::D { .. } => 0,
@@ -823,7 +819,7 @@ where
     fn prepend_version_nolsm(&mut self, nentry: Self) -> Result<isize> {
         let size = self.value.footprint()?;
         self.value = nentry.value.clone();
-        Ok((self.value.footprint()? - size).try_into().unwrap())
+        Ok((self.value.footprint()? - size).try_into()?)
     }
 
     // `nentry` is new_entry to be CREATE/UPDATE into index.
@@ -856,7 +852,8 @@ where
 
         self.deltas.insert(0, delta);
         self.prepend_version_nolsm(nentry)?;
-        Ok(size.try_into().unwrap())
+
+        Ok(size.try_into()?)
     }
 
     // DELETE operation, only in lsm-mode or sticky mode.
@@ -877,7 +874,7 @@ where
             Value::U { .. } => unreachable!(),
         };
         self.value = Value::new_delete(seqno);
-        Ok((self.footprint()? - size).try_into().unwrap())
+        Ok((self.footprint()? - size).try_into()?)
     }
 }
 
@@ -1008,7 +1005,7 @@ where
     //
     // TODO: should fix the order of newer entry and older entry and avoid the
     // `a` `b` logic.
-    pub(crate) fn xmerge(self, entry: Entry<K, V>) -> Entry<K, V> {
+    pub(crate) fn xmerge(self, entry: Entry<K, V>) -> Result<Entry<K, V>> {
         // `a` is newer than `b`, and all versions in a and b are mutually
         // exclusive in seqno ordering.
         let (a, mut b) = if self.to_seqno() > entry.to_seqno() {
@@ -1025,10 +1022,9 @@ where
 
         for ne in a.versions().collect::<Vec<Entry<K, V>>>().into_iter().rev() {
             // println!("xmerge {} {}", ne.to_seqno(), ne.is_deleted());
-            // TODO: is it okay to ignore the result-err here ?
-            b.prepend_version(ne, true /* lsm */).ok();
+            b.prepend_version(ne, true /* lsm */)?;
         }
-        b
+        Ok(b)
     }
 
     // `self` is newer than `entr`

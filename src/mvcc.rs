@@ -37,7 +37,7 @@ use log::{debug, error, info, warn};
 use std::{
     borrow::Borrow,
     cmp::{self, Ord, Ordering},
-    convert::{self, TryInto},
+    convert::{self, TryFrom, TryInto},
     ffi, fmt,
     fmt::Debug,
     hash::Hash,
@@ -46,7 +46,7 @@ use std::{
     result,
     sync::{
         atomic::{AtomicIsize, AtomicPtr, AtomicUsize, Ordering::SeqCst},
-        mpsc, Arc,
+        Arc,
     },
     thread,
 };
@@ -227,12 +227,14 @@ where
     }
 }
 
-impl<K, V> From<Llrb<K, V>> for Box<Mvcc<K, V>>
+impl<K, V> TryFrom<Llrb<K, V>> for Box<Mvcc<K, V>>
 where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    fn from(llrb_index: Llrb<K, V>) -> Box<Mvcc<K, V>> {
+    type Error = Error;
+
+    fn try_from(llrb_index: Llrb<K, V>) -> Result<Box<Mvcc<K, V>>> {
         let mut mvcc_index = if llrb_index.is_lsm() {
             Mvcc::new_lsm(llrb_index.to_name())
         } else {
@@ -244,7 +246,7 @@ where
         mvcc_index
             .snapshot
             .n_nodes
-            .store(llrb_index.len() as isize, SeqCst);
+            .store(llrb_index.len().try_into()?, SeqCst);
 
         let debris = llrb_index.squash();
         mvcc_index.key_footprint = debris.key_footprint;
@@ -256,7 +258,7 @@ where
             debris.n_count,
             vec![], /*reclaim*/
         );
-        mvcc_index
+        Ok(mvcc_index)
     }
 }
 
@@ -611,7 +613,7 @@ where
 
             let mut count = 0;
             for entry in full_table_iter {
-                self.set_index_entry(entry?);
+                self.set_index_entry(entry?)?;
                 count += 1;
             }
             count
@@ -654,14 +656,14 @@ where
                     tree_footprint: self.tree_footprint,
                     reclaim: vec![],
                 };
-                let (root, seen, limit) = self.compact_loop(root, low, &mut cc, LIMIT);
+                let (root, seen, limit) = self.compact_loop(root, low, &mut cc, LIMIT)?;
                 self.n_reclaimed += cc.reclaim.len();
                 self.tree_footprint = cc.tree_footprint;
                 self.snapshot
                     .shift_snapshot(root, snapshot.seqno, snapshot.n_count, cc.reclaim);
 
                 for key in cc.dels.into_iter() {
-                    self.delete_index_entry(key);
+                    self.delete_index_entry(key)?;
                 }
                 (seen, limit)
             };
@@ -710,7 +712,7 @@ where
         key: K,
         value: V,
         seqno: Option<u64>,
-    ) -> (u64, Option<Entry<K, V>>) {
+    ) -> Result<(u64, Option<Entry<K, V>>)> {
         let _w = self.latch.acquire_write(self.spin);
 
         let entry = {
@@ -721,13 +723,13 @@ where
             };
             Entry::new(key, Value::new_upsert_value(value, seqno))
         };
-        let (seqno, old_entry) = self.set_index_entry(entry);
+        let (seqno, old_entry) = self.set_index_entry(entry)?;
         if let Some(old_entry) = &old_entry {
             if old_entry.is_deleted() && (!self.lsm && !self.sticky) {
                 panic!("impossible case");
             }
         }
-        (seqno, old_entry)
+        Ok((seqno, old_entry))
     }
 
     pub fn set_cas_index(
@@ -736,7 +738,7 @@ where
         value: V,
         cas: u64,
         seqno: Option<u64>, // seqno for this mutation
-    ) -> (u64, Result<Option<Entry<K, V>>>) {
+    ) -> Result<(u64, Result<Option<Entry<K, V>>>)> {
         let _w = self.latch.acquire_write(self.spin);
 
         let snapshot: &Arc<Snapshot<K, V>> = self.snapshot.as_ref();
@@ -746,14 +748,14 @@ where
             None => snapshot.seqno + 1,
         };
         let lsm = self.lsm;
-        let key_footprint = util::key_footprint(&key).unwrap();
+        let key_footprint = util::key_footprint(&key)?;
 
         let new_entry = Entry::new(key, Value::new_upsert_value(value, seqno));
 
         let mut n_count = snapshot.n_count;
         let root = snapshot.root_duplicate();
         let mut rclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
-        let s = match self.upsert_cas(root, new_entry, cas, lsm, &mut rclm) {
+        let s = match self.upsert_cas(root, new_entry, cas, lsm, &mut rclm)? {
             UpsertCasResult {
                 node: Some(mut root),
                 new_node,
@@ -803,14 +805,14 @@ where
             n_count,
             rclm,
         );
-        (seqno, entry)
+        Ok((seqno, entry))
     }
 
     pub fn delete_index<Q>(
         &mut self,
         key: &Q,
         seqno: Option<u64>, // seqno for this mutation
-    ) -> (u64, Result<Option<Entry<K, V>>>)
+    ) -> Result<(u64, Result<Option<Entry<K, V>>>)>
     where
         // TODO: From<Q> and Clone will fail if V=String and Q=str
         K: Borrow<Q>,
@@ -823,16 +825,16 @@ where
             Some(seqno) => seqno,
             None => snapshot.seqno + 1,
         };
-        let key_footprint = util::key_footprint(&key.to_owned()).unwrap();
+        let key_footprint = util::key_footprint(&key.to_owned())?;
 
         let mut n_count = snapshot.n_count;
         let root = snapshot.root_duplicate();
         let mut rclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
         let (seqno, root, old_entry) = if self.lsm || self.sticky {
             let res = if self.lsm {
-                self.delete_lsm(root, key, seqno, &mut rclm)
+                self.delete_lsm(root, key, seqno, &mut rclm)?
             } else {
-                self.delete_sticky(root, key, seqno, &mut rclm)
+                self.delete_sticky(root, key, seqno, &mut rclm)?
             };
 
             let s = match res {
@@ -872,7 +874,7 @@ where
             (seqno, root, old_entry)
         } else {
             // in non-lsm mode remove the entry from the tree.
-            let res = match self.do_delete(root, key, &mut rclm) {
+            let res = match self.do_delete(root, key, &mut rclm)? {
                 res @ DeleteResult { node: None, .. } => res,
                 mut res => {
                     res.node.as_mut().map(|node| node.set_black());
@@ -892,7 +894,7 @@ where
 
         self.n_reclaimed += rclm.len();
         self.snapshot.shift_snapshot(root, seqno, n_count, rclm);
-        (seqno, Ok(old_entry))
+        Ok((seqno, Ok(old_entry)))
     }
 }
 
@@ -908,7 +910,7 @@ where
     ///
     /// *LSM mode*: Add a new version for the key, perserving the old value.
     fn set(&mut self, key: K, value: V) -> Result<Option<Entry<K, V>>> {
-        let (_seqno, old_entry) = self.set_index(key, value, None);
+        let (_seqno, old_entry) = self.set_index(key, value, None)?;
         Ok(old_entry)
     }
 
@@ -919,7 +921,7 @@ where
     ///
     /// *LSM mode*: Add a new version for the key, perserving the old value.
     fn set_cas(&mut self, key: K, value: V, cas: u64) -> Result<Option<Entry<K, V>>> {
-        let (_seqno, entry) = self.set_cas_index(key, value, cas, None);
+        let (_seqno, entry) = self.set_cas_index(key, value, cas, None)?;
         entry
     }
 
@@ -939,7 +941,7 @@ where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
     {
-        let (_seqno, entry) = self.delete_index(key, None);
+        let (_seqno, entry) = self.delete_index(key, None)?;
         entry
     }
 }
@@ -990,17 +992,17 @@ where
         new_entry: Entry<K, V>,
         lsm: bool,
         reclaim: &mut Vec<Box<Node<K, V>>>,
-    ) -> UpsertResult<K, V> {
+    ) -> Result<UpsertResult<K, V>> {
         if node.is_none() {
             let node: Box<Node<K, V>> = self.node_from_entry(new_entry);
             let n = node.duplicate();
-            let size: isize = node.footprint().unwrap().try_into().unwrap();
-            return UpsertResult {
+            let size: isize = node.footprint()?.try_into()?;
+            return Ok(UpsertResult {
                 node: Some(node),
                 new_node: Some(n),
                 old_entry: None,
                 size,
-            };
+            });
         }
 
         let node = node.unwrap();
@@ -1008,7 +1010,7 @@ where
             Ordering::Greater => {
                 let mut new_node = self.node_mvcc_clone(&node, reclaim, false);
                 let left = new_node.left.take();
-                let mut r = self.upsert(left, new_entry, lsm, reclaim);
+                let mut r = self.upsert(left, new_entry, lsm, reclaim)?;
                 new_node.left = r.node;
                 r.node = Some(self.walkuprot_23(new_node, reclaim));
                 r
@@ -1016,21 +1018,21 @@ where
             Ordering::Less => {
                 let mut new_node = self.node_mvcc_clone(&node, reclaim, false);
                 let right = new_node.right.take();
-                let mut r = self.upsert(right, new_entry, lsm, reclaim);
+                let mut r = self.upsert(right, new_entry, lsm, reclaim)?;
                 new_node.right = r.node;
                 r.node = Some(self.walkuprot_23(new_node, reclaim));
                 r
             }
             Ordering::Equal if lsm => {
                 let mut new_node = self.node_mvcc_clone(&node, reclaim, true);
-                let size = new_node.footprint().unwrap(); // TODO
+                let size = new_node.footprint()?;
                 let (old_entry, entry) = {
                     let d = Default::default();
                     let entry = mem::replace(&mut new_node.entry, d);
                     (Some(entry.clone()), entry)
                 };
-                new_node.entry = entry.xmerge(new_entry);
-                let size = new_node.footprint().unwrap() - size;
+                new_node.entry = entry.xmerge(new_entry)?;
+                let size = new_node.footprint()? - size;
 
                 new_node.dirty = true;
                 let n = new_node.duplicate();
@@ -1044,7 +1046,7 @@ where
             Ordering::Equal => {
                 let mut new_node = self.node_mvcc_clone(&node, reclaim, true);
                 let entry = new_node.entry.clone();
-                let size = new_node.prepend_version(new_entry, lsm).unwrap();
+                let size = new_node.prepend_version(new_entry, lsm)?;
 
                 new_node.dirty = true;
                 let n = new_node.duplicate();
@@ -1058,7 +1060,7 @@ where
         };
 
         Box::leak(node);
-        r
+        Ok(r)
     }
 
     fn upsert_cas(
@@ -1068,26 +1070,26 @@ where
         cas: u64,
         lsm: bool,
         reclaim: &mut Vec<Box<Node<K, V>>>,
-    ) -> UpsertCasResult<K, V> {
+    ) -> Result<UpsertCasResult<K, V>> {
         if node.is_none() && cas > 0 {
-            return UpsertCasResult {
+            return Ok(UpsertCasResult {
                 node: None,
                 new_node: None,
                 old_entry: None,
                 size: 0,
                 err: Some(Error::InvalidCAS(0)),
-            };
+            });
         } else if node.is_none() {
             let node: Box<Node<K, V>> = self.node_from_entry(nentry);
             let n = node.duplicate();
-            let size: isize = node.footprint().unwrap().try_into().unwrap();
-            return UpsertCasResult {
+            let size: isize = node.footprint()?.try_into()?;
+            return Ok(UpsertCasResult {
                 node: Some(node),
                 new_node: Some(n),
                 old_entry: None,
                 size,
                 err: None,
-            };
+            });
         }
 
         let node = node.unwrap();
@@ -1095,14 +1097,14 @@ where
         let r = if cmp == Ordering::Greater {
             let mut newnd = self.node_mvcc_clone(&node, reclaim, false);
             let left = newnd.left.take();
-            let mut r = self.upsert_cas(left, nentry, cas, lsm, reclaim);
+            let mut r = self.upsert_cas(left, nentry, cas, lsm, reclaim)?;
             newnd.left = r.node;
             r.node = Some(self.walkuprot_23(newnd, reclaim));
             r
         } else if cmp == Ordering::Less {
             let mut newnd = self.node_mvcc_clone(&node, reclaim, false);
             let right = newnd.right.take();
-            let mut r = self.upsert_cas(right, nentry, cas, lsm, reclaim);
+            let mut r = self.upsert_cas(right, nentry, cas, lsm, reclaim)?;
             newnd.right = r.node;
             r.node = Some(self.walkuprot_23(newnd, reclaim));
             r
@@ -1127,7 +1129,7 @@ where
         } else {
             let mut newnd = self.node_mvcc_clone(&node, reclaim, true);
             let entry = Some(node.entry.clone());
-            let size = newnd.prepend_version(nentry, lsm).unwrap();
+            let size = newnd.prepend_version(nentry, lsm)?;
             newnd.dirty = true;
             let n = newnd.duplicate();
             UpsertCasResult {
@@ -1140,7 +1142,7 @@ where
         };
 
         Box::leak(node);
-        r
+        Ok(r)
     }
 
     fn delete_lsm<Q>(
@@ -1149,7 +1151,7 @@ where
         key: &Q,
         seqno: u64,
         reclaim: &mut Vec<Box<Node<K, V>>>,
-    ) -> DeleteResult<K, V>
+    ) -> Result<DeleteResult<K, V>>
     where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
@@ -1158,13 +1160,13 @@ where
             let mut node = self.node_new_deleted(key.to_owned(), seqno);
             node.dirty = false;
             let n = node.duplicate();
-            let size: isize = node.footprint().unwrap().try_into().unwrap();
-            return DeleteResult {
+            let size: isize = node.footprint()?.try_into()?;
+            return Ok(DeleteResult {
                 node: Some(node),
                 new_node: Some(n),
                 old_entry: None,
                 size,
-            };
+            });
         }
 
         let node = node.unwrap();
@@ -1172,21 +1174,21 @@ where
             Ordering::Greater => {
                 let mut new_node = self.node_mvcc_clone(&node, reclaim, false);
                 let left = new_node.left.take();
-                let r = self.delete_lsm(left, key, seqno, reclaim);
+                let r = self.delete_lsm(left, key, seqno, reclaim)?;
                 new_node.left = r.node;
                 (new_node, r.new_node, r.old_entry, r.size)
             }
             Ordering::Less => {
                 let mut new_node = self.node_mvcc_clone(&node, reclaim, false);
                 let right = new_node.right.take();
-                let r = self.delete_lsm(right, key, seqno, reclaim);
+                let r = self.delete_lsm(right, key, seqno, reclaim)?;
                 new_node.right = r.node;
                 (new_node, r.new_node, r.old_entry, r.size)
             }
             Ordering::Equal => {
                 let mut new_node = self.node_mvcc_clone(&node, reclaim, true);
                 let old_entry = node.entry.clone();
-                let size = new_node.delete(seqno).unwrap();
+                let size = new_node.delete(seqno)?;
                 new_node.dirty = true;
                 let n = new_node.duplicate();
                 (new_node, Some(n), Some(old_entry), size)
@@ -1194,12 +1196,12 @@ where
         };
 
         Box::leak(node);
-        DeleteResult {
+        Ok(DeleteResult {
             node: Some(self.walkuprot_23(new_node, reclaim)),
             new_node: n,
             old_entry: entry,
             size,
-        }
+        })
     }
 
     fn delete_sticky<Q>(
@@ -1208,7 +1210,7 @@ where
         key: &Q,
         seqno: u64,
         reclaim: &mut Vec<Box<Node<K, V>>>,
-    ) -> DeleteResult<K, V>
+    ) -> Result<DeleteResult<K, V>>
     where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
@@ -1217,13 +1219,13 @@ where
             let mut node = self.node_new_deleted(key.to_owned(), seqno);
             node.dirty = false;
             let n = node.duplicate();
-            let size: isize = node.footprint().unwrap().try_into().unwrap();
-            return DeleteResult {
+            let size: isize = node.footprint()?.try_into()?;
+            return Ok(DeleteResult {
                 node: Some(node),
                 new_node: Some(n),
                 old_entry: None,
                 size,
-            };
+            });
         }
 
         let node = node.unwrap();
@@ -1231,38 +1233,38 @@ where
             Ordering::Greater => {
                 let mut new_node = self.node_mvcc_clone(&node, reclaim, false);
                 let left = new_node.left.take();
-                let r = self.delete_sticky(left, key, seqno, reclaim);
+                let r = self.delete_sticky(left, key, seqno, reclaim)?;
                 new_node.left = r.node;
                 (new_node, r.new_node, r.old_entry, r.size)
             }
             Ordering::Less => {
                 let mut new_node = self.node_mvcc_clone(&node, reclaim, false);
                 let right = new_node.right.take();
-                let r = self.delete_sticky(right, key, seqno, reclaim);
+                let r = self.delete_sticky(right, key, seqno, reclaim)?;
                 new_node.right = r.node;
                 (new_node, r.new_node, r.old_entry, r.size)
             }
             Ordering::Equal => {
-                let mut size = node.footprint().unwrap(); // TODO
+                let mut size = node.footprint()?;
                 let cutoff = Bound::Included(node.to_seqno());
                 let mut new_node = self.node_mvcc_clone(&node, reclaim, true);
                 let old_entry = node.entry.clone();
-                new_node.delete(seqno).unwrap();
+                new_node.delete(seqno)?;
                 new_node.dirty = true;
                 new_node.entry = new_node.entry.clone().purge(cutoff).unwrap();
-                size = new_node.footprint().unwrap() - size; // TODO
+                size = new_node.footprint()? - size;
                 let n = new_node.duplicate();
                 (new_node, Some(n), Some(old_entry), size)
             }
         };
 
         Box::leak(node);
-        DeleteResult {
+        Ok(DeleteResult {
             node: Some(self.walkuprot_23(new_node, reclaim)),
             new_node: n,
             old_entry: entry,
             size,
-        }
+        })
     }
 
     // this is the non-lsm path.
@@ -1271,18 +1273,18 @@ where
         node: Option<Box<Node<K, V>>>,
         key: &Q,
         reclaim: &mut Vec<Box<Node<K, V>>>,
-    ) -> DeleteResult<K, V>
+    ) -> Result<DeleteResult<K, V>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
         if node.is_none() {
-            return DeleteResult {
+            return Ok(DeleteResult {
                 node: None,
                 new_node: None,
                 old_entry: None,
                 size: 0,
-            };
+            });
         }
 
         let node = node.unwrap();
@@ -1292,21 +1294,21 @@ where
         if newnd.as_key().borrow().gt(key) {
             if newnd.left.is_none() {
                 // key not present, nothing to delete
-                DeleteResult {
+                Ok(DeleteResult {
                     node: Some(newnd),
                     new_node: None,
                     old_entry: None,
                     size: 0,
-                }
+                })
             } else {
                 let ok = !is_red(newnd.as_left_deref());
                 if ok && !is_red(newnd.left.as_ref().unwrap().as_left_deref()) {
                     newnd = self.move_red_left(newnd, reclaim);
                 }
-                let mut r = self.do_delete(newnd.left.take(), key, reclaim);
+                let mut r = self.do_delete(newnd.left.take(), key, reclaim)?;
                 newnd.left = r.node;
                 r.node = Some(self.fixup(newnd, reclaim));
-                r
+                Ok(r)
             }
         } else {
             if is_red(newnd.as_left_deref()) {
@@ -1316,13 +1318,13 @@ where
             // if key equals node and no right children
             if !newnd.as_key().borrow().lt(key) && newnd.right.is_none() {
                 self.node_mvcc_detach(&mut newnd);
-                let size: isize = newnd.footprint().unwrap().try_into().unwrap();
-                return DeleteResult {
+                let size: isize = newnd.footprint()?.try_into()?;
+                return Ok(DeleteResult {
                     node: None,
                     new_node: None,
                     old_entry: Some(newnd.entry.clone()),
                     size: -size,
-                };
+                });
             }
 
             let ok = newnd.right.is_some() && !is_red(newnd.as_right_deref());
@@ -1334,7 +1336,7 @@ where
             if !newnd.as_key().borrow().lt(key) {
                 // node == key
                 let right = newnd.right.take();
-                let (right, mut res_node) = self.delete_min(right, reclaim);
+                let (right, mut res_node) = self.delete_min(right, reclaim)?;
                 newnd.right = right;
                 if res_node.is_none() {
                     panic!("do_delete(): fatal logic, call the programmer");
@@ -1344,18 +1346,18 @@ where
                 newnode.right = newnd.right.take();
                 newnode.black = newnd.black;
                 let entry = newnd.entry.clone();
-                let size: isize = newnd.footprint().unwrap().try_into().unwrap();
-                DeleteResult {
+                let size: isize = newnd.footprint()?.try_into()?;
+                Ok(DeleteResult {
                     node: Some(self.fixup(newnode, reclaim)),
                     new_node: None,
                     old_entry: Some(entry),
                     size: -size,
-                }
+                })
             } else {
-                let mut r = self.do_delete(newnd.right.take(), key, reclaim);
+                let mut r = self.do_delete(newnd.right.take(), key, reclaim)?;
                 newnd.right = r.node;
                 r.node = Some(self.fixup(newnd, reclaim));
-                r
+                Ok(r)
             }
         }
     }
@@ -1365,9 +1367,9 @@ where
         &self,
         node: Option<Box<Node<K, V>>>,
         reclaim: &mut Vec<Box<Node<K, V>>>, /* reclaim */
-    ) -> (Option<Box<Node<K, V>>>, Option<Box<Node<K, V>>>) {
+    ) -> Result<(Option<Box<Node<K, V>>>, Option<Box<Node<K, V>>>)> {
         if node.is_none() {
-            return (None, None);
+            return Ok((None, None));
         }
 
         let node = node.unwrap();
@@ -1376,16 +1378,16 @@ where
 
         if new_node.left.is_none() {
             self.node_mvcc_detach(&mut new_node);
-            (None, Some(new_node))
+            Ok((None, Some(new_node)))
         } else {
             let left = new_node.as_left_deref();
             if !is_red(left) && !is_red(left.unwrap().as_left_deref()) {
                 new_node = self.move_red_left(new_node, reclaim);
             }
             let left = new_node.left.take();
-            let (left, old_node) = self.delete_min(left, reclaim);
+            let (left, old_node) = self.delete_min(left, reclaim)?;
             new_node.left = left;
-            (Some(self.fixup(new_node, reclaim)), old_node)
+            Ok((Some(self.fixup(new_node, reclaim)), old_node))
         }
     }
 }
@@ -1395,20 +1397,20 @@ where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
 {
-    fn set_index_entry(&self, entry: Entry<K, V>) -> (u64, Option<Entry<K, V>>) {
+    fn set_index_entry(&self, entry: Entry<K, V>) -> Result<(u64, Option<Entry<K, V>>)> {
         let mself = unsafe {
             // caller hold a write latch.
             (self as *const Self as *mut Self).as_mut().unwrap()
         };
 
         let snapshot: &Arc<Snapshot<K, V>> = mself.snapshot.as_ref();
-        let key_footprint = util::key_footprint(entry.as_key()).unwrap();
+        let key_footprint = util::key_footprint(entry.as_key())?;
         let (seqno, deleted) = (entry.to_seqno(), entry.is_deleted());
 
         let mut n_count = snapshot.n_count;
         let root = snapshot.root_duplicate();
         let mut rclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
-        match mself.upsert(root, entry, mself.lsm, &mut rclm) {
+        match mself.upsert(root, entry, mself.lsm, &mut rclm)? {
             UpsertResult {
                 node: Some(mut root),
                 new_node: Some(mut n),
@@ -1440,7 +1442,7 @@ where
                 mself
                     .snapshot
                     .shift_snapshot(Some(root), seqno, n_count, rclm);
-                (seqno, old_entry)
+                Ok((seqno, old_entry))
             }
             _ => panic!("set: impossible case, call programmer"),
         }
@@ -1469,7 +1471,7 @@ where
         low: Bound<K>,
         cc: &mut CompactCtxt<K, V>,
         limit: usize,
-    ) -> (Option<Box<Node<K, V>>>, Option<K>, usize) {
+    ) -> Result<(Option<Box<Node<K, V>>>, Option<K>, usize)> {
         use std::ops::Bound::{Excluded, Unbounded};
 
         let mself = unsafe {
@@ -1478,27 +1480,27 @@ where
         };
 
         match (node, low) {
-            (None, _) => (None, None, limit),
+            (None, _) => Ok((None, None, limit)),
             // find the starting point
             (Some(node), Unbounded) => {
                 let mut newn = mself.node_mvcc_clone(&node, &mut cc.reclaim, true);
                 Box::leak(node);
-                match mself.compact_loop(newn.left.take(), Unbounded, cc, limit) {
+                match mself.compact_loop(newn.left.take(), Unbounded, cc, limit)? {
                     (left, seen, limit) if limit == 0 => {
                         newn.left = left;
-                        (Some(newn), seen, limit)
+                        Ok((Some(newn), seen, limit))
                     }
                     (left, _, limit) => {
                         newn.left = left;
-                        Self::compact_entry(&mut newn, cc);
+                        Self::compact_entry(&mut newn, cc)?;
                         let (right, low) = (newn.right.take(), Unbounded);
                         let (right, seen, limit) =
-                            match mself.compact_loop(right, low, cc, limit - 1) {
+                            match mself.compact_loop(right, low, cc, limit - 1)? {
                                 (right, None, limit) => (right, Some(newn.to_key()), limit),
                                 res => res,
                             };
                         newn.right = right;
-                        (Some(newn), seen, limit)
+                        Ok((Some(newn), seen, limit))
                     }
                 }
             }
@@ -1508,31 +1510,31 @@ where
                 match key.cmp(newn.as_key()) {
                     Ordering::Less => {
                         let (left, low) = (newn.left.take(), Excluded(key));
-                        match mself.compact_loop(left, low, cc, limit) {
+                        match mself.compact_loop(left, low, cc, limit)? {
                             (left, seen, limit) if limit == 0 => {
                                 newn.left = left;
-                                (Some(newn), seen, limit)
+                                Ok((Some(newn), seen, limit))
                             }
                             (left, _, limit) => {
                                 newn.left = left;
-                                Self::compact_entry(&mut newn, cc);
+                                Self::compact_entry(&mut newn, cc)?;
                                 let (right, low) = (newn.right.take(), Unbounded);
                                 let (right, seen, limit) =
-                                    match mself.compact_loop(right, low, cc, limit - 1) {
+                                    match mself.compact_loop(right, low, cc, limit - 1)? {
                                         (right, None, limit) => (right, Some(newn.to_key()), limit),
                                         res => res,
                                     };
                                 newn.right = right;
-                                (Some(newn), seen, limit)
+                                Ok((Some(newn), seen, limit))
                             }
                         }
                     }
                     _ => {
                         let right = newn.right.take();
                         let (right, seen, limit) =
-                            mself.compact_loop(right, Excluded(key), cc, limit);
+                            mself.compact_loop(right, Excluded(key), cc, limit)?;
                         newn.right = right;
-                        (Some(newn), seen, limit)
+                        Ok((Some(newn), seen, limit))
                     }
                 }
             }
@@ -1540,8 +1542,8 @@ where
         }
     }
 
-    fn compact_entry(node: &mut Node<K, V>, cc: &mut CompactCtxt<K, V>) {
-        let (size, key) = (node.entry.footprint().unwrap(), node.entry.to_key());
+    fn compact_entry(node: &mut Node<K, V>, cc: &mut CompactCtxt<K, V>) -> Result<()> {
+        let (size, key) = (node.entry.footprint()?, node.entry.to_key());
         cc.tree_footprint += match node.entry.clone().purge(cc.cutoff) {
             None => {
                 cc.dels.push(key);
@@ -1549,12 +1551,14 @@ where
             }
             Some(entry) => {
                 node.entry = entry;
-                node.entry.footprint().unwrap() - size
+                node.entry.footprint()? - size
             }
         };
+
+        Ok(())
     }
 
-    fn delete_index_entry(&self, key: K) {
+    fn delete_index_entry(&self, key: K) -> Result<()> {
         let mself = unsafe {
             // caller hold a write latch.
             (self as *const Self as *mut Self).as_mut().unwrap()
@@ -1566,7 +1570,7 @@ where
         let root = snapshot.root_duplicate();
 
         let mut rclm: Vec<Box<Node<K, V>>> = Vec::with_capacity(RECLAIM_CAP);
-        let res = match mself.do_delete(root, key.borrow(), &mut rclm) {
+        let res = match mself.do_delete(root, key.borrow(), &mut rclm)? {
             res @ DeleteResult { node: None, .. } => res,
             mut res => {
                 res.node.as_mut().map(|node| node.set_black());
@@ -1575,7 +1579,7 @@ where
         };
         match res.old_entry {
             Some(old_entry) => {
-                mself.key_footprint -= util::key_footprint(&key).unwrap();
+                mself.key_footprint -= util::key_footprint(&key)?;
                 mself.tree_footprint += res.size;
                 n_count -= 1;
                 if old_entry.is_deleted() {
@@ -1588,6 +1592,8 @@ where
         mself
             .snapshot
             .shift_snapshot(res.node, snapshot.seqno, n_count, rclm);
+
+        Ok(())
     }
 }
 
@@ -2578,7 +2584,7 @@ where
         key: K,
         value: V,
         seqno: Option<u64>,
-    ) -> (u64, Option<Entry<K, V>>) {
+    ) -> Result<(u64, Option<Entry<K, V>>)> {
         let index: &mut Mvcc<K, V> = self.as_mut();
         index.set_index(key, value, seqno)
     }
@@ -2590,7 +2596,7 @@ where
         value: V,
         cas: u64,
         seqno: Option<u64>,
-    ) -> (u64, Result<Option<Entry<K, V>>>) {
+    ) -> Result<(u64, Result<Option<Entry<K, V>>>)> {
         let index: &mut Mvcc<K, V> = self.as_mut();
         index.set_cas_index(key, value, cas, seqno)
     }
@@ -2600,7 +2606,7 @@ where
         &mut self,
         key: &Q,
         seqno: Option<u64>,
-    ) -> (u64, Result<Option<Entry<K, V>>>)
+    ) -> Result<(u64, Result<Option<Entry<K, V>>>)>
     where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
@@ -2622,7 +2628,7 @@ where
     /// *LSM mode*: Add a new version for the key, perserving the old value.
     fn set(&mut self, key: K, value: V) -> Result<Option<Entry<K, V>>> {
         let index: &mut Mvcc<K, V> = self.as_mut();
-        let (_seqno, old_entry) = index.set_index(key, value, None);
+        let (_seqno, old_entry) = index.set_index(key, value, None)?;
         Ok(old_entry)
     }
 
@@ -2634,7 +2640,7 @@ where
     /// *LSM mode*: Add a new version for the key, perserving the old value.
     fn set_cas(&mut self, key: K, value: V, cas: u64) -> Result<Option<Entry<K, V>>> {
         let index: &mut Mvcc<K, V> = self.as_mut();
-        let (_seqno, entry) = index.set_cas_index(key, value, cas, None);
+        let (_seqno, entry) = index.set_cas_index(key, value, cas, None)?;
         entry
     }
 
@@ -2654,7 +2660,7 @@ where
         Q: ToOwned<Owned = K> + Ord + ?Sized,
     {
         let index: &mut Mvcc<K, V> = self.as_mut();
-        let (_seqno, entry) = index.delete_index(key, None);
+        let (_seqno, entry) = index.delete_index(key, None)?;
         entry
     }
 }
@@ -2671,7 +2677,7 @@ where
         seqno: u64, // seqno for this mutation
     ) -> Result<Option<Entry<K, V>>> {
         let index: &mut Mvcc<K, V> = self.as_mut();
-        let (_seqno, old_entry) = index.set_index(key, value, Some(seqno));
+        let (_seqno, old_entry) = index.set_index(key, value, Some(seqno))?;
         Ok(old_entry)
     }
 
@@ -2683,7 +2689,7 @@ where
         seqno: u64,
     ) -> Result<Option<Entry<K, V>>> {
         let index: &mut Mvcc<K, V> = self.as_mut();
-        let (_seqno, res) = index.set_cas_index(key, value, cas, Some(seqno));
+        let (_seqno, res) = index.set_cas_index(key, value, cas, Some(seqno))?;
         res
     }
 
@@ -2697,7 +2703,7 @@ where
         Q: ToOwned<Owned = K> + Ord + ?Sized,
     {
         let index: &mut Mvcc<K, V> = self.as_mut();
-        let (_seqno, res) = index.delete_index(key, Some(seqno));
+        let (_seqno, res) = index.delete_index(key, Some(seqno))?;
         res
     }
 }
@@ -2785,22 +2791,6 @@ impl ToJson for Stats {
             self.depths.as_ref().map_or(null.clone(), |x| x.to_json()),
         )
     }
-}
-
-// TODO: by freeing nodes in a separate thread we can save some cycles
-// on the write thread. But right now we don't have a mallocer that
-// can perform well with concurrent threads.
-#[allow(dead_code)]
-fn gc<K, V>(rx: mpsc::Receiver<usize>, n_nodes: Arc<AtomicIsize>) -> Result<()>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-{
-    for n in rx {
-        // println!("gc node");
-        n_nodes.as_ref().fetch_sub(n.try_into().unwrap(), SeqCst);
-    }
-    Ok(())
 }
 
 // drop_tree variant for mvcc.

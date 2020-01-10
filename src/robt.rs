@@ -360,7 +360,7 @@ where
 
         self.inner
             .lock()
-            .map_err(|err| ThreadFail(format!("robt lock poisened: {:?}", err)))
+            .map_err(|err| ThreadFail(format!("robt lock poisened, {:?}", err)))
     }
 }
 
@@ -570,7 +570,7 @@ where
                     info!(
                         target: "robt  ",
                         "{:?}, old_bitmap({}) + new_bitmap({}) = {}",
-                        name, old_bitmap.len(), new_bitmap.len(), bitmap.len()
+                        name, old_bitmap.len()?, new_bitmap.len()?, bitmap.len()?
                     );
 
                     let meta_block_bytes =
@@ -1666,7 +1666,7 @@ where
     }
 
     pub fn build_finish(mut self, app_meta: Vec<u8>, bitmap: B, root: u64) -> Result<usize> {
-        let (n_bitmap, bitmap) = (bitmap.len(), bitmap.to_vec());
+        let (n_bitmap, bitmap) = (bitmap.len()?, bitmap.to_vec());
         let stats: String = {
             self.stats.n_bitmap = n_bitmap;
             self.stats.mem_bitmap = bitmap.len();
@@ -1984,7 +1984,7 @@ where
                     // println!("commitscan Equal {} {}", xe.to_seqno(), ye.to_seqno(),);
                     // fetch the value from old snapshot, only value.
                     match self.y_iter.snap.fetch(ye, false, false) {
-                        Ok(ye) => Some(Ok(xe.xmerge(ye))),
+                        Ok(ye) => Some(xe.xmerge(ye)),
                         Err(err) => Some(Err(err)),
                     }
                 }

@@ -19,8 +19,8 @@ pub(crate) fn y_get<'a, 'b, K, V, Q>(
     mut y: LsmGet<'a, K, V, Q>,
 ) -> LsmGet<'a, K, V, Q>
 where
-    K: 'static + Clone + Ord + Borrow<Q>,
-    V: 'static + Clone + Diff,
+    K: 'a + Clone + Ord + Borrow<Q>,
+    V: 'a + Clone + Diff,
     Q: 'a + 'b + Ord + ?Sized,
 {
     Box::new(move |key: &Q| -> Result<Entry<K, V>> {
@@ -41,8 +41,8 @@ pub(crate) fn y_get_versions<'a, 'b, K, V, Q>(
     mut y: LsmGet<'a, K, V, Q>,
 ) -> LsmGet<'a, K, V, Q>
 where
-    K: 'static + Clone + Ord + Footprint + Borrow<Q>,
-    V: 'static + Clone + Diff + Footprint,
+    K: 'a + Clone + Ord + Footprint + Borrow<Q>,
+    V: 'a + Clone + Diff + Footprint,
     Q: 'a + 'b + Ord + ?Sized,
 {
     Box::new(move |key: &Q| -> Result<Entry<K, V>> {

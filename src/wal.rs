@@ -110,8 +110,8 @@ const WAL_BLOCK_SIZE: usize = 10 * 1024 * 1024;
 /// [Rdms]: crate::Rdms
 pub struct Wal<K, V>
 where
-    K: Send + Serialize,
-    V: Send + Serialize,
+    K: Serialize,
+    V: Serialize,
 {
     dir: ffi::OsString,
     name: String,
@@ -125,8 +125,8 @@ where
 
 impl<K, V> Drop for Wal<K, V>
 where
-    K: Send + Serialize,
-    V: Send + Serialize,
+    K: Serialize,
+    V: Serialize,
 {
     fn drop(&mut self) {
         if self.shards.len() > 0 || self.threads.len() > 0 {
@@ -137,8 +137,8 @@ where
 
 impl<K, V> Wal<K, V>
 where
-    K: Send + Serialize,
-    V: Send + Serialize,
+    K: Serialize,
+    V: Serialize,
 {
     /// Create a new [`Wal`] instance under directory ``dir``, using specified
     /// number of shards ``nshards`` and ``name`` must be unique if more than
@@ -233,8 +233,8 @@ where
 
 impl<K, V> Wal<K, V>
 where
-    K: Clone + Ord + Send + Serialize,
-    V: Clone + Diff + Send + Serialize,
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
 {
     fn is_active(&self) -> bool {
         (self.threads.len() + self.shards.len()) > 0
@@ -480,16 +480,16 @@ where
 /// writer handle can be shared across any number of threads.
 pub struct Writer<K, V>
 where
-    K: Send + Serialize,
-    V: Send + Serialize,
+    K: Serialize,
+    V: Serialize,
 {
     tx: mpsc::Sender<OpRequest<K, V>>,
 }
 
 impl<K, V> Writer<K, V>
 where
-    K: Send + Serialize,
-    V: Send + Serialize,
+    K: Serialize,
+    V: Serialize,
 {
     fn new(tx: mpsc::Sender<OpRequest<K, V>>) -> Writer<K, V> {
         Writer { tx }
@@ -719,8 +719,8 @@ where
 
 enum OpRequest<K, V>
 where
-    K: Send + Serialize,
-    V: Send + Serialize,
+    K: Serialize,
+    V: Serialize,
 {
     Set {
         key: K,
@@ -746,8 +746,8 @@ where
 
 impl<K, V> OpRequest<K, V>
 where
-    K: Send + Serialize,
-    V: Send + Serialize,
+    K: Serialize,
+    V: Serialize,
 {
     fn new_set(
         key: K,
@@ -1006,8 +1006,8 @@ where
 
 impl<K, V> Journal<K, V>
 where
-    K: Send + Serialize,
-    V: Send + Serialize,
+    K: Serialize,
+    V: Serialize,
 {
     fn append_op(&mut self, index: u64, cmd: OpRequest<K, V>) -> Result<()> {
         match cmd {

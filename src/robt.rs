@@ -2646,10 +2646,10 @@ where
     }
 
     fn iter(&mut self) -> Result<IndexIter<K, V>> {
-        let snap = unsafe { (self as *mut Snapshot<K, V, B>).as_mut().unwrap() };
         let mut mzs = vec![];
-        snap.build_fwd(snap.to_root()?, &mut mzs)?;
-        Ok(Iter::new(snap, mzs))
+        let root = self.to_root()?;
+        self.build_fwd(root, &mut mzs)?;
+        Ok(Iter::new(self, mzs))
     }
 
     fn range<'a, R, Q>(&'a mut self, range: R) -> Result<IndexIter<K, V>>
@@ -2658,9 +2658,8 @@ where
         R: 'a + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        let snap = unsafe { (self as *mut Snapshot<K, V, B>).as_mut().unwrap() };
         let versions = false;
-        snap.do_range(range, versions)
+        self.do_range(range, versions)
     }
 
     fn reverse<'a, R, Q>(&'a mut self, range: R) -> Result<IndexIter<K, V>>
@@ -2669,9 +2668,8 @@ where
         R: 'a + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        let snap = unsafe { (self as *mut Snapshot<K, V, B>).as_mut().unwrap() };
         let versions = false;
-        snap.do_reverse(range, versions)
+        self.do_reverse(range, versions)
     }
 
     fn get_with_versions<Q>(&mut self, key: &Q) -> Result<Entry<K, V>>
@@ -2692,10 +2690,10 @@ where
     /// Iterate over all entries in this index. Returned entry shall
     /// have all its previous versions, can be a costly call.
     fn iter_with_versions(&mut self) -> Result<IndexIter<K, V>> {
-        let snap = unsafe { (self as *mut Snapshot<K, V, B>).as_mut().unwrap() };
         let mut mzs = vec![];
-        snap.build_fwd(snap.to_root()?, &mut mzs)?;
-        Ok(Iter::new_versions(snap, mzs))
+        let root = self.to_root()?;
+        self.build_fwd(root, &mut mzs)?;
+        Ok(Iter::new_versions(self, mzs))
     }
 
     /// Iterate from lower bound to upper bound. Returned entry shall
@@ -2709,9 +2707,8 @@ where
         R: 'a + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        let snap = unsafe { (self as *mut Snapshot<K, V, B>).as_mut().unwrap() };
         let versions = true;
-        snap.do_range(range, versions)
+        self.do_range(range, versions)
     }
 
     /// Iterate from upper bound to lower bound. Returned entry shall
@@ -2725,9 +2722,8 @@ where
         R: 'a + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        let snap = unsafe { (self as *mut Snapshot<K, V, B>).as_mut().unwrap() };
         let versions = true;
-        snap.do_reverse(range, versions)
+        self.do_reverse(range, versions)
     }
 }
 

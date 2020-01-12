@@ -23,6 +23,8 @@ pub type IndexIter<'a, K, V> = Box<dyn Iterator<Item = Result<Entry<K, V>>> + 'a
 /// Type alias to trait-objects iterating, piece-wise, over [`Index`].
 pub type ScanIter<'a, K, V> = Box<dyn Iterator<Item = Result<ScanEntry<K, V>>> + 'a>;
 
+pub trait ThreadSafe: 'static + Send {}
+
 /// Trait for diffable values.
 ///
 /// All values indexed in [Rdms] must support this trait, since [Rdms]

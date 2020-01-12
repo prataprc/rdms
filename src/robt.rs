@@ -238,50 +238,18 @@ where
             "{:?}, new index at {:?} with config ...\n{}", name, dir, config
         );
 
-        let (tx, rx) = mpsc::channel();
-        let inner = InnerRobt::Build {
-            dir: dir.to_os_string(),
-            name: (name.to_string(), 0).into(),
-            purge_tx: Some(tx),
-            config,
-
-            _phantom_key: marker::PhantomData,
-            _phantom_val: marker::PhantomData,
-        };
-
-        let name = name.to_string();
-        let handle = thread::spawn(|| purger(name, rx));
-
-        Ok(Robt::new(inner, handle))
+        Robt::new(dir, name, config)
     }
 
     fn open(&self, dir: &ffi::OsStr, root: ffi::OsString) -> Result<Robt<K, V, B>> {
-        let name: Name = TryFrom::try_from(IndexFileName(root))?;
+        let name: Name = TryFrom::try_from(IndexFileName(root.clone()))?;
 
         info!(
             target: "robtfc",
-            "{:?}, open from {:?}/{} with config ...", name, dir, name
+            "{:?}, open from {:?}/{} ...", name, dir, name
         );
 
-        let snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
-        snapshot.log()?;
-
-        let (tx, rx) = mpsc::channel();
-        let inner = InnerRobt::Snapshot {
-            dir: dir.to_os_string(),
-            name: name.clone(),
-            footprint: snapshot.footprint()?,
-            meta: snapshot.meta.clone(),
-            config: snapshot.config.clone(),
-            stats: snapshot.to_stats()?,
-            bitmap: Arc::new(snapshot.to_bitmap()?),
-            purge_tx: Some(tx),
-        };
-
-        let name = name.0.clone();
-        let handle = thread::spawn(|| purger(name, rx));
-
-        Ok(Robt::new(inner, handle))
+        Robt::open(dir, root)
     }
 
     fn to_type(&self) -> String {
@@ -295,6 +263,7 @@ where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
+    B: Bloom,
 {
     inner: sync::Mutex<InnerRobt<K, V, B>>,
     purger: Option<thread::JoinHandle<()>>,
@@ -305,6 +274,7 @@ where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
+    B: Bloom,
 {
     fn drop(&mut self) {
         let name = {
@@ -335,12 +305,56 @@ where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
+    B: Bloom,
 {
-    fn new(inner: InnerRobt<K, V, B>, purger: thread::JoinHandle<()>) -> Robt<K, V, B> {
-        Robt {
+    pub fn new(dir: &ffi::OsStr, name: &str, mut config: Config) -> Result<Robt<K, V, B>> {
+        config.name = name.to_string();
+
+        let (tx, rx) = mpsc::channel();
+        let inner = InnerRobt::Build {
+            dir: dir.to_os_string(),
+            name: (name.to_string(), 0).into(),
+            purge_tx: Some(tx),
+            config,
+
+            _phantom_key: marker::PhantomData,
+            _phantom_val: marker::PhantomData,
+        };
+
+        let name = name.to_string();
+        let purger = thread::spawn(|| purger(name, rx));
+
+        Ok(Robt {
             inner: sync::Mutex::new(inner),
             purger: Some(purger),
-        }
+        })
+    }
+
+    pub fn open(dir: &ffi::OsStr, root: ffi::OsString) -> Result<Robt<K, V, B>> {
+        let name: Name = TryFrom::try_from(IndexFileName(root))?;
+
+        let snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
+        snapshot.log()?;
+
+        let (tx, rx) = mpsc::channel();
+        let inner = InnerRobt::Snapshot {
+            dir: dir.to_os_string(),
+            name: name.clone(),
+            footprint: snapshot.footprint()?,
+            meta: snapshot.meta.clone(),
+            config: snapshot.config.clone(),
+            stats: snapshot.to_stats()?,
+            bitmap: Arc::new(snapshot.to_bitmap()?),
+            purge_tx: Some(tx),
+        };
+
+        let name = name.0.clone();
+        let purger = thread::spawn(|| purger(name, rx));
+
+        Ok(Robt {
+            inner: sync::Mutex::new(inner),
+            purger: Some(purger),
+        })
     }
 
     /// Return Index's version number, every commit and compact shall increment
@@ -353,6 +367,20 @@ where
         };
         let parts: (String, usize) = TryFrom::try_from(name)?;
         Ok(parts.1) // version
+    }
+
+    pub fn purge(self) -> Result<()> {
+        let inner = self.as_inner()?;
+        match inner.deref() {
+            InnerRobt::Snapshot { dir, name, .. } => {
+                let snapshot = Snapshot::<K, V, B>::open(&dir, &name.0)?;
+                snapshot.purge()
+            }
+            InnerRobt::Build { .. } => {
+                let msg = format!("robt, cannot purge in build state");
+                Err(Error::UnInitialized(msg))
+            }
+        }
     }
 
     fn as_inner(&self) -> Result<MutexGuard<InnerRobt<K, V, B>>> {
@@ -878,6 +906,7 @@ where
     K: Clone + Ord + Serialize + Footprint,
     V: Clone + Diff + Serialize + Footprint,
     <V as Diff>::D: Serialize + Footprint,
+    B: Bloom,
 {
     fn footprint(&self) -> Result<isize> {
         let inner = self.as_inner()?;
@@ -2373,6 +2402,40 @@ where
         name.is_ok()
     }
 
+    pub fn purge(self) -> Result<()> {
+        let index_file = self.index_fd.to_file();
+        match purge_file(index_file.clone(), &mut vec![], &mut vec![]) {
+            "ok" => Ok(()),
+            "locked" => {
+                let msg = format!("{:?} locked", index_file);
+                Err(Error::InvalidFile(msg))
+            }
+            "error" => {
+                let msg = format!("error unlocking {:?}", index_file);
+                Err(Error::InvalidFile(msg))
+            }
+            _ => unreachable!(),
+        }?;
+
+        match &self.valog_fd {
+            Some((vlog_file, _)) => match purge_file(vlog_file.clone(), &mut vec![], &mut vec![]) {
+                "ok" => Ok(()),
+                "locked" => {
+                    let msg = format!("{:?} locked", vlog_file);
+                    Err(Error::InvalidFile(msg))
+                }
+                "error" => {
+                    let msg = format!("error unlocking {:?}", vlog_file);
+                    Err(Error::InvalidFile(msg))
+                }
+                _ => unreachable!(),
+            },
+            None => Ok(()),
+        }?;
+
+        Ok(())
+    }
+
     fn log(&self) -> Result<()> {
         info!(
             target: "robt  ",
@@ -3484,8 +3547,8 @@ where
 
 fn purge_file(
     file: ffi::OsString,
-    files: &mut Vec<ffi::OsString>,
-    efiles: &mut Vec<ffi::OsString>,
+    locked_files: &mut Vec<ffi::OsString>,
+    err_files: &mut Vec<ffi::OsString>,
 ) -> &'static str {
     let res = match util::open_file_r(&file) {
         Ok(fd) => match fd.try_lock_exclusive() {
@@ -3508,12 +3571,12 @@ fn purge_file(
         }
         ("locked", msg) => {
             info!(target: "robtpr", "{}", msg);
-            files.push(file);
+            locked_files.push(file);
             "locked"
         }
         ("error", msg) => {
             error!(target: "robtpr", "{}", msg);
-            efiles.push(file);
+            err_files.push(file);
             "error"
         }
         _ => unreachable!(),
@@ -3523,30 +3586,30 @@ fn purge_file(
 fn purger(name: String, rx: mpsc::Receiver<ffi::OsString>) {
     info!(target: "robtpr", "{:?}, starting purger ...", name);
 
-    let mut files = vec![];
-    let mut efiles = vec![];
+    let mut locked_files = vec![];
+    let mut err_files = vec![];
 
     loop {
         match rx.try_recv() {
             Err(mpsc::TryRecvError::Empty) => (),
             Err(mpsc::TryRecvError::Disconnected) => break,
             Ok(file) => {
-                purge_file(file.clone(), &mut files, &mut efiles);
+                purge_file(file.clone(), &mut locked_files, &mut err_files);
             }
         }
-        for file in files.drain(..).collect::<Vec<ffi::OsString>>() {
-            purge_file(file.clone(), &mut files, &mut efiles);
+        for file in locked_files.drain(..).collect::<Vec<ffi::OsString>>() {
+            purge_file(file.clone(), &mut locked_files, &mut err_files);
         }
-        if efiles.len() > 0 {
-            error!(target: "robtpr", "{:?}, failed purging {} files", name, efiles.len());
+        if err_files.len() > 0 {
+            error!(target: "robtpr", "{:?}, failed purging {} files", name, err_files.len());
         }
         thread::sleep(time::Duration::from_secs(1));
     }
 
-    for file in files.drain(..).collect::<Vec<ffi::OsString>>() {
-        purge_file(file.clone(), &mut files, &mut efiles);
+    for file in locked_files.drain(..).collect::<Vec<ffi::OsString>>() {
+        purge_file(file.clone(), &mut locked_files, &mut err_files);
     }
-    for file in efiles.into_iter() {
+    for file in err_files.into_iter() {
         error!(target: "robtpr", "{:?}, error purging file {:?}", name, file);
     }
     info!(target: "robtpr", "{:?}, stopping purger ...", name);

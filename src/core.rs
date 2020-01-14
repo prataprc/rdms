@@ -1007,7 +1007,7 @@ where
     //
     // TODO: should fix the order of newer entry and older entry and avoid the
     // `a` `b` logic.
-    pub(crate) fn xmerge(self, entry: Entry<K, V>) -> Result<Entry<K, V>> {
+    pub fn xmerge(self, entry: Entry<K, V>) -> Result<Entry<K, V>> {
         // `a` is newer than `b`, and all versions in a and b are mutually
         // exclusive in seqno ordering.
         let (a, mut b) = if self.to_seqno() > entry.to_seqno() {

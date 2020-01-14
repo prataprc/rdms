@@ -21,6 +21,8 @@ pub enum Error {
     UnInitialized(String),
     /// Supplied key is not found in the index.
     KeyNotFound,
+    /// Index is empty
+    EmptyIndex,
     /// Can be returned by set_cas() API when:
     /// * In non-lsm mode, requested entry is missing but specified
     ///   CAS is not ZERO. Note that this combination is an alias for

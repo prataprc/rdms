@@ -60,7 +60,7 @@ use std::{
 };
 
 use crate::{
-    core::{Bloom, CommitIter, CommitIterator, Index, Serialize, ToJson, Validate},
+    core::{self, Bloom, CommitIterator, Index, Serialize, ToJson, Validate},
     core::{Diff, DiskIndexFactory, Entry, Footprint, IndexIter, Reader, Result},
     error::Error,
     panic::Panic,
@@ -269,6 +269,34 @@ where
     purger: Option<thread::JoinHandle<()>>,
 }
 
+#[derive(Clone)]
+enum InnerRobt<K, V, B>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Serialize,
+{
+    Build {
+        dir: ffi::OsString,
+        name: Name,
+        config: Config,
+        purge_tx: Option<mpsc::Sender<ffi::OsString>>,
+
+        _phantom_key: marker::PhantomData<K>,
+        _phantom_val: marker::PhantomData<V>,
+    },
+    Snapshot {
+        dir: ffi::OsString,
+        name: Name,
+        footprint: isize,
+        meta: Vec<MetaItem>,
+        config: Config,
+        stats: Stats,
+        bitmap: Arc<B>,
+        purge_tx: Option<mpsc::Sender<ffi::OsString>>,
+    },
+}
+
 impl<K, V, B> Drop for Robt<K, V, B>
 where
     K: Clone + Ord + Serialize,
@@ -278,26 +306,23 @@ where
 {
     fn drop(&mut self) {
         let name = {
-            let inner = self.inner.get_mut().unwrap();
-            let name = match &inner {
-                InnerRobt::Build { name, .. } => name.clone(),
-                InnerRobt::Snapshot { name, .. } => name.clone(),
-            };
-            let _purge_tx = match inner {
-                InnerRobt::Build { purge_tx, .. } => purge_tx.take(),
-                InnerRobt::Snapshot { purge_tx, .. } => purge_tx.take(),
-            };
-            name
-        };
-
-        match self.purger.take() {
-            Some(purger) => {
-                if let Err(err) = purger.join() {
-                    error!(target: "robt  ", "{:?}, purger failed {:?}", name, err);
+            match self.inner.get_mut().unwrap() {
+                InnerRobt::Build { name, purge_tx, .. } => {
+                    purge_tx.take();
+                    name.clone()
+                }
+                InnerRobt::Snapshot { name, purge_tx, .. } => {
+                    purge_tx.take();
+                    name.clone()
                 }
             }
-            None => (),
         };
+        // wait till purger routine exit.
+        if let Some(purger) = self.purger.take() {
+            if let Err(err) = purger.join() {
+                error!(target: "robt  ", "{:?}, purger failed {:?}", name, err);
+            }
+        }
     }
 }
 
@@ -322,8 +347,10 @@ where
             _phantom_val: marker::PhantomData,
         };
 
-        let name = name.to_string();
-        let purger = thread::spawn(|| purger(name, rx));
+        let purger = {
+            let name = name.to_string();
+            thread::spawn(|| purger(name, rx))
+        };
 
         Ok(Robt {
             inner: sync::Mutex::new(inner),
@@ -358,11 +385,23 @@ where
         })
     }
 
+    pub fn purge(self) -> Result<()> {
+        match self.as_inner()?.deref() {
+            InnerRobt::Snapshot { dir, name, .. } => {
+                let snapshot = Snapshot::<K, V, B>::open(&dir, &name.0)?;
+                snapshot.purge()
+            }
+            InnerRobt::Build { .. } => {
+                let msg = format!("robt.purge(), in build state");
+                Err(Error::UnInitialized(msg))
+            }
+        }
+    }
+
     /// Return Index's version number, every commit and compact shall increment
     /// the version number.
-    pub fn version(&self) -> Result<usize> {
-        let inner = self.as_inner()?;
-        let name = match inner.deref() {
+    pub fn to_version(&self) -> Result<usize> {
+        let name = match self.as_inner()?.deref() {
             InnerRobt::Build { name, .. } => name.clone(),
             InnerRobt::Snapshot { name, .. } => name.clone(),
         };
@@ -370,44 +409,33 @@ where
         Ok(parts.1) // version
     }
 
-    pub fn purge(self) -> Result<()> {
-        let inner = self.as_inner()?;
-        match inner.deref() {
-            InnerRobt::Snapshot { dir, name, .. } => {
-                let snapshot = Snapshot::<K, V, B>::open(&dir, &name.0)?;
-                snapshot.purge()
-            }
-            InnerRobt::Build { .. } => {
-                let msg = format!("robt, cannot purge in build state");
-                Err(Error::UnInitialized(msg))
-            }
-        }
-    }
-
     pub fn to_next_build(&mut self) -> Result<()> {
         let mut inner = self.as_inner()?;
-        let new_inner = match inner.deref() {
+        let (dir, name, config, purge_tx) = match inner.deref() {
+            InnerRobt::Build {
+                dir,
+                name,
+                config,
+                purge_tx,
+                ..
+            } => (dir.clone(), name.clone(), config.clone(), purge_tx.clone()),
             InnerRobt::Snapshot {
                 dir,
                 name,
                 config,
                 purge_tx,
                 ..
-            } => {
-                let name = name.clone().next();
-                InnerRobt::Build {
-                    dir: dir.clone(),
-                    name,
-                    config: config.clone(),
-                    purge_tx: purge_tx.clone(),
-
-                    _phantom_key: marker::PhantomData,
-                    _phantom_val: marker::PhantomData,
-                }
-            }
-            InnerRobt::Build { .. } => unreachable!(),
+            } => (dir.clone(), name.clone(), config.clone(), purge_tx.clone()),
         };
-        *inner = new_inner;
+        *inner = InnerRobt::Build {
+            dir: dir.clone(),
+            name: name.next(),
+            config: config.clone(),
+            purge_tx: purge_tx.clone(),
+
+            _phantom_key: marker::PhantomData,
+            _phantom_val: marker::PhantomData,
+        };
         Ok(())
     }
 
@@ -416,7 +444,7 @@ where
 
         self.inner
             .lock()
-            .map_err(|err| ThreadFail(format!("robt lock poisened, {:?}", err)))
+            .map_err(|err| ThreadFail(format!("robt.as_inner(), poison-lock {:?}", err)))
     }
 }
 
@@ -432,34 +460,6 @@ where
     }
 }
 
-#[derive(Clone)]
-enum InnerRobt<K, V, B>
-where
-    K: Clone + Ord + Serialize,
-    V: Clone + Diff + Serialize,
-    <V as Diff>::D: Serialize,
-{
-    Build {
-        dir: ffi::OsString,
-        name: Name,
-        config: Config,
-        purge_tx: Option<mpsc::Sender<ffi::OsString>>,
-
-        _phantom_key: marker::PhantomData<K>,
-        _phantom_val: marker::PhantomData<V>,
-    },
-    Snapshot {
-        dir: ffi::OsString,
-        name: Name,
-        footprint: isize,
-        meta: Vec<MetaItem>,
-        config: Config,
-        stats: Stats,
-        bitmap: Arc<B>,
-        purge_tx: Option<mpsc::Sender<ffi::OsString>>,
-    },
-}
-
 impl<K, V, B> Index<K, V> for Robt<K, V, B>
 where
     K: Clone + Ord + Hash + Footprint + Serialize,
@@ -472,8 +472,7 @@ where
     type O = ffi::OsString;
 
     fn to_name(&self) -> Result<String> {
-        let inner = self.as_inner()?;
-        let name = match inner.deref() {
+        let name = match self.as_inner()?.deref() {
             InnerRobt::Build { name, .. } => name.clone(),
             InnerRobt::Snapshot { name, .. } => name.clone(),
         };
@@ -482,8 +481,7 @@ where
     }
 
     fn to_root(&self) -> Result<Self::O> {
-        let inner = self.as_inner()?;
-        let name: Name = match inner.deref() {
+        let name: Name = match self.as_inner()?.deref() {
             InnerRobt::Build { name, .. } => name.clone(),
             InnerRobt::Snapshot { name, .. } => name.clone(),
         };
@@ -493,25 +491,29 @@ where
     }
 
     fn to_metadata(&self) -> Result<Vec<u8>> {
-        let inner = self.as_inner()?;
-        match inner.deref() {
+        match self.as_inner()?.deref() {
             InnerRobt::Snapshot { meta, .. } => {
                 if let MetaItem::AppMetadata(data) = &meta[2] {
                     Ok(data.clone())
                 } else {
-                    panic!("not reachable")
+                    unreachable!()
                 }
             }
-            InnerRobt::Build { .. } => panic!("not reachable"),
+            InnerRobt::Build { .. } => {
+                let msg = format!("robt.to_metadata(), in build state");
+                Err(Error::UnInitialized(msg))
+            }
         }
     }
 
     /// Return the current seqno tracked by this index.
     fn to_seqno(&self) -> Result<u64> {
-        let inner = self.as_inner()?;
-        match inner.deref() {
+        match self.as_inner()?.deref() {
             InnerRobt::Snapshot { stats, .. } => Ok(stats.seqno),
-            InnerRobt::Build { .. } => unreachable!(),
+            InnerRobt::Build { .. } => {
+                let msg = format!("robt.to_seqno(), in build state");
+                Err(Error::UnInitialized(msg))
+            }
         }
     }
 
@@ -522,8 +524,7 @@ where
     }
 
     fn to_reader(&mut self) -> Result<Self::R> {
-        let inner = self.as_inner()?;
-        match inner.deref() {
+        match self.as_inner()?.deref() {
             InnerRobt::Snapshot {
                 dir, name, bitmap, ..
             } => {
@@ -534,7 +535,10 @@ where
                 snapshot.log()?;
                 Ok(snapshot)
             }
-            InnerRobt::Build { .. } => panic!("cannot create a reader"),
+            InnerRobt::Build { .. } => {
+                let msg = format!("robt.to_reader(), in build state");
+                Err(Error::UnInitialized(msg))
+            }
         }
     }
 
@@ -542,7 +546,7 @@ where
         Ok(Panic::new("robt"))
     }
 
-    fn commit<C, F>(&mut self, mut scanner: CommitIter<K, V, C>, metacb: F) -> Result<()>
+    fn commit<C, F>(&mut self, mut scanner: core::CommitIter<K, V, C>, metacb: F) -> Result<()>
     where
         C: CommitIterator<K, V>,
         F: Fn(Vec<u8>) -> Vec<u8>,
@@ -560,12 +564,15 @@ where
 
                 let snapshot = {
                     let config = config.clone();
+
                     let b = Builder::<K, V, B>::initial(dir, &name.0, config)?;
                     b.build(scanner.scan()?, metacb(vec![]))?;
                     let snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
                     snapshot.log()?;
+
                     snapshot
                 };
+
                 let stats = snapshot.to_stats()?;
                 let footprint = snapshot.footprint()?;
 
@@ -608,12 +615,11 @@ where
             } => {
                 info!(target: "robt  ", "{:?}, incremental commit ...", name);
 
+                let mut old = Snapshot::<K, V, B>::open(dir, &name.0)?;
+                let old_bitmap = old.to_bitmap()?;
+
                 let (name, snapshot, meta_block_bytes) = {
                     let bitmap_iter = BitmappedScan::new(scanner.scan()?);
-
-                    let mut old = Snapshot::<K, V, B>::open(dir, &name.0)?;
-                    let old_bitmap = old.to_bitmap()?;
-
                     let commit_iter = {
                         let mut mzs = vec![];
                         old.build_fwd(old.to_root()?, &mut mzs)?;
@@ -628,6 +634,7 @@ where
                         let b = Builder::<K, V, B>::incremental(dir, &name.0, config)?;
                         (name, b)
                     };
+
                     let root = b.build_tree(&mut build_iter)?;
 
                     let commit_iter = build_iter.update_stats(&mut b.stats)?;
@@ -649,12 +656,8 @@ where
                     snapshot.log()?;
 
                     // purge old snapshots file(s).
-                    purge_tx
-                        .as_ref()
-                        .ok_or(Error::UnexpectedFail(format!(
-                            "Robt::commit() missing purge_tx"
-                        )))?
-                        .send(old.index_fd.to_file())?;
+                    let err = Error::UnexpectedFail(format!("robt.commit() missing purge_tx"));
+                    purge_tx.as_ref().ok_or(err)?.send(old.index_fd.to_file())?;
 
                     (name, snapshot, meta_block_bytes)
                 };
@@ -736,6 +739,7 @@ where
             } => {
                 let (name, snapshot, meta_block_bytes) = {
                     let mut old = Snapshot::<K, V, B>::open(dir, &name.0)?;
+
                     let compact_iter = {
                         let iter = old.iter_with_versions()?;
                         CompactScan::new(iter, cutoff)
@@ -761,22 +765,16 @@ where
                     snapshot.log()?;
 
                     // purge old snapshots file(s).
+                    let err = format!("robt.compact() missing purge_tx");
                     purge_tx
                         .as_ref()
-                        .ok_or(Error::UnexpectedFail(format!(
-                            "Robt::compact() missing purge_tx"
-                        )))?
+                        .ok_or(Error::UnexpectedFail(err.clone()))?
                         .send(old.index_fd.to_file())?;
-                    match &old.valog_fd {
-                        Some((file, _)) => {
-                            purge_tx
-                                .as_ref()
-                                .ok_or(Error::UnexpectedFail(format!(
-                                    "Robt::compact() missing purge_tx"
-                                )))?
-                                .send(file.clone())?;
-                        }
-                        None => (),
+                    if let Some((file, _)) = &old.valog_fd {
+                        purge_tx
+                            .as_ref()
+                            .ok_or(Error::UnexpectedFail(err))?
+                            .send(file.clone())?;
                     }
 
                     (name, snapshot, meta_block_bytes)
@@ -834,8 +832,7 @@ where
     where
         G: Clone + RangeBounds<u64>,
     {
-        let inner = self.as_inner()?;
-        match inner.deref() {
+        match self.as_inner()?.deref() {
             InnerRobt::Snapshot { dir, name, .. } => {
                 let mut ss = Arc::new(Snapshot::<K, V, B>::open(dir, &name.0)?);
                 let s = unsafe {
@@ -848,8 +845,8 @@ where
                 Ok(Box::new(FilterScan::new(iter, within)))
             }
             InnerRobt::Build { .. } => {
-                let err = "cannot scan robt in build state".to_string();
-                Err(Error::InvalidSnapshot(err))
+                let err = "robt.scan(), in build state".to_string();
+                Err(Error::UnInitialized(err))
             }
         }
     }
@@ -884,7 +881,7 @@ where
                 Ok(iters)
             }
             InnerRobt::Build { .. } => {
-                let err = "cannot scan robt in build state".to_string();
+                let err = "robt.scans(), in build state".to_string();
                 Err(Error::InvalidSnapshot(err))
             }
         }
@@ -967,7 +964,7 @@ pub struct Config {
     /// Leaf block size in btree index.
     /// Default: Config::ZBLOCKSIZE
     pub(crate) z_blocksize: usize,
-    /// Intemediate block size in btree index.
+    /// Intermediate block size in btree index.
     /// Default: Config::MBLOCKSIZE
     pub(crate) m_blocksize: usize,
     /// If deltas are indexed and/or value to be stored in separate log file.
@@ -1070,11 +1067,13 @@ impl Config {
 
 impl fmt::Display for Config {
     fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
-        let (z, m, v) = (self.z_blocksize, self.m_blocksize, self.v_blocksize);
         let vlog_file = self
             .vlog_file
             .as_ref()
             .map_or(r#""""#.to_string(), |f| format!("{:?}, ", f));
+
+        let (z, m, v) = (self.z_blocksize, self.m_blocksize, self.v_blocksize);
+
         write!(
             f,
             concat!(
@@ -1307,15 +1306,17 @@ pub fn read_meta_items(
 
     // validate and return
     let stats: Stats = stats.parse()?;
-    let at = {
-        let at: u64 = stats.m_blocksize.try_into()?;
-        m - meta_block_bytes - at
-    };
-    if at != root {
-        let msg = format!("robt expected root at {}, found {}", at, root);
-        Err(Error::InvalidSnapshot(msg))
-    } else {
+    if root == std::u64::MAX {
         Ok((meta_items, meta_block_bytes.try_into()?))
+    } else {
+        let at: u64 = stats.m_blocksize.try_into()?;
+        let at = m - meta_block_bytes - at;
+        if at != root {
+            let msg = format!("robt expected root at {}, found {}", at, root);
+            Err(Error::InvalidSnapshot(msg))
+        } else {
+            Ok((meta_items, meta_block_bytes.try_into()?))
+        }
     }
 }
 
@@ -1826,6 +1827,12 @@ where
                 Err(err) => return Err(err),
             };
         }
+
+        if c.z.has_first_key() == false && c.fpos == 0 {
+            // empty iterator.
+            return Ok(std::u64::MAX);
+        }
+
         // println!(" number of mblocks: {}", c.ms.len());
 
         // flush final z-block
@@ -1854,8 +1861,7 @@ where
                 Err(err) => return Err(err),
             }
         } else {
-            let msg = "robt build with empty iteratory".to_string();
-            return Err(Error::DiskIndexFail(msg));
+            unreachable!()
         }
 
         // flush final set of m-blocks
@@ -2524,7 +2530,11 @@ where
     /// Return the file-position for Btree's root node.
     pub fn to_root(&self) -> Result<u64> {
         if let MetaItem::Root(root) = self.meta[0] {
-            Ok(root)
+            if root == std::u64::MAX {
+                Err(Error::EmptyIndex)
+            } else {
+                Ok(root)
+            }
         } else {
             Err(Error::InvalidSnapshot(
                 "robt snapshot root missing".to_string(),
@@ -2595,7 +2605,7 @@ where
 
         let mut partitions = vec![];
         let mut lk = Bound::<K>::Unbounded;
-        println!("to_partitions root len {}", mblock.len());
+        // println!("to_partitions root len {}", mblock.len());
         for index in 0..mblock.len() {
             let mentry = mblock.to_entry(index)?;
 
@@ -2609,7 +2619,7 @@ where
                 "partitions, reading mblock",
             )?)?;
 
-            println!("to_partitions level-1 len {}", mblock1.len());
+            // println!("to_partitions level-1 len {}", mblock1.len());
 
             for index in 0..mblock1.len() {
                 let hk = mblock1.to_key(index)?;

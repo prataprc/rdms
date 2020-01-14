@@ -36,10 +36,10 @@ fn test_to_next_build() {
 
     let mut index = Robt::<i64, i64, NoBitmap>::new(&dir, &name, config).unwrap();
     assert_eq!(index.to_name().unwrap(), name);
-    assert_eq!(index.version().unwrap(), 0);
+    assert_eq!(index.to_version().unwrap(), 0);
     index.to_next_build().unwrap();
     assert_eq!(index.to_name().unwrap(), name);
-    assert_eq!(index.version().unwrap(), 1);
+    assert_eq!(index.to_version().unwrap(), 1);
 }
 
 #[test]
@@ -83,7 +83,7 @@ fn test_version() {
             inner: sync::Mutex::new(inner),
             purger: None,
         };
-        assert_eq!(index.version().unwrap(), i);
+        assert_eq!(index.to_version().unwrap(), i);
 
         let inner = InnerRobt::<i64, i64, NoBitmap>::Snapshot {
             dir: Default::default(),
@@ -99,7 +99,7 @@ fn test_version() {
             inner: sync::Mutex::new(inner),
             purger: None,
         };
-        assert_eq!(index.version().unwrap(), i);
+        assert_eq!(index.to_version().unwrap(), i);
     }
 }
 
@@ -348,83 +348,84 @@ fn test_config() {
     );
 }
 
-#[test]
-fn test_robt_partitions() {
-    let key_max = 1_000_000;
-    let seed: u128 = random();
-    for i in 0..1 {
-        let mut n_ops = 1000; // (i * 100) + 1;
-        let seed = seed + (i as u128);
-        let mut rng = SmallRng::from_seed(seed.to_le_bytes());
-        // populate llrb
-        let lsm: bool = rng.gen();
-        let sticky: bool = rng.gen();
-        let mut llrb: Box<Llrb<i64, i64>> = if lsm {
-            Llrb::new_lsm("test-llrb")
-        } else {
-            Llrb::new("test-llrb")
-        };
-        llrb.set_sticky(sticky);
-
-        random_llrb(n_ops as i64, key_max, seed, &mut llrb);
-
-        // to avoid screwing up the seqno in non-lsm mode, say, what if
-        // the last operation was a delete.
-        llrb.set(123, 123456789).unwrap();
-        n_ops += 1;
-
-        let iter = {
-            let iter = SkipScan::new(llrb.to_reader().unwrap());
-            core::CommitIter::new(
-                CommitWrapper::new(Box::new(iter)),
-                (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded),
-            )
-        };
-
-        // build ROBT
-        let mut config: robt::Config = Default::default();
-        config.delta_ok = lsm;
-        config.value_in_vlog = rng.gen();
-        let mmap = rng.gen::<bool>();
-        println!(
-            "seed:{} n_ops:{} lsm:{} sticky:{} delta:{} vlog:{} mmap:{}",
-            seed, n_ops, lsm, sticky, config.delta_ok, config.value_in_vlog, mmap,
-        );
-        let dir = {
-            let mut dir = std::env::temp_dir();
-            dir.push("test-robt-build");
-            dir.into_os_string()
-        };
-        let name = "test-robt-partitions";
-        let mut index = {
-            //
-            Robt::<i64, i64, CRoaring>::new(&dir, name, config).unwrap()
-        };
-        let app_meta = "heloo world".to_string();
-        index
-            .commit(iter, |_| app_meta.as_bytes().to_vec())
-            .unwrap();
-
-        let mut snapshot = index.to_reader().unwrap();
-        let n = snapshot.len().unwrap();
-        for shard_i in 1..8 {
-            let ranges = snapshot.to_shards(shard_i).unwrap().into_iter();
-            println!("{} shard {} {}", n, shard_i, ranges.len());
-            for range in ranges.into_iter() {
-                let entries: Vec<Result<Entry<i64, i64>>> = {
-                    let iter = snapshot.range(range).unwrap();
-                    iter.collect()
-                };
-                println!("{}", entries.len());
-            }
-        }
-    }
-}
+//#[test]
+//fn test_robt_partitions() {
+//    let key_max = 1_000_000;
+//    let seed: u128 = random();
+//    for i in 0..1 {
+//        let mut n_ops = 1000; // (i * 100) + 1;
+//        let seed = seed + (i as u128);
+//        let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+//        // populate llrb
+//        let lsm: bool = rng.gen();
+//        let sticky: bool = rng.gen();
+//        let mut llrb: Box<Llrb<i64, i64>> = if lsm {
+//            Llrb::new_lsm("test-llrb")
+//        } else {
+//            Llrb::new("test-llrb")
+//        };
+//        llrb.set_sticky(sticky);
+//
+//        random_llrb(n_ops as i64, key_max, seed, &mut llrb);
+//
+//        // to avoid screwing up the seqno in non-lsm mode, say, what if
+//        // the last operation was a delete.
+//        llrb.set(123, 123456789).unwrap();
+//        n_ops += 1;
+//
+//        let iter = {
+//            let iter = SkipScan::new(llrb.to_reader().unwrap());
+//            core::CommitIter::new(
+//                CommitWrapper::new(Box::new(iter)),
+//                (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded),
+//            )
+//        };
+//
+//        // build ROBT
+//        let mut config: robt::Config = Default::default();
+//        config.delta_ok = lsm;
+//        config.value_in_vlog = rng.gen();
+//        let mmap = rng.gen::<bool>();
+//        println!(
+//            "seed:{} n_ops:{} lsm:{} sticky:{} delta:{} vlog:{} mmap:{}",
+//            seed, n_ops, lsm, sticky, config.delta_ok, config.value_in_vlog, mmap,
+//        );
+//        let dir = {
+//            let mut dir = std::env::temp_dir();
+//            dir.push("test-robt-build");
+//            dir.into_os_string()
+//        };
+//        let name = "test-robt-partitions";
+//        let mut index = {
+//            //
+//            Robt::<i64, i64, CRoaring>::new(&dir, name, config).unwrap()
+//        };
+//        let app_meta = "heloo world".to_string();
+//        index
+//            .commit(iter, |_| app_meta.as_bytes().to_vec())
+//            .unwrap();
+//
+//        let mut snapshot = index.to_reader().unwrap();
+//        let n = snapshot.len().unwrap();
+//        for shard_i in 1..8 {
+//            let ranges = snapshot.to_shards(shard_i).unwrap().into_iter();
+//            println!("{} shard {} {}", n, shard_i, ranges.len());
+//            for range in ranges.into_iter() {
+//                let entries: Vec<Result<Entry<i64, i64>>> = {
+//                    let iter = snapshot.range(range).unwrap();
+//                    iter.collect()
+//                };
+//                println!("{}", entries.len());
+//            }
+//        }
+//    }
+//}
 
 #[test]
 fn test_robt_llrb1() {
     let seed: u128 = random();
-    // let seed: u128 = 279765853267557126686238657580803488536;
+    let seed: u128 = 76138835700291835641202088921537605610;
+    println!("seed: {}", seed);
     run_robt_llrb("test-robt-llrb1-1", 60_000, 20_000_i64, 2, seed);
     println!("test_robt_llrb1 first run ...");
     run_robt_llrb("test-robt-llrb1-2", 6_000, 2_000_i64, 10, seed);
@@ -545,7 +546,7 @@ fn test_commit_scan() {
                 .map(|e| Ok(e.as_ref().unwrap().clone()))
                 .collect();
             llrb.commit(
-                CommitIter::new(
+                core::CommitIter::new(
                     es.into_iter(),
                     (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded),
                 ),
@@ -573,7 +574,7 @@ fn test_commit_scan() {
                 .map(|e| Ok(e.as_ref().unwrap().clone()))
                 .collect();
             llrb.commit(
-                CommitIter::new(
+                core::CommitIter::new(
                     es.into_iter(),
                     (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded),
                 ),
@@ -669,7 +670,7 @@ fn test_commit_iterator_scan() {
             .collect();
         index
             .commit(
-                CommitIter::new(c_entries.into_iter(), within.clone()),
+                core::CommitIter::new(c_entries.into_iter(), within.clone()),
                 std::convert::identity,
             )
             .unwrap();
@@ -737,7 +738,7 @@ fn test_commit_iterator_scans() {
             .collect();
         index
             .commit(
-                CommitIter::new(c_entries.into_iter(), within.clone()),
+                core::CommitIter::new(c_entries.into_iter(), within.clone()),
                 std::convert::identity,
             )
             .unwrap();
@@ -807,7 +808,7 @@ fn test_commit_iterator_range_scans() {
             .collect();
         index
             .commit(
-                CommitIter::new(c_entries.into_iter(), within.clone()),
+                core::CommitIter::new(c_entries.into_iter(), within.clone()),
                 std::convert::identity,
             )
             .unwrap();
@@ -900,22 +901,16 @@ fn run_robt_llrb(name: &str, n_ops: u64, key_max: i64, repeat: usize, seed: u128
         };
         let b = Builder::<i64, i64, CRoaring>::initial(&dir, name, config.clone()).unwrap();
         let app_meta = "heloo world".to_string();
-        match b.build(iter, app_meta.as_bytes().to_vec()) {
-            Err(Error::DiskIndexFail(msg)) => {
-                if msg.contains("empty iterator") && refs.len() == 0 {
-                    continue;
-                } else {
-                    panic!("{:?}", Error::DiskIndexFail(msg));
-                }
-            }
-            Err(err) => panic!("{:?}", err),
-            _ => (),
-        }
+        b.build(iter, app_meta.as_bytes().to_vec()).unwrap();
 
         let mut snap = robt::Snapshot::<i64, i64, CRoaring>::open(&dir, name).unwrap();
-        snap.validate().unwrap();
-        snap.set_mmap(mmap).unwrap();
         assert_eq!(snap.len().unwrap(), refs.len());
+        match snap.validate() {
+            Err(Error::EmptyIndex) if refs.len() == 0 => continue,
+            Err(err) => panic!("{:?}", err),
+            Ok(_) => (),
+        }
+        snap.set_mmap(mmap).unwrap();
         assert_eq!(snap.to_seqno().unwrap(), llrb.to_seqno().unwrap());
         assert_eq!(snap.to_app_meta().unwrap(), app_meta.as_bytes().to_vec());
         let stats = snap.to_stats().unwrap();

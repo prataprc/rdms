@@ -3,12 +3,12 @@ use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
 
 use super::*;
 use crate::{
-    core::{Delta, Index, Reader, Writer},
+    core::{self, Delta, Index, Reader, Writer},
     croaring::CRoaring,
     llrb::Llrb,
     nobitmap::NoBitmap,
     robt,
-    scans::{FilterScan, IterChain, SkipScan},
+    scans::{CommitWrapper, FilterScan, IterChain, SkipScan},
 };
 
 #[test]
@@ -27,7 +27,23 @@ fn test_name() {
 }
 
 #[test]
-fn test_index_file_name() {
+fn test_to_next_build() {
+    let name = "to_next_build1".to_string();
+    let mut config: Config = Default::default();
+    config.name = name.clone();
+
+    let dir = std::env::temp_dir().into_os_string();
+
+    let mut index = Robt::<i64, i64, NoBitmap>::new(&dir, &name, config).unwrap();
+    assert_eq!(index.to_name().unwrap(), name);
+    assert_eq!(index.version().unwrap(), 0);
+    index.to_next_build().unwrap();
+    assert_eq!(index.to_name().unwrap(), name);
+    assert_eq!(index.version().unwrap(), 1);
+}
+
+#[test]
+fn test_purge() {
     let name = Name("somename-0-robt-000".to_string());
     let iname: IndexFileName = name.clone().into();
     assert_eq!(iname.to_string(), "somename-0-robt-000.indx".to_string());
@@ -330,6 +346,79 @@ fn test_config() {
         Config::stitch_vlog_file(&dir, "users"),
         ref_file.to_os_string()
     );
+}
+
+#[test]
+fn test_robt_partitions() {
+    let key_max = 1_000_000;
+    let seed: u128 = random();
+    for i in 0..1 {
+        let mut n_ops = 1000; // (i * 100) + 1;
+        let seed = seed + (i as u128);
+        let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+        // populate llrb
+        let lsm: bool = rng.gen();
+        let sticky: bool = rng.gen();
+        let mut llrb: Box<Llrb<i64, i64>> = if lsm {
+            Llrb::new_lsm("test-llrb")
+        } else {
+            Llrb::new("test-llrb")
+        };
+        llrb.set_sticky(sticky);
+
+        random_llrb(n_ops as i64, key_max, seed, &mut llrb);
+
+        // to avoid screwing up the seqno in non-lsm mode, say, what if
+        // the last operation was a delete.
+        llrb.set(123, 123456789).unwrap();
+        n_ops += 1;
+
+        let iter = {
+            let iter = SkipScan::new(llrb.to_reader().unwrap());
+            core::CommitIter::new(
+                CommitWrapper::new(Box::new(iter)),
+                (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded),
+            )
+        };
+
+        // build ROBT
+        let mut config: robt::Config = Default::default();
+        config.delta_ok = lsm;
+        config.value_in_vlog = rng.gen();
+        let mmap = rng.gen::<bool>();
+        println!(
+            "seed:{} n_ops:{} lsm:{} sticky:{} delta:{} vlog:{} mmap:{}",
+            seed, n_ops, lsm, sticky, config.delta_ok, config.value_in_vlog, mmap,
+        );
+        let dir = {
+            let mut dir = std::env::temp_dir();
+            dir.push("test-robt-build");
+            dir.into_os_string()
+        };
+        let name = "test-robt-partitions";
+        let mut index = {
+            //
+            Robt::<i64, i64, CRoaring>::new(&dir, name, config).unwrap()
+        };
+        let app_meta = "heloo world".to_string();
+        index
+            .commit(iter, |_| app_meta.as_bytes().to_vec())
+            .unwrap();
+
+        let mut snapshot = index.to_reader().unwrap();
+        let n = snapshot.len().unwrap();
+        for shard_i in 1..8 {
+            let ranges = snapshot.to_shards(shard_i).unwrap().into_iter();
+            println!("{} shard {} {}", n, shard_i, ranges.len());
+            for range in ranges.into_iter() {
+                let entries: Vec<Result<Entry<i64, i64>>> = {
+                    let iter = snapshot.range(range).unwrap();
+                    iter.collect()
+                };
+                println!("{}", entries.len());
+            }
+        }
+    }
 }
 
 #[test]

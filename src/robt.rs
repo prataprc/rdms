@@ -93,7 +93,7 @@ impl TryFrom<Name> for (String, usize) {
 
     fn try_from(name: Name) -> Result<(String, usize)> {
         let parts: Vec<&str> = name.0.split('-').collect();
-        let err = Error::InvalidFile(format!("not robt index"));
+        let err = Error::InvalidFile(format!("{} not robt index name", name));
 
         if parts.len() >= 3 {
             match &parts[parts.len() - 2..] {
@@ -138,7 +138,7 @@ impl TryFrom<IndexFileName> for Name {
 
     fn try_from(fname: IndexFileName) -> Result<Name> {
         use crate::error::Error::InvalidFile;
-        let err = format!("not robt index");
+        let err = format!("{} not robt index file", fname);
 
         let check_file = |fname: IndexFileName| -> Option<String> {
             let fname = path::Path::new(&fname.0);
@@ -246,7 +246,7 @@ where
 
         info!(
             target: "robtfc",
-            "{:?}, open from {:?}/{} ...", name, dir, name
+            "{:?}, open from {:?}/{:?} ...", name, dir, root
         );
 
         Robt::open(dir, root)
@@ -289,6 +289,7 @@ where
             };
             name
         };
+
         match self.purger.take() {
             Some(purger) => {
                 if let Err(err) = purger.join() {
@@ -383,12 +384,51 @@ where
         }
     }
 
+    pub fn to_next_build(&mut self) -> Result<()> {
+        let mut inner = self.as_inner()?;
+        let new_inner = match inner.deref() {
+            InnerRobt::Snapshot {
+                dir,
+                name,
+                config,
+                purge_tx,
+                ..
+            } => {
+                let name = name.clone().next();
+                InnerRobt::Build {
+                    dir: dir.clone(),
+                    name,
+                    config: config.clone(),
+                    purge_tx: purge_tx.clone(),
+
+                    _phantom_key: marker::PhantomData,
+                    _phantom_val: marker::PhantomData,
+                }
+            }
+            InnerRobt::Build { .. } => unreachable!(),
+        };
+        *inner = new_inner;
+        Ok(())
+    }
+
     fn as_inner(&self) -> Result<MutexGuard<InnerRobt<K, V, B>>> {
         use crate::error::Error::ThreadFail;
 
         self.inner
             .lock()
             .map_err(|err| ThreadFail(format!("robt lock poisened, {:?}", err)))
+    }
+}
+
+impl<K, V, B> Robt<K, V, B>
+where
+    K: Clone + Ord + Hash + Footprint + Serialize,
+    V: Clone + Diff + Footprint + Serialize,
+    <V as Diff>::D: Serialize,
+    B: Bloom,
+{
+    pub fn to_partitions(&mut self) -> Result<Vec<(Bound<K>, Bound<K>)>> {
+        self.to_reader()?.to_partitions()
     }
 }
 
@@ -823,7 +863,7 @@ where
             InnerRobt::Snapshot { dir, name, .. } => {
                 let mut ss = Arc::new(Snapshot::<K, V, B>::open(dir, &name.0)?);
 
-                let ranges = Arc::get_mut(&mut ss).unwrap().do_shards(shards)?;
+                let ranges = Arc::get_mut(&mut ss).unwrap().to_shards(shards)?;
                 let mut mut_snaps = vec![];
                 for _ in 0..ranges.len() {
                     mut_snaps.push(unsafe {
@@ -2543,18 +2583,19 @@ where
         }
     }
 
-    fn do_shards(&mut self, shards: usize) -> Result<Vec<(Bound<K>, Bound<K>)>> {
+    fn to_partitions(&mut self) -> Result<Vec<(Bound<K>, Bound<K>)>> {
         let m_blocksize = self.config.m_blocksize;
         let fpos = self.to_root()?;
 
         let mblock = MBlock::<K, V>::new_decode(self.index_fd.read_buffer(
             fpos,
             m_blocksize,
-            "do_shards, reading root",
+            "partitions, reading root",
         )?)?;
 
-        let mut keys = vec![];
+        let mut partitions = vec![];
         let mut lk = Bound::<K>::Unbounded;
+        println!("to_partitions root len {}", mblock.len());
         for index in 0..mblock.len() {
             let mentry = mblock.to_entry(index)?;
 
@@ -2565,8 +2606,10 @@ where
             let mblock1 = MBlock::<K, V>::new_decode(self.index_fd.read_buffer(
                 mentry.to_fpos(),
                 m_blocksize,
-                "do_shards, reading mblock",
+                "partitions, reading mblock",
             )?)?;
+
+            println!("to_partitions level-1 len {}", mblock1.len());
 
             for index in 0..mblock1.len() {
                 let hk = mblock1.to_key(index)?;
@@ -2575,14 +2618,18 @@ where
                     continue;
                 }
 
-                keys.push((lk, Bound::Excluded(hk.clone())));
+                partitions.push((lk, Bound::Excluded(hk.clone())));
                 lk = Bound::Included(hk);
             }
         }
-        keys.push((lk, Bound::<K>::Unbounded));
+        partitions.push((lk, Bound::<K>::Unbounded));
 
+        Ok(partitions)
+    }
+
+    fn to_shards(&mut self, shards: usize) -> Result<Vec<(Bound<K>, Bound<K>)>> {
         let mut partitions = vec![];
-        for part in util::as_sharded_array(&keys, shards) {
+        for part in util::as_sharded_array(&self.to_partitions()?, shards) {
             if part.len() == 0 {
                 continue;
             }

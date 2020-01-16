@@ -424,7 +424,7 @@ fn test_config() {
 #[test]
 fn test_robt_llrb1() {
     let seed: u128 = random();
-    let seed: u128 = 76138835700291835641202088921537605610;
+    // let seed: u128 = 76138835700291835641202088921537605610;
     println!("seed: {}", seed);
     run_robt_llrb("test-robt-llrb1-1", 60_000, 20_000_i64, 2, seed);
     println!("test_robt_llrb1 first run ...");

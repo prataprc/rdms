@@ -15,9 +15,9 @@ fn test_into_iter_scan() {
 
     let test_cases = [(6_000_i64, 2_000), (0, 2_000)];
     let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
-    for (n_ops, key_max) in test_cases.into_iter() {
+    for (n_ops, key_max) in test_cases.to_vec().into_iter() {
         let mut llrb: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
-        random_llrb(*n_ops, *key_max, seed, &mut llrb);
+        random_llrb(n_ops, key_max, seed, &mut llrb);
 
         let ref_entries: Vec<Result<Entry<i64, i64>>> = llrb.iter().unwrap().collect();
         let mut into_iter = ref_entries.into_iter();
@@ -46,9 +46,9 @@ fn test_into_iter_scans() {
 
     let test_cases = [(6_000_i64, 2_000), (0, 2_000)];
     let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
-    for (n_ops, key_max) in test_cases.into_iter() {
+    for (n_ops, key_max) in test_cases.to_vec().into_iter() {
         let mut llrb: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
-        random_llrb(*n_ops, *key_max, seed, &mut llrb);
+        random_llrb(n_ops, key_max, seed, &mut llrb);
 
         for shards in 1..10 {
             println!("n_ops:{} key_max:{} shards:{}", n_ops, key_max, shards);
@@ -86,9 +86,9 @@ fn test_into_iter_range_scans() {
 
     let test_cases = [(6_000_i64, 2_000)];
     let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
-    for (n_ops, key_max) in test_cases.into_iter() {
+    for (n_ops, key_max) in test_cases.to_vec().into_iter() {
         let mut llrb: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
-        random_llrb(*n_ops, *key_max, seed, &mut llrb);
+        random_llrb(n_ops, key_max, seed, &mut llrb);
 
         for shards in 1..10 {
             println!("n_ops:{} key_max:{} shards:{}", n_ops, key_max, shards);

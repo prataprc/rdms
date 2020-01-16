@@ -754,7 +754,7 @@ fn validate_journals1(dir: ffi::OsString, ops: Vec<TestWriteOp>) {
         .collect();
     let cases = files
         .iter()
-        .zip([(1, 213), (214, 421), (422, 610)].into_iter());
+        .zip([(1, 213), (214, 421), (422, 610)].to_vec().into_iter());
     for (file, (ref_a, ref_z)) in cases {
         let mut j = Journal::<i32, i32>::load("users".to_string(), file.clone())
             .unwrap()
@@ -763,9 +763,9 @@ fn validate_journals1(dir: ffi::OsString, ops: Vec<TestWriteOp>) {
         assert_eq!(j.shard_id(), 1);
         assert_eq!(j.to_current_term(), NIL_TERM);
         let a = j.to_start_index().unwrap() as usize;
-        assert_eq!(a, *ref_a as usize);
+        assert_eq!(a, ref_a as usize);
         let z = j.to_last_index().unwrap() as usize;
-        assert_eq!(z, *ref_z as usize);
+        assert_eq!(z, ref_z as usize);
         assert_eq!(j.exceed_limit(40000).expect("exceed limit"), false);
 
         let ref_ops: Vec<(usize, Op<i32, i32>)> = ops[(a - 1)..(z - 1)]
@@ -790,7 +790,9 @@ fn validate_journals2(dir: ffi::OsString, ops: Vec<TestWriteOp>) {
             file.as_path().as_os_str().to_os_string()
         })
         .collect();
-    let cases = files.iter().zip([(214, 421), (422, 610)].into_iter());
+    let cases = files
+        .iter()
+        .zip([(214, 421), (422, 610)].to_vec().into_iter());
     for (file, (ref_a, ref_z)) in cases {
         let mut j = Journal::<i32, i32>::load("users".to_string(), file.clone())
             .unwrap()
@@ -799,9 +801,9 @@ fn validate_journals2(dir: ffi::OsString, ops: Vec<TestWriteOp>) {
         assert_eq!(j.shard_id(), 1);
         assert_eq!(j.to_current_term(), NIL_TERM);
         let a = j.to_start_index().unwrap() as usize;
-        assert_eq!(a, *ref_a as usize);
+        assert_eq!(a, ref_a as usize);
         let z = j.to_last_index().unwrap() as usize;
-        assert_eq!(z, *ref_z as usize);
+        assert_eq!(z, ref_z as usize);
         assert_eq!(j.exceed_limit(40000).expect("exceed limit"), false);
 
         let ref_ops: Vec<(usize, Op<i32, i32>)> = ops[(a - 1)..(z - 1)]
@@ -838,6 +840,7 @@ fn validate_journals3(dir: ffi::OsString, ops: Vec<TestWriteOp>) {
             (824, 1031),
             (1032, 1220),
         ]
+        .to_vec()
         .into_iter(),
     );
     for (file, (ref_a, ref_z)) in cases {
@@ -848,9 +851,9 @@ fn validate_journals3(dir: ffi::OsString, ops: Vec<TestWriteOp>) {
         assert_eq!(j.shard_id(), 1);
         assert_eq!(j.to_current_term(), NIL_TERM);
         let a = j.to_start_index().unwrap_or(0) as usize;
-        assert_eq!(a, *ref_a as usize);
+        assert_eq!(a, ref_a as usize);
         let z = j.to_last_index().unwrap_or(0) as usize;
-        assert_eq!(z, *ref_z as usize);
+        assert_eq!(z, ref_z as usize);
         assert_eq!(j.exceed_limit(40000).expect("exceed limit"), false);
 
         if a > 0 && z > 0 {

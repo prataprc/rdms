@@ -41,7 +41,6 @@
 //! [LSM]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
 //!
 
-#![feature(bind_by_move_pattern_guards)]
 #![feature(drain_filter)]
 #![feature(maybe_uninit_ref)]
 

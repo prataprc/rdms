@@ -2599,47 +2599,53 @@ where
 
     fn to_partitions(&mut self) -> Result<Vec<(Bound<K>, Bound<K>)>> {
         let m_blocksize = self.config.m_blocksize;
+        let mut partitions = vec![];
+        let mut lk = Bound::<K>::Unbounded;
+
+        // first level
         let fpos = match self.to_root() {
             Ok(root) => Ok(root),
             Err(Error::EmptyIndex) => return Ok(vec![]),
             Err(err) => Err(err),
         }?;
-
-        let mblock = MBlock::<K, V>::new_decode(self.index_fd.read_buffer(
+        let mblock1 = MBlock::<K, V>::new_decode(self.index_fd.read_buffer(
             fpos,
             m_blocksize,
             "partitions, reading root",
         )?)?;
-
-        let mut partitions = vec![];
-        let mut lk = Bound::<K>::Unbounded;
-        // println!("to_partitions root len {}", mblock.len());
-        for index in 0..mblock.len() {
-            let mentry = mblock.to_entry(index)?;
+        // println!("to_partitions root len {}", mblock1.len());
+        for index in 0..mblock1.len() {
+            let mentry = mblock1.to_entry(index)?;
 
             if mentry.is_zblock() {
-                continue;
-            }
-
-            let mblock1 = MBlock::<K, V>::new_decode(self.index_fd.read_buffer(
-                mentry.to_fpos(),
-                m_blocksize,
-                "partitions, reading mblock",
-            )?)?;
-
-            // println!("to_partitions level-1 len {}", mblock1.len());
-
-            for index in 0..mblock1.len() {
                 let hk = mblock1.to_key(index)?;
                 let range = (lk.clone(), Bound::Excluded(hk.clone()));
-                if self.range(range)?.next().is_none() {
+                if self.range(range.clone())?.next().is_none() {
                     continue;
                 }
 
-                partitions.push((lk, Bound::Excluded(hk.clone())));
+                partitions.push(range);
                 lk = Bound::Included(hk);
+            } else {
+                let mblock2 = MBlock::<K, V>::new_decode(self.index_fd.read_buffer(
+                    mentry.to_fpos(),
+                    m_blocksize,
+                    "partitions, reading mblock1",
+                )?)?;
+                // println!("to_partitions level-1 len {}", mblock2.len());
+                for index in 0..mblock2.len() {
+                    let hk = mblock2.to_key(index)?;
+                    let range = (lk.clone(), Bound::Excluded(hk.clone()));
+                    if self.range(range.clone())?.next().is_none() {
+                        continue;
+                    }
+
+                    partitions.push(range);
+                    lk = Bound::Included(hk);
+                }
             }
         }
+
         partitions.push((lk, Bound::<K>::Unbounded));
 
         Ok(partitions)

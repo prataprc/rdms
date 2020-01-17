@@ -348,84 +348,87 @@ fn test_config() {
     );
 }
 
-//#[test]
-//fn test_robt_shards() {
-//    let key_max = 1_000_000;
-//    let seed: u128 = random();
-//    for i in 0..1 {
-//        let seed = seed + (i as u128);
-//        let mut rng = SmallRng::from_seed(seed.to_le_bytes());
-//
-//        // populate llrb
-//        let mut n_ops = 1000; // (i * 50);
-//        let lsm: bool = rng.gen();
-//        let sticky: bool = rng.gen();
-//        let mut llrb: Box<Llrb<i64, i64>> = if lsm {
-//            Llrb::new_lsm("test-llrb")
-//        } else {
-//            Llrb::new("test-llrb")
-//        };
-//        llrb.set_sticky(sticky);
-//
-//        random_llrb(n_ops as i64, key_max, seed, &mut llrb);
-//
-//        // to avoid screwing up the seqno in non-lsm mode, say, what if
-//        // the last operation was a delete.
-//        llrb.set(123, 123456789).unwrap();
-//        n_ops += 1;
-//
-//        let iter = {
-//            let iter = SkipScan::new(llrb.to_reader().unwrap());
-//            core::CommitIter::new(
-//                CommitWrapper::new(Box::new(iter)),
-//                (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded),
-//            )
-//        };
-//
-//        // build ROBT
-//        let mut config: robt::Config = Default::default();
-//        config.delta_ok = lsm;
-//        config.value_in_vlog = rng.gen();
-//        let mmap = rng.gen::<bool>();
-//        println!(
-//            "seed:{} n_ops:{} lsm:{} sticky:{} delta:{} vlog:{} mmap:{}",
-//            seed, n_ops, lsm, sticky, config.delta_ok, config.value_in_vlog, mmap,
-//        );
-//        let dir = {
-//            let mut dir = std::env::temp_dir();
-//            dir.push("test-robt-build");
-//            dir.into_os_string()
-//        };
-//        let name = "test-robt-partitions";
-//        let mut index = {
-//            //
-//            Robt::<i64, i64, CRoaring>::new(&dir, name, config).unwrap()
-//        };
-//        let app_meta = "heloo world".to_string();
-//        index
-//            .commit(iter, |_| app_meta.as_bytes().to_vec())
-//            .unwrap();
-//
-//        let mut snapshot = index.to_reader().unwrap();
-//        let n = snapshot.len().unwrap();
-//        for shard_i in 1..8 {
-//            let ranges = snapshot.to_shards(shard_i).unwrap().into_iter();
-//            println!("{} shard {} {}", n, shard_i, ranges.len());
-//            for range in ranges.into_iter() {
-//                let entries: Vec<Result<Entry<i64, i64>>> = {
-//                    let iter = snapshot.range(range).unwrap();
-//                    iter.collect()
-//                };
-//                println!("{}", entries.len());
-//            }
-//        }
-//    }
-//}
+#[test]
+fn test_robt_shards() {
+    let seed: u128 = random();
+    // let seed: u128 = 249798907963814490666790823847972555780;
+
+    for i in 0..50 {
+        let seed = seed + (i as u128);
+        let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+
+        // populate llrb
+        let (n_ops, key_max) = random_ops_keys(seed, 100_000, 300_000);
+        println!("n_ops:{} key_max:{}", n_ops, key_max);
+
+        let lsm: bool = rng.gen();
+        let sticky: bool = rng.gen();
+        let mut llrb: Box<Llrb<i64, i64>> = if lsm {
+            Llrb::new_lsm("test-llrb")
+        } else {
+            Llrb::new("test-llrb")
+        };
+        llrb.set_sticky(sticky);
+
+        random_llrb(n_ops as i64, key_max, seed, &mut llrb);
+
+        let iter = {
+            let iter = SkipScan::new(llrb.to_reader().unwrap());
+            core::CommitIter::new(
+                CommitWrapper::new(Box::new(iter)),
+                (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded),
+            )
+        };
+
+        // build ROBT
+        let mut config: robt::Config = Default::default();
+        config.delta_ok = lsm;
+        config.value_in_vlog = rng.gen();
+        let mmap = rng.gen::<bool>();
+        println!(
+            "seed:{} lsm:{} sticky:{} delta:{} vlog:{} mmap:{}",
+            seed, lsm, sticky, config.delta_ok, config.value_in_vlog, mmap,
+        );
+        let dir = {
+            let mut dir = std::env::temp_dir();
+            dir.push("test-robt-build");
+            dir.into_os_string()
+        };
+        let name = "test-robt-partitions";
+        let mut snapshot = {
+            let mut index = Robt::<i64, i64, NoBitmap>::new(&dir, name, config).unwrap();
+            let app_meta = "heloo world".to_string();
+            index
+                .commit(iter, |_| app_meta.as_bytes().to_vec())
+                .unwrap();
+            index.to_reader().unwrap()
+        };
+        // println!("stats {}", snapshot.to_stats().unwrap());
+
+        let n = snapshot.len().unwrap();
+        for shard_i in 1..=8 {
+            let ranges = snapshot.to_shards(shard_i).unwrap().into_iter();
+            let mut entries: Vec<Entry<i64, i64>> = vec![];
+            for range in ranges.clone().into_iter() {
+                let iter = snapshot.range_with_versions(range).unwrap();
+                let es: Vec<Entry<i64, i64>> = iter.map(|e| e.unwrap()).collect();
+                entries.extend_from_slice(&es);
+            }
+            println!("{} shard {} {} {}", n, shard_i, ranges.len(), entries.len());
+            assert_eq!(llrb.len(), entries.len());
+            for (e, re) in entries.into_iter().zip(llrb.iter_with_versions().unwrap()) {
+                let re = re.unwrap();
+                check_entry1(&e, &re);
+                check_entry2(&e, &re);
+            }
+        }
+    }
+}
 
 #[test]
 fn test_robt_llrb1() {
     let seed: u128 = random();
-    // let seed: u128 = 76138835700291835641202088921537605610;
+    // let seed: u128 = 225009120977046217695047231070280610702;
     println!("seed: {}", seed);
     run_robt_llrb("test-robt-llrb1-1", 60_000, 20_000_i64, 2, seed);
     println!("test_robt_llrb1 first run ...");
@@ -930,7 +933,12 @@ fn run_robt_llrb(name: &str, n_ops: u64, key_max: i64, repeat: usize, seed: u128
             check_entry1(&entry, &e);
             seqno = std::cmp::max(seqno, e.to_seqno());
         }
-        assert_eq!(seqno, llrb.to_seqno().unwrap());
+        // assert_eq!(seqno, llrb.to_seqno().unwrap());
+        assert_eq!(snap.to_seqno().unwrap(), seqno);
+
+        if seqno == 0 {
+            continue;
+        }
 
         // test first entry
         let ref_entry = refs.first().unwrap();
@@ -1160,4 +1168,37 @@ fn check_entry2(e1: &Entry<i64, i64>, e2: &Entry<i64, i64>) {
         assert_eq!(m.to_diff(), n.to_diff(), "for key {}", key);
         // println!("key:{} diff {:?} {:?}", key, m.to_diff(), n.to_diff());
     }
+}
+
+fn random_ops_keys(seed: u128, ops_limit: i64, key_limit: i64) -> (i64, i64) {
+    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+
+    let n_ops_set: Vec<i64> = vec![
+        0,
+        ops_limit / 10,
+        ops_limit / 100,
+        ops_limit / 1000,
+        ops_limit / 10000,
+    ];
+    let i = rng.gen::<usize>() % (n_ops_set.len() + 1);
+    let n_ops = if i == n_ops_set.len() {
+        10000 + (rng.gen::<u64>() % (ops_limit as u64))
+    } else {
+        n_ops_set[i] as u64
+    };
+    let n_ops = n_ops as i64;
+
+    let max_key_set: Vec<i64> = vec![
+        (key_limit / 10) + 1,
+        (key_limit / 100) + 1,
+        (key_limit / 1000) + 1,
+        (key_limit / 10000) + 1,
+    ];
+    let i: usize = rng.gen::<usize>() % (max_key_set.len() + 1);
+    let max_key = if i == max_key_set.len() {
+        10000 + (rng.gen::<i64>() % key_limit)
+    } else {
+        max_key_set[i]
+    };
+    (n_ops, i64::max(i64::abs(max_key), n_ops / 10) + 1)
 }

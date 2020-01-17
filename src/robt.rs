@@ -622,7 +622,11 @@ where
                     let bitmap_iter = BitmappedScan::new(scanner.scan()?);
                     let commit_iter = {
                         let mut mzs = vec![];
-                        old.build_fwd(old.to_root()?, &mut mzs)?;
+                        match old.to_root() {
+                            Ok(root) => Ok(old.build_fwd(root, &mut mzs)?),
+                            Err(Error::EmptyIndex) => Ok(()),
+                            Err(err) => Err(err),
+                        }?;
                         let old_iter = Iter::new_shallow(&mut old, mzs);
                         CommitScan::new(bitmap_iter, old_iter)
                     };
@@ -2595,7 +2599,11 @@ where
 
     fn to_partitions(&mut self) -> Result<Vec<(Bound<K>, Bound<K>)>> {
         let m_blocksize = self.config.m_blocksize;
-        let fpos = self.to_root()?;
+        let fpos = match self.to_root() {
+            Ok(root) => Ok(root),
+            Err(Error::EmptyIndex) => return Ok(vec![]),
+            Err(err) => Err(err),
+        }?;
 
         let mblock = MBlock::<K, V>::new_decode(self.index_fd.read_buffer(
             fpos,
@@ -2637,17 +2645,17 @@ where
         Ok(partitions)
     }
 
-    fn to_shards(&mut self, shards: usize) -> Result<Vec<(Bound<K>, Bound<K>)>> {
-        let mut partitions = vec![];
-        for part in util::as_sharded_array(&self.to_partitions()?, shards) {
+    fn to_shards(&mut self, n_shards: usize) -> Result<Vec<(Bound<K>, Bound<K>)>> {
+        let mut shards = vec![];
+        for part in util::as_sharded_array(&self.to_partitions()?, n_shards) {
             if part.len() == 0 {
                 continue;
             }
             let (lk, _) = part.first().unwrap();
             let (_, hk) = part.last().unwrap();
-            partitions.push((lk.clone(), hk.clone()));
+            shards.push((lk.clone(), hk.clone()));
         }
-        Ok(partitions)
+        Ok(shards)
     }
 }
 
@@ -2767,8 +2775,11 @@ where
 
     fn iter(&mut self) -> Result<IndexIter<K, V>> {
         let mut mzs = vec![];
-        let root = self.to_root()?;
-        self.build_fwd(root, &mut mzs)?;
+        match self.to_root() {
+            Ok(root) => Ok(self.build_fwd(root, &mut mzs)?),
+            Err(Error::EmptyIndex) => Ok(()),
+            Err(err) => Err(err),
+        }?;
         Ok(Iter::new(self, mzs))
     }
 
@@ -2811,8 +2822,11 @@ where
     /// have all its previous versions, can be a costly call.
     fn iter_with_versions(&mut self) -> Result<IndexIter<K, V>> {
         let mut mzs = vec![];
-        let root = self.to_root()?;
-        self.build_fwd(root, &mut mzs)?;
+        match self.to_root() {
+            Ok(root) => Ok(self.build_fwd(root, &mut mzs)?),
+            Err(Error::EmptyIndex) => Ok(()),
+            Err(err) => Err(err),
+        }?;
         Ok(Iter::new_versions(self, mzs))
     }
 
@@ -2999,23 +3013,29 @@ where
         let mut mzs = vec![];
         let skip_one = match range.start_bound() {
             Bound::Unbounded => {
-                self.build_fwd(self.to_root()?, &mut mzs)?;
+                match self.to_root() {
+                    Ok(root) => Ok(self.build_fwd(root, &mut mzs)?),
+                    Err(Error::EmptyIndex) => Ok(()),
+                    Err(err) => Err(err),
+                }?;
                 false
             }
-            Bound::Included(key) => {
-                let entry = self.build(key, &mut mzs)?;
-                match key.cmp(entry.as_key().borrow()) {
-                    cmp::Ordering::Greater => true,
-                    _ => false,
-                }
-            }
-            Bound::Excluded(key) => {
-                let entry = self.build(key, &mut mzs)?;
-                match key.cmp(entry.as_key().borrow()) {
-                    cmp::Ordering::Equal | cmp::Ordering::Greater => true,
-                    _ => false,
-                }
-            }
+            Bound::Included(key) => match self.build(key, &mut mzs) {
+                Ok(entry) => match key.cmp(entry.as_key().borrow()) {
+                    cmp::Ordering::Greater => Ok(true),
+                    _ => Ok(false),
+                },
+                Err(Error::EmptyIndex) => Ok(false),
+                Err(err) => Err(err),
+            }?,
+            Bound::Excluded(key) => match self.build(key, &mut mzs) {
+                Ok(entry) => match key.cmp(entry.as_key().borrow()) {
+                    cmp::Ordering::Equal | cmp::Ordering::Greater => Ok(true),
+                    _ => Ok(false),
+                },
+                Err(Error::EmptyIndex) => Ok(false),
+                Err(err) => Err(err),
+            }?,
         };
         let mut r = Range::new(self, mzs, range, versions);
         if skip_one {
@@ -3037,23 +3057,29 @@ where
         let mut mzs = vec![];
         let skip_one = match range.end_bound() {
             Bound::Unbounded => {
-                self.build_rev(self.to_root()?, &mut mzs)?;
+                match self.to_root() {
+                    Ok(root) => Ok(self.build_rev(root, &mut mzs)?),
+                    Err(Error::EmptyIndex) => Ok(()),
+                    Err(err) => Err(err),
+                }?;
                 false
             }
-            Bound::Included(key) => {
-                let entry = self.build(&key, &mut mzs)?;
-                match key.cmp(entry.as_key().borrow()) {
-                    cmp::Ordering::Less => true,
-                    _ => false,
-                }
-            }
-            Bound::Excluded(key) => {
-                let entry = self.build(&key, &mut mzs)?;
-                match key.cmp(entry.as_key().borrow()) {
-                    cmp::Ordering::Less | cmp::Ordering::Equal => true,
-                    _ => false,
-                }
-            }
+            Bound::Included(key) => match self.build(&key, &mut mzs) {
+                Ok(entry) => match key.cmp(entry.as_key().borrow()) {
+                    cmp::Ordering::Less => Ok(true),
+                    _ => Ok(false),
+                },
+                Err(Error::EmptyIndex) => Ok(false),
+                Err(err) => Err(err),
+            }?,
+            Bound::Excluded(key) => match self.build(&key, &mut mzs) {
+                Ok(entry) => match key.cmp(entry.as_key().borrow()) {
+                    cmp::Ordering::Less | cmp::Ordering::Equal => Ok(true),
+                    _ => Ok(false),
+                },
+                Err(Error::EmptyIndex) => Ok(false),
+                Err(err) => Err(err),
+            }?,
         };
         let mut rr = Reverse::new(self, mzs, range, versions);
         if skip_one {

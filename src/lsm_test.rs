@@ -92,7 +92,7 @@ fn test_lsm_get1() {
 fn test_lsm_get2() {
     // test case using 2 robt version and 1 mvcc versions
     let seed: u128 = random();
-    // let seed: u128 = 247515434985230591330839704484229277320;
+    // let seed: u128 = 15892195916079603124929713164129097666;
     println!("seed {}", seed);
     let mut refi = Llrb::new_lsm("test-llrb");
 
@@ -131,8 +131,9 @@ fn test_lsm_get2() {
     let w = mvcc.to_writer().unwrap();
     let r = mvcc.to_reader().unwrap();
     let t_handle = {
-        let (_, key_max) = random_ops_keys(seed, 400_000, 400_000);
-        let n_ops = 400_000;
+        let (n_ops, key_max) = random_ops_keys(seed, 4_000, 4_000);
+        let (n_ops, key_max) = (n_ops * 100, key_max * 100);
+        println!("for concurrent thread {} {}", n_ops, key_max);
         thread::spawn(move || concurrent_write(n_ops, key_max, seed, r, w))
     };
 
@@ -155,7 +156,7 @@ fn test_lsm_get2() {
         assert_eq!(entry.to_native_value(), e.to_native_value(), "key {}", key);
         assert_eq!(entry.as_deltas().len(), e.as_deltas().len());
     }
-    // println!("get elapsed {:?}", _start.elapsed().unwrap().as_nanos());
+    println!("get elapsed {:?}", _start.elapsed().unwrap().as_nanos());
     t_handle.join().unwrap();
 
     assert!(refi.validate().is_ok());
@@ -296,8 +297,9 @@ fn test_lsm_get_versions2() {
     let w = mvcc.to_writer().unwrap();
     let r = mvcc.to_reader().unwrap();
     let t_handle = {
-        let (_, key_max) = random_ops_keys(seed, 400_000, 400_000);
-        let n_ops = 400_000;
+        let (n_ops, key_max) = random_ops_keys(seed, 400_000, 400_000);
+        let (n_ops, key_max) = (n_ops * 100, key_max * 100);
+        println!("for concurrent thread {} {}", n_ops, key_max);
         thread::spawn(move || concurrent_write(n_ops, key_max, seed, r, w))
     };
 
@@ -458,12 +460,13 @@ fn test_lsm_iter2() {
     let w = mvcc.to_writer().unwrap();
     let r = mvcc.to_reader().unwrap();
     let t_handle = {
-        let (_, key_max) = random_ops_keys(seed, 400_000, 400_000);
-        let n_ops = 400_000;
+        let (n_ops, key_max) = random_ops_keys(seed, 400_000, 400_000);
+        let (n_ops, key_max) = (n_ops * 100, key_max * 100);
+        println!("concurrent write {} {}", n_ops, key_max);
         thread::spawn(move || concurrent_write(n_ops, key_max, seed, r, w))
     };
 
-    // println!("start verification mvcc seqno {}", seqno);
+    println!("start verification mvcc seqno {}", seqno);
     let mut ss_iter = Box::new(SkipScan::new(mvcc.to_reader().unwrap()));
     ss_iter.set_seqno_range((Bound::Excluded(d2_seqno), Bound::Included(seqno)));
     let revr = false;
@@ -634,8 +637,9 @@ fn test_lsm_iter_versions2() {
     let w = mvcc.to_writer().unwrap();
     let r = mvcc.to_reader().unwrap();
     let t_handle = {
-        let (_, key_max) = random_ops_keys(seed, 400_000, 400_000);
-        let n_ops = 400_000;
+        let (n_ops, key_max) = random_ops_keys(seed, 400_000, 400_000);
+        let (n_ops, key_max) = (n_ops * 100, key_max * 100);
+        println!("concurrent write {} {}", n_ops, key_max);
         thread::spawn(move || concurrent_write(n_ops, key_max, seed, r, w))
     };
 
@@ -824,8 +828,9 @@ fn test_lsm_range2() {
     let w = mvcc.to_writer().unwrap();
     let r = mvcc.to_reader().unwrap();
     let t_handle = {
-        let (_, key_max) = random_ops_keys(seed, 400_000, 400_000);
-        let n_ops = 400_000;
+        let (n_ops, key_max) = random_ops_keys(seed, 400_000, 400_000);
+        let (n_ops, key_max) = (n_ops * 100, key_max * 100);
+        println!("concurrent write {} {}", n_ops, key_max);
         thread::spawn(move || concurrent_write(n_ops, key_max, seed, r, w))
     };
 
@@ -1032,8 +1037,9 @@ fn test_lsm_range_versions2() {
     let w = mvcc.to_writer().unwrap();
     let r = mvcc.to_reader().unwrap();
     let t_handle = {
-        let (_, key_max) = random_ops_keys(seed, 400_000, 400_000);
-        let n_ops = 400_000;
+        let (n_ops, key_max) = random_ops_keys(seed, 400_000, 400_000);
+        let (n_ops, key_max) = (n_ops * 100, key_max * 100);
+        println!("concurrent write {} {}", n_ops, key_max);
         thread::spawn(move || concurrent_write(n_ops, key_max, seed, r, w))
     };
 
@@ -1236,8 +1242,9 @@ fn test_lsm_reverse2() {
     let w = mvcc.to_writer().unwrap();
     let r = mvcc.to_reader().unwrap();
     let t_handle = {
-        let (_, key_max) = random_ops_keys(seed, 400_000, 400_000);
-        let n_ops = 400_000;
+        let (n_ops, key_max) = random_ops_keys(seed, 400_000, 400_000);
+        let (n_ops, key_max) = (n_ops * 100, key_max * 100);
+        println!("concurrent write {} {}", n_ops, key_max);
         thread::spawn(move || concurrent_write(n_ops, key_max, seed, r, w))
     };
 
@@ -1442,8 +1449,9 @@ fn test_lsm_reverse_versions2() {
     let w = mvcc.to_writer().unwrap();
     let r = mvcc.to_reader().unwrap();
     let t_handle = {
-        let (_, key_max) = random_ops_keys(seed, 400_000, 400_000);
-        let n_ops = 400_000;
+        let (n_ops, key_max) = random_ops_keys(seed, 400_000, 400_000);
+        let (n_ops, key_max) = (n_ops * 100, key_max * 100);
+        println!("concurrent write {} {}", n_ops, key_max);
         thread::spawn(move || concurrent_write(n_ops, key_max, seed, r, w))
     };
 
@@ -1648,7 +1656,7 @@ fn concurrent_write(
     for _i in 0..n_ops {
         let key = (rng.gen::<i64>() % key_max).abs();
         let op = rng.gen::<usize>() % 3;
-        // println!("concurrent key {} {}", key, op);
+        // println!("concurrent key {} {} {}", _i, key, op);
         match op {
             0 => {
                 let value: i64 = rng.gen();

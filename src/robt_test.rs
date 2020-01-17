@@ -349,14 +349,15 @@ fn test_config() {
 }
 
 //#[test]
-//fn test_robt_partitions() {
+//fn test_robt_shards() {
 //    let key_max = 1_000_000;
 //    let seed: u128 = random();
 //    for i in 0..1 {
-//        let mut n_ops = 1000; // (i * 100) + 1;
 //        let seed = seed + (i as u128);
 //        let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+//
 //        // populate llrb
+//        let mut n_ops = 1000; // (i * 50);
 //        let lsm: bool = rng.gen();
 //        let sticky: bool = rng.gen();
 //        let mut llrb: Box<Llrb<i64, i64>> = if lsm {
@@ -911,7 +912,6 @@ fn run_robt_llrb(name: &str, n_ops: u64, key_max: i64, repeat: usize, seed: u128
             Ok(_) => (),
         }
         snap.set_mmap(mmap).unwrap();
-        assert_eq!(snap.to_seqno().unwrap(), llrb.to_seqno().unwrap());
         assert_eq!(snap.to_app_meta().unwrap(), app_meta.as_bytes().to_vec());
         let stats = snap.to_stats().unwrap();
         assert_eq!(stats.z_blocksize, config.z_blocksize);
@@ -924,10 +924,13 @@ fn run_robt_llrb(name: &str, n_ops: u64, key_max: i64, repeat: usize, seed: u128
         }
 
         // test get
+        let mut seqno = 0;
         for entry in refs.iter() {
             let e = snap.get(entry.as_key()).unwrap();
             check_entry1(&entry, &e);
+            seqno = std::cmp::max(seqno, e.to_seqno());
         }
+        assert_eq!(seqno, llrb.to_seqno().unwrap());
 
         // test first entry
         let ref_entry = refs.first().unwrap();

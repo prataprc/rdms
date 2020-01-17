@@ -8,12 +8,16 @@ fi
 #    cargo test -- --ignored
 #fi
 
-if [ $? -eq 0 ] ; then
-    echo "cargo test --release ....................."
-    cargo test --release
+if [ $? -ne 0 ] ; then
+    exit 1
 fi
 
-if [ $? -eq 0 ] ; then
-    echo "cargo test --release -- --ignored .................."
-    cargo test --release -- --ignored
+echo "cargo test --release ....................."
+cargo test --release
+
+if [ $? -ne 0 ] ; then
+    exit 1
 fi
+
+echo "cargo test --release -- --ignored .................."
+cargo test --release -- --ignored

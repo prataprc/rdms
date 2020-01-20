@@ -391,10 +391,10 @@ fn test_robt_shards() {
         );
         let dir = {
             let mut dir = std::env::temp_dir();
-            dir.push("test-robt-build");
+            dir.push("test-robt-shards");
             dir.into_os_string()
         };
-        let name = "test-robt-partitions";
+        let name = "test-robt-shards";
         let mut snapshot = {
             let mut index = Robt::<i64, i64, NoBitmap>::new(&dir, name, config).unwrap();
             let app_meta = "heloo world".to_string();
@@ -468,7 +468,7 @@ fn test_robt_partitions() {
         );
         let dir = {
             let mut dir = std::env::temp_dir();
-            dir.push("test-robt-build");
+            dir.push("test-robt-partitions");
             dir.into_os_string()
         };
         let name = "test-robt-partitions";
@@ -793,7 +793,7 @@ fn test_commit_iterator_scans1() {
 
     let dir = {
         let mut dir = std::env::temp_dir();
-        dir.push("test-commit-iterator-scans");
+        dir.push("test-commit-iterator-scans1");
         println!("temp dir {:?}", dir);
         dir.into_os_string()
     };
@@ -833,7 +833,7 @@ fn test_commit_iterator_scans1() {
         let avg = mindex.len() / shards;
         for (i, count) in counts.into_iter().enumerate() {
             assert!(
-                ((count as f64) / (avg as f64)) > 0.60,
+                ((count as f64) / (avg as f64)) > 0.25,
                 "{} shard {} / {}",
                 i,
                 count,
@@ -852,7 +852,7 @@ fn test_commit_iterator_scans2() {
 
     let dir = {
         let mut dir = std::env::temp_dir();
-        dir.push("test-commit-iterator-scans");
+        dir.push("test-commit-iterator-scans2");
         println!("temp dir {:?}", dir);
         dir.into_os_string()
     };

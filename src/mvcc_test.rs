@@ -7,7 +7,7 @@ use crate::{
     core::{CommitIterator, Index, Reader, Validate, Writer},
     error::Error,
     mvcc::Mvcc,
-    scans::{self, IterChain, SkipScan},
+    scans,
     types::Empty,
     util,
 };
@@ -658,7 +658,7 @@ fn test_pw_scan() {
     assert_eq!(index.to_seqno().unwrap(), 10000);
     let seqno1 = index.to_seqno().unwrap();
 
-    let mut iter = SkipScan::new(index.to_reader().unwrap());
+    let mut iter = scans::SkipScan::new(index.to_reader().unwrap());
     iter.set_seqno_range(..=seqno1);
     for (i, entry) in iter.enumerate() {
         let entry = entry.unwrap();
@@ -677,7 +677,7 @@ fn test_pw_scan() {
     assert_eq!(index.to_seqno().unwrap(), 10334);
 
     // skip scan after first-inject.
-    let mut iter = SkipScan::new(index.to_reader().unwrap());
+    let mut iter = scans::SkipScan::new(index.to_reader().unwrap());
     iter.set_seqno_range(..=seqno1);
     for (i, entry) in iter.enumerate() {
         let entry = entry.unwrap();
@@ -715,7 +715,7 @@ fn test_pw_scan() {
     assert_eq!(index.to_seqno().unwrap(), 10935);
 
     // skip scan in-between.
-    let mut iter = SkipScan::new(index.to_reader().unwrap());
+    let mut iter = scans::SkipScan::new(index.to_reader().unwrap());
     iter.set_seqno_range((Bound::Excluded(seqno1), Bound::Included(seqno2)));
     for entry in iter {
         let entry = entry.unwrap();
@@ -778,7 +778,7 @@ fn test_pw_scan() {
     }
 
     // skip scan final.
-    let mut iter = SkipScan::new(index.to_reader().unwrap());
+    let mut iter = scans::SkipScan::new(index.to_reader().unwrap());
     iter.set_seqno_range((Bound::Excluded(seqno2), Bound::Unbounded));
     let mut ref_key = 0;
     for entry in iter {
@@ -1215,7 +1215,12 @@ fn test_commit_iterator_scans2() {
         };
         let mut r = mvcc.to_reader().unwrap();
         let within = (from_seqno, Bound::Included(mvcc.to_seqno().unwrap()));
-        let mut iter = IterChain::new(mvcc.scans(shards, within.clone()).unwrap());
+        let mut iter = {
+            let mut iters = mvcc.scans(shards, within.clone()).unwrap();
+            iters.reverse(); // make this to stack
+            let w = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
+            scans::FilterScans::new(iters, w)
+        };
         let mut ref_iter = r.iter().unwrap();
         let mut count = 0;
         loop {
@@ -1271,7 +1276,12 @@ fn test_commit_iterator_range_scans() {
         };
         let mut r = mvcc.to_reader().unwrap();
         let within = (from_seqno, Bound::Included(mvcc.to_seqno().unwrap()));
-        let mut iter = IterChain::new(mvcc.range_scans(ranges, within.clone()).unwrap());
+        let mut iter = {
+            let mut iters = mvcc.range_scans(ranges, within.clone()).unwrap();
+            iters.reverse(); // make this to stack
+            let w = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
+            scans::FilterScans::new(iters, w)
+        };
         let mut ref_iter = r.iter().unwrap();
         let mut count = 0;
         loop {

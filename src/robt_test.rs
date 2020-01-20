@@ -8,7 +8,7 @@ use crate::{
     llrb::Llrb,
     nobitmap::NoBitmap,
     robt,
-    scans::{self, CommitWrapper, IterChain, SkipScan},
+    scans::{self, CommitWrapper},
 };
 
 #[test]
@@ -373,7 +373,7 @@ fn test_robt_shards() {
         random_llrb(n_ops as i64, key_max, seed, &mut llrb);
 
         let iter = {
-            let iter = SkipScan::new(llrb.to_reader().unwrap());
+            let iter = scans::SkipScan::new(llrb.to_reader().unwrap());
             core::CommitIter::new(
                 CommitWrapper::new(Box::new(iter)),
                 (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded),
@@ -450,7 +450,7 @@ fn test_robt_partitions() {
         random_llrb(n_ops as i64, key_max, seed, &mut mindex);
 
         let iter = {
-            let iter = SkipScan::new(mindex.to_reader().unwrap());
+            let iter = scans::SkipScan::new(mindex.to_reader().unwrap());
             core::CommitIter::new(
                 CommitWrapper::new(Box::new(iter)),
                 (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded),
@@ -814,7 +814,7 @@ fn test_commit_iterator_scans1() {
 
         let mut index = robtf.new(&dir, "snapshot-scans").unwrap();
         let iter = {
-            let iter = SkipScan::new(mindex.to_reader().unwrap());
+            let iter = scans::SkipScan::new(mindex.to_reader().unwrap());
             let iter = CommitWrapper::new(Box::new(iter));
             core::CommitIter::new(iter, within.clone())
         };
@@ -893,8 +893,13 @@ fn test_commit_iterator_scans2() {
             .unwrap();
 
         let shards = (i + 1) as usize;
-        let iters = index.scans(shards, within).unwrap();
-        let mut iter = IterChain::new(iters);
+
+        let mut iter = {
+            let mut iters = index.scans(shards, within).unwrap();
+            iters.reverse(); // make this to stack
+            let w = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
+            scans::FilterScans::new(iters, w)
+        };
 
         let mut r = llrb_snap.to_reader().unwrap();
         let ref_iter = r.iter_with_versions().unwrap();
@@ -973,8 +978,12 @@ fn test_commit_iterator_range_scans() {
                 (Bound::Included(hk), acc)
             });
         ranges.push((last_hk, Bound::Unbounded));
-        let iters = index.range_scans(ranges, within).unwrap();
-        let mut iter = IterChain::new(iters);
+        let mut iter = {
+            let mut iters = index.range_scans(ranges, within).unwrap();
+            iters.reverse(); // make this to stack
+            let w = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
+            scans::FilterScans::new(iters, w)
+        };
 
         let mut r = llrb_snap.to_reader().unwrap();
         let ref_iter = r.iter_with_versions().unwrap();
@@ -1041,7 +1050,7 @@ fn run_robt_llrb(name: &str, n_ops: u64, key_max: i64, repeat: usize, seed: u128
             .map(|e| if e.is_deleted() { 1 } else { 0 })
             .sum();
         // println!("refs len: {}", refs.len());
-        let mut iter = SkipScan::new(llrb.to_reader().unwrap());
+        let mut iter = scans::SkipScan::new(llrb.to_reader().unwrap());
         iter.set_seqno_range(within);
         let dir = {
             let mut dir = std::env::temp_dir();
@@ -1185,7 +1194,7 @@ fn llrb_to_refs1(
     within: (Bound<u64>, Bound<u64>),
     config: &Config,
 ) -> (Box<Llrb<i64, i64>>, Vec<Entry<i64, i64>>) {
-    let mut iter = SkipScan::new(llrb.to_reader().unwrap());
+    let mut iter = scans::SkipScan::new(llrb.to_reader().unwrap());
     iter.set_seqno_range(within);
     let refs = iter
         .filter_map(|e| {

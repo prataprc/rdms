@@ -66,8 +66,7 @@ use crate::{
     panic::Panic,
     robt_entry::MEntry,
     robt_index::{MBlock, ZBlock},
-    scans::{self, BitmappedScan, CompactScan},
-    util,
+    scans, util,
 };
 
 include!("robt_marker.rs");
@@ -619,7 +618,7 @@ where
                 let old_bitmap = old.to_bitmap()?;
 
                 let (name, snapshot, meta_block_bytes) = {
-                    let bitmap_iter = BitmappedScan::new(scanner.scan()?);
+                    let bitmap_iter = scans::BitmappedScan::new(scanner.scan()?);
                     let commit_iter = {
                         let mut mzs = vec![];
                         match old.to_root() {
@@ -746,7 +745,7 @@ where
 
                     let compact_iter = {
                         let iter = old.iter_with_versions()?;
-                        CompactScan::new(iter, cutoff)
+                        scans::CompactScan::new(iter, cutoff)
                     };
 
                     info!(target: "robt  ", "{:?}, compact ...", name);
@@ -1688,9 +1687,9 @@ where
         I: Iterator<Item = Result<Entry<K, V>>>,
     {
         let (root, bitmap): (u64, B) = {
-            let mut build_scanner = BuildScan::new(BitmappedScan::new(iter));
-            let root = self.build_tree(&mut build_scanner)?;
-            let (_, bitmap) = build_scanner.update_stats(&mut self.stats)?.close()?;
+            let mut bscanner = BuildScan::new(scans::BitmappedScan::new(iter));
+            let root = self.build_tree(&mut bscanner)?;
+            let (_, bitmap) = bscanner.update_stats(&mut self.stats)?.close()?;
             (root, bitmap)
         };
 

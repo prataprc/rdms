@@ -245,6 +245,7 @@ where
     iters_stack: Vec<I>,
     start: Bound<u64>,
     end: Bound<u64>,
+    skip_filter: bool,
 }
 
 impl<K, V, I> FilterScans<K, V, I>
@@ -257,11 +258,17 @@ where
     where
         G: RangeBounds<u64>,
     {
-        let (start, end) = util::to_start_end(within);
+        use std::ops::Bound::Unbounded;
+
+        let (start, end, skip_filter) = match util::to_start_end(within) {
+            (Unbounded, Unbounded) => (Unbounded, Unbounded, true),
+            (start, end) => (start, end, false),
+        };
         FilterScans {
             iters_stack,
             start,
             end,
+            skip_filter,
         }
     }
 }
@@ -281,6 +288,7 @@ where
                 None => break None,
                 Some(iter) => loop {
                     match iter.next() {
+                        Some(Ok(entry)) if self.skip_filter => break Some(Ok(entry)),
                         Some(Ok(entry)) => {
                             match entry.filter_within(self.start.clone(), self.end.clone()) {
                                 Some(entry) => break Some(Ok(entry)),

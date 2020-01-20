@@ -232,6 +232,7 @@ impl Footprint for i64 {
 
 //-------------------------------------------------------------------
 
+// TODO: Is this required ??
 pub(crate) struct EmptyIter<'a, K, V>
 where
     K: Clone + Ord,

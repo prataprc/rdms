@@ -41,6 +41,7 @@ fn test_into_iter_scan() {
 #[test]
 fn test_into_iter_scans() {
     use std::vec::IntoIter;
+
     let seed: u128 = random();
     println!("seed {}", seed);
 
@@ -54,16 +55,19 @@ fn test_into_iter_scans() {
             println!("n_ops:{} key_max:{} shards:{}", n_ops, key_max, shards);
             let ref_entries: Vec<Result<Entry<i64, i64>>> = llrb.iter().unwrap().collect();
             let mut into_iter = ref_entries.into_iter();
-            let entries: Vec<Entry<i64, i64>> = IterChain::new(
-                <IntoIter<Result<Entry<i64, i64>>> as CommitIterator<i64, i64>>::scans(
-                    &mut into_iter,
-                    shards,
-                    within.clone(),
-                )
-                .unwrap(),
-            )
-            .map(|e| e.unwrap())
-            .collect();
+            let iter = {
+                let mut iters =
+                    <IntoIter<Result<Entry<i64, i64>>> as CommitIterator<i64, i64>>::scans(
+                        &mut into_iter,
+                        shards,
+                        within.clone(),
+                    )
+                    .unwrap();
+                let w = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
+                iters.reverse(); // make this to stack
+                FilterScans::new(iters, w)
+            };
+            let entries: Vec<Entry<i64, i64>> = iter.map(|e| e.unwrap()).collect();
 
             let ref_entries: Vec<Entry<i64, i64>> =
                 llrb.iter().unwrap().map(|e| e.unwrap()).collect();

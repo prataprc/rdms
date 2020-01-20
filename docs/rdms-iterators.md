@@ -27,10 +27,10 @@ List of types implementing Iterator
 * `scans::SkipScan`, useful in full-table scan using `pw_scan()` interface.
   Additionally, can be configured to filter entries within a key-range and/or
   `seqno` range. Used to implement CommitIterator for `Llrb` and `Mvcc`.
-* `scans::FilterScan`, useful in full-table scan using one or more iterators.
+* `scans::FilterScans`, useful in full-table scan using one or more iterators.
   If more than one iterators are supplied Iterators are chained in stack order.
   Additionally, can be configured to filter entries within a `seqno` range.
-* `scans::BitmappedScan`
+* `scans::BitmappedScan`, useful to build a bitmap of all iterated keys.
 * `scans::CompactScan`
 * `scans::IterChain`
 * `types::EmptyIter`

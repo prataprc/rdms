@@ -7,7 +7,7 @@ use crate::{
     core::{CommitIterator, Index, Reader, Validate, Writer},
     error::Error,
     mvcc::Mvcc,
-    scans::{FilterScan, IterChain, SkipScan},
+    scans::{self, IterChain, SkipScan},
     types::Empty,
     util,
 };
@@ -1033,7 +1033,10 @@ fn check_compact_nodes(
                 Bound::Unbounded,
             ),
         };
-        let mut refiter = FilterScan::new(rindex.iter().unwrap(), within);
+        let mut refiter = {
+            let iters = vec![rindex.iter().unwrap()];
+            scans::FilterScans::new(iters, within)
+        };
         loop {
             let entry = iter.next().transpose().unwrap();
             let refentry = refiter.next().transpose().unwrap();

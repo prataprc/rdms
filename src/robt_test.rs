@@ -8,7 +8,7 @@ use crate::{
     llrb::Llrb,
     nobitmap::NoBitmap,
     robt,
-    scans::{CommitWrapper, FilterScan, IterChain, SkipScan},
+    scans::{self, CommitWrapper, IterChain, SkipScan},
 };
 
 #[test]
@@ -1209,7 +1209,10 @@ fn llrb_to_refs2<R>(
 where
     R: Clone + RangeBounds<i64>,
 {
-    let iter = FilterScan::new(llrb.range(range).unwrap(), within);
+    let iter = {
+        let iters = vec![llrb.range(range).unwrap()];
+        scans::FilterScans::new(iters, within)
+    };
     iter.filter_map(|e| {
         let mut e = e.unwrap();
         if !config.delta_ok {
@@ -1229,7 +1232,10 @@ fn llrb_to_refs3<R>(
 where
     R: Clone + RangeBounds<i64>,
 {
-    let iter = FilterScan::new(llrb.reverse(range).unwrap(), within);
+    let iter = {
+        let iters = vec![llrb.reverse(range).unwrap()];
+        scans::FilterScans::new(iters, within)
+    };
     iter.filter_map(|e| {
         let mut e = e.unwrap();
         if !config.delta_ok {

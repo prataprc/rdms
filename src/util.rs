@@ -75,18 +75,19 @@ pub(crate) fn check_remaining(buf: &[u8], want: usize, msg: &str) -> Result<()> 
     }
 }
 
-pub(crate) fn to_start_end<G>(within: G) -> (Bound<u64>, Bound<u64>)
+pub(crate) fn to_start_end<G, K>(within: G) -> (Bound<K>, Bound<K>)
 where
-    G: RangeBounds<u64>,
+    K: Clone,
+    G: RangeBounds<K>,
 {
     let start = match within.start_bound() {
-        Bound::Included(seqno) => Bound::Included(*seqno),
-        Bound::Excluded(seqno) => Bound::Excluded(*seqno),
+        Bound::Included(val) => Bound::Included(val.clone()),
+        Bound::Excluded(val) => Bound::Excluded(val.clone()),
         Bound::Unbounded => Bound::Unbounded,
     };
     let end = match within.end_bound() {
-        Bound::Included(seqno) => Bound::Included(*seqno),
-        Bound::Excluded(seqno) => Bound::Excluded(*seqno),
+        Bound::Included(val) => Bound::Included(val.clone()),
+        Bound::Excluded(val) => Bound::Excluded(val.clone()),
         Bound::Unbounded => Bound::Unbounded,
     };
     (start, end)

@@ -14,7 +14,7 @@ use crate::{
     util,
 };
 
-// TODO: benchmark SkipScan and FilterScan and measure the difference.
+// TODO: benchmark SkipScan and FilterScans and measure the difference.
 
 const SKIP_SCAN_BATCH_SIZE: usize = 1000;
 
@@ -234,35 +234,39 @@ where
     }
 }
 
-/// FilterScan for continuous full table iteration filtering out older and
+/// FilterScans for continuous full table iteration filtering out older and
 /// newer mutations.
-pub struct FilterScan<K, V, I>
+pub struct FilterScans<K, V, I>
 where
     K: Clone + Ord,
     V: Clone + Diff,
     I: Iterator<Item = Result<Entry<K, V>>>,
 {
-    iter: I,
+    iters_stack: Vec<I>,
     start: Bound<u64>,
     end: Bound<u64>,
 }
 
-impl<K, V, I> FilterScan<K, V, I>
+impl<K, V, I> FilterScans<K, V, I>
 where
     K: Clone + Ord,
     V: Clone + Diff,
     I: Iterator<Item = Result<Entry<K, V>>>,
 {
-    pub fn new<G>(iter: I, within: G) -> FilterScan<K, V, I>
+    pub fn new<G>(iters_stack: Vec<I>, within: G) -> FilterScans<K, V, I>
     where
         G: RangeBounds<u64>,
     {
         let (start, end) = util::to_start_end(within);
-        FilterScan { iter, start, end }
+        FilterScans {
+            iters_stack,
+            start,
+            end,
+        }
     }
 }
 
-impl<K, V, I> Iterator for FilterScan<K, V, I>
+impl<K, V, I> Iterator for FilterScans<K, V, I>
 where
     K: Clone + Ord,
     V: Clone + Diff,
@@ -273,15 +277,31 @@ where
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            match self.iter.next() {
-                Some(Ok(entry)) => {
-                    match entry.filter_within(self.start.clone(), self.end.clone()) {
-                        Some(entry) => break Some(Ok(entry)),
-                        None => (),
-                    }
-                }
-                Some(Err(err)) => break Some(Err(err)),
+            let entry = match self.iters_stack.last_mut() {
                 None => break None,
+                Some(iter) => loop {
+                    match iter.next() {
+                        Some(Ok(entry)) => {
+                            match entry.filter_within(self.start.clone(), self.end.clone()) {
+                                Some(entry) => break Some(Ok(entry)),
+                                None => (),
+                            }
+                        }
+                        Some(Err(err)) => break Some(Err(err)),
+                        None => break None,
+                    }
+                },
+            };
+
+            match entry {
+                Some(Ok(entry)) => break Some(Ok(entry)),
+                Some(Err(err)) => {
+                    self.iters_stack.drain(..);
+                    break Some(Err(err));
+                }
+                None => {
+                    self.iters_stack.pop();
+                }
             }
         }
     }
@@ -526,8 +546,8 @@ where
         G: Clone + RangeBounds<u64>,
     {
         let entries: Vec<Result<Entry<K, V>>> = self.collect();
-        let iter = entries.into_iter();
-        Ok(Box::new(FilterScan::new(iter, within)))
+        let iters = vec![entries.into_iter()];
+        Ok(Box::new(FilterScans::new(iters, within)))
     }
 
     fn scans<G>(&mut self, shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
@@ -539,16 +559,16 @@ where
             entries.push(e?)
         }
 
-        Ok(util::as_sharded_array(&entries, shards)
-            .into_iter()
-            .map(|shard| {
-                let iter: IndexIter<K, V> = Box::new(FilterScan::new(
-                    shard.to_vec().into_iter().map(|e| Ok(e)).into_iter(),
-                    within.clone(),
-                ));
-                iter
-            })
-            .collect())
+        let mut iters = vec![];
+        for shard in util::as_sharded_array(&entries, shards).into_iter() {
+            let iter: IndexIter<K, V> = {
+                let iter = shard.to_vec().into_iter().map(|e| Ok(e)).into_iter();
+                Box::new(FilterScans::new(vec![iter], within.clone()))
+            };
+            iters.push(iter)
+        }
+
+        Ok(iters)
     }
 
     fn range_scans<N, G>(&mut self, ranges: Vec<N>, within: G) -> Result<Vec<IndexIter<K, V>>>
@@ -561,16 +581,17 @@ where
             entries.push(e?)
         }
 
-        Ok(util::as_part_array(&entries, ranges)
-            .into_iter()
-            .map(|shard| {
-                let iter: IndexIter<K, V> = Box::new(FilterScan::new(
-                    shard.into_iter().map(|e| Ok(e)).into_iter(),
-                    within.clone(),
-                ));
-                iter
-            })
-            .collect())
+        let mut iters = vec![];
+        for shard in util::as_part_array(&entries, ranges).into_iter() {
+            let iter: IndexIter<K, V> = {
+                let iter = shard.into_iter().map(|e| Ok(e)).into_iter();
+                Box::new(FilterScans::new(vec![iter], within.clone()))
+            };
+
+            iters.push(iter)
+        }
+
+        Ok(iters)
     }
 }
 

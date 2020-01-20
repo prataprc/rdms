@@ -309,7 +309,10 @@ fn test_filter_scan() {
             (start_seqno, end_seqno)
         };
 
-        let scanner = FilterScan::new(llrb.iter().unwrap(), within);
+        let scanner = {
+            let iters = vec![llrb.iter().unwrap()];
+            FilterScans::new(iters, within)
+        };
 
         let es: Vec<Entry<i64, i64>> = scanner.map(|e| e.unwrap()).collect();
         println!("within:{:?} entries:{}", within, es.len());
@@ -337,40 +340,40 @@ fn test_filter_scan() {
     }
 
     let within = (Bound::Included(5000), Bound::Included(5000));
-    let scanner = FilterScan::new(llrb.iter().unwrap(), within);
+    let scanner = FilterScans::new(vec![llrb.iter().unwrap()], within);
     let es: Vec<Entry<i64, i64>> = scanner.map(|e| e.unwrap()).collect();
     assert_eq!(es.len(), 1);
     assert_eq!(es[0].to_seqno(), 5000);
 
     let within = (Bound::Included(5000), Bound::Excluded(5000));
-    let scanner = FilterScan::new(llrb.iter().unwrap(), within);
+    let scanner = FilterScans::new(vec![llrb.iter().unwrap()], within);
     let es: Vec<Entry<i64, i64>> = scanner.map(|e| e.unwrap()).collect();
     assert_eq!(es.len(), 0);
 
     let within = (Bound::Excluded(5000), Bound::Included(5000));
-    let scanner = FilterScan::new(llrb.iter().unwrap(), within);
+    let scanner = FilterScans::new(vec![llrb.iter().unwrap()], within);
     let es: Vec<Entry<i64, i64>> = scanner.map(|e| e.unwrap()).collect();
     assert_eq!(es.len(), 0);
 
     let within = (Bound::Excluded(5000), Bound::Excluded(5000));
-    let scanner = FilterScan::new(llrb.iter().unwrap(), within);
+    let scanner = FilterScans::new(vec![llrb.iter().unwrap()], within);
     let es: Vec<Entry<i64, i64>> = scanner.map(|e| e.unwrap()).collect();
     assert_eq!(es.len(), 0);
 
     let within = (Bound::Included(5000), Bound::Excluded(5001));
-    let scanner = FilterScan::new(llrb.iter().unwrap(), within);
+    let scanner = FilterScans::new(vec![llrb.iter().unwrap()], within);
     let es: Vec<Entry<i64, i64>> = scanner.map(|e| e.unwrap()).collect();
     assert_eq!(es.len(), 1);
     assert_eq!(es[0].to_seqno(), 5000);
 
     let within = (Bound::Excluded(5000), Bound::Included(5001));
-    let scanner = FilterScan::new(llrb.iter().unwrap(), within);
+    let scanner = FilterScans::new(vec![llrb.iter().unwrap()], within);
     let es: Vec<Entry<i64, i64>> = scanner.map(|e| e.unwrap()).collect();
     assert_eq!(es.len(), 1);
     assert_eq!(es[0].to_seqno(), 5001);
 
     let within = (Bound::Excluded(5000), Bound::Excluded(5001));
-    let scanner = FilterScan::new(llrb.iter().unwrap(), within);
+    let scanner = FilterScans::new(vec![llrb.iter().unwrap()], within);
     let es: Vec<Entry<i64, i64>> = scanner.map(|e| e.unwrap()).collect();
     assert_eq!(es.len(), 0);
 }

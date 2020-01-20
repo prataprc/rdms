@@ -66,7 +66,7 @@ use crate::{
     panic::Panic,
     robt_entry::MEntry,
     robt_index::{MBlock, ZBlock},
-    scans::{BitmappedScan, CompactScan, FilterScan},
+    scans::{self, BitmappedScan, CompactScan},
     util,
 };
 
@@ -838,15 +838,12 @@ where
     {
         match self.as_inner()?.deref() {
             InnerRobt::Snapshot { dir, name, .. } => {
-                let mut ss = Arc::new(Snapshot::<K, V, B>::open(dir, &name.0)?);
-                let s = unsafe {
-                    (Arc::get_mut(&mut ss).unwrap() as *mut Snapshot<K, V, B>)
-                        .as_mut()
-                        .unwrap()
+                let iter = {
+                    let snap = Snapshot::<K, V, B>::open(dir, &name.0)?;
+                    scans::FilterScans::new(vec![snap.into_scan()?], within)
                 };
 
-                let iter = SnapshotScan::new(ss, vec![s.iter_with_versions()?]);
-                Ok(Box::new(FilterScan::new(iter, within)))
+                Ok(Box::new(iter))
             }
             InnerRobt::Build { .. } => {
                 let err = "robt.scan(), in build state".to_string();
@@ -862,26 +859,21 @@ where
         let inner = self.as_inner()?;
         match inner.deref() {
             InnerRobt::Snapshot { dir, name, .. } => {
-                let mut ss = Arc::new(Snapshot::<K, V, B>::open(dir, &name.0)?);
-
-                let ranges = Arc::get_mut(&mut ss).unwrap().to_shards(shards)?;
-                let mut mut_snaps = vec![];
-                for _ in 0..ranges.len() {
-                    mut_snaps.push(unsafe {
-                        (Arc::get_mut(&mut ss).unwrap() as *mut Snapshot<K, V, B>)
-                            .as_mut()
-                            .unwrap()
-                    });
-                }
+                let ranges = {
+                    let mut snap = Snapshot::<K, V, B>::open(dir, &name.0)?;
+                    snap.to_shards(shards)?
+                };
 
                 let mut iters = vec![];
-                for (range, snap) in ranges.into_iter().zip(mut_snaps.into_iter()) {
-                    let iter: IndexIter<K, V> = Box::new(FilterScan::new(
-                        SnapshotScan::new(Arc::clone(&ss), vec![snap.range_with_versions(range)?]),
+                for range in ranges.into_iter() {
+                    let snap = Snapshot::<K, V, B>::open(dir, &name.0)?;
+                    let iter: IndexIter<K, V> = Box::new(scans::FilterScans::new(
+                        vec![snap.into_range_scan(range)?],
                         within.clone(),
                     ));
                     iters.push(iter)
                 }
+
                 Ok(iters)
             }
             InnerRobt::Build { .. } => {
@@ -899,39 +891,17 @@ where
         let inner = self.as_inner()?;
         match inner.deref() {
             InnerRobt::Snapshot { dir, name, .. } => {
-                let mut snapshot = Arc::new(Snapshot::<K, V, B>::open(dir, &name.0)?);
-
-                let mut mut_snaps = vec![];
-                for _ in 0..ranges.len() {
-                    mut_snaps.push(unsafe {
-                        (Arc::get_mut(&mut snapshot).unwrap() as *mut Snapshot<K, V, B>)
-                            .as_mut()
-                            .unwrap()
-                    })
-                }
-
                 let mut iters = vec![];
-                for (range, snap) in ranges.into_iter().zip(mut_snaps.into_iter()) {
-                    let start = match range.start_bound() {
-                        Bound::Unbounded => Bound::Unbounded,
-                        Bound::Included(key) => Bound::Included(key.clone()),
-                        Bound::Excluded(key) => Bound::Excluded(key.clone()),
-                    };
-                    let end = match range.end_bound() {
-                        Bound::Unbounded => Bound::Unbounded,
-                        Bound::Included(key) => Bound::Included(key.clone()),
-                        Bound::Excluded(key) => Bound::Excluded(key.clone()),
-                    };
-
-                    let iter: IndexIter<K, V> = Box::new(FilterScan::new(
-                        SnapshotScan::new(
-                            Arc::clone(&snapshot),
-                            vec![snap.range_with_versions((start, end))?],
-                        ),
+                for range in ranges.into_iter() {
+                    let snap = Snapshot::<K, V, B>::open(dir, &name.0)?;
+                    let iter: IndexIter<K, V> = Box::new(scans::FilterScans::new(
+                        vec![snap.into_range_scan(util::to_start_end(range))?],
                         within.clone(),
                     ));
+
                     iters.push(iter)
                 }
+
                 Ok(iters)
             }
             InnerRobt::Build { .. } => {
@@ -2045,7 +2015,7 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         match (self.x_entry.take(), self.y_entry.take()) {
-            (Some(Ok(xe)), Some(Ok(ye))) => match xe.as_key().cmp(ye.as_key()) {
+            (Some(Ok(xe)), Some(Ok(mut ye))) => match xe.as_key().cmp(ye.as_key()) {
                 cmp::Ordering::Less => {
                     self.x_entry = self.x_iter.next();
                     self.y_entry = Some(Ok(ye));
@@ -2063,8 +2033,8 @@ where
                     self.y_entry = self.y_iter.next();
                     // println!("commitscan Equal {} {}", xe.to_seqno(), ye.to_seqno(),);
                     // fetch the value from old snapshot, only value.
-                    match self.y_iter.snap.fetch(ye, false, false) {
-                        Ok(ye) => Some(xe.xmerge(ye)),
+                    match self.y_iter.snap.fetch(&mut ye, false, false) {
+                        Ok(()) => Some(xe.xmerge(ye)),
                         Err(err) => Some(Err(err)),
                     }
                 }
@@ -2080,58 +2050,6 @@ where
             (Some(Ok(_xe)), Some(Err(err))) => Some(Err(err)),
             (Some(Err(err)), Some(Ok(_ye))) => Some(Err(err)),
             _ => None,
-        }
-    }
-}
-
-struct SnapshotScan<'a, K, V, B>
-where
-    K: Clone + Ord + Serialize,
-    V: Clone + Diff + Serialize,
-{
-    _snapshot: Arc<Snapshot<K, V, B>>,
-    iter: Option<IndexIter<'a, K, V>>,
-    iters: Vec<IndexIter<'a, K, V>>,
-}
-
-impl<'a, K, V, B> SnapshotScan<'a, K, V, B>
-where
-    K: Clone + Ord + Serialize,
-    V: Clone + Diff + Serialize,
-{
-    pub fn new(
-        _snapshot: Arc<Snapshot<K, V, B>>,
-        iters: Vec<IndexIter<'a, K, V>>,
-    ) -> SnapshotScan<'a, K, V, B> {
-        SnapshotScan {
-            _snapshot,
-            iter: None,
-            iters,
-        }
-    }
-}
-
-impl<'a, K, V, B> Iterator for SnapshotScan<'a, K, V, B>
-where
-    K: Clone + Ord + Serialize,
-    V: Clone + Diff + Serialize,
-{
-    type Item = Result<Entry<K, V>>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match &mut self.iter {
-            Some(iter) => match iter.next() {
-                Some(item) => Some(item),
-                None => {
-                    self.iter = None;
-                    self.next()
-                }
-            },
-            None if self.iters.len() == 0 => None,
-            None => {
-                self.iter = Some(self.iters.remove(0));
-                self.next()
-            }
         }
     }
 }
@@ -2486,7 +2404,7 @@ where
         Ok(())
     }
 
-    fn log(&self) -> Result<()> {
+    pub fn log(&self) -> Result<()> {
         info!(
             target: "robt  ",
             "{:?}, opening snapshot in dir {:?} config ...\n{}", self.name, self.dir, self.config
@@ -2578,6 +2496,62 @@ where
             }
             None => None,
         }
+    }
+}
+
+impl<K, V, B> Snapshot<K, V, B>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
+{
+    fn into_scan(mut self) -> Result<Scan<K, V, B>> {
+        let mut mzs = vec![];
+        match self.to_root() {
+            Ok(root) => Ok(self.build_fwd(root, &mut mzs)?),
+            Err(Error::EmptyIndex) => Ok(()),
+            Err(err) => Err(err),
+        }?;
+        Ok(Scan::new(self, mzs))
+    }
+
+    fn into_range_scan<R>(mut self, range: R) -> Result<ScanRange<K, V, B, R>>
+    where
+        R: RangeBounds<K>,
+    {
+        let mut mzs = vec![];
+        let skip_one = match range.start_bound() {
+            Bound::Unbounded => {
+                match self.to_root() {
+                    Ok(root) => Ok(self.build_fwd(root, &mut mzs)?),
+                    Err(Error::EmptyIndex) => Ok(()),
+                    Err(err) => Err(err),
+                }?;
+                false
+            }
+            Bound::Included(key) => match self.build(key, &mut mzs) {
+                Ok(entry) => match key.cmp(entry.as_key().borrow()) {
+                    cmp::Ordering::Greater => Ok(true),
+                    _ => Ok(false),
+                },
+                Err(Error::EmptyIndex) => Ok(false),
+                Err(err) => Err(err),
+            }?,
+            Bound::Excluded(key) => match self.build(key, &mut mzs) {
+                Ok(entry) => match key.cmp(entry.as_key().borrow()) {
+                    cmp::Ordering::Equal | cmp::Ordering::Greater => Ok(true),
+                    _ => Ok(false),
+                },
+                Err(Error::EmptyIndex) => Ok(false),
+                Err(err) => Err(err),
+            }?,
+        };
+
+        let mut r = ScanRange::new(self, mzs, range);
+        if skip_one {
+            r.next();
+        }
+        Ok(r)
     }
 }
 
@@ -2895,7 +2869,9 @@ where
             "first(), reading zblock",
         )?)?;
 
-        self.fetch(zblock.to_entry(0)?.1, false, false)
+        let mut entry = zblock.to_entry(0)?.1;
+        self.fetch(&mut entry, false, false)?;
+        Ok(entry)
     }
 
     /// Return the first entry in index, with all versions.
@@ -2909,7 +2885,9 @@ where
             "first(), reading zblock",
         )?)?;
 
-        self.fetch(zblock.to_entry(0)?.1, false, true)
+        let mut entry = zblock.to_entry(0)?.1;
+        self.fetch(&mut entry, false, true)?;
+        Ok(entry)
     }
 
     /// Return the last entry in index, with only latest value.
@@ -2923,7 +2901,9 @@ where
             "last(), reading zblock",
         )?)?;
 
-        self.fetch(zblock.last()?.1, false, false)
+        let mut entry = zblock.last()?.1;
+        self.fetch(&mut entry, false, false)?;
+        Ok(entry)
     }
 
     /// Return the last entry in index, with all versions.
@@ -2937,7 +2917,9 @@ where
             "last(), reading zblock",
         )?)?;
 
-        self.fetch(zblock.last()?.1, false, true)
+        let mut entry = zblock.last()?.1;
+        self.fetch(&mut entry, false, true)?;
+        Ok(entry)
     }
 
     fn first_zpos(&mut self, fpos: u64) -> Result<u64> {
@@ -3004,9 +2986,10 @@ where
             "do_get(), reading zblock",
         )?)?;
         match zblock.find(key, Bound::Unbounded, Bound::Unbounded) {
-            Ok((_, entry)) => {
+            Ok((_, mut entry)) => {
                 if entry.as_key().borrow().eq(key) {
-                    self.fetch(entry, false /*shallow*/, versions)
+                    self.fetch(&mut entry, false /*shallow*/, versions)?;
+                    Ok(entry)
                 } else {
                     Err(Error::KeyNotFound)
                 }
@@ -3308,10 +3291,10 @@ where
 {
     fn fetch(
         &mut self,
-        mut entry: Entry<K, V>,
+        entry: &mut Entry<K, V>,
         shallow: bool,  // fetch neither value nor deltas.
         versions: bool, // fetch deltas as well
-    ) -> Result<Entry<K, V>> {
+    ) -> Result<()> {
         if !shallow {
             match &mut self.valog_fd {
                 Some((_, fd)) => entry.fetch_value(fd)?,
@@ -3324,7 +3307,137 @@ where
                 _ => (),
             }
         }
-        Ok(entry)
+        Ok(())
+    }
+}
+
+struct Scan<K, V, B>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
+{
+    snap: Snapshot<K, V, B>,
+    mzs: Vec<MZ<K, V>>,
+}
+
+impl<K, V, B> Scan<K, V, B>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
+{
+    fn new(snap: Snapshot<K, V, B>, mzs: Vec<MZ<K, V>>) -> Self {
+        Scan { snap, mzs }
+    }
+}
+
+impl<K, V, B> Iterator for Scan<K, V, B>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
+{
+    type Item = Result<Entry<K, V>>;
+
+    fn next(&mut self) -> Option<Result<Entry<K, V>>> {
+        match self.mzs.pop() {
+            None => None,
+            Some(mut z) => match z.next() {
+                Some(Ok(mut entry)) => {
+                    // println!("one {}", entry.to_seqno());
+                    self.mzs.push(z);
+                    let (shallow, versions) = (false, true);
+                    match self.snap.fetch(&mut entry, shallow, versions) {
+                        Ok(()) => Some(Ok(entry)),
+                        Err(err) => Some(Err(err)),
+                    }
+                }
+                Some(Err(err)) => {
+                    // println!("two {:?}", err);
+                    self.mzs.truncate(0);
+                    Some(Err(err))
+                }
+                None => {
+                    // println!("three none");
+                    match self.snap.rebuild_fwd(&mut self.mzs) {
+                        Err(err) => Some(Err(err)),
+                        Ok(_) => self.next(),
+                    }
+                }
+            },
+        }
+    }
+}
+
+struct ScanRange<K, V, B, R>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
+    R: RangeBounds<K>,
+{
+    snap: Snapshot<K, V, B>,
+    mzs: Vec<MZ<K, V>>,
+    range: R,
+}
+
+impl<K, V, B, R> ScanRange<K, V, B, R>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
+    R: RangeBounds<K>,
+{
+    fn new(snap: Snapshot<K, V, B>, mzs: Vec<MZ<K, V>>, range: R) -> Self {
+        ScanRange { snap, mzs, range }
+    }
+
+    fn till_ok(&self, entry: &Entry<K, V>) -> bool {
+        match self.range.end_bound() {
+            Bound::Unbounded => true,
+            Bound::Included(key) => entry.as_key().borrow().le(key),
+            Bound::Excluded(key) => entry.as_key().borrow().lt(key),
+        }
+    }
+}
+
+impl<K, V, B, R> Iterator for ScanRange<K, V, B, R>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Clone + Serialize,
+    R: RangeBounds<K>,
+{
+    type Item = Result<Entry<K, V>>;
+
+    fn next(&mut self) -> Option<Result<Entry<K, V>>> {
+        match self.mzs.pop() {
+            None => None,
+            Some(mut z) => match z.next() {
+                Some(Ok(mut entry)) => {
+                    if self.till_ok(&entry) {
+                        self.mzs.push(z);
+                        let (shallow, versions) = (false, true);
+                        match self.snap.fetch(&mut entry, shallow, versions) {
+                            Ok(()) => Some(Ok(entry)),
+                            Err(err) => Some(Err(err)),
+                        }
+                    } else {
+                        self.mzs.truncate(0);
+                        None
+                    }
+                }
+                Some(Err(err)) => {
+                    self.mzs.truncate(0);
+                    Some(Err(err))
+                }
+                None => match self.snap.rebuild_fwd(&mut self.mzs) {
+                    Err(err) => Some(Err(err)),
+                    Ok(_) => self.next(),
+                },
+            },
+        }
     }
 }
 
@@ -3389,10 +3502,13 @@ where
         match self.mzs.pop() {
             None => None,
             Some(mut z) => match z.next() {
-                Some(Ok(entry)) => {
+                Some(Ok(mut entry)) => {
                     // println!("one {}", entry.to_seqno());
                     self.mzs.push(z);
-                    Some(self.snap.fetch(entry, self.shallow, self.versions))
+                    match self.snap.fetch(&mut entry, self.shallow, self.versions) {
+                        Ok(()) => Some(Ok(entry)),
+                        Err(err) => Some(Err(err)),
+                    }
                 }
                 Some(Err(err)) => {
                     // println!("two {:?}", err);
@@ -3475,10 +3591,14 @@ where
         match self.mzs.pop() {
             None => None,
             Some(mut z) => match z.next() {
-                Some(Ok(entry)) => {
+                Some(Ok(mut entry)) => {
                     if self.till_ok(&entry) {
                         self.mzs.push(z);
-                        Some(self.snap.fetch(entry, false /*shallow*/, self.versions))
+                        let shallow = false;
+                        match self.snap.fetch(&mut entry, shallow, self.versions) {
+                            Ok(()) => Some(Ok(entry)),
+                            Err(err) => Some(Err(err)),
+                        }
                     } else {
                         self.mzs.truncate(0);
                         None
@@ -3566,10 +3686,14 @@ where
                     self.mzs.truncate(0);
                     Some(Err(err))
                 }
-                Some(Ok(entry)) => {
+                Some(Ok(mut entry)) => {
                     if self.till_ok(&entry) {
                         self.mzs.push(z);
-                        Some(self.snap.fetch(entry, false /*shallow*/, self.versions))
+                        let shallow = false;
+                        match self.snap.fetch(&mut entry, shallow, self.versions) {
+                            Ok(()) => Some(Ok(entry)),
+                            Err(err) => Some(Err(err)),
+                        }
                     } else {
                         self.mzs.truncate(0);
                         None

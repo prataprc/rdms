@@ -17,12 +17,14 @@ List of types implementing Iterator
 * `lsm::YIterVersions`, returned by `lsm::y_iter_versions()` for lsm iteration
   used by multi-level indexes like `Dgm` and `WorkingSet`.
 
-* `robt::BuildScan`
-* `robt::CommitScan`
-* `robt::Iter`
-* `robt::Range`
-* `robt::Reverse`
-* `robt::MZ`
+* `robt::BuildScan`, local to `Robt` index, used while building index.
+* `robt::CommitScan`, local to `Robt` index, used while building index.
+* `robt::Iter`, returned by ``Snapshot::iter()` for full table iteration
+  over `Robt` index.
+* `robt::Range`, returned by `Snapshot::range()` operation.
+* `robt::Reverse`, returned by `Snapshot::reverse()` operation.
+* `robt::MZ`, optimization structure for range() and reverse() iteration
+  over `Robt` index.
 
 * `scans::SkipScan`, useful in full-table scan using `pw_scan()` interface.
   Additionally, can be configured to filter entries within a key-range and/or
@@ -30,10 +32,8 @@ List of types implementing Iterator
 * `scans::FilterScans`, useful in full-table scan using one or more iterators.
   If more than one iterators are supplied Iterators are chained in stack order.
   Additionally, can be configured to filter entries within a `seqno` range.
-* `scans::BitmappedScan`, useful to build a bitmap of all iterated keys.
-* `scans::CompactScan`
-* `scans::IterChain`
-* `types::EmptyIter`
+* `scans::BitmappedScan`, useful to build a bitmap index for all iterated keys.
+* `scans::CompactScan`, useful as compaction structure.
 
 List of types implementing CommitIterator
 =========================================

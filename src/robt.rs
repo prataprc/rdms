@@ -2653,7 +2653,18 @@ where
 
     fn to_shards(&mut self, n_shards: usize) -> Result<Vec<(Bound<K>, Bound<K>)>> {
         let mut shards = vec![];
-        for part in util::as_sharded_array(&self.to_partitions()?, n_shards) {
+
+        let partitions = {
+            let mut ps = self.to_partitions()?;
+            if ps.len() > 1 {
+                ps.pop(); // last partition might have less items.
+                let (lk, _) = ps.pop().unwrap();
+                ps.push((lk, Bound::<K>::Unbounded));
+            }
+            ps
+        };
+
+        for part in util::as_sharded_array(&partitions, n_shards) {
             if part.len() == 0 {
                 continue;
             }

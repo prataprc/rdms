@@ -41,13 +41,13 @@ const SKIP_SCAN_BATCH_SIZE: usize = 1000;
 /// * Data-structure must not suffer any delete/purge
 ///   operation until full-scan is completed.
 /// * Data-structure must implement PiecewiseScan trait.
-pub struct SkipScan<K, V, I>
+pub struct SkipScan<K, V, R>
 where
     K: Clone + Ord,
     V: Clone + Diff,
-    I: PiecewiseScan<K, V>,
+    R: PiecewiseScan<K, V>,
 {
-    reader: I,               // reader handle into index
+    reader: R,               // reader handle into index
     seqno_start: Bound<u64>, // pick mutations withing this sequence-no range.
     seqno_end: Bound<u64>,   // pick mutations withing this sequence-no range.
     key_start: Bound<K>,     // pick mutations withing this sequence-no range.
@@ -68,15 +68,15 @@ where
     Finish(Vec<Result<Entry<K, V>>>),
 }
 
-impl<K, V, I> SkipScan<K, V, I>
+impl<K, V, R> SkipScan<K, V, R>
 where
     K: Clone + Ord,
     V: Clone + Diff,
-    I: PiecewiseScan<K, V>,
+    R: PiecewiseScan<K, V>,
 {
     /// Create a new full table scan using the reader handle. Pick
     /// mutations that are `within` the specified range.
-    pub fn new(reader: I) -> SkipScan<K, V, I> {
+    pub fn new(reader: R) -> SkipScan<K, V, R> {
         SkipScan {
             reader,
             seqno_start: Bound::Unbounded,
@@ -175,11 +175,11 @@ where
     }
 }
 
-impl<K, V, I> Iterator for SkipScan<K, V, I>
+impl<K, V, R> Iterator for SkipScan<K, V, R>
 where
     K: Clone + Ord,
     V: Clone + Diff,
-    I: PiecewiseScan<K, V>,
+    R: PiecewiseScan<K, V>,
 {
     type Item = Result<Entry<K, V>>;
 

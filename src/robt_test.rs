@@ -426,6 +426,92 @@ fn test_robt_shards() {
 }
 
 #[test]
+fn test_robt_partitions() {
+    let seed: u128 = random();
+    // let seed: u128 = 249798907963814490666790823847972555780;
+
+    for i in 0..50 {
+        let seed = seed + (i as u128);
+        let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+
+        // populate llrb
+        let (n_ops, key_max) = random_ops_keys(seed, 100_000, 300_000);
+        println!("n_ops:{} key_max:{}", n_ops, key_max);
+
+        let lsm: bool = rng.gen();
+        let sticky: bool = rng.gen();
+        let mut mindex: Box<Llrb<i64, i64>> = if lsm {
+            Llrb::new_lsm("test-llrb")
+        } else {
+            Llrb::new("test-llrb")
+        };
+        mindex.set_sticky(sticky);
+
+        random_llrb(n_ops as i64, key_max, seed, &mut mindex);
+
+        let iter = {
+            let iter = SkipScan::new(mindex.to_reader().unwrap());
+            core::CommitIter::new(
+                CommitWrapper::new(Box::new(iter)),
+                (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded),
+            )
+        };
+
+        // build ROBT
+        let mut config: robt::Config = Default::default();
+        config.delta_ok = lsm;
+        config.value_in_vlog = rng.gen();
+        let mmap = rng.gen::<bool>();
+        println!(
+            "seed:{} lsm:{} sticky:{} delta:{} vlog:{} mmap:{}",
+            seed, lsm, sticky, config.delta_ok, config.value_in_vlog, mmap,
+        );
+        let dir = {
+            let mut dir = std::env::temp_dir();
+            dir.push("test-robt-build");
+            dir.into_os_string()
+        };
+        let name = "test-robt-partitions";
+        let mut snapshot = {
+            let mut index = Robt::<i64, i64, NoBitmap>::new(&dir, name, config).unwrap();
+            let app_meta = "heloo world".to_string();
+            index
+                .commit(iter, |_| app_meta.as_bytes().to_vec())
+                .unwrap();
+            index.to_reader().unwrap()
+        };
+        // println!("stats {}", snapshot.to_stats().unwrap());
+
+        let n = snapshot.len().unwrap();
+
+        let ranges = snapshot.to_partitions().unwrap().into_iter();
+        let mut entries: Vec<Entry<i64, i64>> = vec![];
+        for range in ranges.clone().into_iter() {
+            let iter = snapshot.range_with_versions(range).unwrap();
+            let es: Vec<Entry<i64, i64>> = iter.map(|e| e.unwrap()).collect();
+            entries.extend_from_slice(&es);
+        }
+        println!(
+            "len:{} partitions:{} entries:{}",
+            n,
+            ranges.len(),
+            entries.len()
+        );
+
+        assert_eq!(mindex.len(), entries.len());
+
+        for (e, re) in entries
+            .into_iter()
+            .zip(mindex.iter_with_versions().unwrap())
+        {
+            let re = re.unwrap();
+            check_entry1(&e, &re);
+            check_entry2(&e, &re);
+        }
+    }
+}
+
+#[test]
 fn test_robt_llrb1() {
     let seed: u128 = random();
     // let seed: u128 = 225009120977046217695047231070280610702;
@@ -699,7 +785,66 @@ fn test_commit_iterator_scan() {
 }
 
 #[test]
-fn test_commit_iterator_scans() {
+fn test_commit_iterator_scans1() {
+    let seed: u128 = random();
+    // let seed: u128 = 133914504903399191543328322236344342635;
+    println!("seed:{}", seed);
+    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+
+    let dir = {
+        let mut dir = std::env::temp_dir();
+        dir.push("test-commit-iterator-scans");
+        println!("temp dir {:?}", dir);
+        dir.into_os_string()
+    };
+
+    let mut config: robt::Config = Default::default();
+    config.delta_ok = true;
+    config.value_in_vlog = true;
+    let robtf = robt_factory::<i64, i64, NoBitmap>(config);
+
+    for i in 0..50 {
+        let (n_ops, key_max) = random_ops_keys(seed + (i * 100), 100_000, 300_000);
+
+        let mut mindex: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
+        random_llrb(n_ops, key_max, seed + (i + 1) * 10, &mut mindex);
+        println!("i:{} n_ops:{}, key_max:{}", i, n_ops, key_max);
+
+        let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
+
+        let mut index = robtf.new(&dir, "snapshot-scans").unwrap();
+        let iter = {
+            let iter = SkipScan::new(mindex.to_reader().unwrap());
+            let iter = CommitWrapper::new(Box::new(iter));
+            core::CommitIter::new(iter, within.clone())
+        };
+        index.commit(iter, std::convert::identity).unwrap();
+
+        let shards = rng.gen::<usize>() % 31 + 1;
+
+        let iters = index.scans(shards, within).unwrap();
+
+        let mut counts: Vec<usize> = vec![];
+        for iter in iters.into_iter() {
+            counts.push(iter.map(|_| 1).collect::<Vec<usize>>().into_iter().sum());
+        }
+        println!("{} {} {:?}", i, shards, counts);
+
+        let avg = mindex.len() / shards;
+        for (i, count) in counts.into_iter().enumerate() {
+            assert!(
+                ((count as f64) / (avg as f64)) > 0.60,
+                "{} shard {} / {}",
+                i,
+                count,
+                avg
+            )
+        }
+    }
+}
+
+#[test]
+fn test_commit_iterator_scans2() {
     let seed: u128 = random();
     // let seed: u128 = 35667521011555069800221219023406283992;
     println!("seed:{}", seed);

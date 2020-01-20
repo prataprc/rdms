@@ -1559,7 +1559,40 @@ fn test_commit_iterator_scan() {
 }
 
 #[test]
-fn test_commit_iterator_scans() {
+fn test_commit_iterator_scans1() {
+    let seed: u128 = random();
+    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+
+    let (n_ops, key_max) = (60_000_i64, 20_000);
+    let mut llrb: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
+    random_llrb(n_ops, key_max, seed, &mut llrb);
+
+    for i in 0..20 {
+        let shards = rng.gen::<usize>() % 31 + 1;
+        let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
+        let iters = llrb.scans(shards, within.clone()).unwrap();
+
+        let mut counts: Vec<usize> = vec![];
+        for iter in iters.into_iter() {
+            counts.push(iter.map(|_| 1).collect::<Vec<usize>>().into_iter().sum());
+        }
+        println!("{} {} {:?}", i, shards, counts);
+
+        let avg = llrb.len() / shards;
+        for (i, count) in counts.into_iter().enumerate() {
+            assert!(
+                ((count as f64) / (avg as f64)) > 0.10,
+                "{} shard {} / {}",
+                i,
+                count,
+                avg
+            )
+        }
+    }
+}
+
+#[test]
+fn test_commit_iterator_scans2() {
     let seed: u128 = random();
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 

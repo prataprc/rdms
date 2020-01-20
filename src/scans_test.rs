@@ -109,16 +109,19 @@ fn test_into_iter_range_scans() {
 
             let ref_entries: Vec<Result<Entry<i64, i64>>> = llrb.iter().unwrap().collect();
             let mut into_iter = ref_entries.into_iter();
-            let entries: Vec<Entry<i64, i64>> = IterChain::new(
-                <IntoIter<Result<Entry<i64, i64>>> as CommitIterator<i64, i64>>::range_scans(
-                    &mut into_iter,
-                    ranges,
-                    within.clone(),
-                )
-                .unwrap(),
-            )
-            .map(|e| e.unwrap())
-            .collect();
+            let iter = {
+                let mut iters =
+                    <IntoIter<Result<Entry<i64, i64>>> as CommitIterator<i64, i64>>::range_scans(
+                        &mut into_iter,
+                        ranges,
+                        within.clone(),
+                    )
+                    .unwrap();
+                iters.reverse(); // make this to stack
+                let w = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
+                FilterScans::new(iters, w)
+            };
+            let entries: Vec<Entry<i64, i64>> = iter.map(|e| e.unwrap()).collect();
 
             let ref_entries: Vec<Entry<i64, i64>> =
                 llrb.iter().unwrap().map(|e| e.unwrap()).collect();

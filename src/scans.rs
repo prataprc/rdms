@@ -3,7 +3,6 @@
 
 use std::{
     hash::Hash,
-    marker,
     ops::{Bound, RangeBounds},
     vec,
 };
@@ -416,62 +415,6 @@ where
                 },
                 Some(Err(err)) => break Some(Err(err)),
                 None => break None,
-            }
-        }
-    }
-}
-
-pub struct IterChain<K, V, I>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-    I: Iterator<Item = Result<Entry<K, V>>>,
-{
-    iter: Option<I>,
-    iters: Vec<I>,
-
-    _phantom_key: marker::PhantomData<K>,
-    _phantom_val: marker::PhantomData<V>,
-}
-
-impl<K, V, I> IterChain<K, V, I>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-    I: Iterator<Item = Result<Entry<K, V>>>,
-{
-    pub fn new(iters: Vec<I>) -> IterChain<K, V, I> {
-        IterChain {
-            iter: None,
-            iters: iters,
-
-            _phantom_key: marker::PhantomData,
-            _phantom_val: marker::PhantomData,
-        }
-    }
-}
-
-impl<K, V, I> Iterator for IterChain<K, V, I>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-    I: Iterator<Item = Result<Entry<K, V>>>,
-{
-    type Item = Result<Entry<K, V>>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match &mut self.iter {
-            Some(iter) => match iter.next() {
-                Some(item) => Some(item),
-                None => {
-                    self.iter = None;
-                    self.next()
-                }
-            },
-            None if self.iters.len() == 0 => None,
-            None => {
-                self.iter = Some(self.iters.remove(0));
-                self.next()
             }
         }
     }

@@ -24,6 +24,7 @@ use crate::{
     error::Error,
     llrb::{Llrb, LlrbReader, LlrbWriter, Stats as LlrbStats},
     scans::CommitWrapper,
+    thread::Thread,
     types::Empty,
 };
 use log::{debug, error, info, warn};
@@ -203,8 +204,7 @@ where
     max_entries: usize,
 
     snapshot: Snapshot<K, V>,
-    auto_shard: Option<thread::JoinHandle<Result<()>>>,
-    auto_shard_tx: Option<mpsc::Sender<(String, mpsc::Sender<usize>)>>,
+    auto_shard: Option<Thread<String, usize, ()>>,
 }
 
 struct Snapshot<K, V>
@@ -225,8 +225,15 @@ where
 {
     fn drop(&mut self) {
         loop {
-            let active = match self.prune_rw() {
-                Ok((_, _, active)) => active,
+            match self.prune_rw() {
+                Ok((_, _, active)) if active > 0 => {
+                    error!(
+                        target: "shllrb",
+                        "{:?}, open read/write handles {}", self.name, active
+                    );
+                    continue;
+                }
+                Ok((_, _, _)) => break,
                 Err(err) => {
                     error!(
                         target: "shllrb", "{:?}, error locking {:?}",
@@ -234,34 +241,17 @@ where
                     );
                     break;
                 }
-            };
-
-            if active > 0 {
-                error!(
+            }
+        }
+        match self.auto_shard.take() {
+            Some(auto_shard) => match auto_shard.close_wait() {
+                Err(err) => error!(
                     target: "shllrb",
-                    "{:?}, open read/write handles {}", self.name, active
-                );
-                continue;
-            }
-
-            // drop input channel to auto_shard
-            mem::drop(self.auto_shard_tx.take());
-
-            // and wait for auto_shard to exit.
-            match self.auto_shard.take() {
-                Some(auto_shard) => match auto_shard.join() {
-                    Ok(Ok(())) => (),
-                    Ok(Err(err)) => error!(
-                        target: "shllrb", "{} auto_shard: {:?}", self.name, err
-                    ),
-                    Err(err) => error!(
-                        target: "shllrb", "{} auto_shard: {:?}", self.name, err
-                    ),
-                },
-                None => (),
-            }
-
-            break;
+                    "{:?}, auto-shard {:?}", self.name, err
+                ),
+                Ok(_) => (),
+            },
+            None => (),
         }
     }
 }
@@ -289,7 +279,6 @@ where
             max_entries: DEFAULT_MAX_ENTRIES,
             snapshot,
             auto_shard: None,
-            auto_shard_tx: Default::default(),
         }
     }
 }
@@ -472,30 +461,25 @@ where
     <V as Diff>::D: Send,
 {
     /// Configure periodic interval for auto-sharding.
-    pub fn set_interval(&mut self, interval: time::Duration) {
-        if self.auto_shard_tx.is_some() {
-            return;
-        }
-
-        self.interval = interval;
-        if self.interval.as_secs() > 0 {
-            let index = unsafe { Box::from_raw(self as *mut Self as *mut ffi::c_void) };
-            let (auto_shard_tx, rx) = mpsc::channel();
-            self.auto_shard = Some(thread::spawn(move || auto_shard::<K, V>(index, rx)));
-            self.auto_shard_tx = Some(auto_shard_tx);
-        }
+    pub fn set_interval(&mut self, interval: time::Duration) -> &mut ShLlrb<K, V> {
+        self.auto_shard = match self.auto_shard.take() {
+            Some(auto_shard) => Some(auto_shard),
+            None if interval.as_secs() > 0 => {
+                self.interval = interval;
+                let index = unsafe { Box::from_raw(self as *mut Self as *mut ffi::c_void) };
+                Some(Thread::new(move |rx| || auto_shard::<K, V>(index, rx)))
+            }
+            None => None,
+        };
+        self
     }
 
     /// Try to balance the underlying shards using splits and merges.
     pub fn balance(&mut self) -> Result<usize> {
-        let msg = format!("shllrb, auto-sharding");
-        let cmd = "balance".to_string();
-        let (tx, rx) = mpsc::channel();
-        self.auto_shard_tx
-            .as_ref()
-            .ok_or(Error::UnInitialized(msg))?
-            .send((cmd, tx))?;
-        Ok(rx.recv()?)
+        match &self.auto_shard {
+            Some(auto_shard) => Ok(auto_shard.request("balance".to_string())?),
+            None => Err(Error::UnInitialized(format!("shllrb, auto-sharding"))),
+        }
     }
 
     pub fn do_balance(&mut self) -> Result<usize> {
@@ -785,6 +769,14 @@ where
     {
         self.as_mut().compact(cutoff, metacb)
     }
+
+    fn close(self) -> Result<()> {
+        (*self).close()
+    }
+
+    fn purge(self) -> Result<()> {
+        (*self).purge()
+    }
 }
 
 impl<K, V> Index<K, V> for ShLlrb<K, V>
@@ -923,6 +915,19 @@ where
         }
         info!(target: "shllrb", "{:?}, compacted {} items", self.name, count);
         Ok(count)
+    }
+
+    fn close(mut self) -> Result<()> {
+        match self.auto_shard.take() {
+            Some(auto_shard) => auto_shard.close_wait()?,
+            None => (),
+        }
+        // TODO: close all other threads.
+        Ok(())
+    }
+
+    fn purge(self) -> Result<()> {
+        self.close()
     }
 }
 
@@ -1964,7 +1969,7 @@ where
 
 fn auto_shard<K, V>(
     mut index: Box<ffi::c_void>,
-    rx: mpsc::Receiver<(String, mpsc::Sender<usize>)>,
+    rx: mpsc::Receiver<(String, Option<mpsc::Sender<usize>>)>,
 ) -> Result<()>
 where
     K: 'static + Send + Clone + Ord + Footprint,
@@ -1992,7 +1997,7 @@ where
         let resp_tx = match rx.recv_timeout(interval - elapsed) {
             Ok((cmd, resp_tx)) => {
                 if cmd == "balance" {
-                    Some(resp_tx)
+                    resp_tx
                 } else {
                     unreachable!()
                 }

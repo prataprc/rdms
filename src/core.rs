@@ -260,6 +260,13 @@ where
     fn compact<F>(&mut self, cutoff: Bound<u64>, mf: F) -> Result<usize>
     where
         F: Fn(Vec<Vec<u8>>) -> Vec<u8>;
+
+    /// End of index life-cycle. Persisted data (in disk) shall not be
+    /// cleared. Refer `purge()` for that.
+    fn close(self) -> Result<()>;
+
+    /// End of index life-cycle. Also clears persisted data (in disk).
+    fn purge(self) -> Result<()>;
 }
 
 /// Trait define index interface to self-validate its internal state.

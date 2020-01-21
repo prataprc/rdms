@@ -51,7 +51,7 @@ use std::{
     ffi, fmt, fs,
     hash::Hash,
     io::Write,
-    marker, mem,
+    marker,
     ops::{Bound, Deref, RangeBounds},
     path, result,
     str::FromStr,
@@ -66,13 +66,19 @@ use crate::{
     panic::Panic,
     robt_entry::MEntry,
     robt_index::{MBlock, ZBlock},
-    scans, util,
+    scans,
+    thread::Thread,
+    util,
 };
 
 include!("robt_marker.rs");
 
 #[derive(Clone)]
 struct Name(String);
+
+pub(crate) trait Flusher {
+    fn post(&self, msg: Vec<u8>) -> Result<()>;
+}
 
 impl Name {
     fn next(self) -> Name {
@@ -265,7 +271,7 @@ where
     B: Bloom,
 {
     inner: sync::Mutex<InnerRobt<K, V, B>>,
-    purger: Option<thread::JoinHandle<()>>,
+    purger: Option<Thread<ffi::OsString, (), ()>>,
 }
 
 #[derive(Clone)]
@@ -279,7 +285,6 @@ where
         dir: ffi::OsString,
         name: Name,
         config: Config,
-        purge_tx: Option<mpsc::Sender<ffi::OsString>>,
 
         _phantom_key: marker::PhantomData<K>,
         _phantom_val: marker::PhantomData<V>,
@@ -292,7 +297,6 @@ where
         config: Config,
         stats: Stats,
         bitmap: Arc<B>,
-        purge_tx: Option<mpsc::Sender<ffi::OsString>>,
     },
 }
 
@@ -306,21 +310,20 @@ where
     fn drop(&mut self) {
         let name = {
             match self.inner.get_mut().unwrap() {
-                InnerRobt::Build { name, purge_tx, .. } => {
-                    purge_tx.take();
-                    name.clone()
-                }
-                InnerRobt::Snapshot { name, purge_tx, .. } => {
-                    purge_tx.take();
-                    name.clone()
-                }
+                InnerRobt::Build { name, .. } => name.clone(),
+                InnerRobt::Snapshot { name, .. } => name.clone(),
             }
         };
+
         // wait till purger routine exit.
-        if let Some(purger) = self.purger.take() {
-            if let Err(err) = purger.join() {
-                error!(target: "robt  ", "{:?}, purger failed {:?}", name, err);
-            }
+        match self.purger.take() {
+            Some(purger) => match purger.close_wait() {
+                Err(err) => error!(
+                    target: "robt  ", "{:?}, purger failed {:?}", name, err
+                ),
+                Ok(_) => (),
+            },
+            None => (),
         }
     }
 }
@@ -335,11 +338,9 @@ where
     pub fn new(dir: &ffi::OsStr, name: &str, mut config: Config) -> Result<Robt<K, V, B>> {
         config.name = name.to_string();
 
-        let (tx, rx) = mpsc::channel();
         let inner = InnerRobt::Build {
             dir: dir.to_os_string(),
             name: (name.to_string(), 0).into(),
-            purge_tx: Some(tx),
             config,
 
             _phantom_key: marker::PhantomData,
@@ -348,7 +349,7 @@ where
 
         let purger = {
             let name = name.to_string();
-            thread::spawn(|| purger(name, rx))
+            Thread::new(move |rx| move || purger(name, rx))
         };
 
         Ok(Robt {
@@ -363,7 +364,6 @@ where
         let snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
         snapshot.log()?;
 
-        let (tx, rx) = mpsc::channel();
         let inner = InnerRobt::Snapshot {
             dir: dir.to_os_string(),
             name: name.clone(),
@@ -372,29 +372,17 @@ where
             config: snapshot.config.clone(),
             stats: snapshot.to_stats()?,
             bitmap: Arc::new(snapshot.to_bitmap()?),
-            purge_tx: Some(tx),
         };
 
-        let name = name.0.clone();
-        let purger = thread::spawn(|| purger(name, rx));
+        let purger = {
+            let name = name.0.clone();
+            Thread::new(move |rx| move || purger(name, rx))
+        };
 
         Ok(Robt {
             inner: sync::Mutex::new(inner),
             purger: Some(purger),
         })
-    }
-
-    pub fn purge(self) -> Result<()> {
-        match self.as_inner()?.deref() {
-            InnerRobt::Snapshot { dir, name, .. } => {
-                let snapshot = Snapshot::<K, V, B>::open(&dir, &name.0)?;
-                snapshot.purge()
-            }
-            InnerRobt::Build { .. } => {
-                let msg = format!("robt.purge(), in build state");
-                Err(Error::UnInitialized(msg))
-            }
-        }
     }
 
     /// Return Index's version number, every commit and compact shall increment
@@ -410,27 +398,18 @@ where
 
     pub fn to_next_build(&mut self) -> Result<()> {
         let mut inner = self.as_inner()?;
-        let (dir, name, config, purge_tx) = match inner.deref() {
+        let (dir, name, config) = match inner.deref() {
             InnerRobt::Build {
-                dir,
-                name,
-                config,
-                purge_tx,
-                ..
-            } => (dir.clone(), name.clone(), config.clone(), purge_tx.clone()),
+                dir, name, config, ..
+            } => (dir.clone(), name.clone(), config.clone()),
             InnerRobt::Snapshot {
-                dir,
-                name,
-                config,
-                purge_tx,
-                ..
-            } => (dir.clone(), name.clone(), config.clone(), purge_tx.clone()),
+                dir, name, config, ..
+            } => (dir.clone(), name.clone(), config.clone()),
         };
         *inner = InnerRobt::Build {
             dir: dir.clone(),
             name: name.next(),
             config: config.clone(),
-            purge_tx: purge_tx.clone(),
 
             _phantom_key: marker::PhantomData,
             _phantom_val: marker::PhantomData,
@@ -444,6 +423,14 @@ where
         self.inner
             .lock()
             .map_err(|err| ThreadFail(format!("robt.as_inner(), poison-lock {:?}", err)))
+    }
+
+    fn do_close(&mut self) -> Result<()> {
+        match self.purger.take() {
+            Some(purger) => purger.close_wait()?,
+            None => (),
+        };
+        Ok(())
     }
 }
 
@@ -553,11 +540,7 @@ where
         let mut inner = self.as_inner()?;
         let new_inner = match inner.deref() {
             InnerRobt::Build {
-                dir,
-                name,
-                config,
-                purge_tx,
-                ..
+                dir, name, config, ..
             } => {
                 info!(target: "robt  ", "{:?}, flush commit ...", name);
 
@@ -602,15 +585,10 @@ where
                     config: snapshot.config.clone(),
                     stats,
                     bitmap: Arc::new(snapshot.to_bitmap()?),
-                    purge_tx: purge_tx.clone(),
                 }
             }
             InnerRobt::Snapshot {
-                dir,
-                name,
-                config,
-                purge_tx,
-                ..
+                dir, name, config, ..
             } => {
                 info!(target: "robt  ", "{:?}, incremental commit ...", name);
 
@@ -659,8 +637,7 @@ where
                     snapshot.log()?;
 
                     // purge old snapshots file(s).
-                    let err = Error::UnexpectedFail(format!("robt.commit() missing purge_tx"));
-                    purge_tx.as_ref().ok_or(err)?.send(old.index_fd.to_file())?;
+                    self.purger.as_ref().unwrap().post(old.index_fd.to_file())?;
 
                     (name, snapshot, meta_block_bytes)
                 };
@@ -694,7 +671,6 @@ where
                     config: snapshot.config.clone(),
                     stats,
                     bitmap: Arc::new(snapshot.to_bitmap()?),
-                    purge_tx: purge_tx.clone(),
                 }
             }
         };
@@ -709,11 +685,7 @@ where
         let mut inner = self.as_inner()?;
         let (new_inner, count) = match inner.deref() {
             InnerRobt::Build {
-                dir,
-                name,
-                config,
-                purge_tx,
-                ..
+                dir, name, config, ..
             } => {
                 error!(
                     target: "robt  ",
@@ -725,7 +697,6 @@ where
                         dir: dir.clone(),
                         name: name.clone(),
                         config: config.clone(),
-                        purge_tx: purge_tx.clone(),
                         _phantom_key: marker::PhantomData,
                         _phantom_val: marker::PhantomData,
                     },
@@ -737,7 +708,6 @@ where
                 name,
                 config,
                 meta,
-                purge_tx,
                 ..
             } => {
                 let (name, snapshot, meta_block_bytes) = {
@@ -768,16 +738,9 @@ where
                     snapshot.log()?;
 
                     // purge old snapshots file(s).
-                    let err = format!("robt.compact() missing purge_tx");
-                    purge_tx
-                        .as_ref()
-                        .ok_or(Error::UnexpectedFail(err.clone()))?
-                        .send(old.index_fd.to_file())?;
+                    self.purger.as_ref().unwrap().post(old.index_fd.to_file())?;
                     if let Some((file, _)) = &old.valog_fd {
-                        purge_tx
-                            .as_ref()
-                            .ok_or(Error::UnexpectedFail(err))?
-                            .send(file.clone())?;
+                        self.purger.as_ref().unwrap().post(file.clone())?;
                     }
 
                     (name, snapshot, meta_block_bytes)
@@ -813,7 +776,6 @@ where
                         config: snapshot.config.clone(),
                         stats: stats.clone(),
                         bitmap: Arc::new(snapshot.to_bitmap()?),
-                        purge_tx: purge_tx.clone(),
                     },
                     stats.n_count,
                 )
@@ -821,6 +783,25 @@ where
         };
         *inner = new_inner;
         Ok(count.try_into()?)
+    }
+
+    fn close(mut self) -> Result<()> {
+        self.do_close()?;
+        Ok(())
+    }
+
+    fn purge(mut self) -> Result<()> {
+        self.do_close()?;
+        match self.as_inner()?.deref() {
+            InnerRobt::Snapshot { dir, name, .. } => {
+                let snapshot = Snapshot::<K, V, B>::open(&dir, &name.0)?;
+                snapshot.purge()
+            }
+            InnerRobt::Build { .. } => {
+                let msg = format!("robt.purge(), in build state");
+                Err(Error::UnInitialized(msg))
+            }
+        }
     }
 }
 
@@ -1586,8 +1567,8 @@ where
     <V as Diff>::D: Serialize,
 {
     config: Config,
-    iflusher: Flusher,
-    vflusher: Option<Flusher>,
+    iflusher: Option<Thread<Vec<u8>, (), (ffi::OsString, u64)>>,
+    vflusher: Option<Thread<Vec<u8>, (), (ffi::OsString, u64)>>,
     stats: Stats,
 
     _phantom_key: marker::PhantomData<K>,
@@ -1610,25 +1591,36 @@ where
         mut config: Config, //  TODO: Bit of ugliness here
     ) -> Result<Builder<K, V, B>> {
         let create = true;
+
         let iflusher = {
-            let file = Config::stitch_index_file(dir, name);
-            Flusher::new(file, config.clone(), create)?
+            let ifile = Config::stitch_index_file(dir, name);
+            Thread::new_sync(
+                move |rx| move || thread_flush(ifile, create, rx),
+                config.flush_queue_size,
+            )
         };
+
         let is_vlog = config.delta_ok || config.value_in_vlog;
         config.vlog_file = match &config.vlog_file {
             Some(vlog_file) if is_vlog => Some(vlog_file.clone()),
             None if is_vlog => Some(Config::stitch_vlog_file(dir, name)),
             _ => None,
         };
-        let vflusher = config
-            .vlog_file
-            .as_ref()
-            .map(|file| Flusher::new(file.clone(), config.clone(), create))
-            .transpose()?;
+
+        let vflusher = match &config.vlog_file {
+            Some(vfile) => {
+                let vfile = vfile.clone();
+                Some(Thread::new_sync(
+                    move |rx| move || thread_flush(vfile, create, rx),
+                    config.flush_queue_size,
+                ))
+            }
+            None => None,
+        };
 
         Ok(Builder {
             config: config.clone(),
-            iflusher,
+            iflusher: Some(iflusher),
             vflusher,
             stats: From::from(config),
 
@@ -1643,32 +1635,46 @@ where
     pub fn incremental(
         dir: &ffi::OsStr, // directory path where index files are stored
         name: &str,
-        mut config: Config, //  TODO: Bit of ugliness here
+        mut config: Config,
     ) -> Result<Builder<K, V, B>> {
         let iflusher = {
-            let file = Config::stitch_index_file(dir, name);
-            Flusher::new(file, config.clone(), true /*create*/)?
+            let ifile = Config::stitch_index_file(dir, name);
+            Thread::new_sync(
+                move |rx| move || thread_flush(ifile, true /*create*/, rx),
+                config.flush_queue_size,
+            )
         };
+
         let is_vlog = config.delta_ok || config.value_in_vlog;
         config.vlog_file = match &config.vlog_file {
             Some(vlog_file) if is_vlog => Some(vlog_file.clone()),
             None if is_vlog => Some(Config::stitch_vlog_file(dir, name)),
             _ => None,
         };
+
         let create = false;
-        let vflusher = config
-            .vlog_file
-            .as_ref()
-            .map(|file| Flusher::new(file.clone(), config.clone(), create))
-            .transpose()?;
+
+        let (vflusher, vf_fpos): (_, usize) = match &config.vlog_file {
+            Some(vfile) => {
+                let vfile = vfile.clone();
+                let vf_fpos = fs::metadata(&vfile)?.len();
+
+                let t = Thread::new_sync(
+                    move |rx| move || thread_flush(vfile, create, rx),
+                    config.flush_queue_size,
+                );
+
+                (Some(t), vf_fpos.try_into()?)
+            }
+            None => (None, Default::default()),
+        };
 
         let mut stats: Stats = From::from(config.clone());
-        let vf_fpos: usize = vflusher.as_ref().map_or(0, |x| x.fpos).try_into()?;
         stats.n_abytes += vf_fpos;
 
         Ok(Builder {
             config: config.clone(),
-            iflusher,
+            iflusher: Some(iflusher),
             vflusher,
             stats,
 
@@ -1726,10 +1732,17 @@ where
             MetaItem::Marker(ROOT_MARKER.clone()), // tip of the index.
         ];
 
-        let index_file: ffi::OsString = self.iflusher.file.clone();
         // flush blocks and close
-        self.iflusher.close_wait()?;
-        self.vflusher.take().map(|x| x.close_wait()).transpose()?;
+        let (index_file, _) = match self.iflusher.take() {
+            Some(iflusher) => iflusher.close_wait()?,
+            None => unreachable!(),
+        };
+        match self.vflusher.take() {
+            Some(vflusher) => {
+                vflusher.close_wait()?;
+            }
+            None => (),
+        };
         // flush meta items to disk and close
         let meta_block_bytes = write_meta_items(index_file, meta_items)?;
         Ok(meta_block_bytes.try_into()?)
@@ -1769,7 +1782,7 @@ where
                 Err(Error::__ZBlockOverflow(_)) => {
                     // zbytes is z_blocksize
                     let (zbytes, vbytes) = c.z.finalize(&mut self.stats)?;
-                    c.z.flush(&mut self.iflusher, self.vflusher.as_mut())?;
+                    c.z.flush(self.iflusher.as_ref(), self.vflusher.as_ref())?;
                     c.fpos += zbytes;
                     c.vfpos += vbytes;
 
@@ -1779,7 +1792,7 @@ where
                         Err(Error::__MBlockOverflow(_)) => {
                             // x is m_blocksize
                             let x = m.finalize(&mut self.stats)?;
-                            m.flush(&mut self.iflusher)?;
+                            m.flush(self.iflusher.as_ref())?;
                             let k = m.as_first_key()?;
                             let r = self.insertms(c.ms, c.fpos + x, k, c.fpos)?;
                             c.ms = r.0;
@@ -1812,7 +1825,7 @@ where
         if c.z.has_first_key() {
             // println!(" flush final zblock: {:?}", c.z.as_first_key());
             let (zbytes, vbytes) = c.z.finalize(&mut self.stats)?;
-            c.z.flush(&mut self.iflusher, self.vflusher.as_mut())?;
+            c.z.flush(self.iflusher.as_ref(), self.vflusher.as_ref())?;
             c.fpos += zbytes;
             c.vfpos += vbytes;
 
@@ -1821,7 +1834,7 @@ where
                 Ok(_) => c.ms.push(m),
                 Err(Error::__MBlockOverflow(_)) => {
                     let x = m.finalize(&mut self.stats)?;
-                    m.flush(&mut self.iflusher)?;
+                    m.flush(self.iflusher.as_ref())?;
                     let mkey = m.as_first_key()?;
                     let res = self.insertms(c.ms, c.fpos + x, mkey, c.fpos)?;
                     c.ms = res.0;
@@ -1842,12 +1855,12 @@ where
             let is_root = m.has_first_key() && c.ms.len() == 0;
             if is_root {
                 let x = m.finalize(&mut self.stats)?;
-                m.flush(&mut self.iflusher)?;
+                m.flush(self.iflusher.as_ref())?;
                 c.fpos += x;
             } else if m.has_first_key() {
                 // x is m_blocksize
                 let x = m.finalize(&mut self.stats)?;
-                m.flush(&mut self.iflusher)?;
+                m.flush(self.iflusher.as_ref())?;
                 let mkey = m.as_first_key()?;
                 let res = self.insertms(c.ms, c.fpos + x, mkey, c.fpos)?;
                 c.ms = res.0;
@@ -1880,7 +1893,7 @@ where
                     // println!("overflow for {:?} {}", key, mfpos);
                     // x is m_blocksize
                     let x = m0.finalize(&mut self.stats)?;
-                    m0.flush(&mut self.iflusher)?;
+                    m0.flush(self.iflusher.as_ref())?;
                     let mkey = m0.as_first_key()?;
                     let res = self.insertms(ms, fpos + x, mkey, fpos)?;
                     ms = res.0;
@@ -2053,84 +2066,20 @@ where
     }
 }
 
-#[allow(dead_code)] // TODO: remove this.
-fn bitmap_index<B>(bitmap_rx: mpsc::Receiver<u32>) -> B
-where
-    B: Bloom,
-{
-    let mut bitmap = <B as Bloom>::create();
-    for digest in bitmap_rx {
-        bitmap.add_digest32(digest)
-    }
-    bitmap
-}
-
-pub(crate) struct Flusher {
-    file: ffi::OsString,
-    fpos: u64,
-    t_handle: thread::JoinHandle<Result<()>>,
-    tx: mpsc::SyncSender<Vec<u8>>,
-}
-
-impl Flusher {
-    fn new(
-        file: ffi::OsString,
-        config: Config,
-        create: bool, // if true create a new file
-    ) -> Result<Flusher> {
-        let (fd, fpos) = if create {
-            (util::open_file_cw(file.clone())?, Default::default())
-        } else {
-            (util::open_file_w(&file)?, fs::metadata(&file)?.len())
-        };
-
-        let (tx, rx) = mpsc::sync_channel(config.flush_queue_size);
-        let file1 = file.clone();
-        let t_handle = thread::spawn(move || thread_flush(file1, fd, rx));
-
-        Ok(Flusher {
-            file,
-            fpos,
-            t_handle,
-            tx,
-        })
-    }
-
-    // return error if flush thread has exited/paniced.
-    pub(crate) fn send(&mut self, block: Vec<u8>) -> Result<()> {
-        self.tx.send(block)?;
-        Ok(())
-    }
-
-    // return the cause for thread failure, if there is a failure, or return
-    // a known error like io::Error or PartialWrite.
-    fn close_wait(self) -> Result<()> {
-        mem::drop(self.tx);
-        match self.t_handle.join() {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(Error::PartialWrite(err))) => Err(Error::PartialWrite(err)),
-            Err(err) => match err.downcast_ref::<String>() {
-                Some(msg) => {
-                    let msg = format!("robt flush err: {}", msg);
-                    Err(Error::ThreadFail(msg))
-                }
-                None => {
-                    let msg = format!("robt flush unknown error");
-                    Err(Error::ThreadFail(msg))
-                }
-            },
-            Ok(Err(err)) => panic!("unreachable arm with err : {:?}", err),
-        }
-    }
-}
-
 fn thread_flush(
     file: ffi::OsString, // for debuging purpose
-    mut fd: fs::File,
-    rx: mpsc::Receiver<Vec<u8>>,
-) -> Result<()> {
+    create: bool,        // if true create a new file
+    rx: mpsc::Receiver<(Vec<u8>, Option<mpsc::Sender<()>>)>,
+) -> Result<(ffi::OsString, u64)> {
+    let (mut fd, fpos) = if create {
+        (util::open_file_cw(file.clone())?, Default::default())
+    } else {
+        (util::open_file_w(&file)?, fs::metadata(&file)?.len())
+    };
+
     fd.lock_shared()?; // <---- read lock
-    for data in rx {
+
+    for (data, _) in rx {
         // println!("flusher {:?} {} {}", file, fpos, data.len());
         // fpos += data.len();
         let n = fd.write(&data)?;
@@ -2144,7 +2093,7 @@ fn thread_flush(
     fd.sync_all()?;
     // file descriptor and receiver channel shall be dropped.
     fd.unlock()?; // <----- read un-lock
-    Ok(())
+    Ok((file, fpos))
 }
 
 // enumerated index file, that can use file-access or mmap-access based
@@ -3806,7 +3755,10 @@ fn purge_file(
     }
 }
 
-fn purger(name: String, rx: mpsc::Receiver<ffi::OsString>) {
+fn purger(
+    name: String,
+    rx: mpsc::Receiver<(ffi::OsString, Option<mpsc::Sender<()>>)>,
+) -> Result<()> {
     info!(target: "robtpr", "{:?}, starting purger ...", name);
 
     let mut locked_files = vec![];
@@ -3814,11 +3766,12 @@ fn purger(name: String, rx: mpsc::Receiver<ffi::OsString>) {
 
     loop {
         match rx.try_recv() {
-            Err(mpsc::TryRecvError::Empty) => (),
-            Err(mpsc::TryRecvError::Disconnected) => break,
-            Ok(file) => {
+            Ok((file, None)) => {
                 purge_file(file.clone(), &mut locked_files, &mut err_files);
             }
+            Ok((_, Some(_))) => unreachable!(),
+            Err(mpsc::TryRecvError::Empty) => (),
+            Err(mpsc::TryRecvError::Disconnected) => break,
         }
         for file in locked_files.drain(..).collect::<Vec<ffi::OsString>>() {
             purge_file(file.clone(), &mut locked_files, &mut err_files);
@@ -3835,7 +3788,10 @@ fn purger(name: String, rx: mpsc::Receiver<ffi::OsString>) {
     for file in err_files.into_iter() {
         error!(target: "robtpr", "{:?}, error purging file {:?}", name, file);
     }
+
     info!(target: "robtpr", "{:?}, stopping purger ...", name);
+
+    Ok(())
 }
 
 #[cfg(test)]

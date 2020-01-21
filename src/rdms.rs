@@ -13,7 +13,10 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use crate::core::{CommitIter, CommitIterator, Diff, Entry, Footprint, Index, Result, Validate};
+use crate::{
+    core::{CommitIter, CommitIterator, Diff, Entry, Footprint, Index, Result, Validate},
+    thread::Thread,
+};
 
 /// Default commit interval, in seconds. Refer to set_commit_interval()
 /// method for more detail.
@@ -23,23 +26,47 @@ pub const COMMIT_INTERVAL: usize = 30 * 60; // 30 minutes
 /// the full set of features.
 pub struct Rdms<K, V, I>
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
+    K: Clone + Ord,
+    V: Clone + Diff,
     I: Index<K, V>,
 {
     name: String,
 
-    index: Arc<sync::Mutex<I>>,
+    index: Option<Arc<sync::Mutex<I>>>,
+    auto_commit: Option<Thread<(), (), ()>>,
+
     _key: marker::PhantomData<K>,
     _value: marker::PhantomData<V>,
 }
 
-impl<K, V, I> Rdms<K, V, I>
+impl<K, V, I> Drop for Rdms<K, V, I>
 where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
+    K: Clone + Ord,
+    V: Clone + Diff,
     I: Index<K, V>,
 {
+    fn drop(&mut self) {
+        match self.auto_commit.take() {
+            Some(auto_commit) => match auto_commit.close_wait() {
+                Err(err) => error!(
+                    target: "rdms  ",
+                    "{:?}, auto-commit {:?}", self.name, err
+                ),
+                Ok(_) => (),
+            },
+            None => (),
+        }
+    }
+}
+
+impl<K, V, I> Rdms<K, V, I>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+    I: Index<K, V>,
+{
+    /// Create a new `Rdms` instance, identified by `name` using an underlying
+    /// `index`.
     pub fn new<S>(name: S, index: I) -> Result<Box<Rdms<K, V, I>>>
     where
         S: AsRef<str>,
@@ -47,11 +74,43 @@ where
         let value = Box::new(Rdms {
             name: name.as_ref().to_string(),
 
-            index: Arc::new(sync::Mutex::new(index)),
+            auto_commit: None,
+            index: Some(Arc::new(sync::Mutex::new(index))),
+
             _key: marker::PhantomData,
             _value: marker::PhantomData,
         });
         Ok(value)
+    }
+
+    /// Close this `Rdms` instance. The life-cycle of the index finishes when
+    /// close is called. Note that, only memory resources will be cleared by
+    /// this call. To cleanup persisted data (in disk) use the `purge()`.
+    pub fn close(mut self) -> Result<()> {
+        self.do_close()?;
+        match Arc::try_unwrap(self.index.take().unwrap()) {
+            Ok(index) => index.into_inner().unwrap().close()?,
+            Err(_) => unreachable!(),
+        }
+        Ok(())
+    }
+
+    /// Purge this index along with disk data.
+    pub fn purge(mut self) -> Result<()> {
+        self.do_close()?;
+        match Arc::try_unwrap(self.index.take().unwrap()) {
+            Ok(index) => index.into_inner().unwrap().close()?,
+            Err(_) => unreachable!(),
+        }
+        Ok(())
+    }
+
+    fn do_close(&mut self) -> Result<()> {
+        match self.auto_commit.take() {
+            Some(auto_commit) => auto_commit.close_wait()?,
+            None => (),
+        }
+        Ok(())
     }
 }
 
@@ -63,20 +122,18 @@ where
 {
     /// Set interval in time duration, for invoking auto commit.
     /// Calling this method will spawn an auto compaction thread.
-    pub fn set_commit_interval(&mut self, interval: Duration) {
-        let index = Arc::clone(&self.index);
-        thread::spawn(move || auto_commit::<K, V, I>(index, interval));
-    }
-}
-
-impl<K, V, I> Drop for Rdms<K, V, I>
-where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
-    I: Index<K, V>,
-{
-    fn drop(&mut self) {
-        // place holder
+    pub fn set_commit_interval(&mut self, interval: Duration) -> &mut Rdms<K, V, I> {
+        self.auto_commit = match self.auto_commit.take() {
+            Some(auto_commit) => Some(auto_commit),
+            None if interval.as_secs() > 0 => {
+                let index = Arc::clone(self.index.as_ref().unwrap());
+                Some(Thread::new(move |_rx| {
+                    move || auto_commit::<K, V, I>(index, interval)
+                }))
+            }
+            None => None,
+        };
+        self
     }
 }
 
@@ -90,6 +147,8 @@ where
         use crate::error::Error::ThreadFail;
 
         self.index
+            .as_ref()
+            .unwrap()
             .lock()
             .map_err(|err| ThreadFail(format!("rdms lock poisened, {:?}", err)))
     }

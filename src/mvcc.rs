@@ -541,6 +541,15 @@ where
     {
         self.as_mut().compact(cutoff, metacb)
     }
+
+    fn close(self) -> Result<()> {
+        (*self).close()
+    }
+
+    /// End of index life-cycle. Also clears persisted data (in disk).
+    fn purge(self) -> Result<()> {
+        (*self).purge()
+    }
 }
 
 impl<K, V> Index<K, V> for Mvcc<K, V>
@@ -679,6 +688,14 @@ where
         };
         info!(target: "mvcc  ", "{:?}, compacted {} items", self.name, count);
         Ok(count)
+    }
+
+    fn close(self) -> Result<()> {
+        Ok(())
+    }
+
+    fn purge(self) -> Result<()> {
+        self.close()
     }
 }
 

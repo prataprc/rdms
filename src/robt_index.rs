@@ -178,11 +178,18 @@ where
         }
     }
 
-    pub(crate) fn flush(&mut self, flusher: &mut Flusher) -> Result<()> {
+    pub(crate) fn flush<T: Flusher>(&mut self, iflusher: Option<&T>) -> Result<()>
+    where
+        T: Flusher,
+    {
         match self {
-            MBlock::Encode { mblock, .. } => flusher.send(mblock.clone()),
+            MBlock::Encode { mblock, .. } => match iflusher {
+                Some(iflusher) => iflusher.post(mblock.clone())?,
+                None => unreachable!(),
+            },
             MBlock::Decode { .. } => unreachable!(),
         }
+        Ok(())
     }
 
     #[cfg(test)]
@@ -560,11 +567,21 @@ where
         }
     }
 
-    pub(crate) fn flush(&mut self, x: &mut Flusher, y: Option<&mut Flusher>) -> Result<()> {
+    pub(crate) fn flush<T: Flusher>(
+        &mut self,
+        iflusher: Option<&T>,
+        vflusher: Option<&T>,
+    ) -> Result<()> {
         match self {
             ZBlock::Encode { leaf, blob, .. } => {
-                x.send(leaf.clone())?;
-                y.map(|flusher| flusher.send(blob.clone())).transpose()?;
+                match iflusher {
+                    Some(iflusher) => iflusher.post(leaf.clone())?,
+                    None => unreachable!(),
+                }
+                match vflusher {
+                    Some(vflusher) => vflusher.post(blob.clone())?,
+                    None => (),
+                }
             }
             ZBlock::Decode { .. } => unreachable!(),
         }

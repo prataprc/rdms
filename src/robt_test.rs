@@ -75,7 +75,6 @@ fn test_version() {
             dir: Default::default(),
             name: name.clone(),
             config: Default::default(),
-            purge_tx: Default::default(),
             _phantom_key: marker::PhantomData,
             _phantom_val: marker::PhantomData,
         };
@@ -93,7 +92,6 @@ fn test_version() {
             config: Default::default(),
             stats: Default::default(),
             bitmap: Arc::new(NoBitmap),
-            purge_tx: Default::default(),
         };
         let index = Robt {
             inner: sync::Mutex::new(inner),

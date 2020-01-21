@@ -120,6 +120,14 @@ where
     {
         Ok(0)
     }
+
+    fn close(self) -> Result<()> {
+        Ok(())
+    }
+
+    fn purge(self) -> Result<()> {
+        Ok(())
+    }
 }
 
 impl<K, V> Writer<K, V> for NoDisk<K, V>

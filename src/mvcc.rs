@@ -1046,8 +1046,7 @@ where
                 let mut new_node = self.node_mvcc_clone(&node, reclaim, true);
                 let size = new_node.footprint()?;
                 let (old_entry, entry) = {
-                    let d = Default::default();
-                    let entry = mem::replace(&mut new_node.entry, d);
+                    let entry = new_node.entry.clone();
                     (Some(entry.clone()), entry)
                 };
                 new_node.entry = entry.xmerge(new_entry)?;

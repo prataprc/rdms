@@ -239,7 +239,7 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         // loop for a maximum of 1000 entries.
         let mut limit = 1000; // TODO: avoid magic constants
-        let mut key: K = unsafe { mem::zeroed() };
+        let mut key: Option<K> = None;
         loop {
             let mut paths = match self.paths.take() {
                 Some(paths) => paths,
@@ -249,7 +249,7 @@ where
             };
             limit -= 1;
             if limit < 0 {
-                break Some(Ok(ScanEntry::Retry(key)));
+                break Some(Ok(ScanEntry::Retry(key.unwrap())));
             }
 
             match paths.pop() {
@@ -272,7 +272,7 @@ where
                         match nref.entry.filter_within(a, z) {
                             Some(entry) => break Some(Ok(ScanEntry::Found(entry))),
                             None => {
-                                key = nref.entry.to_key();
+                                key = Some(nref.entry.to_key());
                             }
                         }
                     }

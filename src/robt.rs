@@ -227,9 +227,9 @@ where
 
 impl<K, V, B> DiskIndexFactory<K, V> for RobtFactory<K, V, B>
 where
-    K: Clone + Ord + Hash + Footprint + Serialize,
-    V: Clone + Diff + Footprint + Serialize,
-    <V as Diff>::D: Serialize,
+    K: Default + Clone + Ord + Hash + Footprint + Serialize,
+    V: Default + Clone + Diff + Footprint + Serialize,
+    <V as Diff>::D: Default + Serialize,
     B: Bloom,
 {
     type I = Robt<K, V, B>;
@@ -436,9 +436,9 @@ where
 
 impl<K, V, B> Robt<K, V, B>
 where
-    K: Clone + Ord + Hash + Footprint + Serialize,
-    V: Clone + Diff + Footprint + Serialize,
-    <V as Diff>::D: Serialize,
+    K: Default + Clone + Ord + Hash + Footprint + Serialize,
+    V: Default + Clone + Diff + Footprint + Serialize,
+    <V as Diff>::D: Default + Serialize,
     B: Bloom,
 {
     pub fn to_partitions(&mut self) -> Result<Vec<(Bound<K>, Bound<K>)>> {
@@ -448,9 +448,9 @@ where
 
 impl<K, V, B> Index<K, V> for Robt<K, V, B>
 where
-    K: Clone + Ord + Hash + Footprint + Serialize,
-    V: Clone + Diff + Footprint + Serialize,
-    <V as Diff>::D: Serialize,
+    K: Default + Clone + Ord + Hash + Footprint + Serialize,
+    V: Default + Clone + Diff + Footprint + Serialize,
+    <V as Diff>::D: Default + Serialize,
     B: Bloom,
 {
     type R = Snapshot<K, V, B>;
@@ -807,9 +807,9 @@ where
 
 impl<K, V, B> CommitIterator<K, V> for Robt<K, V, B>
 where
-    K: Clone + Ord + Serialize,
-    V: Clone + Diff + Serialize,
-    <V as Diff>::D: Serialize,
+    K: Default + Clone + Ord + Serialize,
+    V: Default + Clone + Diff + Serialize,
+    <V as Diff>::D: Default + Serialize,
     B: Bloom,
 {
     fn scan<G>(&mut self, within: G) -> Result<IndexIter<K, V>>
@@ -1995,9 +1995,9 @@ where
 
 impl<'a, K, V, I, B> CommitScan<'a, K, V, I, B>
 where
-    K: Clone + Ord + Serialize + Footprint,
-    V: Clone + Diff + Serialize + Footprint,
-    <V as Diff>::D: Serialize,
+    K: Default + Clone + Ord + Serialize + Footprint,
+    V: Default + Clone + Diff + Serialize + Footprint,
+    <V as Diff>::D: Default + Serialize,
     I: Iterator<Item = Result<Entry<K, V>>>,
 {
     fn new(mut x_iter: I, mut y_iter: Box<Iter<'a, K, V, B>>) -> CommitScan<'a, K, V, I, B> {
@@ -2018,9 +2018,9 @@ where
 
 impl<'a, K, V, I, B> Iterator for CommitScan<'a, K, V, I, B>
 where
-    K: Clone + Ord + Serialize + Footprint,
-    V: Clone + Diff + Serialize + Footprint,
-    <V as Diff>::D: Serialize,
+    K: Default + Clone + Ord + Serialize + Footprint,
+    V: Default + Clone + Diff + Serialize + Footprint,
+    <V as Diff>::D: Default + Serialize,
     I: Iterator<Item = Result<Entry<K, V>>>,
 {
     type Item = Result<Entry<K, V>>;
@@ -2449,9 +2449,9 @@ where
 
 impl<K, V, B> Snapshot<K, V, B>
 where
-    K: Clone + Ord + Serialize,
-    V: Clone + Diff + Serialize,
-    <V as Diff>::D: Clone + Serialize,
+    K: Default + Clone + Ord + Serialize,
+    V: Default + Clone + Diff + Serialize,
+    <V as Diff>::D: Default + Clone + Serialize,
 {
     fn into_scan(mut self) -> Result<Scan<K, V, B>> {
         let mut mzs = vec![];
@@ -2518,7 +2518,15 @@ where
             Err(Error::InvalidSnapshot(msg))
         }
     }
+}
 
+impl<K, V, B> Snapshot<K, V, B>
+where
+    K: Default + Clone + Ord + Serialize,
+    V: Default + Clone + Diff + Serialize,
+    <V as Diff>::D: Default + Clone + Serialize,
+    B: Bloom,
+{
     fn to_partitions(&mut self) -> Result<Vec<(Bound<K>, Bound<K>)>> {
         let m_blocksize = self.config.m_blocksize;
         let mut partitions = vec![];
@@ -2615,9 +2623,9 @@ where
 
 impl<K, V, B> Validate<Stats> for Snapshot<K, V, B>
 where
-    K: Clone + Ord + Serialize + fmt::Debug,
-    V: Clone + Diff + Serialize,
-    <V as Diff>::D: Clone + Serialize,
+    K: Default + Clone + Ord + Serialize + fmt::Debug,
+    V: Default + Clone + Diff + Serialize,
+    <V as Diff>::D: Default + Clone + Serialize,
     B: Bloom,
 {
     fn validate(&mut self) -> Result<Stats> {
@@ -2692,9 +2700,9 @@ where
 // Read methods
 impl<K, V, B> Reader<K, V> for Snapshot<K, V, B>
 where
-    K: Clone + Ord + Serialize,
-    V: Clone + Diff + Serialize,
-    <V as Diff>::D: Clone + Serialize,
+    K: Default + Clone + Ord + Serialize,
+    V: Default + Clone + Diff + Serialize,
+    <V as Diff>::D: Default + Clone + Serialize,
     B: Bloom,
 {
     fn get<Q>(&mut self, key: &Q) -> Result<Entry<K, V>>
@@ -2802,9 +2810,9 @@ where
 
 impl<K, V, B> Snapshot<K, V, B>
 where
-    K: Clone + Ord + Serialize,
-    V: Clone + Diff + Serialize,
-    <V as Diff>::D: Clone + Serialize,
+    K: Default + Clone + Ord + Serialize,
+    V: Default + Clone + Diff + Serialize,
+    <V as Diff>::D: Default + Clone + Serialize,
 {
     /// Return the first entry in index, with only latest value.
     pub fn first(&mut self) -> Result<Entry<K, V>> {
@@ -3234,8 +3242,8 @@ where
 impl<K, V, B> Snapshot<K, V, B>
 where
     K: Clone + Ord + Serialize,
-    V: Clone + Diff + Serialize,
-    <V as Diff>::D: Clone + Serialize,
+    V: Default + Clone + Diff + Serialize,
+    <V as Diff>::D: Default + Clone + Serialize,
 {
     fn fetch(
         &mut self,
@@ -3282,9 +3290,9 @@ where
 
 impl<K, V, B> Iterator for Scan<K, V, B>
 where
-    K: Clone + Ord + Serialize,
-    V: Clone + Diff + Serialize,
-    <V as Diff>::D: Clone + Serialize,
+    K: Default + Clone + Ord + Serialize,
+    V: Default + Clone + Diff + Serialize,
+    <V as Diff>::D: Default + Clone + Serialize,
 {
     type Item = Result<Entry<K, V>>;
 
@@ -3352,9 +3360,9 @@ where
 
 impl<K, V, B, R> Iterator for ScanRange<K, V, B, R>
 where
-    K: Clone + Ord + Serialize,
-    V: Clone + Diff + Serialize,
-    <V as Diff>::D: Clone + Serialize,
+    K: Default + Clone + Ord + Serialize,
+    V: Default + Clone + Diff + Serialize,
+    <V as Diff>::D: Default + Clone + Serialize,
     R: RangeBounds<K>,
 {
     type Item = Result<Entry<K, V>>;
@@ -3440,9 +3448,9 @@ where
 
 impl<'a, K, V, B> Iterator for Iter<'a, K, V, B>
 where
-    K: Clone + Ord + Serialize,
-    V: Clone + Diff + Serialize,
-    <V as Diff>::D: Clone + Serialize,
+    K: Default + Clone + Ord + Serialize,
+    V: Default + Clone + Diff + Serialize,
+    <V as Diff>::D: Default + Clone + Serialize,
 {
     type Item = Result<Entry<K, V>>;
 
@@ -3527,9 +3535,9 @@ where
 
 impl<'a, K, V, B, R, Q> Iterator for Range<'a, K, V, B, R, Q>
 where
-    K: Clone + Ord + Borrow<Q> + Serialize,
-    V: Clone + Diff + Serialize,
-    <V as Diff>::D: Clone + Serialize,
+    K: Default + Clone + Ord + Borrow<Q> + Serialize,
+    V: Default + Clone + Diff + Serialize,
+    <V as Diff>::D: Default + Clone + Serialize,
     R: RangeBounds<Q>,
     Q: Ord + ?Sized,
 {
@@ -3618,9 +3626,9 @@ where
 
 impl<'a, K, V, B, R, Q> Iterator for Reverse<'a, K, V, B, R, Q>
 where
-    K: Clone + Ord + Borrow<Q> + Serialize,
-    V: Clone + Diff + Serialize,
-    <V as Diff>::D: Clone + Serialize,
+    K: Default + Clone + Ord + Borrow<Q> + Serialize,
+    V: Default + Clone + Diff + Serialize,
+    <V as Diff>::D: Default + Clone + Serialize,
     R: RangeBounds<Q>,
     Q: Ord + ?Sized,
 {
@@ -3668,8 +3676,8 @@ where
 
 impl<K, V> Iterator for MZ<K, V>
 where
-    K: Clone + Ord + Serialize,
-    V: Clone + Diff + Serialize,
+    K: Default + Clone + Ord + Serialize,
+    V: Default + Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
 {
     type Item = Result<Entry<K, V>>;
@@ -3694,8 +3702,8 @@ where
 
 impl<K, V> DoubleEndedIterator for MZ<K, V>
 where
-    K: Clone + Ord + Serialize,
-    V: Clone + Diff + Serialize,
+    K: Default + Clone + Ord + Serialize,
+    V: Default + Clone + Diff + Serialize,
     <V as Diff>::D: Clone + Serialize,
 {
     fn next_back(&mut self) -> Option<Result<Entry<K, V>>> {

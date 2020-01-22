@@ -1,4 +1,4 @@
-use std::{convert::TryInto, marker, mem};
+use std::{convert::TryInto, marker};
 
 use crate::{
     core::{self, Diff, Result, Serialize},
@@ -91,13 +91,13 @@ where
 
     pub(crate) fn decode_key(entry: &[u8]) -> Result<K>
     where
-        K: 'a + Serialize,
+        K: 'a + Default + Serialize,
     {
         let klen: usize = {
             let hdr1 = u64::from_be_bytes(entry[0..8].try_into()?);
             (hdr1 & Self::KLEN_MASK).try_into()?
         };
-        let mut key: K = unsafe { mem::zeroed() };
+        let mut key: K = Default::default();
         key.decode(&entry[16..16 + klen])?;
         Ok(key)
     }
@@ -577,7 +577,11 @@ where
     V: Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
 {
-    pub(crate) fn decode_entry(e: &[u8]) -> Result<core::Entry<K, V>> {
+    pub(crate) fn decode_entry(e: &[u8]) -> Result<core::Entry<K, V>>
+    where
+        K: Default,
+        V: Default,
+    {
         let (klen, n_deltas) = {
             let hdr1 = u64::from_be_bytes(e[0..8].try_into()?);
             let n_deltas: usize = (hdr1 & Self::NDELTA_MASK).try_into()?;
@@ -594,7 +598,7 @@ where
         };
         let seqno = u64::from_be_bytes(e[16..24].try_into()?);
 
-        let mut key: K = unsafe { mem::zeroed() };
+        let mut key: K = Default::default();
         key.decode(&e[24..24 + klen])?;
 
         let n = 24 + klen;
@@ -606,7 +610,7 @@ where
                 (n + 8, core::Value::new_upsert(v, seqno))
             }
             (false, false) => {
-                let mut value: V = unsafe { mem::zeroed() };
+                let mut value: V = Default::default();
                 let vlen: usize = vlen.try_into()?;
                 value.decode(&e[n..n + vlen])?;
                 let value = Box::new(vlog::Value::Native { value });
@@ -626,8 +630,11 @@ where
         Ok(entry)
     }
 
-    pub(crate) fn decode_key(entry: &[u8]) -> Result<K> {
-        let mut key: K = unsafe { mem::zeroed() };
+    pub(crate) fn decode_key(entry: &[u8]) -> Result<K>
+    where
+        K: Default,
+    {
+        let mut key: K = Default::default();
 
         let klen: usize = {
             let hdr1 = u64::from_be_bytes(entry[0..8].try_into()?);

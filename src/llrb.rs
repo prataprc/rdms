@@ -1016,8 +1016,7 @@ where
                     Ordering::Equal if lsm => {
                         let size = node.footprint()?;
                         let (old_entry, entry) = {
-                            let d = Default::default();
-                            let entry = mem::replace(&mut node.entry, d);
+                            let entry = node.entry.clone();
                             (Some(entry.clone()), entry)
                         };
                         node.entry = entry.xmerge(nentry)?;

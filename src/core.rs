@@ -6,7 +6,7 @@ use std::{
     ffi, fmt, fs,
     hash::Hash,
     marker,
-    mem::{self, ManuallyDrop},
+    mem::ManuallyDrop,
     ops::{Bound, RangeBounds},
     result,
     sync::atomic::{AtomicBool, Ordering::SeqCst},
@@ -730,20 +730,6 @@ where
     deltas: Vec<Delta<V>>,
 }
 
-impl<K, V> Default for Entry<K, V>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-{
-    fn default() -> Entry<K, V> {
-        Entry {
-            key: unsafe { mem::zeroed() },
-            value: Value::D { seqno: 0 },
-            deltas: Default::default(),
-        }
-    }
-}
-
 impl<K, V> Borrow<K> for Entry<K, V>
 where
     K: Clone + Ord,
@@ -1061,8 +1047,8 @@ where
 impl<K, V> Entry<K, V>
 where
     K: Clone + Ord,
-    V: Clone + Diff + Serialize,
-    <V as Diff>::D: Serialize,
+    V: Default + Clone + Diff + Serialize,
+    <V as Diff>::D: Default + Serialize,
 {
     pub(crate) fn fetch_value(&mut self, fd: &mut fs::File) -> Result<()> {
         Ok(match &self.value {

@@ -1,4 +1,4 @@
-use std::{convert::TryInto, fs, mem};
+use std::{convert::TryInto, fs};
 
 use crate::{
     core::{self, Diff, Footprint, Result, Serialize},
@@ -133,10 +133,10 @@ where
 
 pub(crate) fn fetch_value<V>(fpos: u64, n: u64, fd: &mut fs::File) -> Result<Value<V>>
 where
-    V: Serialize,
+    V: Default + Serialize,
 {
     let block = util::read_buffer(fd, fpos, n, "reading value from vlog")?;
-    let mut value: V = unsafe { mem::zeroed() };
+    let mut value: V = Default::default();
     value.decode(&block[8..])?;
     Ok(Value::new_native(value))
 }
@@ -245,10 +245,10 @@ where
 pub(crate) fn fetch_delta<V>(fpos: u64, n: u64, fd: &mut fs::File) -> Result<Delta<V>>
 where
     V: Diff,
-    <V as Diff>::D: Serialize,
+    <V as Diff>::D: Default + Serialize,
 {
     let block = util::read_buffer(fd, fpos, n, "reading delta from vlog")?;
-    let mut delta: <V as Diff>::D = unsafe { mem::zeroed() };
+    let mut delta: <V as Diff>::D = Default::default();
     delta.decode(&block[8..])?;
     Ok(Delta::new_native(delta))
 }

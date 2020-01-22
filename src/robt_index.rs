@@ -231,7 +231,7 @@ where
     // immediately returns with failure.
     pub(crate) fn get<Q>(&self, key: &Q, from: Bound<usize>, to: Bound<usize>) -> Result<MEntry<K>>
     where
-        K: Borrow<Q>,
+        K: Default + Borrow<Q>,
         Q: Ord + ?Sized,
     {
         let f = match from {
@@ -260,7 +260,7 @@ where
 
     pub(crate) fn find<Q>(&self, key: &Q, from: Bound<usize>, to: Bound<usize>) -> Result<MEntry<K>>
     where
-        K: Borrow<Q>,
+        K: Default + Borrow<Q>,
         Q: Ord + ?Sized,
     {
         let f = match from {
@@ -344,7 +344,10 @@ where
         }
     }
 
-    pub(crate) fn to_key(&self, index: usize) -> Result<K> {
+    pub(crate) fn to_key(&self, index: usize) -> Result<K>
+    where
+        K: Default,
+    {
         let (block, count, offsets) = match self {
             MBlock::Decode {
                 block,
@@ -632,8 +635,9 @@ where
         to: Bound<usize>,
     ) -> Result<(usize, core::Entry<K, V>)>
     where
-        K: Borrow<Q>,
+        K: Default + Borrow<Q>,
         Q: Ord + ?Sized,
+        V: Default,
     {
         let f = match from {
             Bound::Included(f) | Bound::Excluded(f) => f,
@@ -676,7 +680,11 @@ where
         }
     }
 
-    pub fn to_entry(&self, index: usize) -> Result<(usize, core::Entry<K, V>)> {
+    pub fn to_entry(&self, index: usize) -> Result<(usize, core::Entry<K, V>)>
+    where
+        K: Default,
+        V: Default,
+    {
         let (block, count, offsets) = match self {
             ZBlock::Decode {
                 block,
@@ -697,7 +705,11 @@ where
         }
     }
 
-    pub fn last(&self) -> Result<(usize, core::Entry<K, V>)> {
+    pub fn last(&self) -> Result<(usize, core::Entry<K, V>)>
+    where
+        K: Default,
+        V: Default,
+    {
         let (block, count, offsets) = match self {
             ZBlock::Decode {
                 block,
@@ -718,7 +730,10 @@ where
         }
     }
 
-    fn to_key(&self, index: usize) -> Result<K> {
+    fn to_key(&self, index: usize) -> Result<K>
+    where
+        K: Default,
+    {
         let (block, offsets) = match self {
             ZBlock::Decode { block, offsets, .. } => (block, offsets),
             ZBlock::Encode { .. } => unreachable!(),

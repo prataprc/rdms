@@ -58,7 +58,7 @@ pub enum Error {
     PartialRead(String),
     /// Unable to write full buffer into file.
     PartialWrite(String),
-    /// Returned by disk index or Wal that provide durability support.
+    /// Returned by disk index or dlog that provide durability support.
     InvalidFile(String),
     /// Thread has failed.
     ThreadFail(String),
@@ -68,8 +68,8 @@ pub enum Error {
     UnexpectedFail(String),
     /// Inter-Process-Communication error from std::mpsc
     IPCFail(String),
-    /// Invalid WAL
-    InvalidWAL(String),
+    /// Invalid Dlog
+    InvalidDlog(String),
     /// IO error from std::io
     IoError(io::Error),
     /// Json processing error from jsondata package
@@ -154,7 +154,7 @@ impl From<mpsc::RecvError> for Error {
 impl From<Box<dyn any::Any + Send>> for Error {
     fn from(err: Box<dyn any::Any + Send>) -> Error {
         let msg = format!("dynamic error: {:?}", err);
-        Error::InvalidWAL(msg)
+        Error::InvalidDlog(msg)
     }
 }
 

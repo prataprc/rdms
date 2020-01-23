@@ -59,6 +59,8 @@ mod vlog;
 // support modules
 pub mod dlog;
 pub mod dlog_entry;
+pub mod dlog_raft;
+pub mod dlog_wal;
 pub mod lsm;
 pub mod scans;
 

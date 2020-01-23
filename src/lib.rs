@@ -57,9 +57,10 @@ pub mod util;
 mod vlog;
 
 // support modules
+pub mod dlog;
+pub mod dlog_entry;
 pub mod lsm;
 pub mod scans;
-pub mod wal;
 
 // mem index
 pub mod llrb;

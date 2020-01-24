@@ -53,6 +53,13 @@ impl<Q, R, T> Thread<Q, R, T> {
         }
     }
 
+    pub fn to_writer(&self) -> Writer<Q, R> {
+        match self.inner.unwrap().tx {
+            Tx:N(tx) => Writer{ tx: tx.clone() },
+            Tx:S(tx) => Writer{ tx: tx.clone() },
+        }
+    }
+
     pub fn post(&self, msg: Q) -> Result<()> {
         match &self.inner {
             Some(inner) => {
@@ -65,6 +72,7 @@ impl<Q, R, T> Thread<Q, R, T> {
             None => Err(Error::UnInitialized(format!("Thread not initialized"))),
         }
     }
+
     pub fn request(&self, request: Q) -> Result<R> {
         match &self.inner {
             Some(inner) => {
@@ -111,5 +119,21 @@ impl<Q, R, T> Inner<Q, R, T> {
                 Err(err)
             }
         }
+    }
+}
+
+pub struct Writer<Q, R> {
+    tx: Tx<Q, R>,
+}
+
+impl<Q, R> Writer<Q, R> {
+    pub fn post(&self, msg: Q) -> Result<()> {
+        Ok(self.tx.send((msg, None))?)
+    }
+
+    pub fn request(&self, request: Q) -> Result<R> {
+        let (tx, rx) = mpsc::channel();
+        self.tx.send((request, Some(tx)))?,
+        Ok(rx.recv()?)
     }
 }

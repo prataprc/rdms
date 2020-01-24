@@ -73,12 +73,12 @@ use crate::{
 
 include!("robt_marker.rs");
 
-#[derive(Clone)]
-struct Name(String);
-
 pub(crate) trait Flusher {
     fn post(&self, msg: Vec<u8>) -> Result<()>;
 }
+
+#[derive(Clone)]
+struct Name(String);
 
 impl Name {
     fn next(self) -> Name {

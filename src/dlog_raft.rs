@@ -49,12 +49,15 @@ where
 {
     type Key = K;
     type Val = V;
-    type Op = Op<K, V>;
 
     // TODO: add test cases for this.
-    fn on_add_entry(&mut self, entry: dlog_entry::Entry<Op<K, V>>) -> () {
+    fn on_add_entry(&mut self, _entry: &dlog_entry::Entry<Op<K, V>>) -> () {
         // TBD
         unimplemented!()
+    }
+
+    fn to_type(&self) -> String {
+        "raft".to_string()
     }
 }
 
@@ -89,9 +92,9 @@ impl Serialize for State {
 
     fn decode(&mut self, buf: &[u8]) -> Result<usize> {
         util::check_remaining(buf, 24, "dlog batch-config")?;
-        let term = u64::from_be_bytes(buf[0..8].try_into()?);
-        let committed = u64::from_be_bytes(buf[8..16].try_into()?);
-        let persisted = u64::from_be_bytes(buf[16..24].try_into()?);
+        self.term = u64::from_be_bytes(buf[0..8].try_into()?);
+        self.committed = u64::from_be_bytes(buf[8..16].try_into()?);
+        self.persisted = u64::from_be_bytes(buf[16..24].try_into()?);
         let mut n = 24;
 
         let count = u16::from_be_bytes(buf[n..n + 2].try_into()?);

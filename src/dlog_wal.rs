@@ -1,9 +1,167 @@
-use std::{convert::TryInto, fmt, result};
+use std::{convert::TryInto, fmt, result, sync::mpsc};
 
 use crate::{
     core::{Result, Serialize},
-    dlog, dlog_entry, util,
+    dlog, dlog_entry, thread as rt, util,
 };
+
+pub struct Wal<K, V>
+where
+    K: Default + Serialize,
+    V: Default + Serialize,
+{
+    dir: ffi::OsString,
+    name: String,
+    journal_limit: usize,
+
+    index: Arc<AtomicU64>, // seqno
+    threads: Vec<rt::Thread<OpRequest<Op>, OpResponse, Shard<State, Op<K, V>>>>,
+}
+
+impl<K, V> From<Dlog<State, Op<K, V>>> for Wal<K, V>
+where
+    K: Default + Serialize,
+    V: Default + Serialize,
+{
+    fn from(dlog: Dlog<State, Op<K, V>>) -> Wal<K, V> {
+        let mut wal = Wal {
+            dir: dlog.dir,
+            name: dlog.name,
+            journal_limit: dlog.journal_limit,
+
+            index: dlog.index,
+            threads: Default::default(),
+        };
+
+        for shard in self.shards {
+            self.threads.push(shard.spawn())
+        }
+
+        Wal
+    }
+}
+
+impl<K, V> Wal<K, V>
+where
+    K: Default + Serialize,
+    V: Default + Serialize,
+{
+    pub fn to_writer(&mut self) -> Result<Writer<K, V>> {
+        let mut w = Writer {
+            shards: Default::default(),
+        }
+
+        for thread in self.threads {
+            w.shards.push(thread.to_writer())
+        }
+
+        Ok(w)
+    }
+}
+
+impl<K, V> Wal<K, V>
+where
+    K: Default + Serialize,
+    V: Default + Serialize,
+{
+    /// Purge all journal files whose ``last_index`` is  less than ``before``.
+    pub fn purge_till(&mut self, before: u64) -> Result<()> {
+        if self.shards.len() != self.threads.capacity() {
+            panic!("spawn_writers for all shards and try purge_till() API");
+        }
+        for shard_tx in self.shards.iter() {
+            let (tx, rx) = mpsc::sync_channel(1);
+            shard_tx.send(OpRequest::new_purge_till(before, tx))?;
+            rx.recv()?;
+        }
+        Ok(())
+    }
+
+    /// Close the [`Wal`] instance. It is possible to get back the [`Wal`]
+    /// instance using the [`Wal::load`] constructor. To purge the instance use
+    /// [`Wal::purge`] api.
+    pub fn close(&mut self) -> Result<u64> {
+        // wait for the threads to exit, note that threads could have ended
+        // when close() was called on WAL or Writer, or due panic or error.
+        while let Some(tx) = self.shards.pop() {
+            // ignore if send returns an error
+            // TODO: log error here.
+            tx.send(OpRequest::new_close()).ok();
+        }
+        // wait for the threads to exit.
+        let mut index = 0_u64;
+        while let Some(thread) = self.threads.pop() {
+            index = cmp::max(index, thread.join()??);
+        }
+        Ok(index)
+    }
+
+    /// Purge this ``Wal`` instance and all its memory and disk footprints.
+    pub fn purge(mut self) -> Result<()> {
+        self.close()?;
+        if self.threads.len() > 0 {
+            let msg = "cannot purge with active shards".to_string();
+            Err(Error::InvalidWAL(msg))
+        } else {
+            while let Some(journal) = self.journals.pop() {
+                journal.purge()?;
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Writer handle for [`Wal`] instance.
+#[derive(Clone)]
+pub struct Writer<K, V>
+where
+    K: Default + Serialize,
+    V: Default + Serialize,
+{
+    shards: Vec<rt::Writer<OpRequest<K,V>, OpResponse>>,
+}
+
+impl Writer<K, V> {
+    fn new(tx: mpsc::Sender<OpRequest<K, V>>) -> Writer<K, V> {
+        Writer { tx }
+    }
+
+    /// Append ``set`` operation into the log. Return the sequence-no
+    /// for this mutation.
+    pub fn set(&self, key: K, value: V) -> Result<u64> {
+        let (resp_tx, resp_rx) = mpsc::sync_channel(1);
+        self.tx.send(OpRequest::new_set(key, value, resp_tx))?;
+        match resp_rx.recv()? {
+            Opresp::Result(res) => res,
+        }
+    }
+
+    /// Append ``set_cas`` operation into the log. Return the sequence-no
+    /// for this mutation.
+    pub fn set_cas(&self, key: K, value: V, cas: u64) -> Result<u64> {
+        let (resp_tx, resp_rx) = mpsc::sync_channel(1);
+        self.tx
+            .send(OpRequest::new_set_cas(key, value, cas, resp_tx))?;
+        match resp_rx.recv()? {
+            Opresp::Result(res) => res,
+        }
+    }
+
+    /// Append ``delete`` operation into the log. Return the sequence-no
+    /// for this mutation.
+    pub fn delete<Q>(&self, key: &Q) -> Result<u64>
+    where
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + ?Sized,
+    {
+        let (resp_tx, resp_rx) = mpsc::sync_channel(1);
+        self.tx
+            .send(OpRequest::new_delete(key.to_owned(), resp_tx))?;
+        match resp_rx.recv()? {
+            Opresp::Result(res) => res,
+        }
+    }
+}
 
 #[derive(Clone, Default, PartialEq)]
 pub(crate) struct State;
@@ -15,10 +173,13 @@ where
 {
     type Key = K;
     type Val = V;
-    type Op = Op<K, V>;
 
     fn on_add_entry(&mut self, _entry: &dlog_entry::Entry<Op<K, V>>) -> () {
         ()
+    }
+
+    fn to_type(&self) -> String {
+        "wal".to_string()
     }
 }
 

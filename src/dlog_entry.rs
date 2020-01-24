@@ -4,6 +4,7 @@ use std::{convert::TryInto, fmt, fs, result};
 
 use crate::{
     core::{Result, Serialize},
+    dlog::DlogState,
     error::Error,
     util,
 };
@@ -13,7 +14,7 @@ include!("dlog_marker.rs");
 #[derive(Clone)]
 pub(crate) enum Batch<S, T>
 where
-    S: Default + Serialize,
+    S: Default + Serialize + DlogState<T>,
     T: Default + Serialize,
 {
     // Reference to immutable batch in log file,
@@ -39,7 +40,7 @@ where
 
 impl<S, T> PartialEq for Batch<S, T>
 where
-    S: PartialEq + Default + Serialize,
+    S: PartialEq + Default + Serialize + DlogState<T>,
     T: PartialEq + Default + Serialize,
 {
     fn eq(&self, other: &Self) -> bool {
@@ -75,7 +76,7 @@ where
 
 impl<S, T> Batch<S, T>
 where
-    S: Default + Serialize,
+    S: Default + Serialize + DlogState<T>,
     T: Default + Serialize,
 {
     pub(crate) fn default_active() -> Batch<S, T> {
@@ -99,10 +100,10 @@ where
         }
     }
 
-    fn add_entry(&mut self, entry: Entry<T>) {
+    pub(crate) fn add_entry(&mut self, entry: Entry<T>) {
         match self {
             Batch::Active { state, entries } => {
-                // state.on_add_entry(&entry); TODO
+                state.on_add_entry(&entry);
                 entries.push(entry);
             }
             _ => unreachable!(),
@@ -112,10 +113,10 @@ where
 
 impl<S, T> Batch<S, T>
 where
-    S: Default + Serialize,
+    S: Default + Serialize + DlogState<T>,
     T: Default + Serialize,
 {
-    fn to_start_index(&self) -> Option<u64> {
+    pub(crate) fn to_start_index(&self) -> Option<u64> {
         match self {
             Batch::Refer { start_index, .. } => Some(*start_index),
             Batch::Active { entries, .. } => {
@@ -125,7 +126,7 @@ where
         }
     }
 
-    fn to_last_index(&self) -> Option<u64> {
+    pub(crate) fn to_last_index(&self) -> Option<u64> {
         match self {
             Batch::Refer { last_index, .. } => Some(*last_index),
             Batch::Active { entries, .. } => {
@@ -135,21 +136,21 @@ where
         }
     }
 
-    fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         match self {
             Batch::Active { entries, .. } => entries.len(),
             _ => unreachable!(),
         }
     }
 
-    fn into_entries(self) -> Vec<Entry<T>> {
+    pub(crate) fn into_entries(self) -> Vec<Entry<T>> {
         match self {
             Batch::Active { entries, .. } => entries,
             Batch::Refer { .. } => unreachable!(),
         }
     }
 
-    fn into_active(mut self, fd: &mut fs::File) -> Result<Batch<S, T>> {
+    pub(crate) fn into_active(mut self, fd: &mut fs::File) -> Result<Batch<S, T>> {
         match self {
             Batch::Refer { fpos, length, .. } => {
                 let n: u64 = length.try_into()?;
@@ -184,10 +185,10 @@ where
 // NOTE: `length` value includes 8-byte length-prefix and 8-byte length-suffix.
 impl<S, T> Batch<S, T>
 where
-    S: Default + Serialize,
+    S: Default + Serialize + DlogState<T>,
     T: Default + Serialize,
 {
-    fn encode_active(&self, buf: &mut Vec<u8>) -> Result<usize> {
+    pub(crate) fn encode_active(&self, buf: &mut Vec<u8>) -> Result<usize> {
         match self {
             Batch::Active { state, entries } => {
                 buf.resize(buf.len() + 8, 0); // adjust for length
@@ -229,7 +230,7 @@ where
         }
     }
 
-    fn decode_refer(&mut self, buf: &[u8], fpos: u64) -> Result<usize> {
+    pub(crate) fn decode_refer(&mut self, buf: &[u8], fpos: u64) -> Result<usize> {
         util::check_remaining(buf, 24, "dlog batch-refer-hdr")?;
 
         let length = Self::validate(buf)?;
@@ -294,7 +295,7 @@ where
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq)]
 pub(crate) struct Entry<T>
 where
     T: Default + Serialize,
@@ -304,15 +305,6 @@ where
     index: u64,
     // Operation to be logged.
     op: T,
-}
-
-impl<T> PartialEq for Entry<T>
-where
-    T: PartialEq + Default + Serialize,
-{
-    fn eq(&self, other: &Self) -> bool {
-        self.index == self.index && self.op == self.op
-    }
 }
 
 impl<T> fmt::Debug for Entry<T>

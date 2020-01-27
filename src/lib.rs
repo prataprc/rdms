@@ -51,7 +51,7 @@ pub mod panic;
 pub mod spinlock;
 pub mod sync;
 mod sync_writer;
-mod thread;
+pub mod thread;
 pub mod types;
 pub mod util;
 mod vlog;

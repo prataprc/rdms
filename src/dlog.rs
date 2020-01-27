@@ -63,49 +63,25 @@
 //!
 
 use std::{
-    borrow::Borrow,
-    cmp,
-    collections::HashMap,
-    convert::TryInto,
-    ffi, fs,
-    io::{self, Read, Seek, Write},
-    mem, path, result,
-    sync::{atomic::AtomicU64, mpsc, Arc},
-    thread, vec,
+    ffi,
+    sync::{atomic::AtomicU64, Arc},
+    vec,
 };
 
 use crate::{
-    core::{Diff, Replay, Result, Serialize},
-    dlog_entry,
-    {error::Error, util},
+    core::{Result, Serialize},
+    dlog_entry::DEntry,
+    dlog_journal::Shard,
 };
 
-pub(crate) trait DlogState<T>
-where
-    T: Default + Serialize,
-{
-    type Key: Default + Serialize;
-    type Val: Default + Serialize;
-
-    fn on_add_entry(&mut self, entry: &dlog_entry::Entry<T>) -> ();
-
-    fn to_type(&self) -> String;
-}
-
-// default limit for each journal file size.
-const JOURNAL_LIMIT: usize = 1 * 1024 * 1024 * 1024;
-
 /// Dlog entry logging for [`Rdms`] index.
-///
-/// [Rdms]: crate::Rdms
 pub struct Dlog<S, T>
 where
-    S: Default + Serialize + DlogState,
-    T: Default + Serialize,
+    S: Clone + Default + Serialize + DlogState<T>,
+    T: Clone + Default + Serialize,
 {
     pub(crate) dir: ffi::OsString,
     pub(crate) name: String,
-    pub(crate) journal_limit: usize,
 
     pub(crate) index: Arc<AtomicU64>, // seqno
     pub(crate) shards: Vec<Shard<S, T>>,
@@ -113,14 +89,19 @@ where
 
 impl<S, T> Dlog<S, T>
 where
-    S: Default + Serialize + DlogState,
-    T: Default + Serialize,
+    S: Clone + Default + Serialize + DlogState<T>,
+    T: Clone + Default + Serialize,
 {
     /// Create a new [`Dlog`] instance under directory ``dir``, using specified
     /// number of shards ``nshards`` and ``name`` must be unique if more than
     /// only [`Dlog`] instances are going to be created under the same ``dir``.
-    pub fn create(dir: ffi::OsString, name: String, nshards: usize, journal_limit: usize) -> Result<Dlog<S, T>> {
-        let dlog_index = Arc::new(AtomicU64::new(1)),
+    pub fn create(
+        dir: ffi::OsString,
+        name: String,
+        nshards: usize,
+        journal_limit: usize,
+    ) -> Result<Dlog<S, T>> {
+        let dlog_index = Arc::new(AtomicU64::new(1));
 
         // purge existing shard/journals for name.
         let mut shards = vec![];
@@ -134,7 +115,6 @@ where
         Ok(Dlog {
             dir,
             name,
-            journal_limit,
 
             index: dlog_index,
             shards,
@@ -143,8 +123,13 @@ where
 
     /// Load an existing [`Dlog`] instance identified by ``name`` under
     /// directory ``dir``.
-    pub fn load(dir: ffi::OsString, name: String, nshards: usize, journal_limit: usize) -> Result<Dlog<S, T>> {
-        let dlog_index = Arc::new(AtomicU64::new(1)),
+    pub fn load(
+        dir: ffi::OsString,
+        name: String,
+        nshards: usize,
+        journal_limit: usize,
+    ) -> Result<Dlog<S, T>> {
+        let dlog_index = Arc::new(AtomicU64::new(1));
 
         let mut shards = vec![];
         for shard_id in 0..nshards {
@@ -156,145 +141,60 @@ where
         Ok(Dlog {
             dir,
             name,
-            journal_limit,
 
-            index: Arc::new(Box::new(AtomicU64::new(index + 1))),
+            index: dlog_index,
             shards,
         })
     }
 }
 
-impl<K, V> Dlog<K, V>
+pub(crate) enum OpRequest<T>
 where
-    K: Clone + Ord + Serialize,
-    V: Clone + Diff + Serialize,
+    T: Default + Serialize,
 {
-    /// When DB suffer a crash and looses latest set of mutations, [`Wal`]
-    /// can be used to fetch the latest set of mutations and replay them on
-    /// DB. Return total number of operations replayed on DB.
-    pub fn replay<W: Replay<K, V>>(mut self, db: &mut W) -> Result<usize> {
-        // validate
-        if self.is_active() {
-            let msg = format!("cannot replay with active shards");
-            return Err(Error::InvalidWAL(msg));
-        }
-        if self.journals.len() == 0 {
-            return Ok(0);
-        }
-        // sort-merge journals from different shards.
-        let journal = self.journals.remove(0);
-        let mut iter = ReplayIter::new_journal(journal.into_iter()?);
-        for journal in self.journals.drain(..) {
-            let y = ReplayIter::new_journal(journal.into_iter()?);
-            iter = ReplayIter::new_merge(iter, y);
-        }
-        let mut ops = 0;
-        for entry in iter {
-            let entry = entry?;
-            let index = entry.to_index();
-            match entry.into_op() {
-                Op::Set { key, value } => {
-                    db.set_index(key, value, index)?;
-                }
-                Op::SetCAS { key, value, cas } => {
-                    db.set_cas_index(key, value, cas, index)?;
-                }
-                Op::Delete { key } => {
-                    db.delete_index(key, index)?;
-                }
-            }
-            ops += 1;
-        }
-        Ok(ops)
+    Op { op: T },
+    PurgeTill { before: u64 },
+}
+
+impl<T> OpRequest<T>
+where
+    T: Default + Serialize,
+{
+    pub(crate) fn new_op(op: T) -> OpRequest<T> {
+        OpRequest::Op { op }
+    }
+
+    pub(crate) fn new_purge_till(before: u64) -> OpRequest<T> {
+        OpRequest::PurgeTill { before }
     }
 }
 
-enum ReplayIter<K, V>
-where
-    K: Serialize,
-    V: Serialize,
-{
-    JournalIter {
-        iter: BatchIter<K, V>,
-    },
-    MergeIter {
-        x: Box<ReplayIter<K, V>>,
-        y: Box<ReplayIter<K, V>>,
-        x_entry: Option<Result<Entry<K, V>>>,
-        y_entry: Option<Result<Entry<K, V>>>,
-    },
+#[derive(PartialEq)]
+pub(crate) enum OpResponse {
+    Index(u64),
+    Purged(u64),
 }
 
-impl<K, V> ReplayIter<K, V>
-where
-    K: Serialize,
-    V: Serialize,
-{
-    fn new_journal(iter: BatchIter<K, V>) -> ReplayIter<K, V> {
-        ReplayIter::JournalIter { iter }
+impl OpResponse {
+    pub(crate) fn new_index(index: u64) -> OpResponse {
+        OpResponse::Index(index)
     }
 
-    fn new_merge(
-        mut x: ReplayIter<K, V>, // journal iterator
-        mut y: ReplayIter<K, V>, // journal iterator
-    ) -> ReplayIter<K, V> {
-        let x_entry = x.next();
-        let y_entry = y.next();
-        ReplayIter::MergeIter {
-            x: Box::new(x),
-            y: Box::new(y),
-            x_entry,
-            y_entry,
-        }
+    pub(crate) fn new_purged(index: u64) -> OpResponse {
+        OpResponse::Purged(index)
     }
 }
 
-impl<K, V> Iterator for ReplayIter<K, V>
+pub trait DlogState<T>
 where
-    K: Serialize,
-    V: Serialize,
+    T: Default + Serialize,
 {
-    type Item = Result<Entry<K, V>>;
+    type Key: Default + Serialize;
+    type Val: Default + Serialize;
 
-    fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            ReplayIter::JournalIter { iter } => iter.next(),
-            ReplayIter::MergeIter {
-                x,
-                y,
-                x_entry,
-                y_entry,
-            } => match (x_entry.take(), y_entry.take()) {
-                (Some(Ok(xe)), Some(Ok(ye))) => {
-                    let c = xe.to_index().cmp(&ye.to_index());
-                    match c {
-                        cmp::Ordering::Less => {
-                            *x_entry = x.next();
-                            *y_entry = Some(Ok(ye));
-                            Some(Ok(xe))
-                        }
-                        cmp::Ordering::Greater => {
-                            *y_entry = y.next();
-                            *x_entry = Some(Ok(xe));
-                            Some(Ok(ye))
-                        }
-                        cmp::Ordering::Equal => unreachable!(),
-                    }
-                }
-                (Some(Ok(xe)), None) => {
-                    *x_entry = x.next();
-                    Some(Ok(xe))
-                }
-                (None, Some(Ok(ye))) => {
-                    *y_entry = y.next();
-                    Some(Ok(ye))
-                }
-                (_, Some(Err(err))) => Some(Err(err)),
-                (Some(Err(err)), _) => Some(Err(err)),
-                _ => None,
-            },
-        }
-    }
+    fn on_add_entry(&mut self, entry: &DEntry<T>) -> ();
+
+    fn to_type(&self) -> String;
 }
 
 #[cfg(test)]

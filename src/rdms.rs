@@ -8,14 +8,14 @@ use log::error;
 use std::{
     convert, fmt, marker,
     ops::Bound,
-    sync::{self, Arc, MutexGuard},
+    sync::{self, mpsc, Arc, MutexGuard},
     thread,
     time::{Duration, SystemTime},
 };
 
 use crate::{
     core::{CommitIter, CommitIterator, Diff, Entry, Footprint, Index, Result, Validate},
-    thread::Thread,
+    thread as rt,
 };
 
 /// Default commit interval, in seconds. Refer to set_commit_interval()
@@ -33,7 +33,7 @@ where
     name: String,
 
     index: Option<Arc<sync::Mutex<I>>>,
-    auto_commit: Option<Thread<(), (), ()>>,
+    auto_commit: Option<rt::Thread<(), (), ()>>,
 
     _key: marker::PhantomData<K>,
     _value: marker::PhantomData<V>,
@@ -127,8 +127,8 @@ where
             Some(auto_commit) => Some(auto_commit),
             None if interval.as_secs() > 0 => {
                 let index = Arc::clone(self.index.as_ref().unwrap());
-                Some(Thread::new(move |_rx| {
-                    move || auto_commit::<K, V, I>(index, interval)
+                Some(rt::Thread::new(move |rx| {
+                    move || auto_commit::<K, V, I>(index, interval, rx)
                 }))
             }
             None => None,
@@ -220,7 +220,12 @@ where
     }
 }
 
-fn auto_commit<K, V, I>(index: Arc<sync::Mutex<I>>, interval: Duration) -> Result<()>
+// TODO: return some valid stats.
+fn auto_commit<K, V, I>(
+    index: Arc<sync::Mutex<I>>,
+    interval: Duration,
+    rx: rt::Rx<(), ()>,
+) -> Result<()>
 where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
@@ -229,13 +234,15 @@ where
     use crate::error::Error::ThreadFail;
 
     let mut elapsed = Duration::new(0, 0);
-    let initial_count = Arc::strong_count(&index);
     loop {
         if elapsed < interval {
             thread::sleep(interval - elapsed);
         }
-        if Arc::strong_count(&index) < initial_count {
-            break Ok(()); // cascading quite,
+
+        match rx.try_recv() {
+            Err(mpsc::TryRecvError::Empty) => (),
+            Err(mpsc::TryRecvError::Disconnected) => break Ok(()),
+            Ok(_) => unreachable!(),
         }
 
         elapsed = {

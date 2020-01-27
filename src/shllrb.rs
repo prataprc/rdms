@@ -24,7 +24,7 @@ use crate::{
     error::Error,
     llrb::{Llrb, LlrbReader, LlrbWriter, Stats as LlrbStats},
     scans::CommitWrapper,
-    thread::Thread,
+    thread as rt,
     types::Empty,
 };
 use log::{debug, error, info, warn};
@@ -204,7 +204,7 @@ where
     max_entries: usize,
 
     snapshot: Snapshot<K, V>,
-    auto_shard: Option<Thread<String, usize, ()>>,
+    auto_shard: Option<rt::Thread<String, usize, ()>>,
 }
 
 struct Snapshot<K, V>
@@ -243,6 +243,7 @@ where
                 }
             }
         }
+
         match self.auto_shard.take() {
             Some(auto_shard) => match auto_shard.close_wait() {
                 Err(err) => error!(
@@ -467,7 +468,7 @@ where
             None if interval.as_secs() > 0 => {
                 self.interval = interval;
                 let index = unsafe { Box::from_raw(self as *mut Self as *mut ffi::c_void) };
-                Some(Thread::new(move |rx| || auto_shard::<K, V>(index, rx)))
+                Some(rt::Thread::new(move |rx| || auto_shard::<K, V>(index, rx)))
             }
             None => None,
         };
@@ -1171,7 +1172,7 @@ where
     V: Clone + Diff,
 {
     fn drop(&mut self) {
-        info!(target: "shllrb", "{:?}, dropping reader {}", self.name, self.id);
+        debug!(target: "shllrb", "{:?}, dropping reader {}", self.name, self.id);
     }
 }
 
@@ -1413,7 +1414,7 @@ where
     V: Clone + Diff,
 {
     fn drop(&mut self) {
-        info!(target: "shllrb", "{:?}, dropping writer {}", self.name, self.id);
+        debug!(target: "shllrb", "{:?}, dropping writer {}", self.name, self.id);
     }
 }
 
@@ -1967,10 +1968,7 @@ where
     }
 }
 
-fn auto_shard<K, V>(
-    mut index: Box<ffi::c_void>,
-    rx: mpsc::Receiver<(String, Option<mpsc::Sender<usize>>)>,
-) -> Result<()>
+fn auto_shard<K, V>(mut index: Box<ffi::c_void>, rx: rt::Rx<String, usize>) -> Result<()>
 where
     K: 'static + Send + Clone + Ord + Footprint,
     V: 'static + Send + Clone + Diff + Footprint,

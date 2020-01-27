@@ -66,9 +66,7 @@ use crate::{
     panic::Panic,
     robt_entry::MEntry,
     robt_index::{MBlock, ZBlock},
-    scans,
-    thread::Thread,
-    util,
+    scans, thread as rt, util,
 };
 
 include!("robt_marker.rs");
@@ -271,7 +269,7 @@ where
     B: Bloom,
 {
     inner: sync::Mutex<InnerRobt<K, V, B>>,
-    purger: Option<Thread<ffi::OsString, (), ()>>,
+    purger: Option<rt::Thread<ffi::OsString, (), ()>>,
 }
 
 #[derive(Clone)]
@@ -349,7 +347,7 @@ where
 
         let purger = {
             let name = name.to_string();
-            Thread::new(move |rx| move || purger(name, rx))
+            rt::Thread::new(move |rx| move || purger(name, rx))
         };
 
         Ok(Robt {
@@ -376,7 +374,7 @@ where
 
         let purger = {
             let name = name.0.clone();
-            Thread::new(move |rx| move || purger(name, rx))
+            rt::Thread::new(move |rx| move || purger(name, rx))
         };
 
         Ok(Robt {
@@ -1567,8 +1565,8 @@ where
     <V as Diff>::D: Serialize,
 {
     config: Config,
-    iflusher: Option<Thread<Vec<u8>, (), (ffi::OsString, u64)>>,
-    vflusher: Option<Thread<Vec<u8>, (), (ffi::OsString, u64)>>,
+    iflusher: Option<rt::Thread<Vec<u8>, (), (ffi::OsString, u64)>>,
+    vflusher: Option<rt::Thread<Vec<u8>, (), (ffi::OsString, u64)>>,
     stats: Stats,
 
     _phantom_key: marker::PhantomData<K>,
@@ -1594,7 +1592,7 @@ where
 
         let iflusher = {
             let ifile = Config::stitch_index_file(dir, name);
-            Thread::new_sync(
+            rt::Thread::new_sync(
                 move |rx| move || thread_flush(ifile, create, rx),
                 config.flush_queue_size,
             )
@@ -1610,7 +1608,7 @@ where
         let vflusher = match &config.vlog_file {
             Some(vfile) => {
                 let vfile = vfile.clone();
-                Some(Thread::new_sync(
+                Some(rt::Thread::new_sync(
                     move |rx| move || thread_flush(vfile, create, rx),
                     config.flush_queue_size,
                 ))
@@ -1639,7 +1637,7 @@ where
     ) -> Result<Builder<K, V, B>> {
         let iflusher = {
             let ifile = Config::stitch_index_file(dir, name);
-            Thread::new_sync(
+            rt::Thread::new_sync(
                 move |rx| move || thread_flush(ifile, true /*create*/, rx),
                 config.flush_queue_size,
             )
@@ -1659,7 +1657,7 @@ where
                 let vfile = vfile.clone();
                 let vf_fpos = fs::metadata(&vfile)?.len();
 
-                let t = Thread::new_sync(
+                let t = rt::Thread::new_sync(
                     move |rx| move || thread_flush(vfile, create, rx),
                     config.flush_queue_size,
                 );
@@ -2069,7 +2067,7 @@ where
 fn thread_flush(
     file: ffi::OsString, // for debuging purpose
     create: bool,        // if true create a new file
-    rx: mpsc::Receiver<(Vec<u8>, Option<mpsc::Sender<()>>)>,
+    rx: rt::Rx<Vec<u8>, ()>,
 ) -> Result<(ffi::OsString, u64)> {
     let (mut fd, fpos) = if create {
         (util::open_file_cw(file.clone())?, Default::default())
@@ -3763,10 +3761,7 @@ fn purge_file(
     }
 }
 
-fn purger(
-    name: String,
-    rx: mpsc::Receiver<(ffi::OsString, Option<mpsc::Sender<()>>)>,
-) -> Result<()> {
+fn purger(name: String, rx: rt::Rx<ffi::OsString, ()>) -> Result<()> {
     info!(target: "robtpr", "{:?}, starting purger ...", name);
 
     let mut locked_files = vec![];

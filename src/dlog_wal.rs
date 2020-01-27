@@ -1,180 +1,284 @@
-use std::{convert::TryInto, fmt, result, sync::mpsc};
-
-use crate::{
-    core::{Result, Serialize},
-    dlog, dlog_entry, thread as rt, util,
+use std::{
+    borrow::Borrow,
+    cmp,
+    collections::hash_map::RandomState,
+    convert::{self, TryInto},
+    ffi, fmt, fs,
+    hash::{BuildHasher, Hash, Hasher},
+    result,
+    sync::{atomic::AtomicU64, Arc},
 };
 
-pub struct Wal<K, V>
+use crate::{
+    core::{Diff, Replay, Result, Serialize},
+    dlog::{Dlog, DlogState, OpRequest, OpResponse},
+    dlog_entry::DEntry,
+    dlog_journal::Shard,
+    error::Error,
+    thread as rt, util,
+};
+
+pub struct Wal<K, V, H>
 where
-    K: Default + Serialize,
-    V: Default + Serialize,
+    K: 'static + Send + Clone + Default + Serialize,
+    V: 'static + Send + Clone + Default + Serialize,
+    H: Clone + BuildHasher,
 {
     dir: ffi::OsString,
     name: String,
-    journal_limit: usize,
+    hash_builder: H,
 
-    index: Arc<AtomicU64>, // seqno
-    threads: Vec<rt::Thread<OpRequest<Op>, OpResponse, Shard<State, Op<K, V>>>>,
+    _index: Arc<AtomicU64>, // seqno
+    threads: Vec<rt::Thread<OpRequest<Op<K, V>>, OpResponse, Shard<State, Op<K, V>>>>,
 }
 
-impl<K, V> From<Dlog<State, Op<K, V>>> for Wal<K, V>
+impl<K, V> From<Dlog<State, Op<K, V>>> for Wal<K, V, RandomState>
 where
-    K: Default + Serialize,
-    V: Default + Serialize,
+    K: 'static + Send + Clone + Default + Serialize,
+    V: 'static + Send + Clone + Default + Serialize,
 {
-    fn from(dlog: Dlog<State, Op<K, V>>) -> Wal<K, V> {
-        let mut wal = Wal {
-            dir: dlog.dir,
-            name: dlog.name,
-            journal_limit: dlog.journal_limit,
+    fn from(dl: Dlog<State, Op<K, V>>) -> Wal<K, V, RandomState> {
+        let mut wl = Wal {
+            dir: dl.dir,
+            name: dl.name,
 
-            index: dlog.index,
+            hash_builder: RandomState::new(),
+            _index: dl.index,
             threads: Default::default(),
         };
 
-        for shard in self.shards {
-            self.threads.push(shard.spawn())
+        for shard in dl.shards {
+            wl.threads.push(shard.into_thread())
         }
 
-        Wal
+        wl
     }
 }
 
-impl<K, V> Wal<K, V>
+impl<K, V, H> fmt::Debug for Wal<K, V, H>
 where
-    K: Default + Serialize,
-    V: Default + Serialize,
+    K: 'static + Send + Clone + Default + Serialize,
+    V: 'static + Send + Clone + Default + Serialize,
+    H: Clone + BuildHasher,
 {
-    pub fn to_writer(&mut self) -> Result<Writer<K, V>> {
-        let mut w = Writer {
-            shards: Default::default(),
-        }
-
-        for thread in self.threads {
-            w.shards.push(thread.to_writer())
-        }
-
-        Ok(w)
+    fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
+        write!(f, "Wal<{:?},{}>", self.dir, self.name)
     }
 }
 
-impl<K, V> Wal<K, V>
+impl<K, V, H> Wal<K, V, H>
 where
-    K: Default + Serialize,
-    V: Default + Serialize,
+    K: 'static + Send + Clone + Default + Ord + Hash + Serialize,
+    V: 'static + Send + Clone + Default + Diff + Serialize,
+    H: Clone + BuildHasher,
 {
+    pub fn set_hasher(&mut self, hash_builder: H) -> &mut Self {
+        self.hash_builder = hash_builder;
+        self
+    }
+
     /// Purge all journal files whose ``last_index`` is  less than ``before``.
-    pub fn purge_till(&mut self, before: u64) -> Result<()> {
-        if self.shards.len() != self.threads.capacity() {
-            panic!("spawn_writers for all shards and try purge_till() API");
+    pub fn purge_till(&mut self, before: u64) -> Result<u64> {
+        for thread in self.threads.iter() {
+            thread.request(OpRequest::new_purge_till(before))?;
         }
-        for shard_tx in self.shards.iter() {
-            let (tx, rx) = mpsc::sync_channel(1);
-            shard_tx.send(OpRequest::new_purge_till(before, tx))?;
-            rx.recv()?;
+
+        Ok(before)
+    }
+
+    /// Purge this ``Wal`` instance and all its memory and disk footprints.
+    pub fn purge(self) -> Result<u64> {
+        let mut index = 0;
+        for thread in self.threads.into_iter() {
+            let shard = thread.close_wait()?;
+            index = cmp::max(index, shard.purge()?)
         }
-        Ok(())
+
+        Ok(index)
     }
 
     /// Close the [`Wal`] instance. It is possible to get back the [`Wal`]
     /// instance using the [`Wal::load`] constructor. To purge the instance use
     /// [`Wal::purge`] api.
     pub fn close(&mut self) -> Result<u64> {
-        // wait for the threads to exit, note that threads could have ended
-        // when close() was called on WAL or Writer, or due panic or error.
-        while let Some(tx) = self.shards.pop() {
-            // ignore if send returns an error
-            // TODO: log error here.
-            tx.send(OpRequest::new_close()).ok();
+        let mut index = 0;
+        for thread in self.threads.drain(..).into_iter() {
+            let shard = thread.close_wait()?;
+            index = cmp::max(index, shard.close()?)
         }
-        // wait for the threads to exit.
-        let mut index = 0_u64;
-        while let Some(thread) = self.threads.pop() {
-            index = cmp::max(index, thread.join()??);
-        }
+
         Ok(index)
     }
 
-    /// Purge this ``Wal`` instance and all its memory and disk footprints.
-    pub fn purge(mut self) -> Result<()> {
-        self.close()?;
-        if self.threads.len() > 0 {
-            let msg = "cannot purge with active shards".to_string();
-            Err(Error::InvalidWAL(msg))
-        } else {
-            while let Some(journal) = self.journals.pop() {
-                journal.purge()?;
-            }
-            Ok(())
+    pub fn to_writer(&mut self) -> Result<Writer<K, V, H>> {
+        Ok(Writer {
+            hash_builder: self.hash_builder.clone(),
+            shards: self
+                .threads
+                .iter()
+                .map(|thread| thread.to_writer())
+                .collect(),
+        })
+    }
+}
+
+impl<K, V, H> Wal<K, V, H>
+where
+    K: 'static + Send + Clone + Default + Ord + Hash + Serialize,
+    V: 'static + Send + Clone + Default + Diff + Serialize,
+    H: Clone + BuildHasher,
+{
+    /// When DB suffer a crash and looses latest set of mutations, [`Wal`]
+    /// can be used to fetch the latest set of mutations and replay them on
+    /// DB. Return total number of operations replayed on DB.
+    pub fn replay<P>(self, db: &mut P, seqno: u64) -> Result<usize>
+    where
+        P: Replay<K, V>,
+    {
+        // validate
+        if self.is_active() {
+            let msg = format!("cannot replay with active shards");
+            return Err(Error::InvalidWAL(msg));
         }
+
+        let mut ops = 0;
+
+        for thread in self.threads.into_iter() {
+            let shard = thread.close_wait()?;
+            for journal in shard.into_journals().into_iter() {
+                if journal.is_cold() {
+                    continue;
+                }
+                match journal.to_last_index() {
+                    Some(index) if index < seqno => continue,
+                    _ => (),
+                }
+
+                let mut fd = {
+                    let file_path = journal.to_file_path();
+                    let mut opts = fs::OpenOptions::new();
+                    opts.read(true).write(false).open(file_path)?
+                };
+
+                for batch in journal.into_batches()? {
+                    match batch.to_last_index() {
+                        Some(index) if index < seqno => continue,
+                        _ => (),
+                    }
+                    for entry in batch.into_active(&mut fd)?.into_entries() {
+                        let (index, op) = entry.into_index_op();
+                        match op {
+                            Op::Set { key, value } => {
+                                db.set_index(key, value, index)?;
+                            }
+                            Op::SetCAS { key, value, cas } => {
+                                db.set_cas_index(key, value, cas, index)?;
+                            }
+                            Op::Delete { key } => {
+                                db.delete_index(key, index)?;
+                            }
+                        }
+                        ops += 1;
+                    }
+                }
+            }
+        }
+
+        Ok(ops)
+    }
+
+    fn is_active(&self) -> bool {
+        self.threads
+            .iter()
+            .map(|thread| thread.ref_count() > 1)
+            .any(convert::identity)
     }
 }
 
 /// Writer handle for [`Wal`] instance.
-#[derive(Clone)]
-pub struct Writer<K, V>
+pub struct Writer<K, V, H>
 where
-    K: Default + Serialize,
-    V: Default + Serialize,
+    K: 'static + Send + Default + Hash + Serialize,
+    V: 'static + Send + Default + Serialize,
+    H: BuildHasher,
 {
-    shards: Vec<rt::Writer<OpRequest<K,V>, OpResponse>>,
+    hash_builder: H,
+    shards: Vec<rt::Writer<OpRequest<Op<K, V>>, OpResponse>>,
 }
 
-impl Writer<K, V> {
-    fn new(tx: mpsc::Sender<OpRequest<K, V>>) -> Writer<K, V> {
-        Writer { tx }
-    }
-
+impl<K, V, H> Writer<K, V, H>
+where
+    K: 'static + Send + Default + Hash + Serialize,
+    V: 'static + Send + Default + Serialize,
+    H: BuildHasher,
+{
     /// Append ``set`` operation into the log. Return the sequence-no
     /// for this mutation.
-    pub fn set(&self, key: K, value: V) -> Result<u64> {
-        let (resp_tx, resp_rx) = mpsc::sync_channel(1);
-        self.tx.send(OpRequest::new_set(key, value, resp_tx))?;
-        match resp_rx.recv()? {
-            Opresp::Result(res) => res,
+    pub fn set(&mut self, key: K, value: V) -> Result<u64> {
+        let shard = self.as_shard(&key);
+
+        let op = Op::new_set(key, value);
+        match shard.request(OpRequest::new_op(op))? {
+            OpResponse::Index(index) => Ok(index),
+            _ => unreachable!(),
         }
     }
 
     /// Append ``set_cas`` operation into the log. Return the sequence-no
     /// for this mutation.
-    pub fn set_cas(&self, key: K, value: V, cas: u64) -> Result<u64> {
-        let (resp_tx, resp_rx) = mpsc::sync_channel(1);
-        self.tx
-            .send(OpRequest::new_set_cas(key, value, cas, resp_tx))?;
-        match resp_rx.recv()? {
-            Opresp::Result(res) => res,
+    pub fn set_cas(&mut self, key: K, value: V, cas: u64) -> Result<u64> {
+        let shard = self.as_shard(&key);
+
+        let op = Op::new_set_cas(key, value, cas);
+        match shard.request(OpRequest::new_op(op))? {
+            OpResponse::Index(index) => Ok(index),
+            _ => unreachable!(),
         }
     }
 
     /// Append ``delete`` operation into the log. Return the sequence-no
     /// for this mutation.
-    pub fn delete<Q>(&self, key: &Q) -> Result<u64>
+    pub fn delete<Q>(&mut self, key: &Q) -> Result<u64>
     where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + ?Sized,
     {
-        let (resp_tx, resp_rx) = mpsc::sync_channel(1);
-        self.tx
-            .send(OpRequest::new_delete(key.to_owned(), resp_tx))?;
-        match resp_rx.recv()? {
-            Opresp::Result(res) => res,
+        let key: K = key.to_owned();
+
+        let shard = self.as_shard(&key);
+
+        let op = Op::new_delete(key);
+        match shard.request(OpRequest::new_op(op))? {
+            OpResponse::Index(index) => Ok(index),
+            _ => unreachable!(),
         }
+    }
+
+    fn as_shard<'a>(&'a mut self, key: &K) -> &'a mut rt::Writer<OpRequest<Op<K, V>>, OpResponse> {
+        let hash = {
+            let mut hasher = self.hash_builder.build_hasher();
+            key.hash(&mut hasher);
+            hasher.finish()
+        };
+
+        let n: u64 = self.shards.len().try_into().unwrap();
+        let n: usize = (hash % n).try_into().unwrap();
+        &mut self.shards[n]
     }
 }
 
 #[derive(Clone, Default, PartialEq)]
 pub(crate) struct State;
 
-impl<K, V> dlog::DlogState<Op<K, V>> for State
+impl<K, V> DlogState<Op<K, V>> for State
 where
-    K: Default + Serialize,
-    V: Default + Serialize,
+    K: 'static + Send + Default + Serialize,
+    V: 'static + Send + Default + Serialize,
 {
     type Key = K;
     type Val = V;
 
-    fn on_add_entry(&mut self, _entry: &dlog_entry::Entry<Op<K, V>>) -> () {
+    fn on_add_entry(&mut self, _entry: &DEntry<Op<K, V>>) -> () {
         ()
     }
 
@@ -216,8 +320,8 @@ impl From<u64> for OpType {
 #[derive(Clone)]
 pub(crate) enum Op<K, V>
 where
-    K: Default + Serialize,
-    V: Default + Serialize,
+    K: 'static + Send + Default + Serialize,
+    V: 'static + Send + Default + Serialize,
 {
     // Data operations
     Set { key: K, value: V },
@@ -227,8 +331,8 @@ where
 
 impl<K, V> Default for Op<K, V>
 where
-    K: Default + Serialize,
-    V: Default + Serialize,
+    K: 'static + Send + Default + Serialize,
+    V: 'static + Send + Default + Serialize,
 {
     fn default() -> Self {
         Op::Delete {
@@ -239,8 +343,8 @@ where
 
 impl<K, V> PartialEq for Op<K, V>
 where
-    K: PartialEq + Default + Serialize,
-    V: PartialEq + Default + Serialize,
+    K: 'static + Send + PartialEq + Default + Serialize,
+    V: 'static + Send + PartialEq + Default + Serialize,
 {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -270,8 +374,8 @@ where
 
 impl<K, V> fmt::Debug for Op<K, V>
 where
-    K: Default + Serialize + fmt::Debug,
-    V: Default + Serialize + fmt::Debug,
+    K: 'static + Send + Default + Serialize + fmt::Debug,
+    V: 'static + Send + Default + Serialize + fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
         match self {
@@ -295,8 +399,8 @@ where
 
 impl<K, V> Op<K, V>
 where
-    K: Default + Serialize,
-    V: Default + Serialize,
+    K: 'static + Send + Default + Serialize,
+    V: 'static + Send + Default + Serialize,
 {
     pub(crate) fn new_set(key: K, value: V) -> Op<K, V> {
         Op::Set { key, value }
@@ -319,8 +423,8 @@ where
 
 impl<K, V> Serialize for Op<K, V>
 where
-    K: Default + Serialize,
-    V: Default + Serialize,
+    K: 'static + Send + Default + Serialize,
+    V: 'static + Send + Default + Serialize,
 {
     fn encode(&self, buf: &mut Vec<u8>) -> Result<usize> {
         Ok(match self {
@@ -372,8 +476,8 @@ where
 //
 impl<K, V> Op<K, V>
 where
-    K: Default + Serialize,
-    V: Default + Serialize,
+    K: 'static + Send + Default + Serialize,
+    V: 'static + Send + Default + Serialize,
 {
     fn encode_set(buf: &mut Vec<u8>, key: &K, value: &V) -> Result<usize> {
         let n = buf.len();
@@ -435,8 +539,8 @@ where
 //
 impl<K, V> Op<K, V>
 where
-    K: Default + Serialize,
-    V: Default + Serialize,
+    K: 'static + Send + Default + Serialize,
+    V: 'static + Send + Default + Serialize,
 {
     fn encode_set_cas(
         buf: &mut Vec<u8>,
@@ -504,8 +608,8 @@ where
 //
 impl<K, V> Op<K, V>
 where
-    K: Default + Serialize,
-    V: Default + Serialize,
+    K: 'static + Send + Default + Serialize,
+    V: 'static + Send + Default + Serialize,
 {
     fn encode_delete(buf: &mut Vec<u8>, key: &K) -> Result<usize> {
         let n = buf.len();

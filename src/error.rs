@@ -70,6 +70,8 @@ pub enum Error {
     IPCFail(String),
     /// Invalid Dlog
     InvalidDlog(String),
+    /// Invalid Wal
+    InvalidWAL(String),
     /// IO error from std::io
     IoError(io::Error),
     /// Json processing error from jsondata package

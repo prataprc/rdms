@@ -2,7 +2,9 @@ use std::{convert::TryInto, fmt, result};
 
 use crate::{
     core::{Result, Serialize},
-    dlog, dlog_entry, util,
+    dlog,
+    dlog_entry::DEntry,
+    util,
 };
 
 // term value when not using consensus
@@ -51,7 +53,7 @@ where
     type Val = V;
 
     // TODO: add test cases for this.
-    fn on_add_entry(&mut self, _entry: &dlog_entry::Entry<Op<K, V>>) -> () {
+    fn on_add_entry(&mut self, _entry: &DEntry<Op<K, V>>) -> () {
         // TBD
         unimplemented!()
     }

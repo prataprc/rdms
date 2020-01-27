@@ -179,9 +179,12 @@ where
     V: Clone + Diff,
 {
     fn drop(&mut self) {
-        // validation check 1
-        let n = self.multi_rw();
-        if n > 0 {
+        loop {
+            // validation check 1
+            let n = self.multi_rw();
+            if n == 0 {
+                break;
+            }
             error!(
                 target: "mvcc  ",
                 "{:?}, dropped before read/write handles {}", self.name, n
@@ -223,7 +226,7 @@ where
         if n != 0 {
             panic!("leak or double free n_nodes:{}", n);
         }
-        info!(target: "mvcc  ", "{:?}, dropped ...", self.name);
+        debug!(target: "mvcc  ", "{:?}, dropped ...", self.name);
     }
 }
 

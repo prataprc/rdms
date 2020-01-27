@@ -14,8 +14,8 @@ include!("dlog_marker.rs");
 #[derive(Clone)]
 pub(crate) enum Batch<S, T>
 where
-    S: Default + Serialize + DlogState<T>,
-    T: Default + Serialize,
+    S: Clone + Default + Serialize + DlogState<T>,
+    T: Clone + Default + Serialize,
 {
     // Reference to immutable batch in log file,
     Refer {
@@ -34,14 +34,14 @@ where
         // batch current state.
         state: S,
         // list of entries in this batch.
-        entries: Vec<Entry<T>>,
+        entries: Vec<DEntry<T>>,
     },
 }
 
 impl<S, T> PartialEq for Batch<S, T>
 where
-    S: PartialEq + Default + Serialize + DlogState<T>,
-    T: PartialEq + Default + Serialize,
+    S: PartialEq + Clone + Default + Serialize + DlogState<T>,
+    T: PartialEq + Clone + Default + Serialize,
 {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -76,8 +76,8 @@ where
 
 impl<S, T> Batch<S, T>
 where
-    S: Default + Serialize + DlogState<T>,
-    T: Default + Serialize,
+    S: Clone + Default + Serialize + DlogState<T>,
+    T: Clone + Default + Serialize,
 {
     pub(crate) fn default_active() -> Batch<S, T> {
         Batch::Active {
@@ -100,7 +100,7 @@ where
         }
     }
 
-    pub(crate) fn add_entry(&mut self, entry: Entry<T>) {
+    pub(crate) fn add_entry(&mut self, entry: DEntry<T>) {
         match self {
             Batch::Active { state, entries } => {
                 state.on_add_entry(&entry);
@@ -113,14 +113,14 @@ where
 
 impl<S, T> Batch<S, T>
 where
-    S: Default + Serialize + DlogState<T>,
-    T: Default + Serialize,
+    S: Clone + Default + Serialize + DlogState<T>,
+    T: Clone + Default + Serialize,
 {
     pub(crate) fn to_start_index(&self) -> Option<u64> {
         match self {
             Batch::Refer { start_index, .. } => Some(*start_index),
             Batch::Active { entries, .. } => {
-                let index = entries.first().map(|entry| entry.to_index());
+                let index = entries.first().map(|entry| entry.index);
                 index
             }
         }
@@ -130,7 +130,7 @@ where
         match self {
             Batch::Refer { last_index, .. } => Some(*last_index),
             Batch::Active { entries, .. } => {
-                let index = entries.last().map(|entry| entry.to_index());
+                let index = entries.last().map(|entry| entry.index);
                 index
             }
         }
@@ -143,7 +143,7 @@ where
         }
     }
 
-    pub(crate) fn into_entries(self) -> Vec<Entry<T>> {
+    pub(crate) fn into_entries(self) -> Vec<DEntry<T>> {
         match self {
             Batch::Active { entries, .. } => entries,
             Batch::Refer { .. } => unreachable!(),
@@ -185,8 +185,8 @@ where
 // NOTE: `length` value includes 8-byte length-prefix and 8-byte length-suffix.
 impl<S, T> Batch<S, T>
 where
-    S: Default + Serialize + DlogState<T>,
-    T: Default + Serialize,
+    S: Clone + Default + Serialize + DlogState<T>,
+    T: Clone + Default + Serialize,
 {
     pub(crate) fn encode_active(&self, buf: &mut Vec<u8>) -> Result<usize> {
         match self {
@@ -195,12 +195,12 @@ where
                 let mut n = 8;
 
                 let start_index = match entries.first() {
-                    Some(entry) => entry.to_index(),
+                    Some(entry) => entry.index,
                     None => 0,
                 };
                 buf.extend_from_slice(&start_index.to_be_bytes());
                 let last_index = match entries.last() {
-                    Some(entry) => entry.to_index(),
+                    Some(entry) => entry.index,
                     None => 0,
                 };
                 buf.extend_from_slice(&last_index.to_be_bytes());
@@ -262,7 +262,7 @@ where
         let entries = {
             let mut entries = Vec::with_capacity(nentries.try_into()?);
             for _i in 0..entries.capacity() {
-                let mut entry: Entry<T> = Default::default();
+                let mut entry: DEntry<T> = Default::default();
                 n += entry.decode(&buf[n..])?;
                 entries.push(entry);
             }
@@ -296,7 +296,7 @@ where
 }
 
 #[derive(Clone, Default, PartialEq)]
-pub(crate) struct Entry<T>
+pub struct DEntry<T>
 where
     T: Default + Serialize,
 {
@@ -307,29 +307,26 @@ where
     op: T,
 }
 
-impl<T> fmt::Debug for Entry<T>
+impl<T> fmt::Debug for DEntry<T>
 where
     T: Default + Serialize + fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
-        write!(f, "Entry<term: index:{}  op:{:?}>", self.index, self.op)
+        write!(f, "DEntry<term: index:{}  op:{:?}>", self.index, self.op)
     }
 }
 
-impl<T> Entry<T>
+impl<T> DEntry<T>
 where
     T: Default + Serialize,
 {
-    pub(crate) fn new(index: u64, op: T) -> Entry<T> {
-        Entry { index, op }
+    pub(crate) fn new(index: u64, op: T) -> DEntry<T> {
+        DEntry { index, op }
     }
 
-    pub(crate) fn to_index(&self) -> u64 {
-        self.index
-    }
-
-    pub(crate) fn into_op(self) -> T {
-        self.op
+    #[inline]
+    pub(crate) fn into_index_op(self) -> (u64, T) {
+        (self.index, self.op)
     }
 }
 
@@ -339,7 +336,7 @@ where
 // |                           op-bytes                             |
 // +----------------------------------------------------------------+
 //
-impl<T> Serialize for Entry<T>
+impl<T> Serialize for DEntry<T>
 where
     T: Default + Serialize,
 {

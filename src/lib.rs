@@ -61,9 +61,13 @@ pub mod dlog;
 pub mod dlog_entry;
 pub mod dlog_journal;
 pub mod lsm;
-pub mod raft_log;
 pub mod scans;
+
+// write ahead logging.
 pub mod wal;
+
+// raft
+pub mod raft_log;
 
 // mem index
 pub mod llrb;

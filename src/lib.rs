@@ -60,10 +60,10 @@ mod vlog;
 pub mod dlog;
 pub mod dlog_entry;
 pub mod dlog_journal;
-pub mod dlog_raft;
-pub mod dlog_wal;
 pub mod lsm;
+pub mod raft_log;
 pub mod scans;
+pub mod wal;
 
 // mem index
 pub mod llrb;

@@ -336,7 +336,7 @@ where
 {
     shard_id: usize,
     num: usize,               // starts from 1
-    file_path: ffi::OsString, // dir/{name}-shard-{shard_id}-journal-{num}.log
+    file_path: ffi::OsString, // dir/{name}-shard-{shard_id}-journal-{num}.dlog
 
     inner: InnerJournal<S, T>,
 }
@@ -511,15 +511,6 @@ where
         }
         Ok(())
     }
-
-    #[cfg(test)]
-    fn open(&mut self) -> Result<()> {
-        self.fd = Some({
-            let mut opts = fs::OpenOptions::new();
-            opts.read(true).write(false).open(&self.file_path)?
-        });
-        Ok(())
-    }
 }
 
 impl<S, T> Journal<S, T>
@@ -557,10 +548,10 @@ where
         let batches = match self.inner {
             InnerJournal::Active {
                 mut batches,
-                active,
+                mut active,
                 ..
             } => {
-                batches.push(active.clone());
+                batches.push(mem::replace(&mut active, Default::default()));
                 batches
             }
             InnerJournal::Archive { batches, .. } => batches,
@@ -700,3 +691,7 @@ where
         }
     }
 }
+
+//#[cfg(test)]
+//#[path = "dlog_journal_test.rs"]
+//mod dlog_journal_test;

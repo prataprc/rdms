@@ -1,86 +1,114 @@
 use super::*;
 
-use crate::dlog_wal;
+use std::io::Write;
 
 #[test]
 fn test_entry() {
-    // term
-    let r_entry = Entry::new(45, dlog_wal::Op::new_set(10, 20));
+    let _r_entry = DEntry::<i64>::default();
+
+    let r_entry = DEntry::<i64>::new(10, 20);
+
+    {
+        let entry = DEntry::<i64>::new(10, 20);
+        assert_eq!(r_entry.index, entry.index);
+        assert_eq!(r_entry.op, entry.op);
+
+        let (index, op) = entry.into_index_op();
+        assert_eq!(index, 10);
+        assert_eq!(op, 20);
+    }
 
     let mut buf = vec![];
     let n = r_entry.encode(&mut buf).unwrap();
-    assert_eq!(n, 32);
-    let mut entry: Entry<dlog_wal::Op<i32, i32>> = Default::default();
-    entry.decode(&buf).unwrap();
-    assert_eq!(entry.index, r_entry.index);
-    assert_eq!(entry.op, r_entry.op);
+    assert_eq!(n, 16);
 
-    assert_eq!(r_entry.to_index(), 45);
-    match r_entry.into_op() {
-        dlog_wal::Op::Set { key: 10, value: 20 } => (),
-        _ => unreachable!(),
+    {
+        let mut entry: DEntry<i64> = Default::default();
+        entry.decode(&buf).unwrap();
+        assert_eq!(entry.index, r_entry.index);
+        assert_eq!(entry.op, r_entry.op);
     }
 }
 
 #[test]
 fn test_batch1() {
-    // batch
-    let mut batch: Batch<dlog_wal::State, dlog_wal::Op> = Batch::default_active();
+    use crate::wal;
 
-    assert_eq!(batch.to_start_index(), None);
-    assert_eq!(batch.to_last_index(), None);
-    assert_eq!(batch.len(), 0);
+    let batch1: Batch<wal::State, wal::Op<i64, i64>> = Default::default();
+    let batch2: Batch<wal::State, wal::Op<i64, i64>> = Default::default();
+    assert!(batch1 == batch2);
+}
 
-    let (op1, op2, op3) = {
-        (
-            dlog_wal::Op::new_set(10, 20),
-            dlog_wal::Op::new_set_cas(10, 30, 1),
-            dlog_wal::Op::new_delete(10),
-        )
+#[test]
+fn test_batch2() {
+    use crate::wal;
+
+    let validate = |abatch: Batch<wal::State, wal::Op<i64, i64>>| {
+        abatch
+            .into_entries()
+            .into_iter()
+            .enumerate()
+            .for_each(|(i, e)| {
+                let (index, op) = e.into_index_op();
+                assert_eq!(index, (i + 1) as u64);
+                assert_eq!(op, wal::Op::<i64, i64>::new_set(10, 20));
+            })
     };
-    batch.add_entry(Entry::new_term(1, op1.clone()));
-    batch.add_entry(Entry::new_term(2, op2.clone()));
-    batch.add_entry(Entry::new_term(3, op3.clone()));
 
-    assert_eq!(batch.to_start_index(), Some(1));
-    assert_eq!(batch.to_last_index(), Some(3));
-    assert_eq!(batch.len(), 3);
-    assert_eq!(batch.clone().into_entries().len(), 3);
+    let batch = {
+        let mut batch = Batch::<wal::State, wal::Op<i64, i64>>::default_active();
 
-    // encode / decode active
+        assert_eq!(batch.len(), 0);
+
+        for i in 0..100 {
+            let op = wal::Op::new_set(10, 20);
+            batch.add_entry(DEntry::new(i + 1, op));
+        }
+        batch
+    };
+    assert_eq!(batch.to_start_index().unwrap(), 1);
+    assert_eq!(batch.to_last_index().unwrap(), 100);
+    assert_eq!(batch.len(), 100);
+
+    validate(batch.clone());
+
     let mut buf = vec![];
-    let n = batch.encode_active(&mut buf).unwrap();
-    assert_eq!(n, 293);
+    let length = batch.encode_active(&mut buf).unwrap();
+    assert_eq!(length, 4099);
 
-    let mut batch_out: Batch<dlog_wal::State, dlog_wal::Op> = Batch::default_active();
-    let m = batch_out
-        .decode_active(&buf)
-        .expect("failed decoder_active()");
+    let file = {
+        let mut dir = std::env::temp_dir();
+        dir.push("test-dlog-entry-batch2");
+        fs::create_dir_all(&dir).unwrap();
+        dir.push("batch2.dlog");
+        dir.into_os_string()
+    };
+    fs::File::create(&file).unwrap().write(&buf).unwrap();
 
-    assert!(batch == batch_out);
+    let rbatch = Batch::<wal::State, wal::Op<i64, i64>>::new_refer(
+        //
+        0, length, 1, 100,
+    );
+    let mut fd = fs::File::open(&file).unwrap();
+    let abatch = rbatch.into_active(&mut fd).unwrap();
+    validate(abatch);
 
-    // decode refer
-    let mut batch_out: Batch<dlog_wal::State, dlog_wal::Op> = Batch::default_active();
-    let m = batch_out
-        .decode_refer(&buf, 12345678)
-        .expect("failed decoder_active()");
-    assert_eq!(n, m);
-
-    match batch_out {
+    let mut batch = Batch::<wal::State, wal::Op<i64, i64>>::default_active();
+    let n = batch.decode_refer(&buf, 0).unwrap();
+    assert_eq!(n, 4099);
+    match batch {
+        Batch::Refer {
+            fpos: 0,
+            length: 4099,
+            start_index: 1,
+            last_index: 100,
+        } => (),
         Batch::Refer {
             fpos,
             length,
             start_index,
             last_index,
-        } => {
-            assert_eq!(fpos, 12345678);
-            assert_eq!(length, 293);
-            assert_eq!(start_index, 1);
-            assert_eq!(last_index, 3);
-        }
+        } => panic!("{} {} {} {}", fpos, length, start_index, last_index),
         _ => unreachable!(),
     }
-
-    assert_eq!(batch_out.to_start_index(), Some(1));
-    assert_eq!(batch_out.to_last_index(), Some(3));
 }

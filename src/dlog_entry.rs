@@ -14,8 +14,8 @@ include!("dlog_marker.rs");
 #[derive(Clone)]
 pub(crate) enum Batch<S, T>
 where
-    S: Clone + Default + Serialize + DlogState<T>,
-    T: Clone + Default + Serialize,
+    S: Serialize + DlogState<T>,
+    T: Serialize,
 {
     // Reference to immutable batch in log file,
     Refer {
@@ -38,10 +38,25 @@ where
     },
 }
 
+impl<S, T> Default for Batch<S, T>
+where
+    S: Serialize + DlogState<T>,
+    T: Serialize,
+{
+    fn default() -> Batch<S, T> {
+        Batch::Refer {
+            fpos: Default::default(),
+            length: Default::default(),
+            start_index: Default::default(),
+            last_index: Default::default(),
+        }
+    }
+}
+
 impl<S, T> PartialEq for Batch<S, T>
 where
-    S: PartialEq + Clone + Default + Serialize + DlogState<T>,
-    T: PartialEq + Clone + Default + Serialize,
+    S: PartialEq + Serialize + DlogState<T>,
+    T: PartialEq + Serialize,
 {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -76,10 +91,13 @@ where
 
 impl<S, T> Batch<S, T>
 where
-    S: Clone + Default + Serialize + DlogState<T>,
-    T: Clone + Default + Serialize,
+    S: Serialize + DlogState<T>,
+    T: Serialize,
 {
-    pub(crate) fn default_active() -> Batch<S, T> {
+    pub(crate) fn default_active() -> Batch<S, T>
+    where
+        S: Default,
+    {
         Batch::Active {
             state: Default::default(),
             entries: vec![],
@@ -113,8 +131,8 @@ where
 
 impl<S, T> Batch<S, T>
 where
-    S: Clone + Default + Serialize + DlogState<T>,
-    T: Clone + Default + Serialize,
+    S: Serialize + DlogState<T>,
+    T: Serialize,
 {
     pub(crate) fn to_start_index(&self) -> Option<u64> {
         match self {
@@ -150,7 +168,11 @@ where
         }
     }
 
-    pub(crate) fn into_active(mut self, fd: &mut fs::File) -> Result<Batch<S, T>> {
+    pub(crate) fn into_active(mut self, fd: &mut fs::File) -> Result<Batch<S, T>>
+    where
+        S: Default,
+        T: Default,
+    {
         match self {
             Batch::Refer { fpos, length, .. } => {
                 let n: u64 = length.try_into()?;
@@ -177,7 +199,7 @@ where
 // +--------------------------------+-------------------------------+
 // |                              entries                           |
 // +--------------------------------+-------------------------------+
-// |                            BATCH_MARKER                        |
+// |                         DLOG_BATCH_MARKER                      |
 // +----------------------------------------------------------------+
 // |                              length                            |
 // +----------------------------------------------------------------+
@@ -185,8 +207,8 @@ where
 // NOTE: `length` value includes 8-byte length-prefix and 8-byte length-suffix.
 impl<S, T> Batch<S, T>
 where
-    S: Clone + Default + Serialize + DlogState<T>,
-    T: Clone + Default + Serialize,
+    S: Serialize + DlogState<T>,
+    T: Serialize,
 {
     pub(crate) fn encode_active(&self, buf: &mut Vec<u8>) -> Result<usize> {
         match self {
@@ -215,8 +237,8 @@ where
                     n += entry.encode(buf)?;
                 }
 
-                buf.extend_from_slice(BATCH_MARKER.as_ref());
-                n += BATCH_MARKER.len();
+                buf.extend_from_slice(DLOG_BATCH_MARKER.as_ref());
+                n += DLOG_BATCH_MARKER.len();
 
                 n += 8; // suffix length
 
@@ -234,8 +256,8 @@ where
         util::check_remaining(buf, 24, "dlog batch-refer-hdr")?;
 
         let length = Self::validate(buf)?;
-        let start_index = u64::from_be_bytes(buf[32..40].try_into()?);
-        let last_index = u64::from_be_bytes(buf[40..48].try_into()?);
+        let start_index = u64::from_be_bytes(buf[8..16].try_into()?);
+        let last_index = u64::from_be_bytes(buf[16..24].try_into()?);
 
         *self = Batch::Refer {
             fpos,
@@ -247,7 +269,11 @@ where
         Ok(length)
     }
 
-    fn decode_active(&mut self, buf: &[u8]) -> Result<usize> {
+    fn decode_active(&mut self, buf: &[u8]) -> Result<usize>
+    where
+        S: Default,
+        T: Default,
+    {
         util::check_remaining(buf, 24, "dlog batch-active-hdr")?;
 
         let length = Self::validate(buf)?;
@@ -285,8 +311,8 @@ where
             return Err(Error::InvalidDlog(msg));
         }
 
-        let (m, n) = (a - 8 - BATCH_MARKER.len(), a - 8);
-        if BATCH_MARKER.as_slice() != &buf[m..n] {
+        let (m, n) = (a - 8 - DLOG_BATCH_MARKER.len(), a - 8);
+        if DLOG_BATCH_MARKER.as_slice() != &buf[m..n] {
             let msg = format!("batch-marker {:?}", &buf[m..n]);
             return Err(Error::InvalidDlog(msg));
         }
@@ -295,10 +321,10 @@ where
     }
 }
 
-#[derive(Clone, Default, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct DEntry<T>
 where
-    T: Default + Serialize,
+    T: Serialize,
 {
     // Index seqno for this entry. This will be monotonically
     // increasing number.
@@ -307,9 +333,21 @@ where
     op: T,
 }
 
+impl<T> Default for DEntry<T>
+where
+    T: Default + Serialize,
+{
+    fn default() -> DEntry<T> {
+        DEntry {
+            index: Default::default(),
+            op: Default::default(),
+        }
+    }
+}
+
 impl<T> fmt::Debug for DEntry<T>
 where
-    T: Default + Serialize + fmt::Debug,
+    T: Serialize + fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
         write!(f, "DEntry<term: index:{}  op:{:?}>", self.index, self.op)
@@ -318,7 +356,7 @@ where
 
 impl<T> DEntry<T>
 where
-    T: Default + Serialize,
+    T: Serialize,
 {
     pub(crate) fn new(index: u64, op: T) -> DEntry<T> {
         DEntry { index, op }
@@ -338,7 +376,7 @@ where
 //
 impl<T> Serialize for DEntry<T>
 where
-    T: Default + Serialize,
+    T: Serialize,
 {
     fn encode(&self, buf: &mut Vec<u8>) -> Result<usize> {
         buf.extend_from_slice(&self.index.to_be_bytes());

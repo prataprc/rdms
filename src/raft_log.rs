@@ -476,6 +476,6 @@ where
     }
 }
 
-#[cfg(test)]
-#[path = "dlog_raft_test.rs"]
-mod dlog_raft_test;
+//#[cfg(test)]
+//#[path = "raft_log_test.rs"]
+//mod raft_log_test;

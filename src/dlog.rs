@@ -63,7 +63,7 @@
 //!
 
 use std::{
-    ffi,
+    ffi, fmt, result,
     sync::{atomic::AtomicU64, Arc},
     vec,
 };
@@ -85,6 +85,16 @@ where
 
     pub(crate) index: Arc<AtomicU64>, // seqno
     pub(crate) shards: Vec<Shard<S, T>>,
+}
+
+impl<S, T> fmt::Debug for Dlog<S, T>
+where
+    S: Clone + Default + Serialize + DlogState<T>,
+    T: Clone + Default + Serialize,
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
+        write!(f, "Dlog<{:?},{}>", self.dir, self.name)
+    }
 }
 
 impl<S, T> Dlog<S, T>
@@ -187,7 +197,7 @@ impl OpResponse {
 
 pub trait DlogState<T>
 where
-    T: Default + Serialize,
+    T: Serialize,
 {
     type Key: Default + Serialize;
     type Val: Default + Serialize;
@@ -197,6 +207,6 @@ where
     fn to_type(&self) -> String;
 }
 
-#[cfg(test)]
-#[path = "dlog_test.rs"]
-mod dlog_test;
+//#[cfg(test)]
+//#[path = "dlog_test.rs"]
+//mod dlog_test;

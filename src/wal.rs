@@ -643,6 +643,6 @@ where
     }
 }
 
-#[cfg(test)]
-#[path = "dlog_wal_test.rs"]
-mod dlog_wal_test;
+//#[cfg(test)]
+//#[path = "wal_test.rs"]
+//mod wal_test;

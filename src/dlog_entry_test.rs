@@ -66,7 +66,7 @@ fn test_batch2() {
         }
         batch
     };
-    assert_eq!(batch.to_start_index().unwrap(), 1);
+    assert_eq!(batch.to_first_index().unwrap(), 1);
     assert_eq!(batch.to_last_index().unwrap(), 100);
     assert_eq!(batch.len(), 100);
 

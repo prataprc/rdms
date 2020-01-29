@@ -4,10 +4,7 @@ use std::{
     ffi, fmt, fs,
     io::Write,
     mem, path, result,
-    sync::{
-        atomic::{AtomicU64, Ordering::SeqCst},
-        mpsc, Arc,
-    },
+    sync::{atomic::AtomicU64, mpsc, Arc},
     thread,
     time::Duration,
     vec,
@@ -42,8 +39,11 @@ impl JournalFile {
 }
 
 impl From<(String, String, usize, usize)> for JournalFile {
-    fn from((s, typ, sid, num): (String, String, usize, usize)) -> JournalFile {
-        let jfile = format!("{}-{}-shard-{}-journal-{}.dlog", s, typ, sid, num);
+    fn from((s, typ, shard_id, num): (String, String, usize, usize)) -> JournalFile {
+        let jfile = format!(
+            "{}-{}-shard-{:03}-journal-{:03}.dlog",
+            s, typ, shard_id, num
+        );
         let jfile: &ffi::OsStr = jfile.as_ref();
         JournalFile(jfile.to_os_string())
     }
@@ -178,6 +178,8 @@ where
             }
         }
 
+        journals.sort_by(|x, y| x.num.cmp(&y.num));
+
         let num = match journals.last() {
             Some(journal) => {
                 let jf = JournalFile(journal.file_path.clone()).next();
@@ -202,33 +204,17 @@ where
         })
     }
 
-    pub(crate) fn purge(mut self) -> Result<u64> {
+    pub(crate) fn purge(self) -> Result<()> {
         for journal in self.journals.into_iter() {
             journal.purge()?
         }
         self.active.purge()?;
 
-        loop {
-            match Arc::try_unwrap(self.dlog_index) {
-                Ok(index) => break Ok(index.load(SeqCst)),
-                Err(index) => {
-                    thread::sleep(Duration::from_millis(10));
-                    self.dlog_index = index;
-                }
-            }
-        }
+        Ok(())
     }
 
-    pub(crate) fn close(mut self) -> Result<u64> {
-        loop {
-            match Arc::try_unwrap(self.dlog_index) {
-                Ok(index) => break Ok(index.load(SeqCst)),
-                Err(index) => {
-                    thread::sleep(Duration::from_millis(10));
-                    self.dlog_index = index;
-                }
-            }
-        }
+    pub(crate) fn close(self) -> Result<()> {
+        Ok(())
     }
 }
 
@@ -239,7 +225,8 @@ where
     T: Clone + Default + Serialize,
 {
     #[inline]
-    pub(crate) fn into_journals(self) -> Vec<Journal<S, T>> {
+    pub(crate) fn into_journals(mut self) -> Vec<Journal<S, T>> {
+        self.journals.push(self.active);
         self.journals
     }
 }
@@ -258,13 +245,13 @@ where
         S: 'static + Send + Default + Serialize + DlogState<T>,
         T: 'static + Send + Default + Serialize,
     {
-        loop {
+        'outer: loop {
             let mut cmds = vec![];
             loop {
                 match rx.try_recv() {
                     Ok(cmd) => cmds.push(cmd),
                     Err(mpsc::TryRecvError::Empty) => break,
-                    Err(mpsc::TryRecvError::Disconnected) => break,
+                    Err(mpsc::TryRecvError::Disconnected) => break 'outer Ok(self),
                 }
             }
 
@@ -273,6 +260,8 @@ where
                 Ok(true) => break Ok(self),
                 Err(err) => break Err(err),
             }
+
+            thread::sleep(Duration::from_millis(1));
         }
     }
 
@@ -324,13 +313,10 @@ where
     }
 
     fn rotate_journal(&mut self) -> Result<()> {
-        let num = match self.journals.last() {
-            Some(journal) => {
-                let jf = JournalFile(journal.file_path.clone()).next();
-                let p: (String, String, usize, usize) = TryFrom::try_from(jf)?;
-                p.3
-            }
-            None => 1,
+        let num = {
+            let jf = JournalFile(self.active.file_path.clone()).next();
+            let p: (String, String, usize, usize) = TryFrom::try_from(jf)?;
+            p.3
         };
         let (d, n, i) = (self.dir.clone(), self.name.clone(), self.shard_id);
         let new_active = Journal::<S, T>::new_active(d, n, i, num)?;
@@ -350,7 +336,7 @@ where
     T: Clone + Default + Serialize,
 {
     _shard_id: usize,
-    _num: usize,              // starts from 1
+    num: usize,               // starts from 1
     file_path: ffi::OsString, // dir/{name}-shard-{shard_id}-journal-{num}.dlog
 
     inner: InnerJournal<S, T>,
@@ -420,7 +406,7 @@ where
 
         Ok(Journal {
             _shard_id: shard_id,
-            _num: num,
+            num: num,
             file_path: file_path.clone(),
 
             inner: InnerJournal::Active {
@@ -474,7 +460,7 @@ where
 
             Some(Journal {
                 _shard_id: shard_id,
-                _num: num,
+                num: num,
                 file_path: file_path.clone(),
 
                 inner: InnerJournal::Archive {
@@ -507,7 +493,7 @@ where
 
             Some(Journal {
                 _shard_id: shard_id,
-                _num: num,
+                num: num,
                 file_path: file_path.clone(),
 
                 inner: InnerJournal::Cold {
@@ -520,10 +506,9 @@ where
     }
 
     fn purge(self) -> Result<()> {
-        match self.inner {
-            InnerJournal::Cold { file_path } => fs::remove_file(&file_path)?,
-            _ => unreachable!(),
-        }
+        let file_path = self.to_file_path();
+        fs::remove_file(&file_path)?;
+
         Ok(())
     }
 }
@@ -534,12 +519,18 @@ where
     T: Clone + Default + Serialize,
 {
     pub(crate) fn to_last_index(&self) -> Option<u64> {
-        let batches = match &self.inner {
-            InnerJournal::Active { batches, .. } => batches,
-            InnerJournal::Archive { batches, .. } => batches,
+        use InnerJournal::{Active, Archive};
+
+        match &self.inner {
+            Active {
+                batches, active, ..
+            } => match active.to_last_index() {
+                index @ Some(_) => index,
+                None => batches.last()?.to_last_index(),
+            },
+            Archive { batches, .. } => batches.last()?.to_last_index(),
             _ => unreachable!(),
-        };
-        batches.last()?.to_last_index()
+        }
     }
 
     pub(crate) fn to_file_path(&self) -> ffi::OsString {
@@ -652,7 +643,7 @@ where
         match exceeded {
             true if active.len() > 0 => {
                 // rotate journal files.
-                let a = active.to_start_index().unwrap();
+                let a = active.to_first_index().unwrap();
                 let z = active.to_last_index().unwrap();
                 let batch = Batch::new_refer(0, length, a, z);
                 Ok(Some((buffer, batch)))
@@ -669,7 +660,7 @@ where
                         fd.sync_all()?;
                     }
 
-                    let a = active.to_start_index().unwrap();
+                    let a = active.to_first_index().unwrap();
                     let z = active.to_last_index().unwrap();
                     let batch = Batch::new_refer(fpos, length, a, z);
                     batches.push(batch);
@@ -700,7 +691,7 @@ where
                 fd.sync_all()?;
             }
 
-            let a = batch.to_start_index().unwrap();
+            let a = batch.to_first_index().unwrap();
             let z = batch.to_last_index().unwrap();
             batch = Batch::new_refer(fpos, length, a, z);
             batches.push(batch);

@@ -1,12 +1,11 @@
 use std::{
     borrow::Borrow,
-    cmp,
     collections::hash_map::RandomState,
     convert::{self, TryInto},
     ffi, fmt, fs,
     hash::{BuildHasher, Hash, Hasher},
     result,
-    sync::{atomic::AtomicU64, Arc},
+    sync::{atomic::AtomicU64, atomic::Ordering::SeqCst, Arc},
 };
 
 use crate::{
@@ -28,7 +27,7 @@ where
     name: String,
     hash_builder: H,
 
-    _index: Arc<AtomicU64>, // seqno
+    index: Arc<AtomicU64>, // seqno
     threads: Vec<rt::Thread<OpRequest<Op<K, V>>, OpResponse, Shard<State, Op<K, V>>>>,
 }
 
@@ -43,7 +42,7 @@ where
             name: dl.name,
 
             hash_builder: RandomState::new(),
-            _index: dl.index,
+            index: dl.index,
             threads: Default::default(),
         };
 
@@ -88,26 +87,24 @@ where
 
     /// Purge this ``Wal`` instance and all its memory and disk footprints.
     pub fn purge(self) -> Result<u64> {
-        let mut index = 0;
         for thread in self.threads.into_iter() {
             let shard = thread.close_wait()?;
-            index = cmp::max(index, shard.purge()?)
+            shard.purge()?;
         }
 
-        Ok(index)
+        Ok(self.index.load(SeqCst))
     }
 
     /// Close the [`Wal`] instance. It is possible to get back the [`Wal`]
     /// instance using the [`Wal::load`] constructor. To purge the instance use
     /// [`Wal::purge`] api.
     pub fn close(&mut self) -> Result<u64> {
-        let mut index = 0;
         for thread in self.threads.drain(..).into_iter() {
             let shard = thread.close_wait()?;
-            index = cmp::max(index, shard.close()?)
+            shard.close()?;
         }
 
-        Ok(index)
+        Ok(self.index.load(SeqCst))
     }
 
     pub fn to_writer(&mut self) -> Result<Writer<K, V, H>> {
@@ -144,8 +141,8 @@ where
         let mut ops = 0;
 
         for thread in self.threads.into_iter() {
-            let shard = thread.close_wait()?;
-            for journal in shard.into_journals().into_iter() {
+            let journals = thread.close_wait()?.into_journals();
+            for journal in journals.into_iter() {
                 if journal.is_cold() {
                     continue;
                 }

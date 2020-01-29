@@ -222,7 +222,7 @@ fn test_journal() {
 
     assert_eq!(j.shard_id(), 1);
     assert_eq!(j.to_current_term(), NIL_TERM);
-    assert_eq!(j.to_start_index(), None);
+    assert_eq!(j.to_first_index(), None);
     assert_eq!(j.to_last_index(), None);
     assert!(!j.exceed_limit(0).expect("exceed limit"));
 
@@ -290,7 +290,7 @@ fn test_journal() {
 
     let verify_fn = |j: Journal<i32, i32>| {
         assert_eq!(j.shard_id(), 1);
-        assert_eq!(j.to_start_index(), Some(1));
+        assert_eq!(j.to_first_index(), Some(1));
         assert_eq!(j.to_last_index(), Some(12));
         assert_eq!(j.to_current_term(), NIL_TERM);
         assert_eq!(j.exceed_limit(1000).expect("exceed limit"), true);
@@ -485,7 +485,7 @@ fn validate_journals1(dir: ffi::OsString, ops: Vec<TestWriteOp>) {
         j.open().expect("unable to open journal file");
         assert_eq!(j.shard_id(), 1);
         assert_eq!(j.to_current_term(), NIL_TERM);
-        let a = j.to_start_index().unwrap() as usize;
+        let a = j.to_first_index().unwrap() as usize;
         assert_eq!(a, ref_a as usize);
         let z = j.to_last_index().unwrap() as usize;
         assert_eq!(z, ref_z as usize);
@@ -523,7 +523,7 @@ fn validate_journals2(dir: ffi::OsString, ops: Vec<TestWriteOp>) {
         j.open().expect("unable to open journal file");
         assert_eq!(j.shard_id(), 1);
         assert_eq!(j.to_current_term(), NIL_TERM);
-        let a = j.to_start_index().unwrap() as usize;
+        let a = j.to_first_index().unwrap() as usize;
         assert_eq!(a, ref_a as usize);
         let z = j.to_last_index().unwrap() as usize;
         assert_eq!(z, ref_z as usize);
@@ -573,7 +573,7 @@ fn validate_journals3(dir: ffi::OsString, ops: Vec<TestWriteOp>) {
         j.open().expect("unable to open journal file");
         assert_eq!(j.shard_id(), 1);
         assert_eq!(j.to_current_term(), NIL_TERM);
-        let a = j.to_start_index().unwrap_or(0) as usize;
+        let a = j.to_first_index().unwrap_or(0) as usize;
         assert_eq!(a, ref_a as usize);
         let z = j.to_last_index().unwrap_or(0) as usize;
         assert_eq!(z, ref_z as usize);

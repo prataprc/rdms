@@ -134,7 +134,7 @@ where
     S: Serialize + DlogState<T>,
     T: Serialize,
 {
-    pub(crate) fn to_start_index(&self) -> Option<u64> {
+    pub(crate) fn to_first_index(&self) -> Option<u64> {
         match self {
             Batch::Refer { start_index, .. } => Some(*start_index),
             Batch::Active { entries, .. } => {

@@ -110,6 +110,7 @@ where
         name: String,
         nshards: usize,
         journal_limit: usize,
+        nosync: bool,
     ) -> Result<Dlog<S, T>> {
         let dlog_index = Arc::new(AtomicU64::new(1));
 
@@ -118,7 +119,7 @@ where
         for shard_id in 0..nshards {
             let index = Arc::clone(&dlog_index);
             let (d, n, l) = (dir.clone(), name.clone(), journal_limit);
-            shards.push(Shard::<S, T>::create(d, n, shard_id, index, l)?);
+            shards.push(Shard::<S, T>::create(d, n, shard_id, index, l, nosync)?);
         }
 
         // create this Dlog. later shards/journals can be added.
@@ -138,6 +139,7 @@ where
         name: String,
         nshards: usize,
         journal_limit: usize,
+        nosync: bool,
     ) -> Result<Dlog<S, T>> {
         let dlog_index = Arc::new(AtomicU64::new(1));
 
@@ -145,7 +147,7 @@ where
         for shard_id in 0..nshards {
             let index = Arc::clone(&dlog_index);
             let (d, n, l) = (dir.clone(), name.clone(), journal_limit);
-            shards.push(Shard::<S, T>::load(d, n, shard_id, index, l)?);
+            shards.push(Shard::<S, T>::load(d, n, shard_id, index, l, nosync)?);
         }
 
         Ok(Dlog {

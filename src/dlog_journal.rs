@@ -66,19 +66,27 @@ impl TryFrom<JournalFile> for (String, String, usize, usize) {
         };
 
         let stem = check_file(jfile.clone()).ok_or(InvalidFile(err.clone()))?;
-        let parts: Vec<&str> = stem.split('-').collect();
+        let mut parts: Vec<&str> = stem.split('-').collect();
 
-        if parts.len() == 6 {
-            match &parts[..] {
-                [name, typ, "shard", shard_id, "journal", num] => {
-                    let shard_id: usize = shard_id.parse()?;
-                    let num: usize = num.parse()?;
-                    Ok((name.to_string(), typ.to_string(), shard_id, num))
-                }
-                _ => Err(InvalidFile(err.clone())),
+        let (name, parts) = match parts.len() {
+            6 => Ok((parts.remove(0).to_string(), parts)),
+            n if n > 6 => {
+                let name = {
+                    let name: Vec<&str> = parts.drain(..n - 5).collect();
+                    name.join("-")
+                };
+                Ok((name.to_string(), parts))
             }
-        } else {
-            Err(InvalidFile(err.clone()))
+            _ => Err(InvalidFile(err.clone())),
+        }?;
+
+        match &parts[..] {
+            [typ, "shard", shard_id, "journal", num] => {
+                let shard_id: usize = shard_id.parse()?;
+                let num: usize = num.parse()?;
+                Ok((name.to_string(), typ.to_string(), shard_id, num))
+            }
+            _ => Err(InvalidFile(err.clone())),
         }
     }
 }
@@ -105,6 +113,7 @@ where
     name: String,
     shard_id: usize,
     journal_limit: usize,
+    nosync: bool,
 
     dlog_index: Arc<AtomicU64>,
     journals: Vec<Journal<S, T>>,
@@ -122,6 +131,7 @@ where
         shard_id: usize,
         index: Arc<AtomicU64>,
         journal_limit: usize,
+        nosync: bool,
     ) -> Result<Shard<S, T>> {
         // purge existing journals for this shard.
         for item in fs::read_dir(&dir)? {
@@ -141,6 +151,7 @@ where
             name,
             shard_id,
             journal_limit,
+            nosync,
 
             dlog_index: index,
             journals: vec![],
@@ -154,6 +165,7 @@ where
         shard_id: usize,
         index: Arc<AtomicU64>,
         journal_limit: usize,
+        nosync: bool,
     ) -> Result<Shard<S, T>> {
         let mut journals = vec![];
 
@@ -182,6 +194,7 @@ where
             name,
             shard_id,
             journal_limit,
+            nosync,
 
             dlog_index: index,
             journals,
@@ -285,11 +298,11 @@ where
             }
         }
 
-        match self.active.flush1(self.journal_limit)? {
+        match self.active.flush1(self.journal_limit, self.nosync)? {
             None => (),
             Some((buffer, batch)) => {
                 self.rotate_journal()?;
-                self.active.flush2(&buffer, batch)?;
+                self.active.flush2(&buffer, batch, self.nosync)?;
             }
         }
 
@@ -322,10 +335,12 @@ where
         let (d, n, i) = (self.dir.clone(), self.name.clone(), self.shard_id);
         let new_active = Journal::<S, T>::new_active(d, n, i, num)?;
 
-        self.journals
-            .push(mem::replace(&mut self.active, new_active));
-
-        Ok(())
+        let active = mem::replace(&mut self.active, new_active);
+        let msg = format!("fail converting {:?} to archive", active);
+        match active.into_archive() {
+            Some(journal) => Ok(self.journals.push(journal)),
+            None => Err(Error::InvalidDlog(msg)),
+        }
     }
 }
 
@@ -334,8 +349,8 @@ where
     S: Clone + Default + Serialize + DlogState<T>,
     T: Clone + Default + Serialize,
 {
-    shard_id: usize,
-    num: usize,               // starts from 1
+    _shard_id: usize,
+    _num: usize,              // starts from 1
     file_path: ffi::OsString, // dir/{name}-shard-{shard_id}-journal-{num}.dlog
 
     inner: InnerJournal<S, T>,
@@ -367,7 +382,7 @@ where
     T: Clone + Default + Serialize,
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
-        write!(f, "Journal<{},{}>", self.shard_id, self.num)
+        write!(f, "Journal<{:?}>", self.file_path)
     }
 }
 
@@ -404,8 +419,8 @@ where
         };
 
         Ok(Journal {
-            shard_id,
-            num,
+            _shard_id: shard_id,
+            _num: num,
             file_path: file_path.clone(),
 
             inner: InnerJournal::Active {
@@ -458,8 +473,8 @@ where
             }
 
             Some(Journal {
-                shard_id,
-                num,
+                _shard_id: shard_id,
+                _num: num,
                 file_path: file_path.clone(),
 
                 inner: InnerJournal::Archive {
@@ -491,8 +506,8 @@ where
             };
 
             Some(Journal {
-                shard_id,
-                num,
+                _shard_id: shard_id,
+                _num: num,
                 file_path: file_path.clone(),
 
                 inner: InnerJournal::Cold {
@@ -544,7 +559,7 @@ where
         }
     }
 
-    pub(crate) fn into_batches(self) -> Result<vec::IntoIter<Batch<S, T>>> {
+    pub(crate) fn into_batches(self) -> Result<Vec<Batch<S, T>>> {
         let batches = match self.inner {
             InnerJournal::Active {
                 mut batches,
@@ -558,7 +573,7 @@ where
             _ => unreachable!(),
         };
 
-        Ok(batches.into_iter())
+        Ok(batches)
     }
 
     pub(crate) fn add_entry(&mut self, entry: DEntry<T>) {
@@ -568,7 +583,6 @@ where
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn into_archive(mut self) -> Option<Self> {
         use InnerJournal::{Active, Archive, Cold};
 
@@ -613,7 +627,11 @@ where
     S: Clone + Default + Serialize + DlogState<T>,
     T: Clone + Default + Serialize,
 {
-    fn flush1(&mut self, lmt: usize) -> Result<Option<(Vec<u8>, Batch<S, T>)>> {
+    fn flush1(
+        &mut self,
+        journal_limit: usize,
+        nosync: bool,
+    ) -> Result<Option<(Vec<u8>, Batch<S, T>)>> {
         let (file_path, fd, batches, active, exceeded) = match &mut self.inner {
             InnerJournal::Active {
                 file_path,
@@ -621,7 +639,7 @@ where
                 batches,
                 active,
             } => {
-                let limit: u64 = lmt.try_into()?;
+                let limit: u64 = journal_limit.try_into()?;
                 let exceeded = fd.metadata()?.len() > limit;
                 (file_path, fd, batches, active, exceeded)
             }
@@ -629,29 +647,31 @@ where
         };
 
         let mut buffer = Vec::with_capacity(FLUSH_SIZE);
-        let want = active.encode_active(&mut buffer)?;
+        let length = active.encode_active(&mut buffer)?;
 
         match exceeded {
             true if active.len() > 0 => {
                 // rotate journal files.
                 let a = active.to_start_index().unwrap();
                 let z = active.to_last_index().unwrap();
-                let batch = Batch::new_refer(0, want, a, z);
+                let batch = Batch::new_refer(0, length, a, z);
                 Ok(Some((buffer, batch)))
             }
             false if active.len() > 0 => {
                 let fpos = fd.metadata()?.len();
                 let n = fd.write(&buffer)?;
-                if want != n {
+                if length != n {
                     let f = file_path.clone();
-                    let msg = format!("wal-flush: {:?}, {}/{}", f, want, n);
+                    let msg = format!("wal-flush: {:?}, {}/{}", f, length, n);
                     Err(Error::PartialWrite(msg))
                 } else {
-                    fd.sync_all()?; // TODO: <- disk bottle-neck
+                    if !nosync {
+                        fd.sync_all()?;
+                    }
 
                     let a = active.to_start_index().unwrap();
                     let z = active.to_last_index().unwrap();
-                    let batch = Batch::new_refer(fpos, want, a, z);
+                    let batch = Batch::new_refer(fpos, length, a, z);
                     batches.push(batch);
                     *active = Batch::default_active();
                     Ok(None)
@@ -661,7 +681,7 @@ where
         }
     }
 
-    fn flush2(&mut self, buffer: &[u8], mut batch: Batch<S, T>) -> Result<()> {
+    fn flush2(&mut self, buffer: &[u8], mut batch: Batch<S, T>, nosync: bool) -> Result<()> {
         let (file_path, fd, batches, active) = match &mut self.inner {
             InnerJournal::Active {
                 file_path,
@@ -676,7 +696,9 @@ where
         let fpos = fd.metadata()?.len();
         let n = fd.write(&buffer)?;
         if length == n {
-            fd.sync_all()?; // TODO: <- disk bottle-neck
+            if !nosync {
+                fd.sync_all()?;
+            }
 
             let a = batch.to_start_index().unwrap();
             let z = batch.to_last_index().unwrap();
@@ -692,6 +714,6 @@ where
     }
 }
 
-//#[cfg(test)]
-//#[path = "dlog_journal_test.rs"]
-//mod dlog_journal_test;
+#[cfg(test)]
+#[path = "dlog_journal_test.rs"]
+mod dlog_journal_test;

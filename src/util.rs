@@ -13,7 +13,7 @@ use crate::{
 };
 
 // create a file in append mode for writing.
-pub fn open_file_cw(file: ffi::OsString) -> Result<fs::File> {
+pub(crate) fn open_file_cw(file: ffi::OsString) -> Result<fs::File> {
     let os_file = {
         let os_file = path::Path::new(&file);
         fs::remove_file(os_file).ok(); // NOTE: ignore remove errors.
@@ -33,19 +33,18 @@ pub fn open_file_cw(file: ffi::OsString) -> Result<fs::File> {
 }
 
 // open existing file in append mode for writing.
-pub fn open_file_w(file: &ffi::OsString) -> Result<fs::File> {
+pub(crate) fn open_file_w(file: &ffi::OsString) -> Result<fs::File> {
     let os_file = path::Path::new(file);
     let mut opts = fs::OpenOptions::new();
     Ok(opts.append(true).open(os_file)?)
 }
 
 // open file for reading.
-pub fn open_file_r(file: &ffi::OsStr) -> Result<fs::File> {
+pub(crate) fn open_file_r(file: &ffi::OsStr) -> Result<fs::File> {
     let os_file = path::Path::new(file);
     Ok(fs::OpenOptions::new().read(true).open(os_file)?)
 }
 
-// TODO: can we convert this into a macro ???
 pub(crate) fn read_buffer(fd: &mut fs::File, fpos: u64, n: u64, msg: &str) -> Result<Vec<u8>> {
     fd.seek(io::SeekFrom::Start(fpos))?;
 
@@ -64,7 +63,6 @@ pub(crate) fn read_buffer(fd: &mut fs::File, fpos: u64, n: u64, msg: &str) -> Re
     }
 }
 
-// TODO: can this be replaced as Macros.
 #[inline]
 pub(crate) fn check_remaining(buf: &[u8], want: usize, msg: &str) -> Result<()> {
     if buf.len() < want {
@@ -93,7 +91,7 @@ where
     (start, end)
 }
 
-pub fn key_footprint<K>(key: &K) -> Result<isize>
+pub(crate) fn key_footprint<K>(key: &K) -> Result<isize>
 where
     K: Footprint,
 {
@@ -102,7 +100,7 @@ where
     Ok(footprint + key.footprint()?)
 }
 
-pub fn as_sharded_array<T>(array: &Vec<T>, mut shards: usize) -> Vec<&[T]>
+pub(crate) fn as_sharded_array<T>(array: &Vec<T>, mut shards: usize) -> Vec<&[T]>
 where
     T: Clone,
 {
@@ -122,7 +120,7 @@ where
     acc
 }
 
-pub fn as_part_array<T, K, N>(array: &Vec<T>, ranges: Vec<N>) -> Vec<Vec<T>>
+pub(crate) fn as_part_array<T, K, N>(array: &Vec<T>, ranges: Vec<N>) -> Vec<Vec<T>>
 where
     T: Clone + Borrow<K>,
     K: Clone + PartialOrd,

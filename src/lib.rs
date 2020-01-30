@@ -7,7 +7,7 @@
 //! * Provide CRUD API, Create, Read, Update, Delete.
 //! * Parameterized over a key-type (**K**) and a value-type (**V**).
 //! * Parameterized over Memory-index and Disk-index.
-//! * Memory index suitable for daaa ingestion and caching frequently
+//! * Memory index suitable for data ingestion and caching frequently
 //!   accessed key.
 //! * Concurrent reads, with single concurrent write.
 //! * Concurrent writes (_Work in progress_).
@@ -15,10 +15,18 @@
 //! * Version control, distributed (_Work in progress_).
 //! * Log Structured Merge for multi-level indexing.
 //!
-//! **Seqno**, each index will carry a sequence-number as the count
-//! of mutations ingested by the index. For every successful mutation,
-//! the sequence-number will be incremented and corresponding entry
-//! shall be tagged with that sequence-number.
+//! **Key**, each data shall be indexed using an associated key. A key
+//! and its corresponding data, also called its value, is called as an
+//! indexed entry.
+//!
+//! **CRUD**, means [basic set of operations][CRUD] expected for storing
+//! data. All storage operation shall involve, application supplied, key.
+//!
+//! **Seqno**, each index instance shall carry a 64-bit sequence-number as
+//! the count of mutations ingested by the index. Every time a mutating
+//! method is called the sequence-number will be incremented and
+//! corresponding entry, if successful, shall be tagged with that
+//! sequence-number.
 //!
 //! **Log-Structured-Merge [LSM]**, is a common technique used in managing
 //! heterogenous data-structures that are transparent to the index. In
@@ -32,13 +40,12 @@
 //!
 //! **Piece-wise full-table scanning**, in many cases long running scans
 //! are bad for indexes using locks and/or multi-version-concurrency-control.
-//! And there _will_ be situations where a full table scan is required
-//! on such index while handling live read/write operations. Piece-wise
-//! scanning can help in those situations, provided the index is configured
-//! for LSM.
-//!
+//! And there _will_ be situations where a full table scan is required,
+//! while allowing background read/write operations. Piece-wise scanning
+//! can help in those situations, provided the index is configured for LSM.
 //!
 //! [LSM]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
+//! [CRUD]: https://en.wikipedia.org/wiki/Create,_read,_update_and_delete
 //!
 
 #![feature(drain_filter)]
@@ -53,7 +60,7 @@ pub mod sync;
 mod sync_writer;
 pub mod thread;
 pub mod types;
-pub mod util;
+mod util;
 mod vlog;
 
 // support modules

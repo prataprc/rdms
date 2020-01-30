@@ -1,4 +1,15 @@
 //! Module `core` define and implement core types and traits for `rdms`.
+//!
+//! List of types implementing CommitIterator
+//! =========================================
+//!
+//! * [CommitWrapper][scans::CommitWrapper], a wrapper type to convert any
+//!   iterator into a [CommitIterator].
+//! * [std::vec::IntoIter], iterator from std-lib for a vector of entries.
+//! * [Llrb], memory index using left-leaning-red-black tree.
+//! * [Mvcc], memory index using multi-version-concurrency-control for LLRB.
+//! * [Robt], disk index using full-packed, immutable btree.
+//!
 
 use std::{
     borrow::Borrow,
@@ -13,6 +24,9 @@ use std::{
 };
 
 use crate::{error::Error, util, vlog};
+
+#[allow(unused_imports)]
+use crate::{llrb::Llrb, mvcc::Mvcc, robt::Robt, scans};
 
 /// Type alias for all results returned by `rdms` methods.
 pub type Result<T> = result::Result<T, Error>;
@@ -1240,7 +1254,9 @@ where
     Retry(K),
 }
 
-/// Container type for CommitIterator types.
+/// Container type for types implementing [CommitIterator] trait. Refer to
+/// the trait for more details. Instead of using [CommitIterator] type directly,
+/// we are using this container type for all `Index::commit` operation, to
 pub struct CommitIter<K, V, C>
 where
     K: Clone + Ord,

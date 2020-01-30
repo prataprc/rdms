@@ -99,7 +99,7 @@ where
     })
 }
 
-struct YIter<'a, K, V>
+pub struct YIter<'a, K, V>
 where
     K: 'a + Clone + Ord,
     V: 'a + Clone + Diff,
@@ -164,7 +164,7 @@ where
     }
 }
 
-struct YIterVersions<'a, K, V>
+pub struct YIterVersions<'a, K, V>
 where
     K: 'a + Clone + Ord,
     V: 'a + Clone + Diff,

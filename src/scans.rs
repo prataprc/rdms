@@ -1,5 +1,72 @@
-//! Module `scans` implement iterator variants that are useful for
-//! building and managing complex data-index.
+//! Module `scans` implement iterator types that are useful for constructing
+//! complex scans.
+//!
+//! List of Iterators
+//! =================
+//!
+//! Following is a non-exhaustive list of all iterators implemented in
+//! [this](self) module and in other modules.
+//!
+//! **From [core]**
+//!
+//! * [VersionIter][core::VersionIter], iterate over older versions of an entry.
+//!
+//! **From [llrb]**
+//!
+//! * [Iter][llrb::Iter], returned by `Llrb::iter()` for full table iteration
+//!   over [Llrb] index. Note that iteration will block all other operations
+//!   in the index.
+//! * [IterPWScan][llrb::IterPWScan], returned by `Llrb::pw_scan()` for full
+//!   table iteration over [Llrb] index. Unlike `iter()` this won't lock the
+//!   index for more than ~ 1ms.
+//! * [Range][llrb::Range], returned by `Llrb::range()` for forward scan
+//!   from lower-bound to upper-bound.
+//! * [Reverse][llrb::Reverse], returned by `Llrb::reverse()` for reverse scan
+//!   from upper-bound to lower-bound.
+//!
+//! **From [mvcc]**
+//!
+//! * [Iter][mvcc::Iter], returned by `Mvcc::iter()` for full table iteration
+//!   over [Mvcc] index. Note that iteration will block garbage collection of
+//!   abandoned nodes.
+//! * [IterPWScan][mvcc::IterPWScan], returned by `Mvcc::pw_scan()` for full
+//!   table iteration over [Mvcc] index. Unlike `iter()` this won't block the
+//!   garbage collection for more than ~ 1ms.
+//! * [Range][mvcc::Range], returned by `Mvcc::range()` for forward scan from
+//!   lower-bound to upper-bound.
+//! * [Reverse][mvcc::Reverse], returned by `Mvcc::reverse()` for reverse scan
+//!   from upper-bound to lower-bound.
+//!
+//! **From [lsm]**
+//!
+//! * [YIter][lsm::YIter], returned by [y_iter][lsm::y_iter] for lsm iteration
+//!   used in multi-level indexes like [Dgm] and [WorkingSet].
+//! * [YIterVersions][lsm::YIterVersions], returned by
+//!   [y_iter_versions][lsm::y_iter_versions] for lsm iteration used in
+//!   multi-level indexes like [Dgm] and [WorkingSet].
+//!
+//! **From [robt]**
+//!
+//! * [robt::Iter], returned by `robt::Snapshot::iter()` for full table
+//!   iteration over [Robt] index.
+//! * [robt::Range], returned by `robt::Snapshot::range()` operation.
+//! * [robt::Reverse], returned by `robt::Snapshot::reverse()` operation.
+//! * `BuildScan`, local to [Robt] index, used while building index.
+//! * `CommitScan`, local to [Robt] index, used while building index.
+//! * `MZ`, local to [Robt] index, optimization structure for `range()` and
+//!   `reverse()` iteration over [Robt] index.
+//!
+//! **From [scans][self]**
+//!
+//! * [SkipScan], useful in full-table scan using `pw_scan()` interface.
+//!   Additionally, can be configured to filter entries within a key-range and/or
+//!   `seqno` range. Used to implement [CommitIterator] for [Llrb] and [Mvcc].
+//! * [FilterScans], useful in full-table scan using one or more iterators.
+//!   If more than one iterators are supplied Iterators are chained in stack order.
+//!   Additionally, can be configured to filter entries within a `seqno` range.
+//! * [BitmappedScan], useful to build a bitmap index for all iterated keys.
+//! * [CompactScan], useful to filter entries that can be compacted in.
+//!
 
 use std::{
     hash::Hash,
@@ -11,6 +78,15 @@ use crate::{
     core::{Bloom, CommitIterator, Diff, Entry, IndexIter, PiecewiseScan, Result, ScanEntry},
     error::Error,
     util,
+};
+
+#[allow(unused_imports)]
+use crate::{
+    core,
+    llrb::{self, Llrb},
+    lsm,
+    mvcc::{self, Mvcc},
+    robt::{self, Robt},
 };
 
 // TODO: benchmark SkipScan and FilterScans and measure the difference.
@@ -422,7 +498,6 @@ where
 
 // TODO: right now CommitWrapper ignores the `within`,
 // should we make this optional ??
-
 pub struct CommitWrapper<'a, K, V>
 where
     K: Clone + Ord,

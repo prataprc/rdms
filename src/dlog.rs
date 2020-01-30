@@ -1,67 +1,3 @@
-//! Module `dlog` implement entry logging for [Rdms] index.
-//!
-//! Takes care of batching write operations, serializing, appending
-//! them to disk, and finally commiting the appended batch(es). A
-//! single `Dlog` can be managed using ``n`` number of shards, where
-//! each shard manages the log using a set of journal-files.
-//!
-//! **Shards**:
-//!
-//! Every shard is managed in a separate thread and each shard serializes
-//! the log-operations, batches them if possible, flushes them and return
-//! a index-sequence-no for each operation back to the caller. Basic idea
-//! behind shard is to match with I/O concurrency available in modern SSDs.
-//!
-//! **Journals**:
-//!
-//! A shard of `Dlog` is organized into ascending list of journal files,
-//! where each journal file do not exceed the configured size-limit.
-//! Journal files are append only and flushed in batches when ever
-//! possible. Journal files are purged once `Dlog` is notified about
-//! durability guarantee uptill an index-sequence-no.
-//!
-//! A Typical Dlog operation-cycles fall under one of the following catogaries:
-//!
-//! * Initial Dlog cycle, when new Dlog is created on disk.
-//! * Reload Dlog cycle, when opening an existing Dlog on disk.
-//! * Replay Dlog cycle, when entries Dlog needs to be replayed on DB.
-//! * Purge Dlog cycle, when an existing Dlog needs to totally purged.
-//!
-//! **Initial Dlog cycle**:
-//!
-//! ```compile_fail
-//!                                        +--------------+
-//!     Dlog::create() -> spawn_writer() -> | purge_till() |
-//!                                        |    close()   |
-//!                                        +--------------+
-//! ```
-//!
-//! **Reload Dlog cycle**:
-//!
-//! ```compile_fail
-//!                                      +--------------+
-//!     Dlog::load() -> spawn_writer() -> | purge_till() |
-//!                                      |    close()   |
-//!                                      +--------------+
-//! ```
-//!
-//! **Replay Dlog cycle**:
-//!
-//! ```compile_fail
-//!     Dlog::load() -> replay() -> close()
-//! ```
-//!
-//! **Purge cycle**:
-//!
-//! ```compile_fail
-//!     +---------------+
-//!     | Dlog::create() |
-//!     |     or        | ---> Dlog::purge()
-//!     | Dlog::load()   |
-//!     +---------------+
-//! ```
-//!
-
 use std::{
     ffi, fmt, result,
     sync::{atomic::AtomicU64, Arc},
@@ -73,6 +9,9 @@ use crate::{
     dlog_entry::DEntry,
     dlog_journal::Shard,
 };
+
+#[allow(unused_imports)]
+use crate::rdms::Rdms;
 
 /// Dlog entry logging for [`Rdms`] index.
 pub struct Dlog<S, T>

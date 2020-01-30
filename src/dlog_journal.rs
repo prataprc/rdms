@@ -3,7 +3,9 @@ use std::{
     convert::{TryFrom, TryInto},
     ffi, fmt, fs,
     io::Write,
-    mem, path, result,
+    mem,
+    ops::Bound,
+    path, result,
     sync::{atomic::AtomicU64, mpsc, Arc},
     thread,
     time::Duration,
@@ -213,6 +215,42 @@ where
         Ok(())
     }
 
+    pub(crate) fn into_deep_freeze(self, before: Bound<u64>) -> Self {
+        let mut last_index = 0;
+        let mut journals = vec![];
+        for journal in self.journals.into_iter() {
+            let index = match journal.to_last_index() {
+                Some(index) => index,
+                None => break,
+            };
+            assert!(index <= last_index, "fatal {} > {}", index, last_index);
+            let ok = match before {
+                Bound::Included(before) => last_index <= before,
+                Bound::Excluded(before) => last_index < before,
+                Bound::Unbounded => true,
+            };
+            if ok {
+                journals.push(journal.into_cold());
+            } else {
+                journals.push(journal);
+            }
+
+            last_index = index
+        }
+
+        Shard {
+            dir: self.dir,
+            name: self.name,
+            shard_id: self.shard_id,
+            journal_limit: self.journal_limit,
+            nosync: self.nosync,
+
+            dlog_index: self.dlog_index,
+            journals,
+            active: self.active,
+        }
+    }
+
     pub(crate) fn close(self) -> Result<()> {
         Ok(())
     }
@@ -322,11 +360,9 @@ where
         let new_active = Journal::<S, T>::new_active(d, n, i, num)?;
 
         let active = mem::replace(&mut self.active, new_active);
-        let msg = format!("fail converting {:?} to archive", active);
-        match active.into_archive() {
-            Some(journal) => Ok(self.journals.push(journal)),
-            None => Err(Error::InvalidDlog(msg)),
-        }
+        self.journals.push(active.into_archive());
+
+        Ok(())
     }
 }
 
@@ -574,7 +610,7 @@ where
         }
     }
 
-    pub(crate) fn into_archive(mut self) -> Option<Self> {
+    pub(crate) fn into_archive(mut self) -> Self {
         use InnerJournal::{Active, Archive, Cold};
 
         match self.inner {
@@ -582,34 +618,33 @@ where
                 file_path, batches, ..
             } => {
                 self.inner = Archive { file_path, batches };
-                Some(self)
+                self
             }
             Cold { file_path } => {
                 let (dir, fname) = {
                     let fp = path::Path::new(&file_path);
-                    let fname = fp.file_name()?.to_os_string();
-                    let dir = fp.parent()?.as_os_str().to_os_string();
+                    let fname = fp.file_name().unwrap().to_os_string();
+                    let dir = fp.parent().unwrap().as_os_str().to_os_string();
                     (dir, fname)
                 };
 
                 let (name, _, shard_id, _): (String, String, usize, usize) =
-                    TryFrom::try_from(JournalFile(fname.clone())).ok()?;
+                    TryFrom::try_from(JournalFile(fname.clone())).unwrap();
 
-                Some(Self::new_archive(name, shard_id, dir, fname)?)
+                Self::new_archive(name, shard_id, dir, fname).unwrap()
             }
             _ => unreachable!(),
         }
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn into_cold(mut self) -> Option<Self> {
+    pub(crate) fn into_cold(mut self) -> Self {
         use InnerJournal::{Archive, Cold};
 
         self.inner = match self.inner {
             Archive { file_path, .. } => Cold { file_path },
-            _ => unreachable!(),
+            inner => inner,
         };
-        Some(self)
+        self
     }
 }
 

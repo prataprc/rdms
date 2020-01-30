@@ -111,13 +111,15 @@ where
 }
 
 /// Trait define methods to integrate index with Wal (Write-Ahead-Log).
+///
+/// After writing into the [Wal], write operation shall be applied on
+/// the [Index] [write-handle][Index::W].
 pub trait WalWriter<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff,
 {
     /// Set {key, value} in index. Return older entry if present.
-    /// Return older entry if present.
     ///
     /// *LSM mode*: Add a new version for the key, perserving the old value.
     fn set_index(&mut self, key: K, value: V, index: u64) -> Result<Option<Entry<K, V>>>;
@@ -149,7 +151,7 @@ where
         Q: ToOwned<Owned = K> + Ord + ?Sized;
 }
 
-/// Trait to create new memory based index snapshot using pre-defined set of
+/// Trait to create new memory based index instances using pre-defined set of
 /// configuration.
 pub trait WriteIndexFactory<K, V>
 where
@@ -162,7 +164,7 @@ where
     /// Typically this index will be used to index new set of entries.
     fn new(&self, name: &str) -> Result<Self::I>;
 
-    /// Factory name for identification purpose.
+    /// Index type identification purpose.
     fn to_type(&self) -> String;
 }
 
@@ -404,8 +406,7 @@ where
     V: Clone + Diff,
 {
     /// Set {key, value} in index. Return older entry if present.
-    /// Return the older entry if present. If operation was invalid or
-    /// NOOP, returned seqno shall be ZERO.
+    /// If operation was invalid or NOOP, returned seqno shall be ZERO.
     ///
     /// *LSM mode*: Add a new version for the key, perserving the old value.
     fn set(&mut self, k: K, v: V) -> Result<Option<Entry<K, V>>>;

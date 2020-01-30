@@ -14,13 +14,13 @@ fn test_journal_file() {
     let journal_file: JournalFile = (name.clone(), typ.clone(), shard_id, num).into();
     assert_eq!(
         journal_file.clone().0.into_string().unwrap(),
-        "my-dlog-wal-shard-10-journal-1.dlog".to_string()
+        "my-dlog-wal-shard-010-journal-001.dlog".to_string()
     );
 
     let journal_file = journal_file.next();
     assert_eq!(
         journal_file.clone().0.into_string().unwrap(),
-        "my-dlog-wal-shard-10-journal-2.dlog".to_string()
+        "my-dlog-wal-shard-010-journal-002.dlog".to_string()
     );
 
     let (nm, t, id, num) = journal_file.try_into().unwrap();
@@ -60,7 +60,7 @@ fn test_journal() {
     }
 
     assert_eq!(journal.to_last_index().unwrap(), 100_000);
-    let rf: &ffi::OsStr = "journal-wal-shard-1-journal-1.dlog".as_ref();
+    let rf: &ffi::OsStr = "journal-wal-shard-001-journal-001.dlog".as_ref();
     assert_eq!(
         path::Path::new(&journal.to_file_path())
             .file_name()

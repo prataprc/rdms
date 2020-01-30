@@ -1,4 +1,4 @@
-//! Module `core` define and implement core types and traits for `rdms`.
+//! Module `core` define and implement core types and traits for [rdms].
 //!
 //! List of types implementing CommitIterator
 //! =========================================
@@ -26,23 +26,33 @@ use std::{
 use crate::{error::Error, util, vlog};
 
 #[allow(unused_imports)]
-use crate::{llrb::Llrb, mvcc::Mvcc, robt::Robt, scans};
+use crate::{
+    llrb::Llrb,
+    mvcc::Mvcc,
+    rdms::{self, Rdms},
+    robt::Robt,
+    scans,
+    wal::Wal,
+};
 
-/// Type alias for all results returned by `rdms` methods.
+/// Type alias for all results returned by [rdms] methods.
 pub type Result<T> = result::Result<T, Error>;
 
 /// Type alias to trait-objects iterating over an index.
 pub type IndexIter<'a, K, V> = Box<dyn Iterator<Item = Result<Entry<K, V>>> + 'a>;
 
-/// Type alias to trait-objects iterating, piece-wise, over [`Index`].
+/// Type alias to trait-objects iterating, piece-wise, over [Index].
 pub type ScanIter<'a, K, V> = Box<dyn Iterator<Item = Result<ScanEntry<K, V>>> + 'a>;
 
+/// A convenience trait to group thread-safe trait conditions.
 pub trait ThreadSafe: 'static + Send {}
 
 /// Trait for diffable values.
 ///
-/// All values indexed in [Rdms] must support this trait, since [Rdms]
-/// can manage successive modifications to the same entry.
+/// Version control is a unique feature built into [rdms]. And this is possible
+/// by values implementing this trait. Note that this version control follows
+/// centralised behaviour, as apposed to distributed behaviour, for which we
+/// need three-way-merge trait. Now more on how it works:
 ///
 /// If,
 /// ```notest
@@ -54,18 +64,15 @@ pub trait ThreadSafe: 'static + Send {}
 /// D = C - P (diff operation)
 /// P = C - D (merge operation, to get old value)
 /// ```
-///
-/// [Rdms]: crate::Rdms
-///
 pub trait Diff: Sized + From<<Self as Diff>::D> {
     type D: Clone + From<Self> + Into<Self> + Footprint;
 
     /// Return the delta between two consecutive versions of a value.
-    /// ``Delta = New - Old``.
+    /// `Delta = New - Old`.
     fn diff(&self, old: &Self) -> Self::D;
 
     /// Merge delta with newer version to return older version of the value.
-    /// ``Old = New - Delta``.
+    /// `Old = New - Delta`.
     fn merge(&self, delta: &Self::D) -> Self;
 }
 
@@ -84,7 +91,7 @@ pub trait Footprint {
     fn footprint(&self) -> Result<isize>;
 }
 
-/// Trait define methods to integrate index with Wal (Write-Ahead-Log).
+/// Trait define methods to integrate index with [Wal] (Write-Ahead-Log).
 ///
 /// All the methods defined by this trait will be dispatched when
 /// reloading an index from on-disk Write-Ahead-Log.
@@ -93,13 +100,13 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    /// While reloading replay set operation on index.
+    /// Replay set operation from wal-file onto index.
     fn set_index(&mut self, key: K, value: V, index: u64) -> Result<Entry<K, V>>;
 
-    /// While reloading replay set-cas operation on index.
+    /// Replay set-cas operation from wal-file onto index.
     fn set_cas_index(&mut self, key: K, value: V, cas: u64, index: u64) -> Result<Entry<K, V>>;
 
-    /// While reloading replay delete operation on index.
+    /// Replay delete operation from wal-file onto index.
     fn delete_index(&mut self, key: K, index: u64) -> Result<Entry<K, V>>;
 }
 
@@ -116,7 +123,7 @@ where
     fn set_index(&mut self, key: K, value: V, index: u64) -> Result<Option<Entry<K, V>>>;
 
     /// Set {key, value} in index if an older entry exists with the
-    /// same ``cas`` value. To create a fresh entry, pass ``cas`` as ZERO.
+    /// same `cas` value. To create a fresh entry, pass `cas` as ZERO.
     /// Return older entry if present.
     ///
     /// *LSM mode*: Add a new version for the key, perserving the old value.
@@ -159,8 +166,8 @@ where
     fn to_type(&self) -> String;
 }
 
-/// Trait to create new disk based index snapshot using pre-defined set of
-/// configuration.
+/// Trait to create new disk based index instances using pre-defined set
+/// of configuration.
 pub trait DiskIndexFactory<K, V>
 where
     K: Clone + Ord,
@@ -178,11 +185,20 @@ where
     /// compacting them.
     fn open(&self, dir: &ffi::OsStr, root: <Self::I as Index<K, V>>::O) -> Result<Self::I>;
 
-    /// Factory name for identification purpose.
+    /// Index type for identification purpose.
     fn to_type(&self) -> String;
 }
 
-/// Trait to ingest a batch of pre-sorted entries into index.
+/// Trait to commit a batch of pre-sorted entries into target index.
+///
+/// Main purpose of this trait is to give target index, into which
+/// the source iterator must be commited, an ability to generate the
+/// actual iterator(s) the way it suits itself. In other words, target
+/// index might call any of the method to generate the required iterator(s).
+///
+/// On the other hand, it may not be possible for the target index to
+/// know the `within` sequence-no range to filter out entries and its
+/// versions, for which we use [CommitIter]
 pub trait CommitIterator<K, V>
 where
     K: Clone + Ord,
@@ -195,18 +211,18 @@ where
     where
         G: Clone + RangeBounds<u64>;
 
-    /// Return a list of equally balanced handles to iterator on
-    /// range-partitioned entries. Note that ``shards`` argument is
-    /// only a hint, return array of iterators can be less-than or
-    /// equal-to or greater-than the requested shards.
+    /// Return a list of equally balanced handles to iterate on
+    /// range-partitioned entries. Note that `shards` argument is
+    /// only a hint, implementing source can return _lesser_ number of
+    /// iterators or _greater_.
     fn scans<G>(&mut self, shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
     where
         G: Clone + RangeBounds<u64>;
 
-    /// Same as iters() but range partition is decided by the `ranges`
-    /// argument. And unlike the ``shards`` argument, ``ranges`` argument
-    /// is treated with precision, range.len() is equal-to return array
-    /// of iterators.
+    /// Same as [scans][CommitIterator::scans] but range partition is
+    /// decided by the `ranges` argument. And unlike the `shards` argument,
+    /// `ranges` argument is treated with precision, number of iterators
+    /// returned shall exactly match _range.len()_.
     fn range_scans<N, G>(&mut self, ranges: Vec<N>, within: G) -> Result<Vec<IndexIter<K, V>>>
     where
         G: Clone + RangeBounds<u64>,
@@ -215,18 +231,19 @@ where
 
 /// Trait implemented by all types of rdms-indexes.
 ///
-/// Note that not all index types shall implement all the traits/constraints
-/// and methods defined by this trait.
+/// Note that not all index types shall implement all the methods
+/// defined by this trait.
 ///
 pub trait Index<K, V>: Sized
 where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    /// A writer associated type, that can ingest key-value pairs.
+    /// Writer handle into this index to ingest, concurrently, key-value pairs.
     type W: Writer<K, V>;
 
-    /// A reader associated type, that are thread safe.
+    /// Reader handle into this index to concurrently access with other readers
+    /// and writers.
     type R: Reader<K, V>;
 
     /// Root-file / root-block for index.
@@ -276,22 +293,24 @@ where
         F: Fn(Vec<Vec<u8>>) -> Vec<u8>;
 
     /// End of index life-cycle. Persisted data (in disk) shall not be
-    /// cleared. Refer `purge()` for that.
+    /// cleared. Refer [purge][Index::purge] for that.
     fn close(self) -> Result<()>;
 
     /// End of index life-cycle. Also clears persisted data (in disk).
     fn purge(self) -> Result<()>;
 }
 
-/// Trait define index interface to self-validate its internal state.
+/// Trait to self-validate index's internal state.
 pub trait Validate<T: fmt::Display> {
-    /// Self-validate the implementing index type. This can be costly call.
+    /// Call this to make sure all is well. Note that this can be
+    /// a costly call. Returned value can be serialized into string
+    /// format and logged, printed, etc..
     fn validate(&mut self) -> Result<T>;
 }
 
 /// Trait to manage keys in a bitmapped Bloom-filter.
 pub trait Bloom: Sized {
-    /// Create an empty bit-map, with capacity.
+    /// Create an empty bit-map.
     fn create() -> Self;
 
     /// Return the number of items in the bitmap.
@@ -323,7 +342,7 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    /// Get ``key`` from index. Returned entry may not have all its
+    /// Get `key` from index. Returned entry may not have all its
     /// previous versions, if it is costly to fetch from disk.
     fn get<Q>(&mut self, key: &Q) -> Result<Entry<K, V>>
     where
@@ -350,7 +369,7 @@ where
         R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized;
 
-    /// Get ``key`` from index. Returned entry shall have all its
+    /// Get `key` from index. Returned entry shall have all its
     /// previous versions, can be a costly call.
     fn get_with_versions<Q>(&mut self, key: &Q) -> Result<Entry<K, V>>
     where
@@ -392,7 +411,7 @@ where
     fn set(&mut self, k: K, v: V) -> Result<Option<Entry<K, V>>>;
 
     /// Set {key, value} in index if an older entry exists with the
-    /// same ``cas`` value. To create a fresh entry, pass ``cas`` as ZERO.
+    /// same `cas` value. To create a fresh entry, pass `cas` as ZERO.
     /// Return the older entry if present. If operation was invalid or
     /// NOOP, returned seqno shall be ZERO.
     ///
@@ -421,12 +440,19 @@ pub trait Serialize: Sized {
     fn encode(&self, buf: &mut Vec<u8>) -> Result<usize>;
 
     /// Reverse process of encode, given the binary equivalent `buf`,
-    /// construct ``self``.
+    /// construct `self`.
     fn decode(&mut self, buf: &[u8]) -> Result<usize>;
 }
 
 /// Trait typically implemented by mem-only indexes, to construct a stable
 /// full-table scan.
+///
+/// Indexes implementing this trait is expected to return an iterator over
+/// all its entries. Some of the necessary conditions are:
+///
+/// * Iteration should be stable even if there is background mutation.
+/// * Iteration should not block background mutation, it might block for a
+///   short while though.
 pub trait PiecewiseScan<K, V>
 where
     K: Clone + Ord,
@@ -436,7 +462,7 @@ where
     /// * Only entries greater than range.start_bound().
     /// * Only entries whose modified seqno is within seqno-range.
     ///
-    /// This method is typically valid only for memory-only indexes. Also,
+    /// This method is typically implemented by memory-only indexes. Also,
     /// returned entry may not have all its previous versions, if it is
     /// costly to fetch from disk.
     fn pw_scan<G>(&mut self, from: Bound<K>, within: G) -> Result<ScanIter<K, V>>
@@ -444,11 +470,11 @@ where
         G: Clone + RangeBounds<u64>;
 }
 
-/// Trait define interface to convert a type to JSON encoded string.
+/// Trait to serialize an implementing type to JSON encoded string.
 ///
 /// Typically used for web-interfaces.
 pub trait ToJson {
-    /// Call the method to get the JSON encoded string.
+    /// Call this method to get the JSON encoded string.
     fn to_json(&self) -> String;
 }
 
@@ -514,12 +540,12 @@ where
     }
 }
 
-/// Read methods.
+/// Delta accessor methods
 impl<V> Delta<V>
 where
     V: Clone + Diff,
 {
-    /// Return the underlying `difference` value for this delta.
+    /// Return the underlying _difference_ value for this delta.
     #[allow(dead_code)] // TODO: remove if not required.
     pub(crate) fn to_diff(&self) -> Option<<V as Diff>::D> {
         match &self.data {
@@ -528,7 +554,7 @@ where
         }
     }
 
-    /// Return the underlying `difference` value for this delta.
+    /// Return the underlying _difference_ value for this delta.
     #[allow(dead_code)] // TODO: remove if not required.
     pub(crate) fn into_diff(self) -> Option<<V as Diff>::D> {
         match self.data {
@@ -638,6 +664,7 @@ impl<V> Drop for Value<V> {
     }
 }
 
+// Value construction methods
 impl<V> Value<V>
 where
     V: Clone,
@@ -681,7 +708,13 @@ where
             val => val.clone(),
         }
     }
+}
 
+// Value accessor methods
+impl<V> Value<V>
+where
+    V: Clone,
+{
     pub(crate) fn to_native_value(&self) -> Option<V> {
         match &self {
             Value::U { value, .. } => value.to_native_value(),
@@ -729,10 +762,10 @@ where
 }
 
 /// Entry is the covering structure for a {Key, value} pair
-/// indexed by rdms data structures.
+/// indexed by rdms.
 ///
 /// It is a user facing structure, also used in stitching together
-/// different components of `Rdms`.
+/// different components of [Rdms].
 #[derive(Clone)]
 pub struct Entry<K, V>
 where
@@ -778,9 +811,12 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    pub const KEY_SIZE_LIMIT: usize = 1024 * 1024 * 1024; // 1GB
-    pub const DIFF_SIZE_LIMIT: usize = 1024 * 1024 * 1024 * 1024; // 1TB
-    pub const VALUE_SIZE_LIMIT: usize = 1024 * 1024 * 1024 * 1024; // 1TB
+    /// Key's memory footprint cannot exceed this limit. _1GB_.
+    pub const KEY_SIZE_LIMIT: usize = 1024 * 1024 * 1024;
+    /// Value's memory footprint cannot exceed this limit. _1TB_.
+    pub const VALUE_SIZE_LIMIT: usize = 1024 * 1024 * 1024 * 1024;
+    /// Value diff's memory footprint cannot exceed this limit. _1TB_.
+    pub const DIFF_SIZE_LIMIT: usize = 1024 * 1024 * 1024 * 1024;
 
     pub(crate) fn new(key: K, value: Value<V>) -> Entry<K, V> {
         Entry {
@@ -803,7 +839,7 @@ where
     }
 }
 
-// write/update methods.
+// Entry accessor methods.
 impl<K, V> Entry<K, V>
 where
     K: Clone + Ord + Footprint,
@@ -892,7 +928,7 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    // purge all versions whose seqno <= or < ``cutoff``.
+    // purge all versions whose seqno <= or < `cutoff`.
     pub(crate) fn purge(mut self, cutoff: Bound<u64>) -> Option<Entry<K, V>> {
         let n = self.to_seqno();
         // If all versions of this entry are before cutoff, then purge entry
@@ -1007,13 +1043,10 @@ where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
 {
-    // Merge two version chain for same key. This can happen between
-    // two entries from two index, where one of them is a newer snapshot
-    // of the same index. In any case it is expected that all versions of
-    // one entry shall either be greater than all versions of the other entry.
-    //
-    // TODO: should fix the order of newer entry and older entry and avoid the
-    // `a` `b` logic.
+    /// Merge two version chain for same key. This can happen between
+    /// two entries from two index, where one of them is a newer snapshot
+    /// of the same index. In any case it is expected that all versions of
+    /// one entry shall be greater than all versions of the other entry.
     pub fn xmerge(self, entry: Entry<K, V>) -> Result<Entry<K, V>> {
         // `a` is newer than `b`, and all versions in a and b are mutually
         // exclusive in seqno ordering.
@@ -1036,7 +1069,7 @@ where
         Ok(b)
     }
 
-    // `self` is newer than `entr`
+    // `self` is newer than `entry`
     fn validate_xmerge(&self, entr: &Entry<K, V>) {
         // validate ordering
         let mut seqnos = vec![self.to_seqno()];
@@ -1093,7 +1126,7 @@ where
     }
 }
 
-// read methods.
+// Entry accessor methods
 impl<K, V> Entry<K, V>
 where
     K: Clone + Ord,
@@ -1144,8 +1177,8 @@ where
         }
     }
 
-    /// Return the seqno and the state of modification. _`true`_ means
-    /// latest value was a create/update, and _`false`_ means latest value
+    /// Return the seqno and the state of modification. `true` means
+    /// latest value was a create/update, and `false` means latest value
     /// was deleted.
     #[inline]
     pub fn to_seqno_state(&self) -> (bool, u64) {
@@ -1162,7 +1195,7 @@ where
     }
 }
 
-/// Iterate from latest to oldest available version for this entry.
+/// Iterate from newest to oldest _available_ version for this entry.
 pub struct VersionIter<K, V>
 where
     K: Clone + Ord,
@@ -1242,21 +1275,31 @@ where
     }
 }
 
-/// Wrapper type for entries iterated by piece-wise full-table scanner.
+/// Covering type for entries iterated by piece-wise full-table scanner.
+///
+/// This covering type is necessary because of the way [PiecewiseScan]
+/// implementation works. Refer to the documentation of the trait for
+/// additional detail. To meet the trait's expectation, the implementing
+/// index should have the ability to differentiate between end-of-iteration
+/// and end-of-iteration to release the read-lock, if any.
 pub enum ScanEntry<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    // Entry found, continue with iteration.
+    /// Entry found, continue with iteration.
     Found(Entry<K, V>),
-    // Refill.
+    /// Refill denotes end-of-iteration to release the read-lock.
     Retry(K),
 }
 
-/// Container type for types implementing [CommitIterator] trait. Refer to
-/// the trait for more details. Instead of using [CommitIterator] type directly,
-/// we are using this container type for all `Index::commit` operation, to
+/// Container type for types implementing [CommitIterator] trait.
+///
+/// Refer to the trait for more details. Instead of using [CommitIterator]
+/// type directly, we are using [CommitIter] indirection for [Index::commit]
+/// operation to handle situations where it is not possible/efficient to
+/// construct a filtered-iterator, but the target index is known to pick any
+/// of the [CommitIterator] method to construct the actual iterators.
 pub struct CommitIter<K, V, C>
 where
     K: Clone + Ord,
@@ -1277,6 +1320,9 @@ where
     V: Clone + Diff,
     C: CommitIterator<K, V>,
 {
+    /// Construct a new commitable iterator from scanner, `within` shall
+    /// be passed to scanner that allows target index to generate the actual
+    /// iterator allowing for both efficiency and flexibility.
     pub fn new<G>(scanner: C, within: G) -> CommitIter<K, V, C>
     where
         G: RangeBounds<u64>,
@@ -1291,20 +1337,27 @@ where
         }
     }
 
+    /// Return the `within` argument supplied while constructing this iterator.
     pub fn to_within(&self) -> (Bound<u64>, Bound<u64>) {
         (self.start.clone(), self.end.clone())
     }
 
+    /// Calls underlying scanner's [scan][CommitIterator::scan] method
+    /// along with `within` to generate the actual commitable iterator.
     pub fn scan(&mut self) -> Result<IndexIter<K, V>> {
         let within = (self.start.clone(), self.end.clone());
         self.scanner.scan(within)
     }
 
+    /// Same as scan, except that it calls scanner's
+    /// [scans][CommitIterator::scans] method.
     pub fn scans(&mut self, shards: usize) -> Result<Vec<IndexIter<K, V>>> {
         let within = (self.start.clone(), self.end.clone());
         self.scanner.scans(shards, within)
     }
 
+    /// Same as scan, except that it calls scanner's
+    /// [range_scans][CommitIterator::range_scans] method.
     pub fn range_scans<N>(&mut self, rs: Vec<N>) -> Result<Vec<IndexIter<K, V>>>
     where
         N: Clone + RangeBounds<K>,

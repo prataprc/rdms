@@ -496,8 +496,10 @@ where
     }
 }
 
-// TODO: right now CommitWrapper ignores the `within`,
-// should we make this optional ??
+/// Convertor type to convert any iterator into CommitIterator that can
+/// be used within [CommitIter][core::CommitIter]. This type assumes
+/// that source iterator already `knows` the `within` sequence-no range
+/// to filter out entries.
 pub struct CommitWrapper<'a, K, V>
 where
     K: Clone + Ord,

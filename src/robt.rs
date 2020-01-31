@@ -59,6 +59,8 @@ use std::{
     thread, time,
 };
 
+#[allow(unused_imports)] // for documentation
+use crate::rdms::Rdms;
 use crate::{
     core::{self, Bloom, CommitIterator, Index, Serialize, ToJson, Validate},
     core::{Diff, DiskIndexFactory, Entry, Footprint, IndexIter, Reader, Result},
@@ -191,7 +193,7 @@ impl fmt::Display for VlogFileName {
     }
 }
 
-/// Returns a factory to construct Robt instances with given ``config``.
+/// Return a factory to construct Robt instances with given ``config``.
 /// Refer [DiskIndexFactory] for more details.
 pub fn robt_factory<K, V, B>(config: Config) -> RobtFactory<K, V, B>
 where
@@ -208,8 +210,9 @@ where
     }
 }
 
-/// Factory type for Robt instances. Refer [DiskIndexFactory] for
-/// more details.
+/// Factory type, to construct pre-configured Robt instances.
+///
+/// Refer [DiskIndexFactory] for more details.
 pub struct RobtFactory<K, V, B>
 where
     K: Clone + Ord + Serialize,
@@ -260,7 +263,7 @@ where
     }
 }
 
-/// Read only btree. Immutable, fully-packed and lockless sharing.
+/// Index type, immutable, durable, fully-packed and lockless reads.
 pub struct Robt<K, V, B>
 where
     K: Clone + Ord + Serialize,
@@ -906,7 +909,7 @@ where
     }
 }
 
-/// Configuration options for Read Only BTree.
+/// Configuration type, for Read Only BTree.
 #[derive(Clone)]
 pub struct Config {
     /// location path where index files are created.
@@ -1119,8 +1122,6 @@ pub enum MetaItem {
     Stats(String),
     /// Application supplied metadata, typically serialized and opaque
     /// to [Rdms].
-    ///
-    /// [Rdms]: crate::Rdms
     AppMetadata(Vec<u8>),
     /// Probability data structure,
     Bitmap(Vec<u8>),
@@ -1196,8 +1197,6 @@ pub(crate) fn write_meta_items(
 /// a vector of meta items is returned. Along with it, number of
 /// meta-block bytes is return. To learn more about the meta items
 /// refer to [MetaItem] type.
-///
-/// [Robt]: crate::robt::Robt
 pub fn read_meta_items(
     dir: &ffi::OsStr, // directory of index, can be os-native string
     name: &str,
@@ -1284,7 +1283,7 @@ impl fmt::Display for MetaItem {
     }
 }
 
-/// Btree configuration and statistics persisted along with index file.
+/// Statistic type, for [Robt].
 ///
 /// Note that build-only [configuration][Config] options like:
 /// * _`flush_queue_size`_,  configuration option.
@@ -1554,10 +1553,11 @@ impl FromStr for Stats {
     }
 }
 
-/// Builder type for constructing Read-Only-BTree index from an iterator.
+/// Builder type, for constructing Read-Only-BTree index from an iterator.
 ///
-/// Index can be built in _initial_ mode or _incremental_ mode. Refer
-/// to corresponding methods for more information.
+/// Index can be built in [initial][Builder::initial] mode or
+/// [incremental][Builder::incremental] mode. Refer to corresponding methods
+/// for more information.
 pub struct Builder<K, V, B>
 where
     K: Clone + Ord + Serialize,
@@ -1701,8 +1701,9 @@ where
     }
 
     /// Start building the index, this API should be used along with
-    /// build_finish() to have more fine grained control, compared to
-    /// build(), over the index build process.
+    /// [build_finish][Builder::build_finish] to have more fine grained
+    /// control, compared to [build][Builder::build], over the index build
+    /// process.
     pub fn build_start<I>(mut self, iter: I) -> Result<u64>
     where
         I: Iterator<Item = Result<Entry<K, V>>>,
@@ -1713,6 +1714,8 @@ where
         Ok(root)
     }
 
+    /// Completes the build process, refer to
+    /// [build_start][Builder::build_start] for details.
     pub fn build_finish(mut self, app_meta: Vec<u8>, bitmap: B, root: u64) -> Result<usize> {
         let (n_bitmap, bitmap) = (bitmap.len()?, bitmap.to_vec());
         let stats: String = {
@@ -2181,9 +2184,10 @@ impl IndexFile {
     }
 }
 
-/// A read only snapshot of BTree built using [robt] index.
+/// Read handle into [Robt] indexes.
 ///
-/// [robt]: crate::robt
+/// Every open snapshot will hold an open file-descriptors, and two
+/// open file-descritors when configured with value-log file.
 pub struct Snapshot<K, V, B>
 where
     K: Clone + Ord + Serialize,
@@ -3395,9 +3399,7 @@ where
     }
 }
 
-/// Iterate over [Robt] index, from beginning to end.
-///
-/// [Robt]: crate::robt::Robt
+/// Iterate type, to do full-table scan over [Robt] index.
 pub struct Iter<'a, K, V, B>
 where
     K: Clone + Ord + Serialize,
@@ -3481,9 +3483,7 @@ where
     }
 }
 
-/// Iterate over [Robt] index, from a _lower bound_ to _upper bound_.
-///
-/// [Robt]: crate::robt::Robt
+/// Iterate type, to range over [Robt] index, from a _lower bound_ to _upper bound_.
 pub struct Range<'a, K, V, B, R, Q>
 where
     K: Clone + Ord + Borrow<Q> + Serialize,
@@ -3571,10 +3571,7 @@ where
     }
 }
 
-/// Reverse iterate over [Robt] index, from an _upper bound_
-/// to _lower bound_.
-///
-/// [Robt]: crate::robt::Robt
+/// Iterate type, to range over [Robt] index, from an _upper bound_ to _lower bound_.
 pub struct Reverse<'a, K, V, B, R, Q>
 where
     K: Clone + Ord + Borrow<Q> + Serialize,

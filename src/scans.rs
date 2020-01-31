@@ -93,10 +93,10 @@ use crate::{
 
 const SKIP_SCAN_BATCH_SIZE: usize = 1000;
 
-/// SkipScan for full table iteration of LSM data structure.
+/// Iterator type, for full table iteration of LSM data structure.
 ///
 /// SkipScan achieve full table scan by stitching together piece-wise
-/// scan of LSM data-structure, only selecting mutations (and versions)
+/// scan of LSM data-structure, and only selecting mutations (and versions)
 /// that are within specified sequence-no range.
 ///
 /// Mitigates following issues.
@@ -309,7 +309,7 @@ where
     }
 }
 
-/// FilterScans for continuous full table iteration filtering out older and
+/// Iterator type, for continuous full table iteration filtering out older and
 /// newer mutations.
 pub struct FilterScans<K, V, I>
 where
@@ -390,7 +390,7 @@ where
     }
 }
 
-/// BitmappedScan wrapper for full-table scanners.
+/// Iterator type, to wrap full-table scanners and generate bitmap index.
 ///
 /// Computes a bitmap of all keys that are iterated over the index `I`. The
 /// bitmap type is parameterised as `B`.
@@ -446,7 +446,7 @@ where
     }
 }
 
-/// CompactScan for continuous full table iteration filtering out
+/// Iterator type, for continuous full table iteration filtering out
 /// older mutations.
 pub struct CompactScan<K, V, I>
 where
@@ -496,10 +496,11 @@ where
     }
 }
 
-/// Convertor type to convert any iterator into CommitIterator that can
-/// be used within [CommitIter][core::CommitIter]. This type assumes
-/// that source iterator already `knows` the `within` sequence-no range
-/// to filter out entries.
+/// Iterator type, to convert any iterator into CommitIterator that can
+/// be used within [CommitIter][core::CommitIter].
+///
+/// This type assumes that source iterator already _knows_ the _within_
+/// sequence-no range to filter out entries.
 pub struct CommitWrapper<'a, K, V>
 where
     K: Clone + Ord,

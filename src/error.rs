@@ -81,14 +81,19 @@ pub enum Error {
     /// Error converting from one type to another.
     ConversionError(String),
     // internal error, given key is less than the entire data set.
+    #[doc(hidden)]
     __LessThan,
     // internal error, z-block of robt index has overflowed.
+    #[doc(hidden)]
     __ZBlockOverflow(usize),
     // inernal error, m-block of robt index has overflowed.
+    #[doc(hidden)]
     __MBlockOverflow(usize),
     // internal error, iteration exhausted in robt index's m-block entries.
+    #[doc(hidden)]
     __MBlockExhausted(usize),
     // internal error, iteration exhausted in robt index's z-block entries.
+    #[doc(hidden)]
     __ZBlockExhausted(usize),
 }
 

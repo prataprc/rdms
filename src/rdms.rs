@@ -1,7 +1,7 @@
 //! Module `rdms` implement a full-featured storage index.
 //!
 //! [Rdms] can be composed using underlying components and mechanisms defined
-//! in `core` module.
+//! in [core] module.
 
 use log::error;
 
@@ -13,17 +13,19 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+#[allow(unused_imports)]
+use crate::core;
 use crate::{
     core::{CommitIter, CommitIterator, Diff, Entry, Footprint, Index, Result, Validate},
     thread as rt,
 };
 
-/// Default commit interval, in seconds. Refer to set_commit_interval()
+/// Default commit interval, _30 minutes_. Refer to set_commit_interval()
 /// method for more detail.
 pub const COMMIT_INTERVAL: usize = 30 * 60; // 30 minutes
 
-/// Index keys and corresponding values. Check module documentation for
-/// the full set of features.
+/// Index type, composable index type. Check module documentation for
+/// full set of features.
 pub struct Rdms<K, V, I>
 where
     K: Clone + Ord,

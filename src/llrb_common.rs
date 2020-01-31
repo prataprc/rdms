@@ -153,13 +153,10 @@ where
     Ok(ss_l)
 }
 
-/// Full table scan type for both [Llrb] and [Mvcc] index.
+/// Iterator type, to do full table scan, for both [Llrb] and [Mvcc] index.
 ///
 /// A full table scan using this type is optimal when used with concurrent
 /// read threads, but not with concurrent write threads.
-///
-/// [Llrb]: crate::llrb::Llrb
-/// [Mvcc]: crate::mvcc::Mvcc
 pub struct Iter<'a, K, V>
 where
     K: Ord + Clone,
@@ -210,13 +207,8 @@ where
     }
 }
 
-/// Piece-wise full table scan type for both [Llrb] and [Mvcc] index.
-///
-/// Unlike [Iter] type, a full table scan using this type is optimal
-/// for both concurrent reads and writes.
-///
-/// [Llrb]: crate::llrb::Llrb
-/// [Mvcc]: crate::mvcc::Mvcc
+/// Iterator type, to do piece-wise full table scan, for both [Llrb] and
+/// [Mvcc] index.
 pub struct IterPWScan<'a, K, V>
 where
     K: Ord + Clone,
@@ -291,11 +283,8 @@ where
     }
 }
 
-/// Range scan between a _`lower-bound`_ and _`higher-bound`_ for bot [`Llrb`]
-/// and [Mvcc] index.
-///
-/// [Llrb]: crate::llrb::Llrb
-/// [Mvcc]: crate::mvcc::Mvcc
+/// Iterator type, to do range scan between a _lower-bound_ and
+/// _higher-bound_, for both [`Llrb`] and [Mvcc] index.
 pub struct Range<'a, K, V, R, Q>
 where
     K: Ord + Clone + Borrow<Q>,
@@ -372,11 +361,8 @@ where
     }
 }
 
-/// Reverse range scan between a _`higher-bound`_ and _`lower-bound`_ for both
-/// [`Llrb`] and [Mvcc] index.
-///
-/// [Llrb]: crate::llrb::Llrb
-/// [Mvcc]: crate::mvcc::Mvcc
+/// Iterator type, to do range scan between a _higher-bound_ and
+/// _lower-bound_ for both [`Llrb`] and [Mvcc] index.
 pub struct Reverse<'a, K, V, R, Q>
 where
     K: Ord + Clone,

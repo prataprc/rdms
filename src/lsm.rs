@@ -1,5 +1,5 @@
-//! Module `lsm` implement merge logic for lookup and iteration api for
-//! LSM indexes.
+//! Module `lsm` implement read API across LSM snapshots of
+//! single index instance.
 
 use std::{borrow::Borrow, cmp, hash::Hash};
 
@@ -58,7 +58,10 @@ where
     })
 }
 
-// ``x`` contains newer mutations than ``y``
+/// Merge two iterators and its entries that belong to different
+/// index snapshots.
+///
+/// NOTE: Iterator `x` contains newer mutations than iterator `y`.
 pub fn y_iter<'a, K, V>(
     mut x: IndexIter<'a, K, V>, // newer
     mut y: IndexIter<'a, K, V>, // older
@@ -79,6 +82,9 @@ where
     })
 }
 
+/// Same as [y_iter] but handles previous versions of iterated entries as well.
+///
+/// NOTE: Iterator `x` contains newer mutations than iterator `y`.
 pub fn y_iter_versions<'a, K, V>(
     mut x: IndexIter<'a, K, V>, // newer
     mut y: IndexIter<'a, K, V>, // older
@@ -99,6 +105,7 @@ where
     })
 }
 
+/// Iterator type, returned by [y_iter].
 pub struct YIter<'a, K, V>
 where
     K: 'a + Clone + Ord,
@@ -164,6 +171,7 @@ where
     }
 }
 
+/// Iterator type, returned by [y_iter_versions].
 pub struct YIterVersions<'a, K, V>
 where
     K: 'a + Clone + Ord,

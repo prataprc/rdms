@@ -13,7 +13,7 @@ use crate::llrb::Llrb;
 
 /// Node corresponds to a single entry in Llrb instance.
 #[derive(Clone)]
-pub struct Node<K, V>
+pub(crate) struct Node<K, V>
 where
     K: Clone + Ord,
     V: Clone + Diff,
@@ -212,7 +212,7 @@ where
 
 // TODO: test cases for Depth.
 
-/// LlrbDepth calculates minimum, maximum, average and percentile of
+/// Statistic type, that captures minimum, maximum, average and percentile of
 /// leaf-node depth in the LLRB tree.
 #[derive(Clone)]
 pub struct LlrbDepth {

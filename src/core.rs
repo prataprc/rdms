@@ -24,7 +24,6 @@ use std::{
 };
 
 use crate::{error::Error, util, vlog};
-
 #[allow(unused_imports)]
 use crate::{
     llrb::Llrb,

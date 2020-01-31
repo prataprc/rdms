@@ -1,7 +1,10 @@
+//! Module `panic` handles unimplemented features.
+
 use std::{borrow::Borrow, ops::RangeBounds};
 
 use crate::core::{Diff, Entry, IndexIter, Reader, Result, Writer};
 
+/// Placeholder type, to handle unimplemented features.
 pub struct Panic(String);
 
 impl Panic {

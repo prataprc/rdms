@@ -44,11 +44,13 @@ use std::{
     sync::Arc,
 };
 
+#[allow(unused_imports)]
 use crate::{
     core::{CommitIter, Result, ScanEntry, ScanIter, Value, WalWriter, WriteIndexFactory},
     core::{CommitIterator, ToJson, Validate, Writer},
     core::{Diff, Entry, Footprint, Index, IndexIter, PiecewiseScan, Reader},
     error::Error,
+    llrb_node::Node,
     mvcc::{Mvcc, Snapshot},
     scans,
     spinlock::{self, RWSpinlock},
@@ -56,14 +58,13 @@ use crate::{
     util,
 };
 // re-export
-pub use crate::llrb_node::Node;
+pub use crate::llrb_node::LlrbDepth;
 
 include!("llrb_common.rs");
 
-pub use crate::llrb_node::LlrbDepth;
-
-/// LlrbFactory captures a set of configuration for creating new Llrb
-/// instances. By implementing `WriteIndexFactory` trait this can be
+/// Factory type, to construct preconfigured [Llrb] index instances.
+///
+/// By implementing `WriteIndexFactory` trait this can be
 /// used with other, more sophisticated, index implementations.
 pub struct LlrbFactory {
     lsm: bool,
@@ -71,9 +72,10 @@ pub struct LlrbFactory {
     spin: bool,
 }
 
-/// Create a new factory with initial set of configuration. To know
-/// more about other configurations supported by the LlrbFactory refer
-/// to its ``set_``, methods.
+/// Create a new [LlrbFactory] with initial set of configuration.
+///
+/// To know more about other configurations supported by the LlrbFactory
+/// refer to its ``set_``, methods.
 ///
 /// * *lsm*, spawn Llrb instances in lsm mode, this will preserve the
 ///   entire history of all write operations applied on the index.
@@ -145,7 +147,7 @@ where
     }
 }
 
-/// Single threaded, in-memory index using [left-leaning-red-black][llrb] tree.
+/// Index type, single threaded, in-memory using [left-leaning-red-black][llrb] tree.
 ///
 /// [llrb]: https://en.wikipedia.org/wiki/Left-leaning_red-black_tree
 pub struct Llrb<K, V>
@@ -2268,7 +2270,7 @@ where
     }
 }
 
-/// Statistics for [`Llrb`] tree.
+/// Statistic type, for [`Llrb`] tree.
 pub struct Stats {
     pub name: String,
     pub entries: usize,

@@ -16,8 +16,10 @@ use crate::{
     types::Empty,
 };
 
+/// Factory type, to construct NoDisk indexes.
 pub struct NoDiskFactory;
 
+/// Return [NoDiskFactory].
 pub fn nodisk_factory() -> NoDiskFactory {
     NoDiskFactory
 }
@@ -30,20 +32,23 @@ where
 {
     type I = NoDisk<K, V>;
 
+    #[inline]
     fn new(&self, _dir: &ffi::OsStr, _name: &str) -> Result<NoDisk<K, V>> {
         Ok(NoDisk::new())
     }
 
+    #[inline]
     fn open(&self, _: &ffi::OsStr, _: Empty) -> Result<NoDisk<K, V>> {
         Ok(NoDisk::new())
     }
 
+    #[inline]
     fn to_type(&self) -> String {
         "nodisk".to_string()
     }
 }
 
-/// NoDisk type denotes empty Disk type.
+/// Index type, for empty Disk type. Can be used with mem-only storage.
 ///
 /// Applications can use this type while instantiating `rdms-index` in
 /// mem-only mode.
@@ -54,6 +59,7 @@ pub struct NoDisk<K, V> {
 }
 
 impl<K, V> NoDisk<K, V> {
+    #[inline]
     fn new() -> NoDisk<K, V> {
         NoDisk {
             phantom_key: marker::PhantomData,
@@ -63,6 +69,7 @@ impl<K, V> NoDisk<K, V> {
 }
 
 impl<K, V> Footprint for NoDisk<K, V> {
+    #[inline]
     fn footprint(&self) -> Result<isize> {
         Ok(0)
     }
@@ -77,35 +84,43 @@ where
     type W = Panic;
     type O = Empty;
 
+    #[inline]
     fn to_name(&self) -> Result<String> {
         Ok("no-disk mama !!".to_string())
     }
 
+    #[inline]
     fn to_root(&self) -> Result<Empty> {
         Ok(Empty)
     }
 
+    #[inline]
     fn to_metadata(&self) -> Result<Vec<u8>> {
         Ok(vec![])
     }
 
+    #[inline]
     fn to_seqno(&self) -> Result<u64> {
         Ok(0)
     }
 
+    #[inline]
     fn set_seqno(&mut self, _seqno: u64) -> Result<()> {
         // noop
         Ok(())
     }
 
+    #[inline]
     fn to_reader(&mut self) -> Result<Self::R> {
         Ok(Panic::new("nodisk"))
     }
 
+    #[inline]
     fn to_writer(&mut self) -> Result<Self::W> {
         Ok(Panic::new("nodisk"))
     }
 
+    #[inline]
     fn commit<C, F>(&mut self, _: CommitIter<K, V, C>, _metadb: F) -> Result<()>
     where
         C: CommitIterator<K, V>,
@@ -114,6 +129,7 @@ where
         Ok(())
     }
 
+    #[inline]
     fn compact<F>(&mut self, _: Bound<u64>, _: F) -> Result<usize>
     where
         F: Fn(Vec<Vec<u8>>) -> Vec<u8>,
@@ -121,10 +137,12 @@ where
         Ok(0)
     }
 
+    #[inline]
     fn close(self) -> Result<()> {
         Ok(())
     }
 
+    #[inline]
     fn purge(self) -> Result<()> {
         Ok(())
     }

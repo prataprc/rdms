@@ -70,18 +70,20 @@ const RECLAIM_CAP: usize = 128;
 
 include!("llrb_common.rs");
 
-/// MvccFactory captures a set of configuration for creating new Mvcc
-/// instances. By implementing `WriteIndexFactory` trait this can be
-/// used with other, more sophisticated, index implementations.
+/// Factory type, to construct preconfigured [Mvcc] index instances.
+///
+/// By implementing `WriteIndexFactory` trait this can be used with other,
+/// more sophisticated, index implementations.
 pub struct MvccFactory {
     lsm: bool,
     sticky: bool,
     spin: bool,
 }
 
-/// Create a new factory with initial set of configuration. To know
-/// more about other configurations supported by the MvccFactory refer
-/// to its ``set_``, methods.
+/// Create a new [MvccFactory] with initial set of configuration.
+///
+/// To know more about other configurations supported by the LlrbFactory
+/// refer to its ``set_``, methods.
 ///
 /// * *lsm*, spawn Mvcc instances in lsm mode, this will preserve the
 /// entire history of all write operations applied on the index.
@@ -2729,7 +2731,7 @@ where
     }
 }
 
-/// Statistics for [`Mvcc`] tree.
+/// Statistic type, for [`Mvcc`] tree.
 pub struct Stats {
     pub name: String,
     pub entries: usize,

@@ -1,6 +1,8 @@
 //! Module `sync` implements synchronisation primitive to implement
 //! complex index types.
 
+// TODO: deprecate this module, after implementing Dgm and Backup
+
 use std::{ffi, mem, sync::Arc};
 
 pub struct SyncAccess<T> {

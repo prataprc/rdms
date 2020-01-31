@@ -53,10 +53,9 @@ use crate::core::{Result, ToJson};
 /// concurrency.
 ///
 /// It uses AtomicU64 for:
-/// a. ref-count, bits [0-61].
-/// b. latch flag, bit 62.
-/// c. lock flag, bit 63.
-///
+/// * ref-count, bits [0-61].
+/// * latch flag, bit 62.
+/// * lock flag, bit 63.
 pub struct RWSpinlock {
     value: AtomicU64,
     read_locks: AtomicU64,
@@ -149,6 +148,7 @@ impl RWSpinlock {
     }
 }
 
+/// Type to handle read-latch, when value gets dropped the latch is released.
 pub struct Reader<'a> {
     door: &'a RWSpinlock,
 }
@@ -159,6 +159,7 @@ impl<'a> Drop for Reader<'a> {
     }
 }
 
+/// Type to handle write-latch, when value gets dropped the latch is released.
 pub struct Writer<'a> {
     door: &'a RWSpinlock,
 }
@@ -175,11 +176,17 @@ impl<'a> Drop for Writer<'a> {
     }
 }
 
+/// Statistic type, to capture [RWSpinlock] metrics.
 #[derive(Default)]
 pub struct Stats {
+    /// Actual 64-bit value of the RWSpinlock when
+    /// [to_stats][RWSpinlock::to_stats] is called.
     pub value: u64,
+    /// Total number of read locks so far.
     pub read_locks: usize,
+    /// Total number of write locks so far.
     pub write_locks: usize,
+    /// Total number of conflicts so far, while acquire the latch.
     pub conflicts: usize,
 }
 

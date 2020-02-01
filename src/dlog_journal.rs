@@ -6,7 +6,10 @@ use std::{
     mem,
     ops::Bound,
     path, result,
-    sync::{atomic::AtomicU64, mpsc, Arc},
+    sync::{
+        atomic::{AtomicU64, Ordering::SeqCst},
+        mpsc, Arc,
+    },
     thread,
     time::Duration,
     vec,
@@ -25,9 +28,6 @@ const FLUSH_SIZE: usize = 1 * 1024 * 1024;
 
 // default block size while loading the Dlog/Journal batches.
 const DLOG_BLOCK_SIZE: usize = 10 * 1024 * 1024;
-
-// default limit for each journal file size.
-pub const JOURNAL_LIMIT: usize = 1 * 1024 * 1024 * 1024;
 
 #[derive(Clone)]
 pub(crate) struct JournalFile(ffi::OsString);
@@ -106,15 +106,12 @@ impl fmt::Debug for JournalFile {
 }
 
 // shards are monotonically increasing number from 1 to N
-pub(crate) struct Shard<S, T>
-where
-    S: Clone + Default + Serialize + DlogState<T>,
-    T: Clone + Default + Serialize,
-{
+pub(crate) struct Shard<S, T> {
     dir: ffi::OsString,
     name: String,
     shard_id: usize,
     journal_limit: usize,
+    batch_size: usize,
     nosync: bool,
 
     dlog_index: Arc<AtomicU64>,
@@ -124,8 +121,8 @@ where
 
 impl<S, T> Shard<S, T>
 where
-    S: Clone + Default + Serialize + DlogState<T>,
-    T: Clone + Default + Serialize,
+    S: Default + Serialize,
+    T: Default + Serialize,
 {
     pub(crate) fn create(
         dir: ffi::OsString,
@@ -133,8 +130,12 @@ where
         shard_id: usize,
         index: Arc<AtomicU64>,
         journal_limit: usize,
+        batch_size: usize,
         nosync: bool,
-    ) -> Result<Shard<S, T>> {
+    ) -> Result<Shard<S, T>>
+    where
+        S: DlogState<T>,
+    {
         // purge existing journals for this shard.
         for item in fs::read_dir(&dir)? {
             let file_name = item?.file_name();
@@ -153,6 +154,7 @@ where
             name,
             shard_id,
             journal_limit,
+            batch_size,
             nosync,
 
             dlog_index: index,
@@ -167,8 +169,12 @@ where
         shard_id: usize,
         index: Arc<AtomicU64>,
         journal_limit: usize,
+        batch_size: usize,
         nosync: bool,
-    ) -> Result<Shard<S, T>> {
+    ) -> Result<(u64, Shard<S, T>)>
+    where
+        S: DlogState<T>,
+    {
         let mut journals = vec![];
 
         for item in fs::read_dir(&dir)? {
@@ -181,6 +187,18 @@ where
         }
 
         journals.sort_by(|x, y| x.num.cmp(&y.num));
+        let last_index = {
+            let mut iter = journals.iter().rev();
+            loop {
+                match iter.next() {
+                    None => break index.load(SeqCst),
+                    Some(journal) => match journal.to_last_index() {
+                        Some(last_index) => break last_index,
+                        None => (),
+                    },
+                }
+            }
+        };
 
         let num = match journals.last() {
             Some(journal) => {
@@ -193,17 +211,21 @@ where
         let (d, n) = (dir.clone(), name.clone());
         let active = Journal::<S, T>::new_active(d, n, shard_id, num)?;
 
-        Ok(Shard {
-            dir,
-            name,
-            shard_id,
-            journal_limit,
-            nosync,
+        Ok((
+            last_index,
+            Shard {
+                dir,
+                name,
+                shard_id,
+                journal_limit,
+                batch_size,
+                nosync,
 
-            dlog_index: index,
-            journals,
-            active,
-        })
+                dlog_index: index,
+                journals,
+                active,
+            },
+        ))
     }
 
     pub(crate) fn purge(self) -> Result<()> {
@@ -243,6 +265,7 @@ where
             name: self.name,
             shard_id: self.shard_id,
             journal_limit: self.journal_limit,
+            batch_size: self.batch_size,
             nosync: self.nosync,
 
             dlog_index: self.dlog_index,
@@ -257,11 +280,7 @@ where
 }
 
 // shards are monotonically increasing number from 1 to N
-impl<S, T> Shard<S, T>
-where
-    S: Clone + Default + Serialize + DlogState<T>,
-    T: Clone + Default + Serialize,
-{
+impl<S, T> Shard<S, T> {
     #[inline]
     pub(crate) fn into_journals(mut self) -> Vec<Journal<S, T>> {
         self.journals.push(self.active);
@@ -271,26 +290,41 @@ where
 
 impl<S, T> Shard<S, T>
 where
-    S: 'static + Send + Clone + Default + Serialize + DlogState<T>,
-    T: 'static + Send + Clone + Default + Serialize,
+    S: 'static + Send + Default + Serialize,
+    T: 'static + Send + Default + Serialize,
 {
-    pub(crate) fn into_thread(self) -> rt::Thread<OpRequest<T>, OpResponse, Shard<S, T>> {
+    pub(crate) fn into_thread(self) -> rt::Thread<OpRequest<T>, OpResponse, Shard<S, T>>
+    where
+        S: DlogState<T>,
+    {
         rt::Thread::new(move |rx| move || self.routine(rx))
     }
+}
 
+impl<S, T> Shard<S, T>
+where
+    S: Default + Serialize,
+    T: Default + Serialize,
+{
     fn routine(mut self, rx: rt::Rx<OpRequest<T>, OpResponse>) -> Result<Self>
     where
-        S: 'static + Send + Default + Serialize + DlogState<T>,
-        T: 'static + Send + Default + Serialize,
+        S: DlogState<T>,
     {
         'outer: loop {
             let mut cmds = vec![];
+            let mut retry = self.batch_size * 2;
             loop {
                 match rx.try_recv() {
-                    Ok(cmd) => cmds.push(cmd),
+                    Ok(cmd) => {
+                        cmds.push(cmd);
+                        if cmds.len() > self.batch_size || retry <= 0 {
+                            break;
+                        }
+                    }
                     Err(mpsc::TryRecvError::Empty) => break,
                     Err(mpsc::TryRecvError::Disconnected) => break 'outer Ok(self),
                 }
+                retry -= 1;
             }
 
             match self.do_cmds(cmds) {
@@ -307,7 +341,10 @@ where
     fn do_cmds(
         &mut self,
         cmds: Vec<(OpRequest<T>, Option<mpsc::Sender<OpResponse>>)>,
-    ) -> Result<bool> {
+    ) -> Result<bool>
+    where
+        S: DlogState<T>,
+    {
         use std::sync::atomic::Ordering::AcqRel;
 
         for cmd in cmds {
@@ -350,7 +387,10 @@ where
         Ok(before)
     }
 
-    fn rotate_journal(&mut self) -> Result<()> {
+    fn rotate_journal(&mut self) -> Result<()>
+    where
+        S: DlogState<T>,
+    {
         let num = {
             let jf = JournalFile(self.active.file_path.clone()).next();
             let p: (String, String, usize, usize) = TryFrom::try_from(jf)?;
@@ -366,11 +406,7 @@ where
     }
 }
 
-pub(crate) struct Journal<S, T>
-where
-    S: Clone + Default + Serialize + DlogState<T>,
-    T: Clone + Default + Serialize,
-{
+pub(crate) struct Journal<S, T> {
     _shard_id: usize,
     num: usize,               // starts from 1
     file_path: ffi::OsString, // dir/{name}-shard-{shard_id}-journal-{num}.dlog
@@ -378,11 +414,7 @@ where
     inner: InnerJournal<S, T>,
 }
 
-enum InnerJournal<S, T>
-where
-    S: Clone + Default + Serialize + DlogState<T>,
-    T: Clone + Default + Serialize,
-{
+enum InnerJournal<S, T> {
     Active {
         file_path: ffi::OsString,
         fd: fs::File,
@@ -398,11 +430,7 @@ where
     },
 }
 
-impl<S, T> fmt::Debug for Journal<S, T>
-where
-    S: Clone + Default + Serialize + DlogState<T>,
-    T: Clone + Default + Serialize,
-{
+impl<S, T> fmt::Debug for Journal<S, T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
         write!(f, "Journal<{:?}>", self.file_path)
     }
@@ -410,15 +438,18 @@ where
 
 impl<S, T> Journal<S, T>
 where
-    S: Clone + Default + Serialize + DlogState<T>,
-    T: Clone + Default + Serialize,
+    S: Default + Serialize,
+    T: Serialize,
 {
     fn new_active(
         dir: ffi::OsString,
         name: String,
         shard_id: usize,
         num: usize,
-    ) -> Result<Journal<S, T>> {
+    ) -> Result<Journal<S, T>>
+    where
+        S: DlogState<T>,
+    {
         let file: JournalFile = {
             let state: S = Default::default();
             (name.to_string(), state.to_type(), shard_id, num).into()
@@ -459,7 +490,10 @@ where
         shard_id: usize,
         dir: ffi::OsString,
         fname: ffi::OsString,
-    ) -> Option<Journal<S, T>> {
+    ) -> Option<Journal<S, T>>
+    where
+        S: DlogState<T>,
+    {
         let (nm, _, id, num): (String, String, usize, usize) =
             TryFrom::try_from(JournalFile(fname.clone())).ok()?;
 
@@ -547,13 +581,39 @@ where
 
         Ok(())
     }
+
+    pub(crate) fn into_archive(mut self) -> Self
+    where
+        S: DlogState<T>,
+    {
+        use InnerJournal::{Active, Archive, Cold};
+
+        match self.inner {
+            Active {
+                file_path, batches, ..
+            } => {
+                self.inner = Archive { file_path, batches };
+                self
+            }
+            Cold { file_path } => {
+                let (dir, fname) = {
+                    let fp = path::Path::new(&file_path);
+                    let fname = fp.file_name().unwrap().to_os_string();
+                    let dir = fp.parent().unwrap().as_os_str().to_os_string();
+                    (dir, fname)
+                };
+
+                let (name, _, shard_id, _): (String, String, usize, usize) =
+                    TryFrom::try_from(JournalFile(fname.clone())).unwrap();
+
+                Self::new_archive(name, shard_id, dir, fname).unwrap()
+            }
+            _ => unreachable!(),
+        }
+    }
 }
 
-impl<S, T> Journal<S, T>
-where
-    S: Clone + Default + Serialize + DlogState<T>,
-    T: Clone + Default + Serialize,
-{
+impl<S, T> Journal<S, T> {
     pub(crate) fn to_last_index(&self) -> Option<u64> {
         use InnerJournal::{Active, Archive};
 
@@ -603,36 +663,12 @@ where
         Ok(batches)
     }
 
-    pub(crate) fn add_entry(&mut self, entry: DEntry<T>) {
+    pub(crate) fn add_entry(&mut self, entry: DEntry<T>)
+    where
+        S: DlogState<T>,
+    {
         match &mut self.inner {
             InnerJournal::Active { active, .. } => active.add_entry(entry),
-            _ => unreachable!(),
-        }
-    }
-
-    pub(crate) fn into_archive(mut self) -> Self {
-        use InnerJournal::{Active, Archive, Cold};
-
-        match self.inner {
-            Active {
-                file_path, batches, ..
-            } => {
-                self.inner = Archive { file_path, batches };
-                self
-            }
-            Cold { file_path } => {
-                let (dir, fname) = {
-                    let fp = path::Path::new(&file_path);
-                    let fname = fp.file_name().unwrap().to_os_string();
-                    let dir = fp.parent().unwrap().as_os_str().to_os_string();
-                    (dir, fname)
-                };
-
-                let (name, _, shard_id, _): (String, String, usize, usize) =
-                    TryFrom::try_from(JournalFile(fname.clone())).unwrap();
-
-                Self::new_archive(name, shard_id, dir, fname).unwrap()
-            }
             _ => unreachable!(),
         }
     }
@@ -650,8 +686,8 @@ where
 
 impl<S, T> Journal<S, T>
 where
-    S: Clone + Default + Serialize + DlogState<T>,
-    T: Clone + Default + Serialize,
+    S: Default + Serialize,
+    T: Serialize,
 {
     fn flush1(
         &mut self,

@@ -100,13 +100,13 @@ where
     V: Clone + Diff,
 {
     /// Replay set operation from wal-file onto index.
-    fn set_index(&mut self, key: K, value: V, index: u64) -> Result<Entry<K, V>>;
+    fn set_index(&mut self, key: K, value: V, index: u64) -> Result<()>;
 
     /// Replay set-cas operation from wal-file onto index.
-    fn set_cas_index(&mut self, key: K, value: V, cas: u64, index: u64) -> Result<Entry<K, V>>;
+    fn set_cas_index(&mut self, key: K, value: V, cas: u64, index: u64) -> Result<()>;
 
     /// Replay delete operation from wal-file onto index.
-    fn delete_index(&mut self, key: K, index: u64) -> Result<Entry<K, V>>;
+    fn delete_index(&mut self, key: K, index: u64) -> Result<()>;
 }
 
 /// Trait define methods to integrate index with Wal (Write-Ahead-Log).

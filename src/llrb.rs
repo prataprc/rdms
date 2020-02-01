@@ -46,7 +46,7 @@ use std::{
 
 #[allow(unused_imports)]
 use crate::{
-    core::{CommitIter, Result, ScanEntry, ScanIter, Value, WalWriter, WriteIndexFactory},
+    core::{CommitIter, Replay, Result, ScanEntry, ScanIter, Value, WalWriter, WriteIndexFactory},
     core::{CommitIterator, ToJson, Validate, Writer},
     core::{Diff, Entry, Footprint, Index, IndexIter, PiecewiseScan, Reader},
     error::Error,
@@ -1587,6 +1587,27 @@ where
         Q: 'a + Ord + ?Sized,
     {
         self.reverse(r)
+    }
+}
+
+impl<K, V> Replay<K, V> for Llrb<K, V>
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+{
+    fn set_index(&mut self, key: K, value: V, seqno: u64) -> Result<()> {
+        self.set_index(key, value, Some(seqno))?;
+        Ok(())
+    }
+
+    fn set_cas_index(&mut self, key: K, value: V, cas: u64, seqno: u64) -> Result<()> {
+        self.set_cas_index(key, value, cas, Some(seqno))?.1?;
+        Ok(())
+    }
+
+    fn delete_index(&mut self, key: K, seqno: u64) -> Result<()> {
+        self.delete_index(&key, Some(seqno))?.1?;
+        Ok(())
     }
 }
 

@@ -12,11 +12,7 @@ use crate::{
 include!("dlog_marker.rs");
 
 #[derive(Clone)]
-pub(crate) enum Batch<S, T>
-where
-    S: Serialize + DlogState<T>,
-    T: Serialize,
-{
+pub(crate) enum Batch<S, T> {
     // Reference to immutable batch in log file,
     Refer {
         // position in log-file where the batch starts.
@@ -38,11 +34,7 @@ where
     },
 }
 
-impl<S, T> Default for Batch<S, T>
-where
-    S: Serialize + DlogState<T>,
-    T: Serialize,
-{
+impl<S, T> Default for Batch<S, T> {
     fn default() -> Batch<S, T> {
         Batch::Refer {
             fpos: Default::default(),
@@ -55,8 +47,8 @@ where
 
 impl<S, T> PartialEq for Batch<S, T>
 where
-    S: PartialEq + Serialize + DlogState<T>,
-    T: PartialEq + Serialize,
+    S: PartialEq,
+    T: PartialEq,
 {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -89,11 +81,7 @@ where
     }
 }
 
-impl<S, T> Batch<S, T>
-where
-    S: Serialize + DlogState<T>,
-    T: Serialize,
-{
+impl<S, T> Batch<S, T> {
     pub(crate) fn default_active() -> Batch<S, T>
     where
         S: Default,
@@ -118,7 +106,10 @@ where
         }
     }
 
-    pub(crate) fn add_entry(&mut self, entry: DEntry<T>) {
+    pub(crate) fn add_entry(&mut self, entry: DEntry<T>)
+    where
+        S: DlogState<T>,
+    {
         match self {
             Batch::Active { state, entries } => {
                 state.on_add_entry(&entry);
@@ -129,11 +120,7 @@ where
     }
 }
 
-impl<S, T> Batch<S, T>
-where
-    S: Serialize + DlogState<T>,
-    T: Serialize,
-{
+impl<S, T> Batch<S, T> {
     pub(crate) fn to_first_index(&self) -> Option<u64> {
         match self {
             Batch::Refer { start_index, .. } => Some(*start_index),
@@ -170,8 +157,8 @@ where
 
     pub(crate) fn into_active(mut self, fd: &mut fs::File) -> Result<Batch<S, T>>
     where
-        S: Default,
-        T: Default,
+        S: Default + Serialize,
+        T: Default + Serialize,
     {
         match self {
             Batch::Refer { fpos, length, .. } => {
@@ -207,7 +194,7 @@ where
 // NOTE: `length` value includes 8-byte length-prefix and 8-byte length-suffix.
 impl<S, T> Batch<S, T>
 where
-    S: Serialize + DlogState<T>,
+    S: Serialize,
     T: Serialize,
 {
     pub(crate) fn encode_active(&self, buf: &mut Vec<u8>) -> Result<usize> {
@@ -322,10 +309,7 @@ where
 }
 
 #[derive(Clone, PartialEq)]
-pub struct DEntry<T>
-where
-    T: Serialize,
-{
+pub struct DEntry<T> {
     // Index seqno for this entry. This will be monotonically
     // increasing number.
     index: u64,
@@ -335,7 +319,7 @@ where
 
 impl<T> Default for DEntry<T>
 where
-    T: Default + Serialize,
+    T: Default,
 {
     fn default() -> DEntry<T> {
         DEntry {
@@ -347,17 +331,14 @@ where
 
 impl<T> fmt::Debug for DEntry<T>
 where
-    T: Serialize + fmt::Debug,
+    T: fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
         write!(f, "DEntry<term: index:{}  op:{:?}>", self.index, self.op)
     }
 }
 
-impl<T> DEntry<T>
-where
-    T: Serialize,
-{
+impl<T> DEntry<T> {
     pub(crate) fn new(index: u64, op: T) -> DEntry<T> {
         DEntry { index, op }
     }

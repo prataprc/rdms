@@ -3,7 +3,7 @@ use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
 use std::{mem, ops::Bound};
 
 use super::*;
-use crate::{llrb::Node, scans, util};
+use crate::{llrb_node::Node, scans, util};
 
 include!("./ref_test.rs");
 

@@ -1,15 +1,27 @@
+use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
+
+use std::{collections::hash_map::RandomState, ffi, mem, path, sync::mpsc, thread};
+
 use super::*;
+use crate::{
+    core::{Entry, Index, Reader, Writer},
+    dlog_journal::Journal,
+    llrb::Llrb,
+};
+
+// TODO: fine tune Wal test cases
 
 #[test]
 fn test_state() {
-    let state: State = Default::default();
-    let entry: dlog_entry::Entry<Op<i32, i32>> = Default::default();
+    let mut state: State = Default::default();
+    let entry: DEntry<Op<i32, i32>> = Default::default();
     state.on_add_entry(&entry);
 
     let mut buf = vec![];
-    assert_eq!(state.encode(&mut buf), 0);
+    assert_eq!(state.encode(&mut buf).unwrap(), 0);
     let mut dec_state: State = Default::default();
-    assert_eq!(dec_state.decode(&buf), state);
+    dec_state.decode(&buf).unwrap();
+    assert!(dec_state == state);
 }
 
 #[test]
@@ -61,5 +73,470 @@ fn test_op() {
     match res {
         Op::Delete { key: 34 } => (),
         _ => unreachable!(),
+    }
+}
+
+#[test]
+fn test_wal() {
+    let seed: u128 = random();
+
+    for i in 0..10 {
+        let seed = seed + (i * 100);
+        let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+        let dir = {
+            let mut dir_path = path::PathBuf::new();
+            dir_path.push(std::env::temp_dir().into_os_string());
+            dir_path.push("test-wal");
+            let dir: &ffi::OsStr = dir_path.as_ref();
+            dir.clone().to_os_string()
+        };
+        fs::remove_dir_all(&dir).ok();
+        fs::create_dir_all(&dir).unwrap();
+
+        let name = "users".to_string();
+        let nshards = 1;
+        let journal_limit = (rng.gen::<usize>() % 100_000) + 1_000;
+        let batch_size = (rng.gen::<usize>() % 100) + 1;
+        let nosync: bool = rng.gen();
+
+        println!(
+            "seed:{} dir:{:?} journal_limit:{} batch_size:{} nosync:{}",
+            seed, dir, journal_limit, batch_size, nosync
+        );
+
+        let mut wl: Wal<i64, i64, RandomState> = {
+            let dl = Dlog::<State, Op<i64, i64>>::create(
+                dir.clone(),
+                name.clone(),
+                nshards,
+                journal_limit,
+                batch_size,
+                nosync,
+            )
+            .unwrap();
+            Wal::from_dlog(dl, RandomState::new())
+        };
+
+        let mut items = create_wal(seed, &mut wl, false /*nocas*/);
+        let last_index = items.len() as u64;
+        items.sort_by(|x, y| x.0.cmp(&y.0));
+
+        {
+            let dl = Dlog::<State, Op<i64, i64>>::load(
+                dir.clone(),
+                name.clone(),
+                nshards,
+                journal_limit,
+                batch_size,
+                nosync,
+            )
+            .unwrap();
+            validate_dlog1(dl, items.clone());
+        }
+
+        let before = rng.gen::<u64>() % last_index;
+        wl.purge_till(before).unwrap();
+
+        {
+            let dl = Dlog::<State, Op<i64, i64>>::load(
+                dir.clone(),
+                name.clone(),
+                nshards,
+                journal_limit,
+                batch_size,
+                nosync,
+            )
+            .unwrap();
+            let lis: Vec<u64> = dl
+                .shards
+                .into_iter()
+                .map(|shard| shard.into_journals())
+                .flatten()
+                .map(|journal| journal.to_last_index().unwrap_or(std::u64::MAX))
+                .collect();
+            println!("before:{} lis:{:?}", before, lis);
+            assert!(lis.into_iter().all(|x| x > before));
+        }
+
+        wl.close().unwrap();
+
+        let mut wl: Wal<i64, i64, RandomState> = {
+            let dl = Dlog::<State, Op<i64, i64>>::load(
+                dir.clone(),
+                name.clone(),
+                nshards,
+                journal_limit,
+                batch_size,
+                nosync,
+            )
+            .unwrap();
+            Wal::from_dlog(dl, RandomState::new())
+        };
+
+        let mut load_items = load_wal(seed, &mut wl, false /*nocas*/);
+        load_items.sort_by(|x, y| x.0.cmp(&y.0));
+        items.extend_from_slice(&load_items);
+
+        {
+            let dl = Dlog::<State, Op<i64, i64>>::load(
+                dir.clone(),
+                name.clone(),
+                nshards,
+                journal_limit,
+                batch_size,
+                nosync,
+            )
+            .unwrap();
+            validate_dlog2(dl, items)
+        }
+
+        {
+            wl.purge().unwrap();
+
+            let dl = Dlog::<State, Op<i64, i64>>::load(
+                dir.clone(),
+                name.clone(),
+                nshards,
+                journal_limit,
+                batch_size,
+                nosync,
+            )
+            .unwrap();
+            assert_eq!(dl.index.load(SeqCst), 1);
+            assert_eq!(dl.shards.len(), 1);
+        }
+    }
+}
+
+#[test]
+fn test_wal_replay() {
+    let seed: u128 = random();
+
+    for i in 0..10 {
+        let seed = seed + (i * 100);
+        let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+        let dir = {
+            let mut dir_path = path::PathBuf::new();
+            dir_path.push(std::env::temp_dir().into_os_string());
+            dir_path.push("test-wal-replay");
+            let dir: &ffi::OsStr = dir_path.as_ref();
+            dir.clone().to_os_string()
+        };
+        fs::remove_dir_all(&dir).ok();
+        fs::create_dir_all(&dir).unwrap();
+
+        let name = "users".to_string();
+        let nshards = 1;
+        let journal_limit = (rng.gen::<usize>() % 100_000) + 1_000;
+        let batch_size = (rng.gen::<usize>() % 100) + 1;
+        let nosync: bool = rng.gen();
+
+        println!(
+            "seed:{} dir:{:?} journal_limit:{} batch_size:{} nosync:{}",
+            seed, dir, journal_limit, batch_size, nosync
+        );
+
+        let mut wl: Wal<i64, i64, RandomState> = {
+            let dl = Dlog::<State, Op<i64, i64>>::create(
+                dir.clone(),
+                name.clone(),
+                nshards,
+                journal_limit,
+                batch_size,
+                nosync,
+            )
+            .unwrap();
+            Wal::from_dlog(dl, RandomState::new())
+        };
+
+        let mut items = create_wal(seed, &mut wl, true /*nocas*/);
+        items.sort_by(|x, y| x.0.cmp(&y.0));
+        let mut index: Box<Llrb<i64, i64>> = Llrb::new_lsm("twal-replay");
+        let mut ref_index: Box<Llrb<i64, i64>> = Llrb::new_lsm("twal-replay-ref");
+        for item in items.into_iter() {
+            match item.1 {
+                Op::Set { key, value } => {
+                    index.set(key, value).unwrap();
+                    ref_index.set(key, value).unwrap();
+                }
+                Op::SetCAS { key, value, .. } => {
+                    index.set(key, value).unwrap();
+                    ref_index.set(key, value).unwrap();
+                }
+                Op::Delete { key } => {
+                    index.delete(&key).unwrap();
+                    ref_index.delete(&key).unwrap();
+                }
+            };
+        }
+
+        let mut items = load_wal(seed, &mut wl, true /*nocas*/);
+        items.sort_by(|x, y| x.0.cmp(&y.0));
+        for item in items.into_iter() {
+            match item.1 {
+                Op::Set { key, value } => {
+                    ref_index.set(key, value).unwrap();
+                }
+                Op::SetCAS { key, value, .. } => {
+                    ref_index.set(key, value).unwrap();
+                }
+                Op::Delete { key } => {
+                    ref_index.delete(&key).unwrap();
+                }
+            };
+        }
+
+        let seqno = index.to_seqno().unwrap();
+        wl.replay(index.as_mut(), seqno).unwrap();
+
+        assert_eq!(index.len(), ref_index.len());
+        assert_eq!(index.to_seqno(), ref_index.to_seqno());
+        for (e, re) in index.iter().unwrap().zip(ref_index.iter().unwrap()) {
+            check_node(&e.unwrap(), &re.unwrap())
+        }
+    }
+}
+
+fn create_wal(
+    seed: u128,
+    wl: &mut Wal<i64, i64, RandomState>, // wal
+    nocas: bool,
+) -> Vec<(u64, Op<i64, i64>)> {
+    let (tx, rx) = mpsc::channel();
+    let mut last_index = wl.to_index();
+    assert_eq!(last_index, 1);
+
+    let mut threads = vec![];
+    for i in 0..1000 {
+        let mut w = wl.to_writer().unwrap();
+        let wl_tx = tx.clone();
+        let thread = thread::spawn(move || {
+            let mut rng = {
+                let seed = seed + (i as u128);
+                SmallRng::from_seed(seed.to_le_bytes())
+            };
+            for _ in 0..100 {
+                let op: u8 = rng.gen();
+                let (index, op) = match op % 3 {
+                    0 => {
+                        let key = rng.gen::<i64>().abs();
+                        let value = rng.gen::<i64>().abs();
+                        let index = w.set(key, value).unwrap();
+                        (index, Op::new_set(key, value))
+                    }
+                    1 if nocas => {
+                        let key = rng.gen::<i64>().abs();
+                        let value = rng.gen::<i64>().abs();
+                        let index = w.set(key, value).unwrap();
+                        (index, Op::new_set(key, value))
+                    }
+                    1 => {
+                        let key = rng.gen::<i64>().abs();
+                        let value = rng.gen::<i64>().abs();
+                        let cas = rng.gen::<u64>();
+                        let index = w.set_cas(key, value, cas).unwrap();
+                        (index, Op::new_set_cas(key, value, cas))
+                    }
+                    2 => {
+                        let key = rng.gen::<i64>().abs();
+                        let index = w.delete(&key).unwrap();
+                        (index, Op::new_delete(key))
+                    }
+                    _ => unreachable!(),
+                };
+                wl_tx.send((index, op)).unwrap()
+            }
+        });
+        threads.push(thread)
+    }
+
+    for thread in threads.into_iter() {
+        thread.join().unwrap();
+    }
+
+    mem::drop(tx);
+
+    last_index += 100_000;
+    let mut items = vec![];
+    for item in rx {
+        items.push(item)
+    }
+    assert_eq!(items.len() as u64, last_index - 1);
+
+    items
+}
+
+fn load_wal(
+    seed: u128,
+    wl: &mut Wal<i64, i64, RandomState>, // wal
+    nocas: bool,
+) -> Vec<(u64, Op<i64, i64>)> {
+    let (tx, rx) = mpsc::channel();
+    let last_index = wl.to_index();
+    assert_eq!(last_index, 100_001);
+
+    let mut threads = vec![];
+    for i in 0..1000 {
+        let mut w = wl.to_writer().unwrap();
+        let wl_tx = tx.clone();
+        let thread = thread::spawn(move || {
+            let mut rng = {
+                let seed = seed + (i as u128);
+                SmallRng::from_seed(seed.to_le_bytes())
+            };
+            for _ in 0..100 {
+                let op: u8 = rng.gen();
+                let (index, op) = match op % 3 {
+                    0 => {
+                        let key = rng.gen::<i64>().abs();
+                        let value = rng.gen::<i64>().abs();
+                        let index = w.set(key, value).unwrap();
+                        (index, Op::new_set(key, value))
+                    }
+                    1 if nocas => {
+                        let key = rng.gen::<i64>().abs();
+                        let value = rng.gen::<i64>().abs();
+                        let index = w.set(key, value).unwrap();
+                        (index, Op::new_set(key, value))
+                    }
+                    1 => {
+                        let key = rng.gen::<i64>().abs();
+                        let value = rng.gen::<i64>().abs();
+                        let cas = rng.gen::<u64>();
+                        let index = w.set_cas(key, value, cas).unwrap();
+                        (index, Op::new_set_cas(key, value, cas))
+                    }
+                    2 => {
+                        let key = rng.gen::<i64>().abs();
+                        let index = w.delete(&key).unwrap();
+                        (index, Op::new_delete(key))
+                    }
+                    _ => unreachable!(),
+                };
+                wl_tx.send((index, op)).unwrap()
+            }
+        });
+        threads.push(thread)
+    }
+
+    for thread in threads.into_iter() {
+        thread.join().unwrap();
+    }
+
+    mem::drop(tx);
+
+    let mut items = vec![];
+    for item in rx {
+        items.push(item)
+    }
+
+    items
+}
+
+fn validate_dlog1(dl: Dlog<State, Op<i64, i64>>, items: Vec<(u64, Op<i64, i64>)>) {
+    let last_index = items.len() as u64;
+    assert_eq!(dl.index.load(SeqCst), last_index + 1);
+    let mut entries = vec![];
+    let journals: Vec<Journal<State, Op<i64, i64>>> = dl
+        .shards
+        .into_iter()
+        .map(|shard| shard.into_journals())
+        .flatten()
+        .collect();
+    for journal in journals.into_iter() {
+        let mut fd = {
+            let file_path = journal.to_file_path();
+            let mut opts = fs::OpenOptions::new();
+            opts.read(true).open(&file_path).unwrap()
+        };
+        let es: Vec<DEntry<Op<i64, i64>>> = journal
+            .into_batches()
+            .unwrap()
+            .into_iter()
+            .map(|batch| batch.into_active(&mut fd).unwrap().into_entries())
+            .flatten()
+            .collect();
+        entries.extend_from_slice(&es);
+    }
+
+    for (e, (index, op)) in entries.into_iter().zip(items.into_iter()) {
+        let (rindex, rop) = e.into_index_op();
+        assert!(rindex == index);
+        assert!(rop == op);
+    }
+}
+
+fn validate_dlog2(
+    dl: Dlog<State, Op<i64, i64>>,
+    mut items: Vec<(u64, Op<i64, i64>)>, // includes both create and loaded items
+) {
+    let last_index = items.len() as u64;
+    assert_eq!(dl.index.load(SeqCst), last_index + 1);
+    let mut entries = vec![];
+    let journals: Vec<Journal<State, Op<i64, i64>>> = dl
+        .shards
+        .into_iter()
+        .map(|shard| shard.into_journals())
+        .flatten()
+        .collect();
+    for journal in journals.into_iter() {
+        let mut fd = {
+            let file_path = journal.to_file_path();
+            let mut opts = fs::OpenOptions::new();
+            opts.read(true).open(&file_path).unwrap()
+        };
+        let es: Vec<DEntry<Op<i64, i64>>> = journal
+            .into_batches()
+            .unwrap()
+            .into_iter()
+            .map(|batch| batch.into_active(&mut fd).unwrap().into_entries())
+            .flatten()
+            .collect();
+        entries.extend_from_slice(&es);
+    }
+
+    items.drain(..(items.len() - entries.len()));
+    for (e, (index, op)) in entries.into_iter().zip(items.into_iter()) {
+        let (rindex, rop) = e.into_index_op();
+        assert!(rindex == index);
+        assert!(rop == op);
+    }
+}
+
+fn check_node(entry: &Entry<i64, i64>, ref_entry: &Entry<i64, i64>) {
+    //println!("check_node {} {}", entry.key(), ref_entry.key);
+    assert_eq!(entry.to_key(), ref_entry.to_key(), "key");
+
+    let key = entry.to_key();
+    //println!("check-node value {:?}", entry.to_native_value());
+    assert_eq!(
+        entry.to_native_value(),
+        ref_entry.to_native_value(),
+        "key {}",
+        key
+    );
+    assert_eq!(entry.to_seqno(), ref_entry.to_seqno(), "key {}", key);
+    assert_eq!(entry.is_deleted(), ref_entry.is_deleted(), "key {}", key);
+    assert_eq!(
+        entry.as_deltas().len(),
+        ref_entry.as_deltas().len(),
+        "key {}",
+        key
+    );
+
+    //println!("versions {} {}", n_vers, refn_vers);
+    let mut vers = entry.versions();
+    let mut ref_vers = ref_entry.versions();
+    loop {
+        match (vers.next(), ref_vers.next()) {
+            (Some(e), Some(re)) => {
+                assert_eq!(e.to_native_value(), re.to_native_value(), "key {}", key);
+                assert_eq!(e.to_seqno(), re.to_seqno(), "key {} ", key);
+                assert_eq!(e.is_deleted(), re.is_deleted(), "key {}", key);
+            }
+            (None, None) => break,
+            (Some(e), None) => panic!("invalid entry {} {}", e.to_key(), e.to_seqno()),
+            (None, Some(re)) => panic!("invalid entry {} {}", re.to_key(), re.to_seqno()),
+        }
     }
 }

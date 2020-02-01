@@ -91,6 +91,7 @@ fn test_journal() {
 fn test_shard() {
     let seed: u128 = random();
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    println!("seed:{}", seed);
 
     let dir = {
         let mut dir = path::PathBuf::new();
@@ -120,6 +121,7 @@ fn test_shard() {
             shard_id,
             Arc::clone(&dlog_index),
             journal_limit,
+            batch_size as usize,
             nosync,
         )
         .unwrap()
@@ -153,25 +155,29 @@ fn test_shard() {
         tshard.close_wait().unwrap();
         assert_eq!(dlog_index.load(SeqCst), (n_batches * batch_size + 1) as u64);
 
-        let shard = Shard::<wal::State, wal::Op<i64, i64>>::load(
+        let (last_index, shard) = Shard::<wal::State, wal::Op<i64, i64>>::load(
             dir.clone(),
             name.clone(),
             shard_id,
             Arc::clone(&dlog_index),
             journal_limit,
+            batch_size as usize,
             nosync,
         )
         .unwrap();
+        assert_eq!(last_index, (n_batches * batch_size) as u64);
 
         let journals = shard.into_journals();
         assert_eq!(dlog_index.load(SeqCst), (n_batches * batch_size + 1) as u64);
 
-        {
-            let batch = match &journals[0].inner {
-                InnerJournal::Archive { batches, .. } => &batches[0],
+        if journals.len() > 0 {
+            match &journals[0].inner {
+                InnerJournal::Archive { batches, .. } if batches.len() > 0 => {
+                    assert_eq!(batches[0].to_first_index().unwrap(), 1);
+                }
+                InnerJournal::Archive { .. } => (),
                 _ => unreachable!(),
             };
-            assert_eq!(batch.to_first_index().unwrap(), 1);
         }
 
         let mut entries = vec![];
@@ -197,12 +203,13 @@ fn test_shard() {
             assert_eq!(op, r.1);
         }
 
-        let shard = Shard::<wal::State, wal::Op<i64, i64>>::load(
+        let (_, shard) = Shard::<wal::State, wal::Op<i64, i64>>::load(
             dir.clone(),
             name.clone(),
             shard_id,
             Arc::clone(&dlog_index),
             journal_limit,
+            batch_size as usize,
             nosync,
         )
         .unwrap();

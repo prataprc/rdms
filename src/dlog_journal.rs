@@ -191,7 +191,7 @@ where
             let mut iter = journals.iter().rev();
             loop {
                 match iter.next() {
-                    None => break index.load(SeqCst),
+                    None => break index.load(SeqCst) - 1,
                     Some(journal) => match journal.to_last_index() {
                         Some(last_index) => break last_index,
                         None => (),

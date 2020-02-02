@@ -186,12 +186,15 @@ where
             }
         }
 
+        let idx = index.load(SeqCst);
+
         journals.sort_by(|x, y| x.num.cmp(&y.num));
         let last_index = {
             let mut iter = journals.iter().rev();
             loop {
                 match iter.next() {
-                    None => break index.load(SeqCst) - 1,
+                    None if idx == 0 => break 0,
+                    None => break idx - 1,
                     Some(journal) => match journal.to_last_index() {
                         Some(last_index) => break last_index,
                         None => (),

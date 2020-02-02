@@ -151,7 +151,8 @@ where
         self
     }
 
-    /// Purge all journal files whose `last_index` is  <= `before`.
+    /// Purge all journal files whose `last_index` is  le/lt `before`. If
+    /// `before` is Bound::Unbounded all log files shall be purged.
     pub fn purge_till(&mut self, before: Bound<u64>) -> Result<Bound<u64>> {
         for thread in self.threads.iter() {
             thread.request(OpRequest::new_purge_till(before))?;

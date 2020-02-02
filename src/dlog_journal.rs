@@ -374,10 +374,16 @@ where
     }
 
     // return index or io::Error.
-    fn do_purge_till(&mut self, before: u64) -> Result<u64> {
+    fn do_purge_till(&mut self, before: Bound<u64>) -> Result<Bound<u64>> {
         for _ in 0..self.journals.len() {
-            match self.journals[0].to_last_index() {
-                Some(last_index) if last_index < before => {
+            match (self.journals[0].to_last_index(), before) {
+                (Some(li), Bound::Included(before)) if li <= before => {
+                    self.journals.remove(0).purge()?;
+                }
+                (Some(li), Bound::Excluded(before)) if li < before => {
+                    self.journals.remove(0).purge()?;
+                }
+                (Some(_), Bound::Unbounded) => {
                     self.journals.remove(0).purge()?;
                 }
                 _ => break,

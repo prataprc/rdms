@@ -52,6 +52,7 @@ use std::{
     convert::{self, TryInto},
     ffi, fmt, fs,
     hash::{BuildHasher, Hash, Hasher},
+    ops::Bound,
     result,
     sync::{atomic::AtomicU64, atomic::Ordering::SeqCst, Arc},
 };
@@ -151,7 +152,7 @@ where
     }
 
     /// Purge all journal files whose `last_index` is  <= `before`.
-    pub fn purge_till(&mut self, before: u64) -> Result<u64> {
+    pub fn purge_till(&mut self, before: Bound<u64>) -> Result<Bound<u64>> {
         for thread in self.threads.iter() {
             thread.request(OpRequest::new_purge_till(before))?;
         }

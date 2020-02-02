@@ -178,7 +178,7 @@ where
 
 pub(crate) enum OpRequest<T> {
     Op { op: T },
-    PurgeTill { before: u64 },
+    PurgeTill { before: Bound<u64> },
 }
 
 impl<T> OpRequest<T> {
@@ -186,7 +186,7 @@ impl<T> OpRequest<T> {
         OpRequest::Op { op }
     }
 
-    pub(crate) fn new_purge_till(before: u64) -> OpRequest<T> {
+    pub(crate) fn new_purge_till(before: Bound<u64>) -> OpRequest<T> {
         OpRequest::PurgeTill { before }
     }
 }
@@ -194,7 +194,7 @@ impl<T> OpRequest<T> {
 #[derive(PartialEq)]
 pub(crate) enum OpResponse {
     Index(u64),
-    Purged(u64),
+    Purged(Bound<u64>),
 }
 
 impl OpResponse {
@@ -202,7 +202,7 @@ impl OpResponse {
         OpResponse::Index(index)
     }
 
-    pub(crate) fn new_purged(index: u64) -> OpResponse {
+    pub(crate) fn new_purged(index: Bound<u64>) -> OpResponse {
         OpResponse::Purged(index)
     }
 }

@@ -134,7 +134,8 @@ fn test_wal() {
             validate_dlog1(dl, items.clone());
         }
 
-        let before = rng.gen::<u64>() % last_index;
+        let befr = rng.gen::<u64>() % last_index;
+        let before = Bound::Included(befr);
         wl.purge_till(before).unwrap();
 
         {
@@ -154,8 +155,8 @@ fn test_wal() {
                 .flatten()
                 .map(|journal| journal.to_last_index().unwrap_or(std::u64::MAX))
                 .collect();
-            println!("before:{} lis:{:?}", before, lis);
-            assert!(lis.into_iter().all(|x| x > before));
+            println!("before:{:?} lis:{:?}", before, lis);
+            assert!(lis.into_iter().all(|x| x > befr));
         }
 
         wl.close().unwrap();

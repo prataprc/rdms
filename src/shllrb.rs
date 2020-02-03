@@ -31,14 +31,14 @@ use log::{debug, error, info, warn};
 
 /// Periodic interval to manage auto-sharding. Refer to auto_shard() for
 /// more details.
-const SHARD_INTERVAL: time::Duration = time::Duration::from_secs(10);
+pub const SHARD_INTERVAL: time::Duration = time::Duration::from_secs(10);
 
 /// Periodic interval to retry API operation. Happens when a shard is not
 /// in Active state.
-const RETRY_INTERVAL: time::Duration = time::Duration::from_millis(10);
+pub const RETRY_INTERVAL: time::Duration = time::Duration::from_millis(10);
 
 /// Maximum number of entries in a shard, beyond which a shard shall be split.
-const DEFAULT_MAX_ENTRIES: usize = 1_000_000;
+pub const DEFAULT_MAX_ENTRIES: usize = 1_000_000;
 
 // ShardName format.
 #[derive(Clone)]
@@ -203,8 +203,8 @@ where
     max_shards: usize,
     max_entries: usize,
 
-    snapshot: Snapshot<K, V>,
     auto_shard: Option<rt::Thread<String, usize, ()>>,
+    snapshot: Snapshot<K, V>,
 }
 
 struct Snapshot<K, V>
@@ -247,8 +247,7 @@ where
         match self.auto_shard.take() {
             Some(auto_shard) => match auto_shard.close_wait() {
                 Err(err) => error!(
-                    target: "shllrb",
-                    "{:?}, auto-shard {:?}", self.name, err
+                    target: "shllrb", "{:?}, auto-shard {:?}", self.name, err
                 ),
                 Ok(_) => (),
             },
@@ -278,8 +277,9 @@ where
             interval: SHARD_INTERVAL,
             max_shards: 1,
             max_entries: DEFAULT_MAX_ENTRIES,
-            snapshot,
+
             auto_shard: None,
+            snapshot,
         }
     }
 }
@@ -296,15 +296,6 @@ where
         let mut index: ShLlrb<K, V> = Default::default();
         index.name = name.to_string();
         Box::new(index)
-    }
-
-    /// Applications can call this to log Information log for application
-    pub fn log(&self) {
-        info!(
-            target: "shllrb",
-            "{:?}, new sharded-llrb instance, with config {}",
-            self.name, self.to_config_string()
-        );
     }
 
     /// Configure Llrb for LSM, refer to Llrb:new_lsm() for more details.
@@ -338,20 +329,94 @@ where
         self
     }
 
-    fn try_init(&self) -> Result<()> {
-        let mut shards = self.as_shards()?;
-        if shards.len() == 0 {
-            let shard_name: ShardName = (self.name.clone(), 0).into();
-            let mut llrb = if self.lsm {
-                Llrb::new_lsm(shard_name.to_string())
-            } else {
-                Llrb::new(shard_name.to_string())
-            };
-            llrb.set_sticky(self.sticky).set_spinlatch(self.spin);
-            shards.push(Shard::new_active(llrb, Bound::Unbounded));
+    /// Configure periodic interval for auto-sharding.
+    pub fn set_interval(&mut self, interval: time::Duration) -> &mut ShLlrb<K, V>
+    where
+        K: 'static + Send,
+        V: 'static + Send,
+        <V as Diff>::D: Send,
+    {
+        self.auto_shard = match self.auto_shard.take() {
+            auto_shard @ Some(_) => auto_shard,
+            None if interval.as_secs() > 0 => {
+                self.interval = interval;
+                let index = unsafe { Box::from_raw(self as *mut Self as *mut ffi::c_void) };
+                Some(rt::Thread::new(move |rx| || auto_shard::<K, V>(index, rx)))
+            }
+            None => None,
+        };
+        self
+    }
+}
+
+/// Maintanence API
+impl<K, V> ShLlrb<K, V>
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+{
+    /// Return whether this index support lsm mode.
+    #[inline]
+    pub fn is_lsm(&self) -> bool {
+        self.lsm
+    }
+
+    /// Return whether this index is in sticky mode.
+    #[inline]
+    pub fn is_sticky(&self) -> bool {
+        self.sticky
+    }
+
+    /// Return the behaviour of spin-latch behaviour.
+    pub fn is_spin(&self) -> bool {
+        self.spin
+    }
+
+    /// Return number of entries in this index.
+    #[inline]
+    pub fn len(&self) -> Result<usize> {
+        let (shards, _) = self.lock_snapshot()?;
+
+        Ok(shards.iter().map(|shard| shard.as_index().len()).sum())
+    }
+
+    /// Identify this index. Applications can choose unique names while
+    /// creating Llrb indices.
+    #[inline]
+    pub fn to_name(&self) -> String {
+        self.name.clone()
+    }
+
+    /// Gather quick statistics from each shard and return the
+    /// consolidated statisics.
+    pub fn to_stats(&self) -> Result<LlrbStats> {
+        let (shards, _) = self.lock_snapshot()?;
+
+        let mut statss: Vec<LlrbStats> = vec![];
+        for shard in shards.iter() {
+            statss.push(shard.as_index().to_stats()?);
         }
 
-        Ok(())
+        let stats = statss.remove(0);
+        let mut stats = statss.into_iter().fold(stats, |stats, s| stats.merge(s));
+        stats.name = self.to_name();
+        Ok(stats)
+    }
+    /// Applications can call this to log Information log for application
+    pub fn log(&self) {
+        info!(
+            target: "shllrb",
+            "{:?}, new sharded-llrb instance, with config {}",
+            self.name, self.to_config_string()
+        );
+    }
+
+    /// Try to balance the underlying shards using splits and merges.
+    pub fn balance(&mut self) -> Result<usize> {
+        match &self.auto_shard {
+            Some(auto_shard) => Ok(auto_shard.request("balance".to_string())?),
+            None => Err(Error::UnInitialized(format!("shllrb, auto-sharding"))),
+        }
     }
 
     fn to_config_string(&self) -> String {
@@ -371,10 +436,36 @@ where
         ss.join("\n")
     }
 
+    fn as_shards(&self) -> Result<MutexGuard<Vec<Shard<K, V>>>> {
+        use crate::error::Error::ThreadFail;
+
+        self.snapshot
+            .shards
+            .lock()
+            .map_err(|e| ThreadFail(format!("shllrb: lock poisened, {:?}", e)))
+    }
+
+    fn try_init(&self) -> Result<()> {
+        let mut shards = self.as_shards()?;
+        if shards.len() == 0 {
+            let shard_name: ShardName = (self.name.clone(), 0).into();
+            let mut llrb = if self.lsm {
+                Llrb::new_lsm(shard_name.to_string())
+            } else {
+                Llrb::new(shard_name.to_string())
+            };
+            llrb.set_sticky(self.sticky).set_spinlatch(self.spin);
+            shards.push(Shard::new_active(llrb, Bound::Unbounded));
+        }
+
+        Ok(())
+    }
+
     fn as_mut_ptr_snapshot(&self) -> *mut Snapshot<K, V> {
         &self.snapshot as *const Snapshot<K, V> as *mut Snapshot<K, V>
     }
 
+    // Return only if shards are locked and all shards are in active state.
     fn lock_snapshot(&self) -> Result<(MutexGuard<Vec<Shard<K, V>>>, &mut Snapshot<K, V>)> {
         self.try_init()?;
 
@@ -383,7 +474,7 @@ where
             let mut shards = self.as_shards()?;
             // make sure that all shards are in Active state.
             for shard in shards.iter_mut() {
-                if shard.as_mut_inner().is_none() {
+                if shard.to_index().is_none() {
                     mem::drop(shards);
                     thread::sleep(RETRY_INTERVAL);
                     continue 'outer;
@@ -394,6 +485,9 @@ where
         }
     }
 
+    // A global lock is similar to lock_snapshot(), that along with the guarantee
+    // that there wont be any concurrent reader or writer threads access the
+    // shard.
     fn to_global_lock(&self) -> Result<GlobalLock<K, V>> {
         use crate::error::Error::ThreadFail;
 
@@ -404,18 +498,18 @@ where
 
         let mut readers = vec![];
         for rd in snapshot.rdrefns.iter() {
-            readers.push(
-                rd.lock()
-                    .map_err(|err| ThreadFail(format!("shllrb reader lock poisened, {:?}", err)))?,
-            )
+            let r = rd
+                .lock()
+                .map_err(|e| ThreadFail(format!("shllrb rd poisened, {:?}", e)))?;
+            readers.push(r);
         }
 
         let mut writers = vec![];
         for wt in snapshot.wtrefns.iter() {
-            writers.push(
-                wt.lock()
-                    .map_err(|err| ThreadFail(format!("shllrb writer lock poisened, {:?}", err)))?,
-            )
+            let w = wt
+                .lock()
+                .map_err(|e| ThreadFail(format!("shllrb wt poisened, {:?}", e)))?;
+            writers.push(w);
         }
 
         Ok(GlobalLock {
@@ -425,6 +519,11 @@ where
         })
     }
 
+    // reader and writer threads migh exit as part of application's ongoing
+    // logic. In such cases, the main instance of ShLlrb should be able clean
+    // up itself with dead readers and writers.
+    //
+    // Return (no-of-readers-pruned, no-of-writers-pruned, no-of-active-refs)
     fn prune_rw(&mut self) -> Result<(usize, usize, usize)> {
         loop {
             let (_shards, snapshot) = self.lock_snapshot()?;
@@ -449,7 +548,8 @@ where
                 snapshot.wtrefns.remove(*off);
             }
 
-            let active = self.snapshot.rdrefns.len() + self.snapshot.wtrefns.len();
+            let mut active = self.snapshot.rdrefns.len();
+            active += self.snapshot.wtrefns.len();
             break Ok((roffs.len(), woffs.len(), active));
         }
     }
@@ -461,36 +561,13 @@ where
     V: 'static + Send + Clone + Diff + Footprint,
     <V as Diff>::D: Send,
 {
-    /// Configure periodic interval for auto-sharding.
-    pub fn set_interval(&mut self, interval: time::Duration) -> &mut ShLlrb<K, V> {
-        self.auto_shard = match self.auto_shard.take() {
-            Some(auto_shard) => Some(auto_shard),
-            None if interval.as_secs() > 0 => {
-                self.interval = interval;
-                let index = unsafe { Box::from_raw(self as *mut Self as *mut ffi::c_void) };
-                Some(rt::Thread::new(move |rx| || auto_shard::<K, V>(index, rx)))
-            }
-            None => None,
-        };
-        self
-    }
-
-    /// Try to balance the underlying shards using splits and merges.
-    pub fn balance(&mut self) -> Result<usize> {
-        match &self.auto_shard {
-            Some(auto_shard) => Ok(auto_shard.request("balance".to_string())?),
-            None => Err(Error::UnInitialized(format!("shllrb, auto-sharding"))),
-        }
-    }
-
     pub fn do_balance(&mut self) -> Result<usize> {
         let old_count = {
             let (shards, _) = self.lock_snapshot()?; // should be a quick call
             shards.len()
         };
 
-        let mut n = self.try_merging_shards()?;
-        n += self.try_spliting_shards()?;
+        let n = self.try_merging_shards()? + self.try_spliting_shards()?;
 
         let new_count = {
             let (shards, _) = self.lock_snapshot()?; // should be a quick call
@@ -514,17 +591,16 @@ where
     fn try_merging_shards(&mut self) -> Result<usize> {
         // phase-1 mark shards that are going to be affected by the merge.
         let mut merges = {
+            let n = (self.max_shards / 5) + 1; // TODO: no magic formula
             let mut gl = self.to_global_lock()?;
             if gl.shards.len() >= self.max_shards && gl.shards.len() > 1 {
-                gl.start_merges(MergeOrder::new(&gl.shards).filter().take(
-                    (self.max_shards / 5) + 1, // TODO: no magic formula
-                ))
+                gl.start_merges(MergeOrder::new(&gl.shards).filter().take(n))
             } else {
-                vec![]
+                return Ok(0);
             }
         };
         // MergeOrder shall order by entries, now re-order by offset.
-        merges.sort_by(|x, y| (x.0).0.cmp(&(y.0).0));
+        merges.sort_by(|x, y| x[0].0.cmp(&y[0].0));
         merges.reverse(); // in descending order of offset
         let n_merges = merges.len();
         if n_merges > 0 {
@@ -535,7 +611,8 @@ where
 
         // phase-2 spawn threads to commit smaller shards into left/right shard
         let mut threads = vec![];
-        for ((c_off, curr), (o_off, other)) in merges.into_iter() {
+        for item in merges.into_iter() {
+            let [(c_off, curr), (o_off, other)] = item;
             // println!("merge at ({}, {})", c_off, o_off);
             threads.push(thread::spawn(move || {
                 do_merge((c_off, curr), (o_off, other))
@@ -643,72 +720,6 @@ where
                     .join("; "),
             ))
         }
-    }
-}
-
-/// Maintenance API.
-impl<K, V> ShLlrb<K, V>
-where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
-{
-    /// Return whether this index support lsm mode.
-    #[inline]
-    pub fn is_lsm(&self) -> bool {
-        self.lsm
-    }
-
-    /// Return whether this index is in sticky mode.
-    #[inline]
-    pub fn is_sticky(&self) -> bool {
-        self.sticky
-    }
-
-    /// Return the behaviour of spin-latch behaviour.
-    pub fn is_spin(&self) -> bool {
-        self.spin
-    }
-
-    /// Return number of entries in this index.
-    #[inline]
-    pub fn len(&self) -> Result<usize> {
-        let (shards, _) = self.lock_snapshot()?;
-
-        Ok(shards
-            .iter()
-            .map(|shard| shard.as_inner().unwrap().index.len())
-            .sum())
-    }
-
-    /// Identify this index. Applications can choose unique names while
-    /// creating Llrb indices.
-    #[inline]
-    pub fn to_name(&self) -> String {
-        self.name.clone()
-    }
-
-    /// Gather quick statistics from each shard and return the
-    /// consolidated statisics.
-    pub fn to_stats(&self) -> Result<LlrbStats> {
-        let (shards, _) = self.lock_snapshot()?;
-        let mut statss: Vec<LlrbStats> = vec![];
-        for shard in shards.iter() {
-            statss.push(shard.as_inner().unwrap().index.to_stats()?);
-        }
-
-        let stats = statss.remove(0);
-        let mut stats = statss.into_iter().fold(stats, |stats, s| stats.merge(s));
-        stats.name = self.to_name();
-        Ok(stats)
-    }
-
-    fn as_shards(&self) -> Result<MutexGuard<Vec<Shard<K, V>>>> {
-        use crate::error::Error::ThreadFail;
-
-        self.snapshot
-            .shards
-            .lock()
-            .map_err(|err| ThreadFail(format!("shllrb shard lock poisened, {:?}", err)))
     }
 }
 
@@ -833,7 +844,7 @@ where
         let readers = {
             let mut readers = vec![];
             for shard in shards.iter_mut() {
-                readers.push(shard.as_mut_inner().unwrap().to_reader()?);
+                readers.push(shard.to_reader()?);
             }
             Arc::new(Mutex::new(readers))
         };
@@ -849,7 +860,7 @@ where
         let writers = {
             let mut writers = vec![];
             for shard in shards.iter_mut() {
-                writers.push(shard.as_mut_inner().unwrap().to_writer()?);
+                writers.push(shard.to_writer()?);
             }
             Arc::new(Mutex::new(writers))
         };
@@ -866,10 +877,8 @@ where
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
         let mut gl = self.to_global_lock()?;
-        let hks = gl
-            .shards
-            .iter()
-            .map(|shard| shard.as_inner().unwrap().high_key.clone());
+
+        let hks = gl.shards.iter().map(|shard| shard.to_high_key());
 
         let (_, ranges) =
             hks.into_iter()
@@ -889,7 +898,7 @@ where
         let iters = scanner.range_scans(ranges)?;
         assert_eq!(iters.len(), gl.shards.len());
         for (i, iter) in iters.into_iter().enumerate() {
-            let index = &mut gl.shards[i].as_mut_inner().unwrap().index;
+            let index = &mut gl.shards[i].as_mut_index();
             index.commit(
                 core::CommitIter::new(CommitWrapper::new(iter), within.clone()),
                 |meta| metacb(meta),
@@ -909,9 +918,7 @@ where
         let mut count = 0;
         for shard in shards.iter_mut() {
             count += shard
-                .as_mut_inner()
-                .unwrap()
-                .index
+                .as_mut_index()
                 .compact(cutoff.clone(), |meta| metacb(meta))?
         }
         info!(target: "shllrb", "{:?}, compacted {} items", self.name, count);
@@ -949,9 +956,10 @@ where
 {
     fn footprint(&self) -> Result<isize> {
         let (shards, _) = self.lock_snapshot()?;
+
         let mut footprint = 0;
         for shard in shards.iter() {
-            footprint += shard.as_inner().unwrap().index.footprint()?;
+            footprint += shard.as_index().footprint()?;
         }
         Ok(footprint)
     }
@@ -1006,8 +1014,7 @@ where
         };
 
         for shard in mut_shards {
-            iter.iters
-                .push(shard.as_mut_inner().unwrap().index.scan(within.clone())?);
+            iter.iters.push(shard.as_mut_index().scan(within.clone())?);
         }
         Ok(iter)
     }
@@ -1027,7 +1034,7 @@ where
         let mut iters = vec![];
         for shard in mut_shards {
             iters.push(Box::new(CommitIter::new(
-                vec![shard.as_mut_inner().unwrap().index.scan(within.clone())?],
+                vec![shard.as_mut_index().scan(within.clone())?],
                 Arc::clone(&shards),
             )) as IndexIter<K, V>)
         }
@@ -1056,9 +1063,7 @@ where
             for shard in mut_shards.iter_mut() {
                 iter.iters.push(
                     shard
-                        .as_mut_inner()
-                        .unwrap()
-                        .index
+                        .as_mut_index()
                         .range_scans(vec![range.clone()], within.clone())?
                         .remove(0),
                 );
@@ -1088,13 +1093,13 @@ where
         let (mut shards, _) = self.lock_snapshot()?;
         let mut statss = vec![];
         for shard in shards.iter_mut() {
-            statss.push(shard.as_mut_inner().unwrap().index.validate()?)
+            statss.push(shard.as_mut_index().validate()?)
         }
         let mut within = (Bound::<K>::Unbounded, Bound::<K>::Unbounded);
         for shard in shards.iter_mut() {
             within.0 = high_key_to_low_key(&within.1);
-            within.1 = shard.as_inner().unwrap().high_key.clone();
-            let index = &mut shard.as_mut_inner().unwrap().index;
+            within.1 = shard.to_high_key();
+            let index = &mut shard.as_mut_index();
             index.first().map(|f| assert!(within.contains(f.as_key())));
             index.last().map(|l| assert!(within.contains(l.as_key())));
         }
@@ -1482,18 +1487,16 @@ where
     K: Ord + Clone,
     V: Clone + Diff,
 {
-    Active(InnerShard<K, V>),
-    Merge(Bound<K>), // highkey
-    Split(Bound<K>), // highkey
-}
-
-struct InnerShard<K, V>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-{
-    high_key: Bound<K>,
-    index: Box<Llrb<K, V>>,
+    Active {
+        index: Box<Llrb<K, V>>,
+        high_key: Bound<K>,
+    },
+    Merge {
+        high_key: Bound<K>,
+    },
+    Split {
+        high_key: Bound<K>,
+    },
 }
 
 impl<K, V> Shard<K, V>
@@ -1502,15 +1505,15 @@ where
     V: Clone + Diff,
 {
     fn new_active(index: Box<Llrb<K, V>>, high_key: Bound<K>) -> Shard<K, V> {
-        Shard::Active(InnerShard { index, high_key })
+        Shard::Active { index, high_key }
     }
 
     fn new_merge(high_key: Bound<K>) -> Shard<K, V> {
-        Shard::Merge(high_key)
+        Shard::Merge { high_key }
     }
 
     fn new_split(high_key: Bound<K>) -> Shard<K, V> {
-        Shard::Split(high_key)
+        Shard::Split { high_key }
     }
 }
 
@@ -1519,34 +1522,71 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    fn as_inner(&self) -> Option<&InnerShard<K, V>> {
+    fn as_index(&self) -> &Llrb<K, V> {
         match self {
-            Shard::Active(inner) => Some(inner),
-            Shard::Merge(_) | Shard::Split(_) => None,
+            Shard::Active { index, .. } => index.as_ref(),
+            Shard::Merge { .. } | Shard::Split { .. } => unreachable!(),
         }
     }
 
-    fn as_mut_inner(&mut self) -> Option<&mut InnerShard<K, V>> {
+    fn as_mut_index(&mut self) -> &mut Llrb<K, V> {
         match self {
-            Shard::Active(inner) => Some(inner),
-            Shard::Merge(_) | Shard::Split(_) => None,
+            Shard::Active { index, .. } => index.as_mut(),
+            Shard::Merge { .. } | Shard::Split { .. } => unreachable!(),
         }
     }
-}
 
-impl<K, V> InnerShard<K, V>
-where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
-{
-    fn to_reader(&mut self) -> Result<ShardReader<K, V>> {
-        let r = self.index.to_reader()?;
-        Ok(ShardReader::new_active(self.high_key.clone(), r))
+    fn to_index(&self) -> Option<&Llrb<K, V>> {
+        match self {
+            Shard::Active { index, .. } => Some(index.as_ref()),
+            Shard::Merge { .. } | Shard::Split { .. } => None,
+        }
     }
 
-    fn to_writer(&mut self) -> Result<ShardWriter<K, V>> {
-        let w = self.index.to_writer()?;
-        Ok(ShardWriter::new_active(self.high_key.clone(), w))
+    fn to_high_key(&self) -> Bound<K> {
+        match self {
+            Shard::Active { high_key, .. } => high_key,
+            Shard::Merge { high_key } => high_key,
+            Shard::Split { high_key } => high_key,
+        }
+        .clone()
+    }
+
+    fn set_high_key(&mut self, hk: Bound<K>) {
+        let high_key = match self {
+            Shard::Active { high_key, .. } => high_key,
+            Shard::Merge { high_key } => high_key,
+            Shard::Split { high_key } => high_key,
+        };
+        *high_key = hk;
+    }
+
+    fn to_reader(&mut self) -> Result<ShardReader<K, V>>
+    where
+        K: Footprint,
+        V: Footprint,
+    {
+        match self {
+            Shard::Active { index, high_key } => {
+                let r = index.to_reader()?;
+                Ok(ShardReader::new_active(high_key.clone(), r))
+            }
+            Shard::Merge { .. } | Shard::Split { .. } => unreachable!(),
+        }
+    }
+
+    fn to_writer(&mut self) -> Result<ShardWriter<K, V>>
+    where
+        K: Footprint,
+        V: Footprint,
+    {
+        match self {
+            Shard::Active { index, high_key } => {
+                let w = index.to_writer()?;
+                Ok(ShardWriter::new_active(high_key.clone(), w))
+            }
+            Shard::Merge { .. } | Shard::Split { .. } => unreachable!(),
+        }
     }
 }
 
@@ -1769,17 +1809,17 @@ where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
 {
-    fn right_merge(&mut self, off: usize) -> ((usize, Shard<K, V>), (usize, Shard<K, V>)) {
+    fn right_merge(&mut self, off: usize) -> [(usize, Shard<K, V>); 2] {
         if off >= (self.shards.len() - 1) {
             unreachable!()
         }
 
         let curr = self.shards.remove(off);
-        let curr_hk = curr.as_inner().unwrap().high_key.clone();
+        let curr_hk = curr.to_high_key();
         self.shards.insert(off, Shard::new_merge(curr_hk.clone()));
 
         let right = self.shards.remove(off + 1);
-        let right_hk = right.as_inner().unwrap().high_key.clone();
+        let right_hk = right.to_high_key();
         self.shards
             .insert(off + 1, Shard::new_merge(right_hk.clone()));
 
@@ -1797,20 +1837,20 @@ where
             ws.insert(off + 1, ShardWriter::new_merge(right_hk.clone()));
         }
 
-        ((off, curr), (off + 1, right))
+        [(off, curr), (off + 1, right)]
     }
 
-    fn left_merge(&mut self, off: usize) -> ((usize, Shard<K, V>), (usize, Shard<K, V>)) {
+    fn left_merge(&mut self, off: usize) -> [(usize, Shard<K, V>); 2] {
         if off <= 0 {
             unreachable!()
         }
 
         let curr = self.shards.remove(off);
-        let curr_hk = curr.as_inner().unwrap().high_key.clone();
+        let curr_hk = curr.to_high_key();
         self.shards.insert(off, Shard::new_merge(curr_hk.clone()));
 
         let left = self.shards.remove(off - 1);
-        let left_hk = left.as_inner().unwrap().high_key.clone();
+        let left_hk = left.to_high_key();
         self.shards
             .insert(off - 1, Shard::new_merge(left_hk.clone()));
 
@@ -1828,13 +1868,10 @@ where
             ws.insert(off - 1, ShardWriter::new_merge(left_hk.clone()));
         }
 
-        ((off, curr), (off - 1, left))
+        [(off, curr), (off - 1, left)]
     }
 
-    fn start_merges(
-        &mut self,
-        offsets: Vec<usize>,
-    ) -> Vec<((usize, Shard<K, V>), (usize, Shard<K, V>))> {
+    fn start_merges(&mut self, offsets: Vec<usize>) -> Vec<[(usize, Shard<K, V>); 2]> {
         if self.shards.len() < 2 {
             unreachable!()
         }
@@ -1844,18 +1881,18 @@ where
             let (left, curr, right) = match off {
                 0 => (
                     None,
-                    self.shards[off].as_inner(),
-                    self.shards[off + 1].as_inner(),
+                    self.shards[off].to_index(),
+                    self.shards[off + 1].to_index(),
                 ),
                 off if off == self.shards.len() - 1 => (
-                    self.shards[off - 1].as_inner(),
-                    self.shards[off].as_inner(),
+                    self.shards[off - 1].to_index(),
+                    self.shards[off].to_index(),
                     None,
                 ),
                 off => (
-                    self.shards[off - 1].as_inner(),
-                    self.shards[off].as_inner(),
-                    self.shards[off + 1].as_inner(),
+                    self.shards[off - 1].to_index(),
+                    self.shards[off].to_index(),
+                    self.shards[off + 1].to_index(),
                 ),
             };
             match (left, curr, right) {
@@ -1863,7 +1900,7 @@ where
                 (None, Some(_), None) => continue,
                 (None, Some(_), Some(_)) => merges.push(self.right_merge(off)),
                 (Some(_), Some(_), None) => merges.push(self.left_merge(off)),
-                (Some(left), Some(_), Some(right)) if left.index.len() < right.index.len() => {
+                (Some(l), Some(_), Some(r)) if l.len() < r.len() => {
                     merges.push(self.left_merge(off))
                 }
                 (Some(_), Some(_), Some(_)) => merges.push(self.right_merge(off)),
@@ -1874,7 +1911,7 @@ where
 
     fn split(&mut self, off: usize) -> (usize, Shard<K, V>) {
         let curr = self.shards.remove(off);
-        let hk = curr.as_inner().unwrap().high_key.clone();
+        let hk = curr.to_high_key();
         self.shards.insert(off, Shard::new_split(hk.clone()));
 
         for rs in self.readers.iter_mut() {
@@ -1901,8 +1938,8 @@ where
         curr_hk: Option<Bound<K>>,
     ) -> Result<usize> {
         // validation
-        let last_inner = new_shards.last_mut().unwrap().as_mut_inner().unwrap();
-        let hk = last_inner.high_key.clone();
+        let last_shard = new_shards.last_mut().unwrap();
+        let hk = last_shard.to_high_key();
         for rs in self.readers.iter_mut() {
             match rs.remove(off) {
                 ShardReader::Merge { high_key, .. } | ShardReader::Split { high_key, .. } => {
@@ -1920,23 +1957,23 @@ where
             }
         }
         match self.shards.remove(off) {
-            Shard::Merge(high_key) | Shard::Split(high_key) => {
+            Shard::Merge { high_key } | Shard::Split { high_key } => {
                 assert!(hk == high_key);
             }
-            Shard::Active(_) => unreachable!(),
+            Shard::Active { .. } => unreachable!(),
         }
-        last_inner.high_key = match curr_hk {
+        last_shard.set_high_key(match curr_hk {
             Some(hk) => hk,
             None => hk,
-        };
+        });
         // ^ validation ok
 
         for mut shard in new_shards.into_iter() {
             for rs in self.readers.iter_mut() {
-                rs.insert(off, shard.as_mut_inner().unwrap().to_reader()?);
+                rs.insert(off, shard.to_reader()?);
             }
             for ws in self.writers.iter_mut() {
-                ws.insert(off, shard.as_mut_inner().unwrap().to_writer()?);
+                ws.insert(off, shard.to_writer()?);
             }
             self.shards.insert(off, shard);
             off += 1;
@@ -2053,7 +2090,7 @@ where
     V: Clone + Diff + Footprint,
 {
     let (curr_index, curr_hk) = match curr {
-        Shard::Active(InnerShard { index, high_key }) => (index, high_key),
+        Shard::Active { index, high_key } => (index, high_key),
         _ => unreachable!(),
     };
     let curr_name = curr_index.to_name()?;
@@ -2064,19 +2101,19 @@ where
         target: "shllrb", "{} commiting shard\n{}", curr_name, curr_stats
     );
 
-    let other_index = &mut other.as_mut_inner().unwrap().index;
+    let other_index = &mut other.as_mut_index();
     match other_index.commit(iter, |meta| meta) {
         Ok(()) if c_off > o_off => {
             info!(
                 target: "shllrb", "{} left merge\n{}",
-                other_index.to_name()?, other_index.to_stats()?
+                other_index.to_name(), other_index.to_stats()?
             );
             Ok((c_off, o_off, Some(curr_hk), other))
         }
         Ok(()) => {
             info!(
                 target: "shllrb", "{} right merge\n{}",
-                other_index.to_name()?, other_index.to_stats()?
+                other_index.to_name(), other_index.to_stats()?
             );
             Ok((c_off, o_off, None, other))
         }
@@ -2084,7 +2121,7 @@ where
             error!(
                 target: "shllrb",
                 "{}, error merging {} index: {:?}",
-                other_index.to_name()?, curr_name, err
+                other_index.to_name(), curr_name, err
             );
             Err(err)
         }
@@ -2104,7 +2141,7 @@ where
     let n2: ShardName = (name.clone(), off + 1).into();
 
     let (curr_index, high_key) = match curr {
-        Shard::Active(InnerShard { high_key, index }) => (index, high_key),
+        Shard::Active { high_key, index } => (index, high_key),
         _ => unreachable!(),
     };
 
@@ -2147,7 +2184,7 @@ impl MergeOrder {
             shards
                 .iter()
                 .enumerate()
-                .map(|(off, shard)| (off, shard.as_inner().unwrap().index.len()))
+                .map(|(off, shard)| (off, shard.as_index().len()))
                 .collect(),
         );
         mo.asc_order(); // order by length
@@ -2192,7 +2229,7 @@ impl SplitOrder {
             shards
                 .iter()
                 .enumerate()
-                .map(|(off, shard)| (off, shard.as_inner().unwrap().index.len()))
+                .map(|(off, shard)| (off, shard.as_index().len()))
                 .collect(),
         );
         so.dsc_order();

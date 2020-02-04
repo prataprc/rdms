@@ -138,6 +138,32 @@ where
     partitions
 }
 
+pub(crate) fn high_keys_to_ranges<K>(high_keys: Vec<Bound<K>>) -> Vec<(Bound<K>, Bound<K>)>
+where
+    K: Clone,
+{
+    let mut ranges = vec![];
+    let mut low_key = Bound::<K>::Unbounded;
+    for high_key in high_keys.into_iter() {
+        let lk = high_key_to_low_key(&high_key);
+        ranges.push((low_key, high_key));
+        low_key = lk;
+    }
+
+    ranges
+}
+
+pub(crate) fn high_key_to_low_key<K>(hk: &Bound<K>) -> Bound<K>
+where
+    K: Clone,
+{
+    match hk {
+        Bound::Unbounded => Bound::Unbounded,
+        Bound::Excluded(hk) => Bound::Included(hk.clone()),
+        _ => unreachable!(),
+    }
+}
+
 #[cfg(test)]
 #[path = "util_test.rs"]
 mod util_test;

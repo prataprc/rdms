@@ -26,6 +26,7 @@ use crate::{
     scans::CommitWrapper,
     thread as rt,
     types::Empty,
+    util,
 };
 use log::{debug, error, info, warn};
 
@@ -591,10 +592,11 @@ where
     fn try_merging_shards(&mut self) -> Result<usize> {
         // phase-1 mark shards that are going to be affected by the merge.
         let mut merges = {
-            let n = (self.max_shards / 5) + 1; // TODO: no magic formula
             let mut gl = self.to_global_lock()?;
+
+            let n = (self.max_shards / 5) + 1; // TODO: no magic formula
             if gl.shards.len() >= self.max_shards && gl.shards.len() > 1 {
-                gl.start_merges(MergeOrder::new(&gl.shards).filter().take(n))
+                gl.mark_merges(MergeOrder::new(&gl.shards).filter().take(n))
             } else {
                 return Ok(0);
             }
@@ -625,15 +627,15 @@ where
             match t.join() {
                 Ok(Ok((c_off, o_off, curr_hk, other))) => {
                     let mut gl = self.to_global_lock()?;
-                    gl.insert_active(o_off, vec![other], curr_hk)
-                        .unwrap_or_else(|err| {
-                            errs.push(err);
-                            0
-                        });
-                    gl.remove_shard(c_off).unwrap_or_else(|err| {
-                        errs.push(err);
-                        0
-                    });
+
+                    match gl.insert_active(o_off, vec![other], curr_hk) {
+                        Ok(_) => (),
+                        Err(err) => errs.push(err),
+                    }
+                    match gl.remove_shard(c_off) {
+                        Err(err) => errs.push(err),
+                        Ok(_) => (),
+                    }
                 }
                 Ok(Err(err)) => {
                     error!(target: "shllrb", "merge: {:?}", err);
@@ -645,6 +647,7 @@ where
                 }
             }
         }
+
         // return
         if errs.len() == 0 {
             Ok(n_merges)
@@ -662,10 +665,11 @@ where
         // phase-1 mark shards that will be affected by the split.
         let mut splits = {
             let mut gl = self.to_global_lock()?;
+
+            let n = self.max_shards - gl.shards.len(); // TODO: no magic formula
             if gl.shards.len() < self.max_shards {
-                gl.start_splits(SplitOrder::new(&gl.shards).filter().take(
-                    self.max_shards - gl.shards.len(), // TODO: no magic formula
-                ))
+                let offsets = SplitOrder::new(&gl.shards).filter().take(n);
+                offsets.into_iter().map(|off| gl.mark_split(off)).collect()
             } else {
                 vec![]
             }
@@ -693,11 +697,11 @@ where
             match t.join() {
                 Ok(Ok((off, one, two))) => {
                     let mut gl = self.to_global_lock()?;
-                    gl.insert_active(off, vec![one, two], None)
-                        .unwrap_or_else(|err| {
-                            errs.push(err);
-                            0
-                        });
+
+                    match gl.insert_active(off, vec![one, two], None) {
+                        Ok(_) => (),
+                        Err(err) => errs.push(err),
+                    }
                 }
                 Ok(Err(err)) => {
                     error!(target: "shllrb", "split: {:?}", err);
@@ -709,6 +713,7 @@ where
                 }
             }
         }
+
         // return
         if errs.len() == 0 {
             Ok(n_splits)
@@ -825,6 +830,7 @@ where
     #[inline]
     fn set_seqno(&mut self, seqno: u64) -> Result<()> {
         let (_shards, snapshot) = self.lock_snapshot()?;
+
         let n = snapshot.rdrefns.len() + snapshot.wtrefns.len();
         if n > 0 {
             panic!(
@@ -838,7 +844,6 @@ where
     }
 
     fn to_reader(&mut self) -> Result<Self::R> {
-        let name = self.name.clone();
         let (mut shards, snapshot) = self.lock_snapshot()?;
 
         let readers = {
@@ -850,11 +855,11 @@ where
         };
         let id = snapshot.rdrefns.len();
         snapshot.rdrefns.push(Arc::clone(&readers));
-        Ok(ShllrbReader::new(name, id, readers))
+
+        Ok(ShllrbReader::new(self.name.clone(), id, readers))
     }
 
     fn to_writer(&mut self) -> Result<Self::W> {
-        let name = self.name.clone();
         let (mut shards, snapshot) = self.lock_snapshot()?;
 
         let writers = {
@@ -865,9 +870,10 @@ where
             Arc::new(Mutex::new(writers))
         };
         let id = snapshot.wtrefns.len();
-        snapshot.wtrefns.push(Arc::clone(&writers));
         let seqno = Arc::clone(&snapshot.root_seqno);
-        Ok(ShllrbWriter::new(name, id, seqno, writers))
+        snapshot.wtrefns.push(Arc::clone(&writers));
+
+        Ok(ShllrbWriter::new(self.name.clone(), id, seqno, writers))
     }
 
     // holds global lock. no other operations are allowed.
@@ -878,19 +884,16 @@ where
     {
         let mut gl = self.to_global_lock()?;
 
-        let hks = gl.shards.iter().map(|shard| shard.to_high_key());
-
-        let (_, ranges) =
-            hks.into_iter()
-                .fold((Bound::Unbounded, vec![]), |(low_key, mut ranges), hk| {
-                    ranges.push((low_key, hk.clone()));
-                    (high_key_to_low_key(&hk), ranges)
-                });
+        let ranges = util::high_keys_to_ranges(
+            gl.shards
+                .iter()
+                .map(|s| s.to_high_key())
+                .collect::<Vec<Bound<K>>>(),
+        );
 
         warn!(
             target: "shllrb",
-            "{:?}, commit started (blocks all other index meta-ops) ...",
-            self.name,
+            "{:?}, commit started (blocks index meta-ops) ...", self.name,
         );
 
         // println!("num ranges {}", ranges.len());
@@ -915,6 +918,7 @@ where
         F: Fn(Vec<Vec<u8>>) -> Vec<u8>,
     {
         let (mut shards, _) = self.lock_snapshot()?;
+
         let mut count = 0;
         for shard in shards.iter_mut() {
             count += shard
@@ -925,15 +929,17 @@ where
         Ok(count)
     }
 
+    // to be called only after all other readers and writers exit.
     fn close(mut self) -> Result<()> {
         match self.auto_shard.take() {
             Some(auto_shard) => auto_shard.close_wait()?,
             None => (),
         }
-        // TODO: close all other threads.
+
         Ok(())
     }
 
+    // to be called only after all other readers and writers exit.
     fn purge(self) -> Result<()> {
         self.close()
     }
@@ -1097,7 +1103,7 @@ where
         }
         let mut within = (Bound::<K>::Unbounded, Bound::<K>::Unbounded);
         for shard in shards.iter_mut() {
-            within.0 = high_key_to_low_key(&within.1);
+            within.0 = util::high_key_to_low_key(&within.1);
             within.1 = shard.to_high_key();
             let index = &mut shard.as_mut_index();
             index.first().map(|f| assert!(within.contains(f.as_key())));
@@ -1193,6 +1199,7 @@ where
     {
         'outer: loop {
             let mut readers = self.readers.lock().unwrap();
+
             match Self::find(key, readers.as_mut_slice()) {
                 (_, ShardReader::Active { r, .. }) => break r.get(key),
                 _ => {
@@ -1206,12 +1213,17 @@ where
 
     fn iter(&mut self) -> Result<IndexIter<K, V>> {
         'outer: loop {
-            let mut iter = Box::new(Iter::new(vec![], self.readers.lock().unwrap()));
+            let mut iter = {
+                let readers = self.readers.lock().unwrap();
+                Box::new(Iter::new(vec![], readers))
+            };
+
             let readers = unsafe {
                 (iter.readers.as_mut_slice() as *mut [ShardReader<K, V>])
                     .as_mut()
                     .unwrap()
             };
+
             for reader in readers {
                 match reader {
                     ShardReader::Active { r, .. } => iter.iters.push(r.iter()?),
@@ -1233,7 +1245,11 @@ where
         Q: 'a + Ord + ?Sized,
     {
         'outer: loop {
-            let mut iter = Box::new(Iter::new(vec![], self.readers.lock().unwrap()));
+            let mut iter = {
+                let readers = self.readers.lock().unwrap();
+                Box::new(Iter::new(vec![], readers))
+            };
+
             let readers = unsafe {
                 (iter.readers.as_mut_slice() as *mut [ShardReader<K, V>])
                     .as_mut()
@@ -1241,7 +1257,8 @@ where
             };
 
             let start = match range.start_bound() {
-                Bound::Excluded(lr) | Bound::Included(lr) => Self::find(lr, readers).0,
+                Bound::Excluded(lr) => Self::find(lr, readers).0,
+                Bound::Included(lr) => Self::find(lr, readers).0,
                 Bound::Unbounded => 0,
             };
 
@@ -1280,7 +1297,11 @@ where
         Q: 'a + Ord + ?Sized,
     {
         'outer: loop {
-            let mut iter = Box::new(Iter::new(vec![], self.readers.lock().unwrap()));
+            let mut iter = {
+                let readers = self.readers.lock().unwrap();
+                Box::new(Iter::new(vec![], readers))
+            };
+
             let readers = unsafe {
                 (iter.readers.as_mut_slice() as *mut [ShardReader<K, V>])
                     .as_mut()
@@ -1288,9 +1309,11 @@ where
             };
 
             let start = match range.start_bound() {
-                Bound::Excluded(lr) | Bound::Included(lr) => Self::find(lr, readers).0,
+                Bound::Excluded(lr) => Self::find(lr, readers).0,
+                Bound::Included(lr) => Self::find(lr, readers).0,
                 Bound::Unbounded => 0,
             };
+
             for reader in readers[start..].iter_mut() {
                 match reader {
                     ShardReader::Active {
@@ -1508,20 +1531,24 @@ where
         Shard::Active { index, high_key }
     }
 
-    fn new_merge(high_key: Bound<K>) -> Shard<K, V> {
-        Shard::Merge { high_key }
+    fn to_merge(&self) -> Shard<K, V> {
+        match self {
+            Shard::Active { high_key, .. } => Shard::Merge {
+                high_key: high_key.clone(),
+            },
+            Shard::Merge { .. } | Shard::Split { .. } => unreachable!(),
+        }
     }
 
-    fn new_split(high_key: Bound<K>) -> Shard<K, V> {
-        Shard::Split { high_key }
+    fn to_split(&self) -> Shard<K, V> {
+        match self {
+            Shard::Active { high_key, .. } => Shard::Split {
+                high_key: high_key.clone(),
+            },
+            Shard::Merge { .. } | Shard::Split { .. } => unreachable!(),
+        }
     }
-}
 
-impl<K, V> Shard<K, V>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-{
     fn as_index(&self) -> &Llrb<K, V> {
         match self {
             Shard::Active { index, .. } => index.as_ref(),
@@ -1616,12 +1643,33 @@ where
         ShardReader::Active { high_key, r }
     }
 
-    fn new_merge(high_key: Bound<K>) -> ShardReader<K, V> {
-        ShardReader::Merge { high_key }
+    fn to_merge(&self) -> ShardReader<K, V> {
+        match self {
+            ShardReader::Active { high_key, .. } => ShardReader::Merge {
+                high_key: high_key.clone(),
+            },
+            ShardReader::Split { .. } => unreachable!(),
+            ShardReader::Merge { .. } => unreachable!(),
+        }
     }
 
-    fn new_split(high_key: Bound<K>) -> ShardReader<K, V> {
-        ShardReader::Split { high_key }
+    fn to_split(&self) -> ShardReader<K, V> {
+        match self {
+            ShardReader::Active { high_key, .. } => ShardReader::Split {
+                high_key: high_key.clone(),
+            },
+            ShardReader::Split { .. } => unreachable!(),
+            ShardReader::Merge { .. } => unreachable!(),
+        }
+    }
+
+    fn to_high_key(&self) -> Bound<K> {
+        match self {
+            ShardReader::Active { high_key, .. } => high_key,
+            ShardReader::Merge { high_key } => high_key,
+            ShardReader::Split { high_key } => high_key,
+        }
+        .clone()
     }
 
     fn less<Q>(key: &Q, s: &ShardReader<K, V>) -> bool
@@ -1668,12 +1716,33 @@ where
         ShardWriter::Active { high_key, w }
     }
 
-    fn new_merge(high_key: Bound<K>) -> ShardWriter<K, V> {
-        ShardWriter::Merge { high_key }
+    fn to_merge(&self) -> ShardWriter<K, V> {
+        match self {
+            ShardWriter::Active { high_key, .. } => ShardWriter::Merge {
+                high_key: high_key.clone(),
+            },
+            ShardWriter::Split { .. } => unreachable!(),
+            ShardWriter::Merge { .. } => unreachable!(),
+        }
     }
 
-    fn new_split(high_key: Bound<K>) -> ShardWriter<K, V> {
-        ShardWriter::Split { high_key }
+    fn to_split(&self) -> ShardWriter<K, V> {
+        match self {
+            ShardWriter::Active { high_key, .. } => ShardWriter::Split {
+                high_key: high_key.clone(),
+            },
+            ShardWriter::Split { .. } => unreachable!(),
+            ShardWriter::Merge { .. } => unreachable!(),
+        }
+    }
+
+    fn to_high_key(&self) -> Bound<K> {
+        match self {
+            ShardWriter::Active { high_key, .. } => high_key,
+            ShardWriter::Merge { high_key } => high_key,
+            ShardWriter::Split { high_key } => high_key,
+        }
+        .clone()
     }
 
     fn less(key: &K, s: &ShardWriter<K, V>) -> bool {
@@ -1809,69 +1878,7 @@ where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
 {
-    fn right_merge(&mut self, off: usize) -> [(usize, Shard<K, V>); 2] {
-        if off >= (self.shards.len() - 1) {
-            unreachable!()
-        }
-
-        let curr = self.shards.remove(off);
-        let curr_hk = curr.to_high_key();
-        self.shards.insert(off, Shard::new_merge(curr_hk.clone()));
-
-        let right = self.shards.remove(off + 1);
-        let right_hk = right.to_high_key();
-        self.shards
-            .insert(off + 1, Shard::new_merge(right_hk.clone()));
-
-        for rs in self.readers.iter_mut() {
-            rs.remove(off);
-            rs.insert(off, ShardReader::new_merge(curr_hk.clone()));
-            rs.remove(off + 1);
-            rs.insert(off + 1, ShardReader::new_merge(right_hk.clone()));
-        }
-
-        for ws in self.writers.iter_mut() {
-            ws.remove(off);
-            ws.insert(off, ShardWriter::new_merge(curr_hk.clone()));
-            ws.remove(off + 1);
-            ws.insert(off + 1, ShardWriter::new_merge(right_hk.clone()));
-        }
-
-        [(off, curr), (off + 1, right)]
-    }
-
-    fn left_merge(&mut self, off: usize) -> [(usize, Shard<K, V>); 2] {
-        if off <= 0 {
-            unreachable!()
-        }
-
-        let curr = self.shards.remove(off);
-        let curr_hk = curr.to_high_key();
-        self.shards.insert(off, Shard::new_merge(curr_hk.clone()));
-
-        let left = self.shards.remove(off - 1);
-        let left_hk = left.to_high_key();
-        self.shards
-            .insert(off - 1, Shard::new_merge(left_hk.clone()));
-
-        for rs in self.readers.iter_mut() {
-            rs.remove(off);
-            rs.insert(off, ShardReader::new_merge(curr_hk.clone()));
-            rs.remove(off - 1);
-            rs.insert(off - 1, ShardReader::new_merge(left_hk.clone()));
-        }
-
-        for ws in self.writers.iter_mut() {
-            ws.remove(off);
-            ws.insert(off, ShardWriter::new_merge(curr_hk.clone()));
-            ws.remove(off - 1);
-            ws.insert(off - 1, ShardWriter::new_merge(left_hk.clone()));
-        }
-
-        [(off, curr), (off - 1, left)]
-    }
-
-    fn start_merges(&mut self, offsets: Vec<usize>) -> Vec<[(usize, Shard<K, V>); 2]> {
+    fn mark_merges(&mut self, offsets: Vec<usize>) -> Vec<[(usize, Shard<K, V>); 2]> {
         if self.shards.len() < 2 {
             unreachable!()
         }
@@ -1909,26 +1916,91 @@ where
         merges
     }
 
-    fn split(&mut self, off: usize) -> (usize, Shard<K, V>) {
+    fn right_merge(&mut self, off: usize) -> [(usize, Shard<K, V>); 2] {
+        if off >= (self.shards.len() - 1) {
+            unreachable!()
+        }
+
         let curr = self.shards.remove(off);
-        let hk = curr.to_high_key();
-        self.shards.insert(off, Shard::new_split(hk.clone()));
+        self.shards.insert(off, curr.to_merge());
+
+        let right = self.shards.remove(off + 1);
+        self.shards.insert(off + 1, right.to_merge());
 
         for rs in self.readers.iter_mut() {
-            rs.remove(off);
-            rs.insert(off, ShardReader::new_split(hk.clone()));
+            let r = rs.remove(off);
+            rs.insert(off, r.to_merge());
+            let r = rs.remove(off + 1);
+            rs.insert(off + 1, r.to_merge());
+
+            assert!(rs[off].to_high_key() == curr.to_high_key());
+            assert!(rs[off + 1].to_high_key() == right.to_high_key());
         }
 
         for ws in self.writers.iter_mut() {
-            ws.remove(off);
-            ws.insert(off, ShardWriter::new_split(hk.clone()));
+            let w = ws.remove(off);
+            ws.insert(off, w.to_merge());
+            let w = ws.remove(off + 1);
+            ws.insert(off + 1, w.to_merge());
+
+            assert!(ws[off].to_high_key() == curr.to_high_key());
+            assert!(ws[off + 1].to_high_key() == right.to_high_key());
+        }
+
+        [(off, curr), (off + 1, right)]
+    }
+
+    fn left_merge(&mut self, off: usize) -> [(usize, Shard<K, V>); 2] {
+        if off <= 0 {
+            unreachable!()
+        }
+
+        let curr = self.shards.remove(off);
+        self.shards.insert(off, curr.to_merge());
+
+        let left = self.shards.remove(off - 1);
+        self.shards.insert(off - 1, left.to_merge());
+
+        for rs in self.readers.iter_mut() {
+            let r = rs.remove(off);
+            rs.insert(off, r.to_merge());
+            let r = rs.remove(off - 1);
+            rs.insert(off - 1, r.to_merge());
+
+            assert!(rs[off].to_high_key() == curr.to_high_key());
+            assert!(rs[off + 1].to_high_key() == left.to_high_key());
+        }
+
+        for ws in self.writers.iter_mut() {
+            let w = ws.remove(off);
+            ws.insert(off, w.to_merge());
+            let w = ws.remove(off - 1);
+            ws.insert(off - 1, w.to_merge());
+
+            assert!(ws[off].to_high_key() == curr.to_high_key());
+            assert!(ws[off + 1].to_high_key() == left.to_high_key());
+        }
+
+        [(off, curr), (off - 1, left)]
+    }
+
+    fn mark_split(&mut self, off: usize) -> (usize, Shard<K, V>) {
+        let curr = self.shards.remove(off);
+        self.shards.insert(off, curr.to_split());
+
+        for rs in self.readers.iter_mut() {
+            let r = rs.remove(off);
+            rs.insert(off, r.to_split());
+            assert!(rs[off].to_high_key() == curr.to_high_key());
+        }
+
+        for ws in self.writers.iter_mut() {
+            let w = ws.remove(off);
+            ws.insert(off, w.to_split());
+            assert!(ws[off].to_high_key() == curr.to_high_key());
         }
 
         (off, curr)
-    }
-
-    fn start_splits(&mut self, offsets: Vec<usize>) -> Vec<(usize, Shard<K, V>)> {
-        offsets.into_iter().map(|off| self.split(off)).collect()
     }
 
     fn insert_active(
@@ -1942,30 +2014,24 @@ where
         let hk = last_shard.to_high_key();
         for rs in self.readers.iter_mut() {
             match rs.remove(off) {
-                ShardReader::Merge { high_key, .. } | ShardReader::Split { high_key, .. } => {
-                    assert!(hk == high_key);
-                }
+                ShardReader::Merge { high_key, .. } => assert!(hk == high_key),
+                ShardReader::Split { high_key, .. } => assert!(hk == high_key),
                 ShardReader::Active { .. } => unreachable!(),
             }
         }
         for ws in self.writers.iter_mut() {
             match ws.remove(off) {
-                ShardWriter::Merge { high_key, .. } | ShardWriter::Split { high_key, .. } => {
-                    assert!(hk == high_key);
-                }
+                ShardWriter::Merge { high_key, .. } => assert!(hk == high_key),
+                ShardWriter::Split { high_key, .. } => assert!(hk == high_key),
                 ShardWriter::Active { .. } => unreachable!(),
             }
         }
         match self.shards.remove(off) {
-            Shard::Merge { high_key } | Shard::Split { high_key } => {
-                assert!(hk == high_key);
-            }
+            Shard::Merge { high_key } => assert!(hk == high_key),
+            Shard::Split { high_key } => assert!(hk == high_key),
             Shard::Active { .. } => unreachable!(),
         }
-        last_shard.set_high_key(match curr_hk {
-            Some(hk) => hk,
-            None => hk,
-        });
+        last_shard.set_high_key(curr_hk.unwrap_or(hk));
         // ^ validation ok
 
         for mut shard in new_shards.into_iter() {
@@ -2070,17 +2136,6 @@ where
     }
 }
 
-fn high_key_to_low_key<K>(hk: &Bound<K>) -> Bound<K>
-where
-    K: Clone,
-{
-    match hk {
-        Bound::Unbounded => Bound::Unbounded,
-        Bound::Excluded(hk) => Bound::Included(hk.clone()),
-        _ => unreachable!(),
-    }
-}
-
 fn do_merge<K, V>(
     (c_off, curr): (usize, Shard<K, V>),
     (o_off, mut other): (usize, Shard<K, V>),
@@ -2095,33 +2150,31 @@ where
     };
     let curr_name = curr_index.to_name()?;
     let curr_stats = curr_index.to_stats()?;
-    let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
-    let iter = core::CommitIter::new(curr_index, within);
-    warn!(
-        target: "shllrb", "{} commiting shard\n{}", curr_name, curr_stats
-    );
+
+    let iter = {
+        let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
+        core::CommitIter::new(curr_index, within)
+    };
+    warn!(target: "shllrb", "{} commiting shard\n{}", curr_name, curr_stats);
 
     let other_index = &mut other.as_mut_index();
+    let o_name = other_index.to_name();
+    let o_stats = other_index.to_stats()?;
+
     match other_index.commit(iter, |meta| meta) {
         Ok(()) if c_off > o_off => {
-            info!(
-                target: "shllrb", "{} left merge\n{}",
-                other_index.to_name(), other_index.to_stats()?
-            );
+            info!(target: "shllrb", "{} left merge\n{}", o_name, o_stats);
             Ok((c_off, o_off, Some(curr_hk), other))
         }
         Ok(()) => {
-            info!(
-                target: "shllrb", "{} right merge\n{}",
-                other_index.to_name(), other_index.to_stats()?
-            );
+            info!(target: "shllrb", "{} right merge\n{}", o_name, o_stats);
             Ok((c_off, o_off, None, other))
         }
         Err(err) => {
             error!(
                 target: "shllrb",
                 "{}, error merging {} index: {:?}",
-                other_index.to_name(), curr_name, err
+                o_name, curr_name, err
             );
             Err(err)
         }
@@ -2145,34 +2198,34 @@ where
         _ => unreachable!(),
     };
 
-    let curr_name = curr_index.to_name()?;
-    debug!(
-        target: "llrb  ",
-        "{} split in progress ...\n{}", curr_name, curr_index.to_stats()?
-    );
+    let c_name = curr_index.to_name()?;
+    let c_stats = curr_index.to_stats()?;
+
+    debug!(target: "llrb  ", "{} split in progress ...\n{}", c_name, c_stats);
+
     match curr_index.split(n1.to_string(), n2.to_string()) {
         Ok((one, two)) => {
             let (s1, s2) = (one.to_stats()?, two.to_stats()?);
             info!(target: "llrb  ", "{} split-shard 1st half\n{}", n1, s1);
             info!(target: "llrb  ", "{} split-shard 2nd half\n{}", n2, s2);
 
-            let one = Shard::new_active(one, Bound::Excluded(two.first().unwrap().to_key()));
+            let one = {
+                let high_key = Bound::Excluded(two.first().unwrap().to_key());
+                Shard::new_active(one, high_key)
+            };
             let two = Shard::new_active(two, high_key);
 
             Ok((off, one, two))
         }
         Err(err) => {
-            error!(
-                target: "shllrb",
-                "{}, error splitting index {:?}", curr_name, err
-            );
+            error!(target: "shllrb", "{}, splitting index {:?}", c_name, err);
             Err(err)
         }
     }
 }
 
 #[derive(Clone)]
-struct MergeOrder(Vec<(usize, usize)>); // (offset, length)
+struct MergeOrder(Vec<(usize, usize)>); // (offset, entries)
 
 impl MergeOrder {
     fn new<'a, K, V>(shards: &MutexGuard<'a, Vec<Shard<K, V>>>) -> MergeOrder
@@ -2187,12 +2240,8 @@ impl MergeOrder {
                 .map(|(off, shard)| (off, shard.as_index().len()))
                 .collect(),
         );
-        mo.asc_order(); // order by length
+        mo.0.sort_by(|x, y| x.1.cmp(&y.1)); // ascending order
         mo
-    }
-
-    fn asc_order(&mut self) {
-        self.0.sort_by(|x, y| x.1.cmp(&y.1))
     }
 
     fn avg_len(&self) -> usize {
@@ -2217,7 +2266,7 @@ impl MergeOrder {
     }
 }
 
-struct SplitOrder(Vec<(usize, usize)>); // (offset, length)
+struct SplitOrder(Vec<(usize, usize)>); // (offset, entries)
 
 impl SplitOrder {
     fn new<'a, K, V>(shards: &MutexGuard<'a, Vec<Shard<K, V>>>) -> SplitOrder
@@ -2232,13 +2281,11 @@ impl SplitOrder {
                 .map(|(off, shard)| (off, shard.as_index().len()))
                 .collect(),
         );
-        so.dsc_order();
-        so
-    }
+        // dsc_order
+        so.0.sort_by(|x, y| x.1.cmp(&y.1));
+        so.0.reverse();
 
-    fn dsc_order(&mut self) {
-        self.0.sort_by(|x, y| x.1.cmp(&y.1));
-        self.0.reverse();
+        so
     }
 
     fn avg_len(&self) -> usize {

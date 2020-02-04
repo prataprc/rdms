@@ -86,7 +86,7 @@ pub mod nodisk;
 pub mod robt;
 mod robt_entry;
 mod robt_index;
-// pub mod shrobt; TODO
+pub mod shrobt;
 // pub mod dgm; TODO
 // pub mod backup; TODO
 

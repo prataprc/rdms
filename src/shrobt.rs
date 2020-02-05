@@ -190,8 +190,8 @@ where
         use toml::Value;
 
         let root_file: ffi::OsString = {
-            let mut rootp = path::PathBuf::from(dir);
             let rootf: RootFileName = name.to_string().into();
+            let mut rootp = path::PathBuf::from(dir);
             rootp.push(&rootf.0);
             rootp.into_os_string()
         };
@@ -203,7 +203,7 @@ where
             Value::Table(dict).to_string()
         };
 
-        let mut fd = util::open_file_cw(root_file.clone())?;
+        let mut fd = util::create_file_a(root_file.clone())?;
         fd.write(text.as_bytes())?;
         Ok(root_file.into())
     }
@@ -263,6 +263,7 @@ where
 {
     name: String,
     root: ffi::OsString,
+
     seqno: u64,
     count: usize,
     metadata: Vec<u8>,
@@ -286,12 +287,18 @@ where
         config: robt::Config,
         num_shards: usize,
     ) -> Result<ShRobt<K, V, B>> {
-        let root = ShrobtFactory::<K, V, B>::new_root_file(dir, name, num_shards)?;
+        let root = ShrobtFactory::<K, V, B>::new_root_file(
+            // create a new root file
+            dir, name, num_shards,
+        )?;
 
         let mut shards = vec![];
         for shard_i in 0..num_shards {
-            let name: ShardName = (name.to_string(), shard_i).into();
-            let index = Robt::new(dir, &name.0, config.clone())?;
+            let (name, _): (String, usize) = {
+                let name: ShardName = (name.to_string(), shard_i).into();
+                name.try_into()?
+            };
+            let index = Robt::new(dir, &name, config.clone())?;
             shards.push(Shard::new_build(index));
         }
 
@@ -314,10 +321,12 @@ where
         let name: String = TryFrom::try_from(RootFileName(root.clone()))?;
 
         let num_shards: usize = {
-            let value = ShrobtFactory::<K, V, B>::open_root_file(dir, root.as_os_str())?;
             let err1 = InvalidFile(format!("shrobt, not a table"));
             let err2 = InvalidFile(format!("shrobt, missing num_shards"));
             let err3 = InvalidFile(format!("shrobt, num_shards not int"));
+
+            let root = root.as_os_str();
+            let value = ShrobtFactory::<K, V, B>::open_root_file(dir, root)?;
 
             let num_shards = value
                 .as_table()
@@ -338,32 +347,32 @@ where
         let mut indexes: Vec<Option<Robt<K, V, B>>> = vec![];
         (0..num_shards).for_each(|_| indexes.push(None));
 
-        let items: Vec<Robt<K, V, B>> = fs::read_dir(dir)?
+        let items: Vec<(usize, Robt<K, V, B>)> = fs::read_dir(dir)?
             .filter_map(|item| item.ok())
             .filter_map(|item| Robt::open(dir, item.file_name()).ok())
-            .filter_map(|index| {
-                let nm = index.to_name().ok()?;
-                let (nm, _): (String, usize) = TryFrom::try_from(ShardName(nm)).ok()?;
-                if name == nm {
-                    Some(index)
-                } else {
-                    None
-                }
+            .filter_map(|index| match index.to_name().ok() {
+                Some(nm) => Some((nm, index)),
+                None => None,
             })
+            .filter_map(|(nm, index)| {
+                let nm = ShardName(nm);
+                let (nm, index_i): (String, usize) = TryFrom::try_from(nm).ok()?;
+                Some((nm, index_i, index))
+            })
+            .filter(|(nm, _, _)| &name == nm)
+            .filter_map(|(_, index_i, index)| Some((index_i, index)))
             .collect();
 
-        for item in items.into_iter() {
-            let nm = item.to_name().unwrap();
-            let (_, index_i): (String, usize) = TryFrom::try_from(ShardName(nm)).unwrap();
+        for (index_i, index) in items.into_iter() {
             indexes[index_i] = match indexes[index_i].take() {
-                None => Some(item),
-                Some(index) => {
-                    if index.to_version()? < item.to_version()? {
-                        index.purge()?;
-                        Some(item)
-                    } else {
-                        item.purge()?;
+                None => Some(index),
+                Some(old_index) => {
+                    if old_index.to_version()? < index.to_version()? {
+                        old_index.purge()?;
                         Some(index)
+                    } else {
+                        index.purge()?;
+                        Some(old_index)
                     }
                 }
             };
@@ -383,10 +392,10 @@ where
             let mut count = 0;
             let mut metadata: Option<Vec<u8>> = None;
             for index in indexes.iter_mut() {
-                metadata.get_or_insert(index.to_metadata()?);
-                assert_eq!(metadata.clone().unwrap(), index.to_metadata()?);
                 seqno = cmp::max(seqno, index.to_seqno()?);
                 count += index.to_reader()?.len()?;
+                metadata.get_or_insert(index.to_metadata()?);
+                assert_eq!(metadata.clone().unwrap(), index.to_metadata()?);
             }
             (seqno, count, metadata)
         };
@@ -396,6 +405,7 @@ where
         Ok(ShRobt {
             name: name.clone(),
             root,
+
             seqno,
             count,
             metadata: metadata.unwrap(),
@@ -470,139 +480,99 @@ where
             stats = stats.merge(shard.to_snapshot()?.to_stats()?)
         }
 
+        assert_eq!(stats.seqno, self.seqno);
+
         stats.name = self.name.clone();
         stats.build_time = self.build_time;
         stats.epoch = self.epoch;
-        assert_eq!(stats.seqno, self.seqno);
 
         Ok(stats)
     }
 
     fn to_ranges(&self) -> Vec<(Bound<K>, Bound<K>)> {
-        let shards = self.shards.lock().unwrap();
+        let mut shards = self.shards.lock().unwrap();
 
-        let (mut ranges, mut low_key) = (vec![], Bound::<K>::Unbounded);
-        for shard in shards.iter() {
-            match shard {
-                Shard::Snapshot { high_key, .. } => {
-                    ranges.push((low_key, high_key.clone()));
-                    low_key = match high_key {
-                        Bound::Excluded(hk) => Bound::Included(hk.clone()),
-                        _ => unreachable!(),
-                    };
-                }
-                Shard::Build { .. } => unreachable!(),
-            }
-        }
-        assert!(low_key == Bound::Unbounded);
-
-        ranges
+        let high_keys: Vec<Bound<K>> = shards
+            .iter_mut()
+            .filter_map(|shard| shard.to_high_key())
+            .collect();
+        util::high_keys_to_ranges(high_keys)
     }
 
-    fn rebalance(&self) -> Result<Option<Vec<(Bound<K>, Bound<K>)>>> {
+    fn to_footprints(&self) -> Result<Vec<isize>> {
         let mut shards = self.shards.lock().unwrap();
 
         let mut footprints = vec![];
         for shard in shards.iter_mut() {
             footprints.push(shard.as_robt().footprint()?);
         }
-        let total: isize = footprints.clone().into_iter().sum();
-        let avg = total / (shards.len() as isize);
-        let ok = footprints
-            .into_iter()
-            .map(|x| (x as f64) / (avg as f64))
-            .any(|f| (f < 0.5) || (f > 1.5)); // TODO: no magic
-        if !ok {
-            return Ok(None);
-        }
+
+        Ok(footprints)
+    }
+
+    fn to_partitions(&self) -> Result<Vec<(isize, Bound<K>, Bound<K>)>> {
+        let mut shards = self.shards.lock().unwrap();
 
         let mut partitions: Vec<(isize, Bound<K>, Bound<K>)> = vec![];
         for shard in shards.iter_mut() {
-            let footprint = shard.as_robt().footprint()?;
+            let robt_index = shard.as_mut_robt();
 
-            let ps: Vec<(isize, Bound<K>, Bound<K>)> = {
-                let ps = shard.as_mut_robt().to_partitions()?;
-                let q = footprint / (ps.len() as isize);
+            let mut ps: Vec<(isize, Bound<K>, Bound<K>)> = {
+                let ps = robt_index.to_partitions()?;
+                let q = robt_index.footprint()? / (ps.len() as isize);
                 ps.into_iter().map(|(lk, hk)| (q, lk, hk)).collect()
             };
 
-            match (partitions.pop(), ps.first()) {
-                (Some(mut a), Some(z)) => {
-                    assert!(a.2 == Bound::Unbounded);
-                    a.2 = match z.1.clone() {
-                        Bound::Included(lk) => Bound::Excluded(lk),
-                        _ => unreachable!(),
-                    };
-                    partitions.push(a);
-                    partitions.extend_from_slice(&ps);
-                }
-                (None, Some(item)) => {
-                    partitions.push(item.clone());
-                    partitions.extend_from_slice(&ps);
-                }
-                (Some(a), None) => partitions.push(a),
-                (None, None) => (),
-            }
-        }
-
-        let _ = {
-            let (p, n) = (partitions.len(), shards.len());
-            if p < n {
-                let msg = format!("num_partitions {} < num_shards {}", p, n);
-                Err(Error::UnexpectedFail(msg))
-            } else {
-                Ok(())
-            }
-        }?;
-
-        let mut ranges: Vec<(isize, Bound<K>, Bound<K>)> = vec![];
-        let mut piter = partitions.into_iter();
-
-        let mut low_key: Option<Bound<K>> = None;
-        let mut high_key = Bound::<K>::Unbounded;
-        let mut fp = 0_isize;
-        loop {
-            match piter.next() {
-                Some((size, lk, hk)) => {
-                    if (fp + size) < avg {
-                        fp += size;
-                        low_key.get_or_insert(lk);
-                        high_key = hk;
-                    } else if low_key.is_none() {
-                        ranges.push((size, lk, hk));
-                        fp = 0;
-                        low_key = None;
-                        high_key = Bound::<K>::Unbounded;
-                    } else {
-                        ranges.push((fp, low_key.unwrap(), high_key));
-                        fp = size;
-                        low_key = Some(lk);
-                        high_key = hk;
+            let stitch_item = {
+                ps.reverse();
+                let item = match (partitions.pop(), ps.pop()) {
+                    (None, Some(_)) => None,
+                    (Some((zf, zl, zh)), Some((af, al, ah))) => {
+                        assert!(zh == Bound::Unbounded);
+                        assert!(al == Bound::Unbounded);
+                        Some((zf + af, zl, ah))
                     }
-                }
-                None => {
-                    match low_key {
-                        Some(low_key) => ranges.push((fp, low_key, high_key)),
-                        None => (),
-                    };
-                    break;
-                }
+                    (Some(a), None) => Some(a),
+                    (None, None) => None,
+                };
+                ps.reverse();
+                item
+            };
+
+            if let Some(item) = stitch_item {
+                partitions.push(item);
             }
+            partitions.extend_from_slice(&ps);
         }
 
-        let (low_key, high_key) = match &ranges.last().unwrap().2 {
-            Bound::Excluded(k) => (Bound::Included(k.clone()), Bound::<K>::Unbounded),
-            _ => unreachable!(),
-        };
-        for _ in 0..(shards.len() - ranges.len()) {
-            ranges.push((0, low_key.clone(), high_key.clone()));
+        Ok(partitions)
+    }
+
+    fn rebalance(&self) -> Result<Option<Vec<(Bound<K>, Bound<K>)>>> {
+        let footprints = self.to_footprints()?;
+        let num_shards = footprints.len();
+
+        let footprint: usize = self.footprint()?.try_into().unwrap();
+        let avg = footprint / num_shards;
+
+        let ok = footprints
+            .into_iter()
+            .map(|footprint| (footprint as f64) / (avg as f64))
+            .any(|ratio| (ratio < 0.5) || (ratio > 1.5)); // TODO: no magic
+        if ok {
+            let partitions = self.to_partitions()?;
+            let ranges = util::as_sharded_array(&partitions, num_shards);
+            let ranges = ranges
+                .into_iter()
+                .map(|rs| match (rs.first(), rs.last()) {
+                    (Some((_, l, _)), Some((_, _, h))) => (l.clone(), h.clone()),
+                    _ => unreachable!(),
+                })
+                .collect();
+            Ok(Some(ranges))
+        } else {
+            Ok(None)
         }
-
-        assert_eq!(ranges.len(), shards.len());
-
-        Ok(Some(
-            ranges.into_iter().map(|(_, lk, hk)| (lk, hk)).collect(),
-        ))
     }
 }
 
@@ -1219,7 +1189,15 @@ where
     fn new_snapshot(high_key: Bound<K>, inner: Robt<K, V, B>) -> Shard<K, V, B> {
         Shard::Snapshot { high_key, inner }
     }
+}
 
+impl<K, V, B> Shard<K, V, B>
+where
+    K: Default + Clone + Ord + Hash + Footprint + Serialize,
+    V: Default + Clone + Diff + Footprint + Serialize,
+    <V as Diff>::D: Default + Serialize,
+    B: Bloom,
+{
     fn is_build(&self) -> bool {
         match self {
             Shard::Build { .. } => true,
@@ -1233,15 +1211,7 @@ where
             Shard::Snapshot { .. } => true,
         }
     }
-}
 
-impl<K, V, B> Shard<K, V, B>
-where
-    K: Default + Clone + Ord + Hash + Footprint + Serialize,
-    V: Default + Clone + Diff + Footprint + Serialize,
-    <V as Diff>::D: Default + Serialize,
-    B: Bloom,
-{
     fn into_robt(self) -> Robt<K, V, B> {
         match self {
             Shard::Build { inner } => inner,
@@ -1267,6 +1237,13 @@ where
         match self {
             Shard::Snapshot { inner, .. } => inner.to_reader(),
             Shard::Build { .. } => unreachable!(),
+        }
+    }
+
+    fn to_high_key(&mut self) -> Option<Bound<K>> {
+        match self {
+            Shard::Snapshot { high_key, .. } => Some(high_key.clone()),
+            Shard::Build { .. } => None,
         }
     }
 }

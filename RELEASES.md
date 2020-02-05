@@ -23,10 +23,11 @@ Code Review checklist
 * [ ] Verify unreachable!() macro, try to replace them with Err(Error).
 * [ ] Avoid println!() macro in production code.
 * [ ] Review TODO comments in code.
-* [ ] Check for unwrap() calls. It can be security breach if unwrap
-  is called on values from external sources, outside the `rdms` library.
-* [ ] check fo ok() calls on Result type. It can be security breach if
-  errors are ignored.
+* [ ] Validate the usage of:
+    * [ ] unwrap() calls.
+    * [ ] ok() calls on Result/Option types.
+    * [ ] unsafe { .. } blocks.
+    * [ ] panic!(), unimplemented!(), unreachable!(), assert!() macros.
 * [ ] Trim trait constraits for exported types, exported functions and
   type/methods/functions defined in core.rs
 

@@ -13,7 +13,7 @@ use crate::{
 };
 
 // create a file in append mode for writing.
-pub(crate) fn open_file_cw(file: ffi::OsString) -> Result<fs::File> {
+pub(crate) fn create_file_a(file: ffi::OsString) -> Result<fs::File> {
     let os_file = {
         let os_file = path::Path::new(&file);
         fs::remove_file(os_file).ok(); // NOTE: ignore remove errors.
@@ -140,7 +140,7 @@ where
 
 pub(crate) fn high_keys_to_ranges<K>(high_keys: Vec<Bound<K>>) -> Vec<(Bound<K>, Bound<K>)>
 where
-    K: Clone,
+    K: Clone + Ord,
 {
     let mut ranges = vec![];
     let mut low_key = Bound::<K>::Unbounded;
@@ -149,6 +149,8 @@ where
         ranges.push((low_key, high_key));
         low_key = lk;
     }
+
+    assert!(low_key == Bound::Unbounded);
 
     ranges
 }
@@ -160,6 +162,17 @@ where
     match hk {
         Bound::Unbounded => Bound::Unbounded,
         Bound::Excluded(hk) => Bound::Included(hk.clone()),
+        _ => unreachable!(),
+    }
+}
+
+pub(crate) fn low_key_to_high_key<K>(lk: &Bound<K>) -> Bound<K>
+where
+    K: Clone,
+{
+    match lk {
+        Bound::Unbounded => Bound::Unbounded,
+        Bound::Included(lk) => Bound::Excluded(lk.clone()),
         _ => unreachable!(),
     }
 }

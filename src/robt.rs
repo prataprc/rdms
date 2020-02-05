@@ -1370,7 +1370,7 @@ impl Stats {
             m_bytes: self.m_bytes + other.m_bytes,
             v_bytes: self.v_bytes + other.v_bytes,
             padding: self.padding + other.padding,
-            n_abytes: Default::default(),
+            n_abytes: self.n_abytes + other.n_abytes,
             mem_bitmap: self.mem_bitmap + other.mem_bitmap,
             n_bitmap: self.n_bitmap + other.n_bitmap,
 
@@ -2073,7 +2073,7 @@ fn thread_flush(
     rx: rt::Rx<Vec<u8>, ()>,
 ) -> Result<(ffi::OsString, u64)> {
     let (mut fd, fpos) = if create {
-        (util::open_file_cw(file.clone())?, Default::default())
+        (util::create_file_a(file.clone())?, Default::default())
     } else {
         (util::open_file_w(&file)?, fs::metadata(&file)?.len())
     };
@@ -2529,6 +2529,8 @@ where
     <V as Diff>::D: Default + Clone + Serialize,
     B: Bloom,
 {
+    /// partition robt indexes into ~ equally sized data-set and return their
+    /// range.
     fn to_partitions(&mut self) -> Result<Vec<(Bound<K>, Bound<K>)>> {
         let m_blocksize = self.config.m_blocksize;
         let mut partitions = vec![];

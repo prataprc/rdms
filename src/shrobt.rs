@@ -574,6 +574,26 @@ where
             Ok(None)
         }
     }
+
+    fn to_range_scans<'a>(
+        &mut self,
+        re_ranges: Vec<(Bound<K>, Bound<K>)>,
+    ) -> Result<Vec<IndexIter<'a, K, V>>> {
+        let mut shards = self.shards.lock().unwrap();
+
+        let mut outer_iters = vec![];
+        for re_range in re_ranges.into_iter() {
+            let mut iters = vec![];
+            for shard in shards.iter_mut() {
+                let snap = shard.as_mut_robt().to_reader()?;
+                let iter = snap.into_range_scan(re_range.clone())?;
+                iters.push(Box::new(iter) as IndexIter<K, V>);
+            }
+            outer_iters.push(Box::new(Iter::new(iters)) as IndexIter<K, V>)
+        }
+
+        Ok(outer_iters)
+    }
 }
 
 impl<K, V, B> Index<K, V> for ShRobt<K, V, B>
@@ -640,76 +660,59 @@ where
         C: CommitIterator<K, V>,
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
-        let re_ranges = self.rebalance()?;
         let within = scanner.to_within();
+        let re_ranges = self.rebalance()?;
+        let re_iters = match re_ranges.clone() {
+            Some(re_ranges) => Some(self.to_range_scans(re_ranges)?),
+            None => None,
+        };
 
-        let (indexes, iters, mut shards, _readers) = match self.to_state()? {
-            "build" => {
-                let mut shards = self.shards.lock().unwrap();
+        let mut shards = self.shards.lock().unwrap();
 
-                let iters = {
-                    let m = shards.len();
-                    let iters = scanner.scans(m)?;
-                    let n = iters.len();
-                    if m == n {
-                        Ok(iters)
-                    } else {
-                        let err = format!("shrobt.commit(), {}/{} shards", m, n);
-                        Err(Error::UnexpectedFail(err))
-                    }
-                }?;
-
-                let indexes: Vec<Robt<K,V,B>> = shards.drain(..).map(|shard| shard.into_robt()).collect();
-                (indexes, iters, shards, vec![])
-            }
-            "snapshot" if re_ranges.is_none() => {
-                let iters = {
-                    let ranges = self.to_ranges();
-                    scanner.range_scans(ranges)?
-                };
-
-                let mut shards = self.shards.lock().unwrap();
-
-                let indexes: Vec<Robt<K,V,B>> = shards.drain(..).map(|shard| shard.into_robt()).collect();
-                (indexes, iters, shards, vec![])
-            }
-            "snapshot" /* is_some */ => {
-                let re_ranges = re_ranges.unwrap();
-                let commit_iters = scanner.range_scans(re_ranges.clone())?;
-                let (m, n) = (re_ranges.len(), commit_iters.len());
-                if m != n {
-                    let err = format!("shrobt.commit(), {}/{} re_ranges", m, n);
-                    return Err(Error::UnexpectedFail(err))
+        let iters = match (self.to_state()?, re_ranges, re_iters) {
+            ("build", _, _) => {
+                let iters = scanner.scans(shards.len())?;
+                if shards.len() == iters.len() {
+                    Ok(iters)
+                } else {
+                    Err(Error::UnexpectedFail(format!(
+                        "shrobt.commit(), {}/{} shards",
+                        shards.len(),
+                        iters.len()
+                    )))
                 }
+            }
+            ("snapshot", Some(re_ranges), Some(re_iters)) => {
+                let src_iters = scanner.range_scans(re_ranges.clone())?;
 
-                let mut shards = self.shards.lock().unwrap();
-
-                let mut outer_iters = vec![];
-                let doo = commit_iters.into_iter().zip(re_ranges.into_iter()).into_iter();
                 let reverse = false;
-                let mut readers = vec![];
-                for (commit_iter, range) in doo {
-                    let iter = {
-                        let mut iters = vec![];
-                        for shard in shards.iter_mut() {
-                            let mut reader = shard.as_mut_robt().to_reader()?;
-                            let r = unsafe { (&mut reader as *mut robt::Snapshot<K,V,B>).as_mut().unwrap() };
-                            iters.push(r.range(range.clone())?);
-                            readers.push(reader);
-                        }
-                        Box::new(Iter::new(iters))
-                    };
-                    outer_iters.push(lsm::y_iter(commit_iter, iter, reverse));
-                }
+                let iters = src_iters
+                    .into_iter()
+                    .zip(re_iters.into_iter())
+                    .into_iter()
+                    .map(|(i1, i2)| lsm::y_iter(i1, i2, reverse))
+                    .collect();
 
                 for shard in shards.iter_mut() {
                     shard.as_mut_robt().to_next_build()?;
                 }
 
-                let indexes: Vec<Robt<K,V,B>> = shards.drain(..).map(|shard| shard.into_robt()).collect();
-                (indexes, outer_iters, shards, readers)
+                Ok(iters)
             }
+            ("snapshot", None, _) => Ok(scanner.range_scans(self.to_ranges())?),
             _ => unreachable!(),
+        }?;
+
+        let mut indexes: Vec<Robt<K, V, B>> = {
+            let iter = shards.drain(..).map(|shard| shard.into_robt());
+            iter.collect()
+        };
+        let metas = {
+            let mut metas = vec![];
+            for index in indexes.iter_mut() {
+                metas.push(metacb(index.to_metadata()?))
+            }
+            metas
         };
 
         // scatter
@@ -718,30 +721,50 @@ where
             .into_iter()
             .zip(iters.into_iter())
             .into_iter()
+            .zip(metas.into_iter())
+            .into_iter()
             .enumerate();
-        for (i, (index, iter)) in iter {
+        for (i, ((index, iter), meta)) in iter {
             let iter = unsafe {
-                Box::from_raw(
-                    Box::leak(iter) as *mut dyn Iterator<Item = Result<Entry<K, V>>>
-                        as *mut ffi::c_void,
-                )
+                let iter = Box::leak(iter);
+                let iter = iter as *mut dyn Iterator<Item = Result<Entry<K, V>>>;
+                Box::from_raw(iter as *mut ffi::c_void)
             };
+
             threads.push(thread::spawn(move || {
-                do_commit(i, index, iter, within.clone())
+                do_commit(i, index, iter, meta, within.clone())
             }));
         }
+
         // gather
         let mut indexes = vec![];
+        let mut errs = vec![];
         for t in threads.into_iter() {
             match t.join() {
                 Ok(Ok((off, index))) => indexes.push((off, index)),
-                Ok(Err(err)) => error!(target: "shrobt", "commit: {:?}", err),
-                Err(err) => error!(target: "shrobt", "thread: {:?}", err),
+                Ok(Err(err)) => {
+                    error!(target: "shrobt", "commit: {:?}", err);
+                    errs.push(err);
+                }
+                Err(err) => {
+                    error!(target: "shrobt", "thread: {:?}", err);
+                    errs.push(Error::ThreadFail(format!("{:?}", err)));
+                }
             }
         }
 
-        indexes.sort_by(|x, y| x.0.cmp(&y.0));
-        let indexes: Vec<Robt<K, V, B>> = indexes.into_iter().map(|x| x.1).collect();
+        let indexes: Vec<Robt<K, V, B>> = if errs.len() > 0 {
+            Err(Error::DiskIndexFail(
+                errs.into_iter()
+                    .map(|e| format!("{:?}", e))
+                    .collect::<Vec<String>>()
+                    .join("; "),
+            ))
+        } else {
+            indexes.sort_by(|x, y| x.0.cmp(&y.0));
+            Ok(indexes.into_iter().map(|x| x.1).collect())
+        }?;
+
         robts_to_shards(indexes)?
             .drain(..)
             .for_each(|shard| shards.push(shard));
@@ -767,8 +790,9 @@ where
 
 fn do_commit<K, V, B>(
     off: usize,
-    mut inner: Robt<K, V, B>,
+    mut index: Robt<K, V, B>,
     iter: Box<ffi::c_void>,
+    meta: Vec<u8>,
     within: (Bound<u64>, Bound<u64>),
 ) -> Result<(usize, Robt<K, V, B>)>
 where
@@ -779,14 +803,14 @@ where
 {
     let iter = {
         let iter = unsafe {
-            // convert back
-            Box::from_raw(Box::leak(iter) as *mut ffi::c_void as *mut IndexIter<K, V>)
+            let iter = Box::leak(iter);
+            Box::from_raw(iter as *mut ffi::c_void as *mut IndexIter<K, V>)
         };
         CommitIter::new(CommitWrapper::new(iter), within)
     };
 
-    inner.commit(iter, convert::identity)?;
-    Ok((off, inner))
+    index.commit(iter, |_| meta.clone())?;
+    Ok((off, index))
 }
 
 impl<K, V, B> Footprint for ShRobt<K, V, B>
@@ -1244,24 +1268,6 @@ where
         match self {
             Shard::Snapshot { high_key, .. } => Some(high_key.clone()),
             Shard::Build { .. } => None,
-        }
-    }
-}
-
-impl<K, V, B> Shard<K, V, B>
-where
-    K: Default + Clone + Ord + Hash + Footprint + Serialize,
-    V: Default + Clone + Diff + Footprint + Serialize,
-    <V as Diff>::D: Default + Serialize,
-    B: Bloom,
-{
-    fn to_reader(&mut self) -> Result<ShardReader<K, V, B>> {
-        match self {
-            Shard::Snapshot { inner, high_key } => {
-                let snapshot = inner.to_reader()?;
-                Ok(ShardReader::new(high_key.clone(), snapshot))
-            }
-            Shard::Build { .. } => unreachable!(),
         }
     }
 }

@@ -2455,7 +2455,7 @@ where
     V: Default + Clone + Diff + Serialize,
     <V as Diff>::D: Default + Clone + Serialize,
 {
-    fn into_scan(mut self) -> Result<Scan<K, V, B>> {
+    pub(crate) fn into_scan(mut self) -> Result<Scan<K, V, B>> {
         let mut mzs = vec![];
         match self.to_root() {
             Ok(root) => Ok(self.build_fwd(root, &mut mzs)?),
@@ -2465,7 +2465,7 @@ where
         Ok(Scan::new(self, mzs))
     }
 
-    fn into_range_scan<R>(mut self, range: R) -> Result<ScanRange<K, V, B, R>>
+    pub(crate) fn into_range_scan<R>(mut self, range: R) -> Result<ScanRange<K, V, B, R>>
     where
         R: RangeBounds<K>,
     {
@@ -3271,7 +3271,7 @@ where
     }
 }
 
-struct Scan<K, V, B>
+pub(crate) struct Scan<K, V, B>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,
@@ -3330,7 +3330,7 @@ where
     }
 }
 
-struct ScanRange<K, V, B, R>
+pub(crate) struct ScanRange<K, V, B, R>
 where
     K: Clone + Ord + Serialize,
     V: Clone + Diff + Serialize,

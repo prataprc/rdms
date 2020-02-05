@@ -166,17 +166,6 @@ where
     }
 }
 
-pub(crate) fn low_key_to_high_key<K>(lk: &Bound<K>) -> Bound<K>
-where
-    K: Clone,
-{
-    match lk {
-        Bound::Unbounded => Bound::Unbounded,
-        Bound::Included(lk) => Bound::Excluded(lk.clone()),
-        _ => unreachable!(),
-    }
-}
-
 #[cfg(test)]
 #[path = "util_test.rs"]
 mod util_test;

@@ -1223,7 +1223,7 @@ where
     }
 }
 
-pub enum Shard<K, V, B>
+enum Shard<K, V, B>
 where
     K: Clone + Ord + Hash + Footprint + Serialize,
     V: Clone + Diff + Footprint + Serialize,

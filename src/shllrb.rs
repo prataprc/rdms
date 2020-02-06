@@ -562,7 +562,7 @@ where
     V: 'static + Send + Clone + Diff + Footprint,
     <V as Diff>::D: Send,
 {
-    pub fn do_balance(&mut self) -> Result<usize> {
+    fn do_balance(&mut self) -> Result<usize> {
         let old_count = {
             let (shards, _) = self.lock_snapshot()?; // should be a quick call
             shards.len()

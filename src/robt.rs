@@ -681,7 +681,7 @@ where
 
     fn compact<F>(&mut self, cutoff: Bound<u64>, _metacb: F) -> Result<usize>
     where
-        F: Fn(Vec<Vec<u8>>) -> Vec<u8>,
+        F: Fn(Vec<u8>) -> Vec<u8>,
     {
         let mut inner = self.as_inner()?;
         let (new_inner, count) = match inner.deref() {

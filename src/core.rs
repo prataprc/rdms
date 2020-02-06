@@ -291,7 +291,7 @@ where
     /// Return number of items in index.
     fn compact<F>(&mut self, cutoff: Bound<u64>, mf: F) -> Result<usize>
     where
-        F: Fn(Vec<Vec<u8>>) -> Vec<u8>;
+        F: Fn(Vec<u8>) -> Vec<u8>;
 
     /// End of index life-cycle. Persisted data (in disk) shall not be
     /// cleared. Refer [purge][Index::purge] for that.

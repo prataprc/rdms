@@ -267,8 +267,6 @@ where
     seqno: u64,
     count: usize,
     metadata: Vec<u8>,
-    build_time: u64,
-    epoch: i128,
     shards: Arc<Mutex<Vec<Shard<K, V, B>>>>,
 }
 
@@ -309,8 +307,6 @@ where
             seqno: Default::default(),
             count: Default::default(),
             metadata: Default::default(),
-            build_time: Default::default(),
-            epoch: Default::default(),
             shards: Arc::new(Mutex::new(shards)),
         })
     }
@@ -409,8 +405,6 @@ where
             seqno,
             count,
             metadata: metadata.unwrap(),
-            build_time: Default::default(),
-            epoch: Default::default(),
             shards: Arc::new(Mutex::new(shards)),
         })
     }
@@ -483,8 +477,6 @@ where
         assert_eq!(stats.seqno, self.seqno);
 
         stats.name = self.name.clone();
-        stats.build_time = self.build_time;
-        stats.epoch = self.epoch;
 
         Ok(stats)
     }
@@ -594,6 +586,20 @@ where
 
         Ok(outer_iters)
     }
+
+    fn transform_metadatas<F>(&self, metacb: F) -> Result<Vec<Vec<u8>>>
+    where
+        F: Fn(Vec<u8>) -> Vec<u8>,
+    {
+        let shards = self.shards.lock().unwrap();
+
+        let mut metas = vec![];
+        for shard in shards.iter() {
+            metas.push(metacb(shard.as_robt().to_metadata()?))
+        }
+
+        Ok(metas)
+    }
 }
 
 impl<K, V, B> Index<K, V> for ShRobt<K, V, B>
@@ -666,6 +672,7 @@ where
             Some(re_ranges) => Some(self.to_range_scans(re_ranges)?),
             None => None,
         };
+        let metas: Vec<Vec<u8>> = self.transform_metadatas(metacb)?;
 
         let mut shards = self.shards.lock().unwrap();
 
@@ -703,16 +710,9 @@ where
             _ => unreachable!(),
         }?;
 
-        let mut indexes: Vec<Robt<K, V, B>> = {
+        let indexes: Vec<Robt<K, V, B>> = {
             let iter = shards.drain(..).map(|shard| shard.into_robt());
             iter.collect()
-        };
-        let metas = {
-            let mut metas = vec![];
-            for index in indexes.iter_mut() {
-                metas.push(metacb(index.to_metadata()?))
-            }
-            metas
         };
 
         // scatter
@@ -722,9 +722,8 @@ where
             .zip(iters.into_iter())
             .into_iter()
             .zip(metas.into_iter())
-            .into_iter()
             .enumerate();
-        for (i, ((index, iter), meta)) in iter {
+        for (off, ((index, iter), meta)) in iter {
             let iter = unsafe {
                 let iter = Box::leak(iter);
                 let iter = iter as *mut dyn Iterator<Item = Result<Entry<K, V>>>;
@@ -732,7 +731,7 @@ where
             };
 
             threads.push(thread::spawn(move || {
-                do_commit(i, index, iter, meta, within.clone())
+                do_commit(off, index, iter, meta, within.clone())
             }));
         }
 
@@ -747,22 +746,22 @@ where
                     errs.push(err);
                 }
                 Err(err) => {
-                    error!(target: "shrobt", "thread: {:?}", err);
+                    error!(target: "shrobt", "commit-thread: {:?}", err);
                     errs.push(Error::ThreadFail(format!("{:?}", err)));
                 }
             }
         }
 
-        let indexes: Vec<Robt<K, V, B>> = if errs.len() > 0 {
+        let indexes: Vec<Robt<K, V, B>> = if errs.len() == 0 {
+            indexes.sort_by(|x, y| x.0.cmp(&y.0));
+            Ok(indexes.into_iter().map(|x| x.1).collect())
+        } else {
             Err(Error::DiskIndexFail(
                 errs.into_iter()
                     .map(|e| format!("{:?}", e))
                     .collect::<Vec<String>>()
                     .join("; "),
             ))
-        } else {
-            indexes.sort_by(|x, y| x.0.cmp(&y.0));
-            Ok(indexes.into_iter().map(|x| x.1).collect())
         }?;
 
         robts_to_shards(indexes)?
@@ -774,17 +773,82 @@ where
 
     fn compact<F>(&mut self, cutoff: Bound<u64>, metacb: F) -> Result<usize>
     where
-        F: Fn(Vec<Vec<u8>>) -> Vec<u8>,
+        F: Fn(Vec<u8>) -> Vec<u8>,
     {
-        unimplemented!()
+        let metas: Vec<Vec<u8>> = self.transform_metadatas(metacb)?;
+
+        let mut shards = self.shards.lock().unwrap();
+
+        let indexes: Vec<Robt<K, V, B>> = {
+            let iter = shards.drain(..).map(|shard| shard.into_robt());
+            iter.collect()
+        };
+
+        // scatter
+        let iter = indexes.into_iter().zip(metas.into_iter()).enumerate();
+        let mut threads = vec![];
+        for (off, (index, meta)) in iter {
+            threads.push(thread::spawn(move || {
+                do_compact(off, index, cutoff.clone(), meta)
+            }));
+        }
+
+        // gather
+        let (mut indexes, mut errs, mut count) = (vec![], vec![], 0);
+        for t in threads.into_iter() {
+            match t.join() {
+                Ok(Ok((off, cnt, index))) => {
+                    count += cnt;
+                    indexes.push((off, index));
+                }
+                Ok(Err(err)) => {
+                    error!(target: "shrobt", "compact: {:?}", err);
+                    errs.push(err);
+                }
+                Err(err) => {
+                    error!(target: "shrobt", "compact-thread: {:?}", err);
+                    errs.push(Error::ThreadFail(format!("{:?}", err)));
+                }
+            }
+        }
+
+        let indexes: Vec<Robt<K, V, B>> = if errs.len() == 0 {
+            indexes.sort_by(|x, y| x.0.cmp(&y.0));
+            Ok(indexes.into_iter().map(|x| x.1).collect())
+        } else {
+            Err(Error::DiskIndexFail(
+                errs.into_iter()
+                    .map(|e| format!("{:?}", e))
+                    .collect::<Vec<String>>()
+                    .join("; "),
+            ))
+        }?;
+
+        robts_to_shards(indexes)?
+            .drain(..)
+            .for_each(|shard| shards.push(shard));
+
+        Ok(count)
     }
 
     fn close(self) -> Result<()> {
-        unimplemented!()
+        let mut shards = self.shards.lock().unwrap();
+
+        for shard in shards.drain(..) {
+            shard.into_robt().close()?
+        }
+
+        Ok(())
     }
 
     fn purge(self) -> Result<()> {
-        unimplemented!()
+        let mut shards = self.shards.lock().unwrap();
+
+        for shard in shards.drain(..) {
+            shard.into_robt().purge()?
+        }
+
+        Ok(())
     }
 }
 
@@ -811,6 +875,22 @@ where
 
     index.commit(iter, |_| meta.clone())?;
     Ok((off, index))
+}
+
+fn do_compact<K, V, B>(
+    off: usize,
+    mut index: Robt<K, V, B>,
+    cutoff: Bound<u64>,
+    meta: Vec<u8>,
+) -> Result<(usize, usize, Robt<K, V, B>)>
+where
+    K: Default + Clone + Ord + Hash + Footprint + Serialize + ThreadSafe,
+    V: Default + Clone + Diff + Footprint + Serialize + ThreadSafe,
+    B: Bloom + ThreadSafe,
+    <V as Diff>::D: Default + Clone + Serialize,
+{
+    let count = index.compact(cutoff, |_| meta.clone())?;
+    Ok((off, count, index))
 }
 
 impl<K, V, B> Footprint for ShRobt<K, V, B>

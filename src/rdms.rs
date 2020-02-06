@@ -202,7 +202,7 @@ where
 
     pub fn compact<F>(&mut self, cutoff: Bound<u64>, metacb: F) -> Result<usize>
     where
-        F: Fn(Vec<Vec<u8>>) -> Vec<u8>,
+        F: Fn(Vec<u8>) -> Vec<u8>,
     {
         let mut index = self.as_index()?;
         index.compact(cutoff, metacb)

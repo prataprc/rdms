@@ -1,6 +1,6 @@
 use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
 
-use std::{mem, ops::Bound};
+use std::{convert, mem, ops::Bound};
 
 use super::*;
 use crate::{llrb_node::Node, scans, util};
@@ -933,7 +933,7 @@ fn test_compact() {
             lsm, sticky, n_ops, cutoff
         );
 
-        let count = index.compact(cutoff, |metas| metas[0].clone()).unwrap();
+        let count = index.compact(cutoff, convert::identity).unwrap();
         assert_eq!(count, rindex.to_stats().unwrap().entries);
         check_compact_nodes(index.as_mut(), rindex.as_mut(), cutoff);
     }

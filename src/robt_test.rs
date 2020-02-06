@@ -229,7 +229,7 @@ fn test_stats_merge() {
     assert_eq!(stats.mem_bitmap, 3);
     assert_eq!(stats.n_bitmap, 3);
     assert_eq!(stats.padding, 3);
-    assert_eq!(stats.n_abytes, 0);
+    assert_eq!(stats.n_abytes, 4);
     assert_eq!(stats.build_time, 0);
     assert_eq!(stats.epoch, 0);
 }

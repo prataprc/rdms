@@ -9,8 +9,7 @@ use crate::{
     lsm,
     panic::Panic,
     robt::{self, Robt},
-    scans::CommitWrapper,
-    util,
+    scans, util,
 };
 use log::error;
 use toml;
@@ -644,13 +643,9 @@ where
 
         let mut readers = vec![];
         for shard in shards.iter_mut().rev() {
-            match shard {
-                Shard::Snapshot { high_key, inner } => {
-                    let snapshot = inner.to_reader()?;
-                    readers.push(ShardReader::new(high_key.clone(), snapshot));
-                }
-                Shard::Build { .. } => unreachable!(),
-            }
+            let high_key = shard.to_high_key().unwrap();
+            let snapshot = shard.as_mut_robt().to_reader()?;
+            readers.push(ShardReader::new(high_key, snapshot));
         }
 
         ShrobtReader::new(self.name.clone(), readers)
@@ -870,7 +865,7 @@ where
             let iter = Box::leak(iter);
             Box::from_raw(iter as *mut ffi::c_void as *mut IndexIter<K, V>)
         };
-        CommitIter::new(CommitWrapper::new(iter), within)
+        CommitIter::new(scans::CommitWrapper::new(iter), within)
     };
 
     index.commit(iter, |_| meta.clone())?;
@@ -911,117 +906,82 @@ where
     }
 }
 
-//impl<K, V> CommitIterator<K, V> for Box<Shrobt<K, V>>
-//where
-//    K: Clone + Ord + Footprint,
-//    V: Clone + Diff + Footprint,
-//{
-//    fn scan<G>(&mut self, within: G) -> Result<IndexIter<K, V>>
-//    where
-//        G: Clone + RangeBounds<u64>,
-//    {
-//        self.as_mut().scan(within)
-//    }
-//
-//    fn scans<G>(&mut self, shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
-//    where
-//        G: Clone + RangeBounds<u64>,
-//    {
-//        self.as_mut().scans(shards, within)
-//    }
-//
-//    fn range_scans<N, G>(&mut self, ranges: Vec<N>, within: G) -> Result<Vec<IndexIter<K, V>>>
-//    where
-//        N: Clone + RangeBounds<K>,
-//        G: Clone + RangeBounds<u64>,
-//    {
-//        self.as_mut().range_scans(ranges, within)
-//    }
-//}
+impl<K, V, B> CommitIterator<K, V> for ShRobt<K, V, B>
+where
+    K: Default + Clone + Ord + Hash + Footprint + Serialize + ThreadSafe,
+    V: Default + Clone + Diff + Footprint + Serialize + ThreadSafe,
+    <V as Diff>::D: Default + Clone + Serialize + Footprint,
+    B: Bloom + ThreadSafe,
+{
+    fn scan<G>(&mut self, within: G) -> Result<IndexIter<K, V>>
+    where
+        G: Clone + RangeBounds<u64>,
+    {
+        let mut shards = self.shards.lock().unwrap();
 
-//impl<K, V> CommitIterator<K, V> for Shllrb<K, V>
-//where
-//    K: Clone + Ord + Footprint,
-//    V: Clone + Diff + Footprint,
-//{
-//    fn scan<G>(&mut self, within: G) -> Result<IndexIter<K, V>>
-//    where
-//        G: Clone + RangeBounds<u64>,
-//    {
-//        let mut iter = {
-//            let (shards, _) = self.lock_snapshot();
-//            Box::new(CommitIter::new(vec![], Arc::new(shards)))
-//        };
-//        let mut_shards = unsafe {
-//            let mut_shards = Arc::get_mut(&mut iter.shards).unwrap();
-//            (mut_shards.as_mut_slice() as *mut [Shard<K, V>])
-//                .as_mut()
-//                .unwrap()
-//        };
-//
-//        for shard in mut_shards {
-//            iter.iters
-//                .push(shard.as_mut_inner().unwrap().index.scan(within.clone())?);
-//        }
-//        Ok(iter)
-//    }
-//
-//    fn scans<G>(&mut self, _shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
-//    where
-//        G: Clone + RangeBounds<u64>,
-//    {
-//        let (mut shards, _) = self.lock_snapshot();
-//        let mut_shards = unsafe {
-//            ((&mut shards).as_mut_slice() as *mut [Shard<K, V>])
-//                .as_mut()
-//                .unwrap()
-//        };
-//        let shards = Arc::new(shards);
-//
-//        let mut iters = vec![];
-//        for shard in mut_shards {
-//            iters.push(Box::new(CommitIter::new(
-//                vec![shard.as_mut_inner().unwrap().index.scan(within.clone())?],
-//                Arc::clone(&shards),
-//            )) as IndexIter<K, V>)
-//        }
-//        Ok(iters)
-//    }
-//
-//    fn range_scans<N, G>(&mut self, ranges: Vec<N>, within: G) -> Result<Vec<IndexIter<K, V>>>
-//    where
-//        N: Clone + RangeBounds<K>,
-//        G: Clone + RangeBounds<u64>,
-//    {
-//        let (mut shards, _) = self.lock_snapshot();
-//        let mut mut_shardss = vec![];
-//        for _ in 0..ranges.len() {
-//            mut_shardss.push(unsafe {
-//                ((&mut shards).as_mut_slice() as *mut [Shard<K, V>])
-//                    .as_mut()
-//                    .unwrap()
-//            })
-//        }
-//        let shards = Arc::new(shards);
-//
-//        let mut outer_iters = vec![];
-//        for (range, mut_shards) in ranges.into_iter().zip(mut_shardss.into_iter()) {
-//            let mut iter = Box::new(CommitIter::new(vec![], Arc::clone(&shards)));
-//            for shard in mut_shards.iter_mut() {
-//                iter.iters.push(
-//                    shard
-//                        .as_mut_inner()
-//                        .unwrap()
-//                        .index
-//                        .range_scans(vec![range.clone()], within.clone())?
-//                        .remove(0),
-//                );
-//            }
-//            outer_iters.push(iter as IndexIter<K, V>);
-//        }
-//        Ok(outer_iters)
-//    }
-//}
+        let mut iters = vec![];
+        for shard in shards.iter_mut() {
+            let snap = shard.as_mut_robt().to_reader()?;
+            iters.push(snap.into_scan()?);
+        }
+
+        Ok(Box::new(scans::FilterScans::new(iters, within)))
+    }
+
+    fn scans<G>(&mut self, shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
+    where
+        G: Clone + RangeBounds<u64>,
+    {
+        let partitions: Vec<(isize, Bound<K>, Bound<K>)> = self.to_partitions()?;
+        assert!(partitions.len() > shards);
+
+        let ranges = util::as_sharded_array(&partitions, shards);
+        let ranges: Vec<(Bound<K>, Bound<K>)> = ranges
+            .into_iter()
+            .map(|rs| match (rs.first(), rs.last()) {
+                (Some((_, l, _)), Some((_, _, h))) => (l.clone(), h.clone()),
+                _ => unreachable!(),
+            })
+            .collect();
+
+        let mut shards = self.shards.lock().unwrap();
+
+        let mut iters = vec![];
+        for range in ranges.into_iter() {
+            let mut scans = vec![];
+            for shard in shards.iter_mut() {
+                let snap = shard.as_mut_robt().to_reader()?;
+                scans.push(snap.into_range_scan(range.clone())?)
+            }
+            let iter = scans::FilterScans::new(scans, within.clone());
+            iters.push(Box::new(iter) as IndexIter<K, V>);
+        }
+
+        Ok(iters)
+    }
+
+    fn range_scans<N, G>(&mut self, ranges: Vec<N>, within: G) -> Result<Vec<IndexIter<K, V>>>
+    where
+        N: Clone + RangeBounds<K>,
+        G: Clone + RangeBounds<u64>,
+    {
+        let mut shards = self.shards.lock().unwrap();
+
+        let mut iters = vec![];
+        for range in ranges.into_iter() {
+            let mut scans = vec![];
+            for shard in shards.iter_mut() {
+                let snap = shard.as_mut_robt().to_reader()?;
+                let range = util::to_start_end(range.clone());
+                scans.push(snap.into_range_scan(range)?)
+            }
+            let iter = scans::FilterScans::new(scans, within.clone());
+            iters.push(Box::new(iter) as IndexIter<K, V>);
+        }
+
+        Ok(iters)
+    }
+}
 
 impl<K, V, B> Validate<robt::Stats> for ShRobt<K, V, B>
 where
@@ -1382,58 +1342,6 @@ where
         }
     }
 }
-
-//struct CommitIter<'a, K, V>
-//where
-//    K: Clone + Ord,
-//    V: Clone + Diff,
-//{
-//    shards: Arc<MutexGuard<'a, Vec<Shard<K, V>>>>,
-//    iter: Option<IndexIter<'a, K, V>>,
-//    iters: Vec<IndexIter<'a, K, V>>,
-//}
-//
-//impl<'a, K, V> CommitIter<'a, K, V>
-//where
-//    K: Clone + Ord,
-//    V: Clone + Diff,
-//{
-//    pub fn new(
-//        iters: Vec<IndexIter<'a, K, V>>,
-//        shards: Arc<MutexGuard<'a, Vec<Shard<K, V>>>>,
-//    ) -> CommitIter<'a, K, V> {
-//        CommitIter {
-//            shards,
-//            iter: None,
-//            iters,
-//        }
-//    }
-//}
-//
-//impl<'a, K, V> Iterator for CommitIter<'a, K, V>
-//where
-//    K: Clone + Ord,
-//    V: Clone + Diff,
-//{
-//    type Item = Result<Entry<K, V>>;
-//
-//    fn next(&mut self) -> Option<Self::Item> {
-//        match &mut self.iter {
-//            Some(iter) => match iter.next() {
-//                Some(item) => Some(item),
-//                None => {
-//                    self.iter = None;
-//                    self.next()
-//                }
-//            },
-//            None if self.iters.len() == 0 => None,
-//            None => {
-//                self.iter = Some(self.iters.remove(0));
-//                self.next()
-//            }
-//        }
-//    }
-//}
 
 struct Iter<'a, K, V>
 where

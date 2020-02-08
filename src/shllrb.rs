@@ -1795,18 +1795,14 @@ where
     type Item = Result<Entry<K, V>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match &mut self.iter {
-            Some(iter) => match iter.next() {
-                Some(item) => Some(item),
-                None => {
-                    self.iter = None;
-                    self.next()
-                }
-            },
-            None if self.iters.len() == 0 => None,
-            None => {
-                self.iter = Some(self.iters.remove(0));
-                self.next()
+        loop {
+            match &mut self.iter {
+                Some(iter) => match iter.next() {
+                    Some(item) => break Some(item),
+                    None => self.iter = None,
+                },
+                None if self.iters.len() == 0 => break None,
+                None => self.iter = Some(self.iters.remove(0)),
             }
         }
     }
@@ -1847,18 +1843,14 @@ where
     type Item = Result<Entry<K, V>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match &mut self.iter {
-            Some(iter) => match iter.next() {
-                Some(item) => Some(item),
-                None => {
-                    self.iter = None;
-                    self.next()
-                }
-            },
-            None if self.iters.len() == 0 => None,
-            None => {
-                self.iter = Some(self.iters.remove(0));
-                self.iter.as_mut().unwrap().next()
+        loop {
+            match &mut self.iter {
+                Some(iter) => match iter.next() {
+                    Some(item) => break Some(item),
+                    None => self.iter = None,
+                },
+                None if self.iters.len() == 0 => break None,
+                None => self.iter = Some(self.iters.remove(0)),
             }
         }
     }

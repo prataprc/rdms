@@ -23,8 +23,7 @@ use crate::{
     },
     error::Error,
     llrb::{Llrb, LlrbReader, LlrbWriter, Stats as LlrbStats},
-    scans::CommitWrapper,
-    thread as rt,
+    scans, thread as rt,
     types::Empty,
     util,
 };
@@ -902,10 +901,12 @@ where
         assert_eq!(iters.len(), gl.shards.len());
         for (i, iter) in iters.into_iter().enumerate() {
             let index = &mut gl.shards[i].as_mut_index();
-            index.commit(
-                core::CommitIter::new(CommitWrapper::new(iter), within.clone()),
-                |meta| metacb(meta),
-            )?;
+            let within = within.clone();
+            let iter = {
+                let iter = scans::CommitWrapper::new(vec![iter]);
+                core::CommitIter::new(iter, within)
+            };
+            index.commit(iter, |meta| metacb(meta))?;
             let mut seqno = self.snapshot.root_seqno.load(Ordering::SeqCst);
             seqno = cmp::max(seqno, index.to_seqno()?);
             self.snapshot.root_seqno.store(seqno, Ordering::SeqCst);

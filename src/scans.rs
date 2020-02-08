@@ -75,8 +75,8 @@ use std::{
 };
 
 use crate::{
-    core::{Bloom, CommitIterator, Diff, Entry, IndexIter, PiecewiseScan, Result, ScanEntry},
-    error::Error,
+    core::ScanEntry,
+    core::{Bloom, CommitIterator, Diff, Entry, IndexIter, PiecewiseScan, Result},
     util,
 };
 
@@ -496,8 +496,8 @@ where
     }
 }
 
-/// Iterator type, to convert any iterator into CommitIterator that can
-/// be used within [CommitIter][core::CommitIter].
+/// Iterator type, to convert any iterator, or chain of iterators, into
+/// CommitIterator trait. It can be used within [CommitIter][core::CommitIter].
 ///
 /// This type assumes that source iterator already _knows_ the _within_
 /// sequence-no range to filter out entries.
@@ -506,7 +506,7 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    iter: Option<IndexIter<'a, K, V>>,
+    iters: Vec<IndexIter<'a, K, V>>,
 }
 
 impl<'a, K, V> CommitWrapper<'a, K, V>
@@ -514,8 +514,8 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    pub fn new(iter: IndexIter<'a, K, V>) -> CommitWrapper<'a, K, V> {
-        CommitWrapper { iter: Some(iter) }
+    pub fn new(iters: Vec<IndexIter<'a, K, V>>) -> CommitWrapper<'a, K, V> {
+        CommitWrapper { iters: iters }
     }
 }
 
@@ -524,30 +524,21 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    fn scan<G>(&mut self, _within: G) -> Result<IndexIter<K, V>>
+    fn scan<G>(&mut self, within: G) -> Result<IndexIter<K, V>>
     where
         G: RangeBounds<u64>,
     {
-        match self.iter.take() {
-            Some(iter) => Ok(iter),
-            None => {
-                let msg = format!("CommitIterator::scan() malformed");
-                Err(Error::UnInitialized(msg))
-            }
-        }
+        let mut iters: Vec<IndexIter<'a, K, V>> = self.iters.drain(..).collect();
+        iters.reverse();
+
+        Ok(Box::new(FilterScans::new(iters, within)))
     }
 
     fn scans<G>(&mut self, _: usize, _within: G) -> Result<Vec<IndexIter<K, V>>>
     where
         G: RangeBounds<u64>,
     {
-        match self.iter.take() {
-            Some(iter) => Ok(vec![iter]),
-            None => {
-                let msg = format!("CommitIterator::scans() malformed");
-                Err(Error::UnInitialized(msg))
-            }
-        }
+        Ok(self.iters.drain(..).collect())
     }
 
     fn range_scans<N, G>(&mut self, _: Vec<N>, _within: G) -> Result<Vec<IndexIter<K, V>>>
@@ -555,13 +546,7 @@ where
         G: RangeBounds<u64>,
         N: RangeBounds<K>,
     {
-        match self.iter.take() {
-            Some(iter) => Ok(vec![iter]),
-            None => {
-                let msg = format!("CommitIterator::range_scans() malformed");
-                Err(Error::UnInitialized(msg))
-            }
-        }
+        Ok(self.iters.drain(..).collect())
     }
 }
 

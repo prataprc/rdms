@@ -1648,9 +1648,9 @@ where
     where
         G: Clone + RangeBounds<u64>,
     {
-        let mut ss = scans::SkipScan::new(self.to_reader()?);
+        let mut ss = Box::new(scans::SkipScan::new(self.to_reader()?));
         ss.set_seqno_range(within);
-        Ok(Box::new(ss))
+        Ok(ss)
     }
 
     fn scans<G>(&mut self, shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
@@ -1676,18 +1676,18 @@ where
         for hkey in keys {
             let range = (lkey.clone(), Bound::Excluded(hkey.clone()));
             if self.range(range.clone())?.next().is_some() {
-                let mut ss = scans::SkipScan::new(self.to_reader()?);
+                let mut ss = Box::new(scans::SkipScan::new(self.to_reader()?));
                 ss.set_key_range(range).set_seqno_range(within.clone());
                 lkey = Bound::Included(hkey);
-                scans.push(Box::new(ss));
+                scans.push(ss);
             }
         }
 
         let range = (lkey, Bound::Unbounded);
         if self.range(range.clone())?.next().is_some() {
-            let mut ss = scans::SkipScan::new(self.to_reader()?);
+            let mut ss = Box::new(scans::SkipScan::new(self.to_reader()?));
             ss.set_key_range(range).set_seqno_range(within);
-            scans.push(Box::new(ss));
+            scans.push(ss);
         }
 
         Ok(scans)
@@ -1700,9 +1700,9 @@ where
     {
         let mut scans: Vec<IndexIter<K, V>> = vec![];
         for range in ranges {
-            let mut ss = scans::SkipScan::new(self.to_reader()?);
+            let mut ss = Box::new(scans::SkipScan::new(self.to_reader()?));
             ss.set_key_range(range).set_seqno_range(within.clone());
-            scans.push(Box::new(ss));
+            scans.push(ss);
         }
         Ok(scans)
     }

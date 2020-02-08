@@ -427,11 +427,13 @@ where
     }
 
     fn as_inner(&self) -> Result<MutexGuard<InnerRobt<K, V, B>>> {
-        use crate::error::Error::ThreadFail;
-
-        self.inner
-            .lock()
-            .map_err(|err| ThreadFail(format!("robt.as_inner(), poison-lock {:?}", err)))
+        match self.inner.lock() {
+            Ok(value) => Ok(value),
+            Err(err) => {
+                let msg = format!("robt.as_inner(), poison-lock {:?}", err);
+                Err(Error::ThreadFail(msg))
+            }
+        }
     }
 
     fn do_close(&mut self) -> Result<()> {
@@ -626,8 +628,12 @@ where
 
                     let (name, mut b) = {
                         let name = name.clone().next();
-                        let config = config.clone();
-                        let b = Builder::<K, V, B>::incremental(dir, &name.0, config)?;
+                        let b = Builder::<K, V, B>::incremental(
+                            //
+                            dir,
+                            &name.0,
+                            config.clone(),
+                        )?;
                         (name, b)
                     };
 
@@ -645,8 +651,10 @@ where
                         name, old_bitmap.len()?, new_bitmap.len()?, bitmap.len()?
                     );
 
-                    let meta_block_bytes =
-                        b.build_finish(metacb(old.to_app_meta()?), bitmap, root)?;
+                    let meta_block_bytes = {
+                        let meta = metacb(old.to_app_meta()?);
+                        b.build_finish(meta, bitmap, root)?
+                    };
 
                     let snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
                     snapshot.log()?;
@@ -672,11 +680,15 @@ where
                     );
                 }
 
-                info!(
-                    target: "robt  ",
-                    "{:?}, footprint {}, wrote {} bytes",
-                    name, footprint, stats.z_bytes + stats.m_bytes + stats.v_bytes + meta_block_bytes
-                );
+                {
+                    let s = stats.clone();
+                    info!(
+                        target: "robt  ",
+                        "{:?}, footprint {}, wrote {} bytes",
+                        name, footprint,
+                        s.z_bytes + s.m_bytes + s.v_bytes + meta_block_bytes
+                    );
+                }
 
                 InnerRobt::Snapshot {
                     dir: dir.clone(),
@@ -776,11 +788,16 @@ where
                         name, vlog_file
                     );
                 }
-                info!(
-                    target: "robt  ",
-                    "{:?}, footprint {}, wrote {} bytes",
-                    name, footprint, stats.z_bytes + stats.m_bytes + stats.v_bytes + meta_block_bytes
-                );
+
+                {
+                    let s = stats.clone();
+                    info!(
+                        target: "robt  ",
+                        "{:?}, footprint {}, wrote {} bytes",
+                        name, footprint,
+                        s.z_bytes + s.m_bytes + s.v_bytes + meta_block_bytes
+                    );
+                }
 
                 (
                     InnerRobt::Snapshot {
@@ -1042,6 +1059,8 @@ impl fmt::Display for Config {
             .map_or(r#""""#.to_string(), |f| format!("{:?}, ", f));
 
         let (z, m, v) = (self.z_blocksize, self.m_blocksize, self.v_blocksize);
+        let dok = self.delta_ok;
+        let fqs = self.flush_queue_size;
 
         write!(
             f,
@@ -1051,7 +1070,7 @@ impl fmt::Display for Config {
                 "robt.config = {{ delta_ok={}, value_in_vlog={} }}\n",
                 "robt.config = {{ vlog_file={}, flush_queue_size={} }}",
             ),
-            self.name, z, m, v, self.delta_ok, self.value_in_vlog, vlog_file, self.flush_queue_size,
+            self.name, z, m, v, dok, self.value_in_vlog, vlog_file, fqs
         )
     }
 }
@@ -1158,24 +1177,36 @@ pub(crate) fn write_meta_items(
     for (i, item) in items.into_iter().enumerate() {
         match (i, item) {
             (0, MetaItem::Root(fpos)) => {
-                debug!(target: "robt  ", "{:?}, writing root at {} ...", file, fpos);
+                debug!(
+                    target: "robt  ", "{:?}, writing root at {} ...",
+                    file, fpos
+                );
                 hdr[0..8].copy_from_slice(&fpos.to_be_bytes());
             }
             (1, MetaItem::Bitmap(bitmap)) => {
                 let ln: u64 = bitmap.len().try_into()?;
-                debug!(target: "robt  ", "{:?}, writing bitmap {} bytes ...", file, ln);
+                debug!(
+                    target: "robt  ", "{:?}, writing bitmap {} bytes ...",
+                    file, ln
+                );
                 hdr[8..16].copy_from_slice(&ln.to_be_bytes());
                 block.extend_from_slice(&bitmap);
             }
             (2, MetaItem::AppMetadata(md)) => {
                 let ln: u64 = md.len().try_into()?;
-                debug!(target: "robt  ", "{:?}, writing app-meta {} bytes ...", file, ln);
+                debug!(
+                    target: "robt  ", "{:?}, writing app-meta {} bytes ...",
+                    file, ln
+                );
                 hdr[16..24].copy_from_slice(&ln.to_be_bytes());
                 block.extend_from_slice(&md);
             }
             (3, MetaItem::Stats(s)) => {
                 let ln: u64 = s.len().try_into()?;
-                debug!(target: "robt  ", "{:?}, writing stats {} bytes ...", file, ln);
+                debug!(
+                    target: "robt  ", "{:?}, writing stats {} bytes ...",
+                    file, ln
+                );
                 hdr[24..32].copy_from_slice(&ln.to_be_bytes());
                 block.extend_from_slice(s.as_bytes());
             }
@@ -2284,7 +2315,10 @@ where
         // open optional value log file.
         let valog_fd = match config.vlog_file {
             Some(vfile) => {
-                let err = Error::InvalidSnapshot("robt snapshot bad vlog file-name".to_string());
+                let err = {
+                    let msg = "robt snapshot bad vlog file-name".to_string();
+                    Error::InvalidSnapshot(msg)
+                };
                 // stem the file name.
                 let mut vpath = path::PathBuf::new();
                 vpath.push(path::Path::new(dir));
@@ -2371,24 +2405,29 @@ where
     pub fn log(&self) -> Result<()> {
         info!(
             target: "robt  ",
-            "{:?}, opening snapshot in dir {:?} config ...\n{}", self.name, self.dir, self.config
+            "{:?}, opening snapshot in dir {:?} config ...\n{}",
+            self.name, self.dir, self.config
         );
         for item in self.meta.iter().enumerate() {
             match item {
                 (0, MetaItem::Root(fpos)) => info!(
-                    target: "robt  ", "{:?}, meta-item root at {}", self.name, fpos
+                    target: "robt  ", "{:?}, meta-item root at {}",
+                    self.name, fpos
                 ),
                 (1, MetaItem::Bitmap(_)) => info!(
                     target: "robt  ", "{:?}, meta-item bit-map", self.name
                 ),
                 (2, MetaItem::AppMetadata(data)) => info!(
-                    target: "robt  ", "{:?}, meta-item app-meta-data {} bytes", self.name, data.len()
+                    target: "robt  ", "{:?}, meta-item app-meta-data {} bytes",
+                    self.name, data.len()
                 ),
                 (3, MetaItem::Stats(_)) => info!(
-                    target: "robt  ", "{:?}, meta-item stats\n{}", self.name, self.to_stats()?
+                    target: "robt  ", "{:?}, meta-item stats\n{}",
+                    self.name, self.to_stats()?
                 ),
                 (4, MetaItem::Marker(data)) => info!(
-                    target: "robt  ", "{:?}, meta-item marker {} bytes", self.name, data.len()
+                    target: "robt  ", "{:?}, meta-item marker {} bytes",
+                    self.name, data.len()
                 ),
                 _ => unreachable!(),
             }

@@ -372,7 +372,7 @@ where
             meta: snapshot.meta.clone(),
             config: snapshot.config.clone(),
             stats: snapshot.to_stats()?,
-            bitmap: Arc::new(snapshot.to_bitmap()?),
+            bitmap: Arc::clone(&snapshot.bitmap),
         };
 
         let purger = {
@@ -385,7 +385,15 @@ where
             purger: Some(purger),
         })
     }
+}
 
+impl<K, V, B> Robt<K, V, B>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Serialize,
+    B: Bloom,
+{
     /// Return Index's version number, every commit and compact shall increment
     /// the version number.
     pub fn to_version(&self) -> Result<usize> {
@@ -433,17 +441,24 @@ where
         };
         Ok(())
     }
-}
 
-impl<K, V, B> Robt<K, V, B>
-where
-    K: Default + Clone + Ord + Hash + Footprint + Serialize,
-    V: Default + Clone + Diff + Footprint + Serialize,
-    <V as Diff>::D: Default + Serialize,
-    B: Bloom,
-{
-    pub fn to_partitions(&mut self) -> Result<Vec<(Bound<K>, Bound<K>)>> {
+    pub fn to_partitions(&mut self) -> Result<Vec<(Bound<K>, Bound<K>)>>
+    where
+        K: Default + Hash + Footprint,
+        V: Default + Footprint,
+        <V as Diff>::D: Default,
+    {
         self.to_reader()?.to_partitions()
+    }
+
+    pub fn len(&self) -> Result<usize> {
+        match self.as_inner()?.deref() {
+            InnerRobt::Snapshot { stats, .. } => Ok(stats.n_count.try_into()?),
+            InnerRobt::Build { .. } => {
+                let msg = format!("robt.len(), in build state");
+                Err(Error::UnInitialized(msg))
+            }
+        }
     }
 }
 
@@ -518,7 +533,7 @@ where
                 info!(target: "robt  ", "{:?}, new reader ...", name);
 
                 let mut snapshot = Snapshot::open(dir, &name.0)?;
-                assert!(snapshot.set_bitmap(Arc::clone(bitmap)));
+                snapshot.set_bitmap(Arc::clone(bitmap));
                 snapshot.log()?;
                 Ok(snapshot)
             }
@@ -547,12 +562,11 @@ where
 
                 let snapshot = {
                     let config = config.clone();
-
                     let b = Builder::<K, V, B>::initial(dir, &name.0, config)?;
                     b.build(scanner.scan()?, metacb(vec![]))?;
+
                     let snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
                     snapshot.log()?;
-
                     snapshot
                 };
 
@@ -585,7 +599,7 @@ where
                     meta: snapshot.meta.clone(),
                     config: snapshot.config.clone(),
                     stats,
-                    bitmap: Arc::new(snapshot.to_bitmap()?),
+                    bitmap: Arc::clone(&snapshot.bitmap),
                 }
             }
             InnerRobt::Snapshot {
@@ -594,7 +608,7 @@ where
                 info!(target: "robt  ", "{:?}, incremental commit ...", name);
 
                 let mut old = Snapshot::<K, V, B>::open(dir, &name.0)?;
-                let old_bitmap = old.to_bitmap()?;
+                let old_bitmap = Arc::clone(&old.bitmap);
 
                 let (name, snapshot, meta_block_bytes) = {
                     let bitmap_iter = scans::BitmappedScan::new(scanner.scan()?);
@@ -671,7 +685,7 @@ where
                     meta: snapshot.meta.clone(),
                     config: snapshot.config.clone(),
                     stats,
-                    bitmap: Arc::new(snapshot.to_bitmap()?),
+                    bitmap: Arc::clone(&snapshot.bitmap),
                 }
             }
         };
@@ -776,7 +790,7 @@ where
                         meta: snapshot.meta.clone(),
                         config: snapshot.config.clone(),
                         stats: stats.clone(),
-                        bitmap: Arc::new(snapshot.to_bitmap()?),
+                        bitmap: Arc::clone(&snapshot.bitmap),
                     },
                     stats.n_count,
                 )
@@ -1123,7 +1137,7 @@ pub enum MetaItem {
     /// Application supplied metadata, typically serialized and opaque
     /// to [Rdms].
     AppMetadata(Vec<u8>),
-    /// Probability data structure,
+    /// Probability data structure, only valid from read_meta_items().
     Bitmap(Vec<u8>),
     /// File-position where the root block for the Btree starts.
     Root(u64),
@@ -1213,8 +1227,10 @@ pub fn read_meta_items(
     let n_stats: usize = u64::from_be_bytes(hdr[24..32].try_into()?).try_into()?;
     let n_marker: usize = u64::from_be_bytes(hdr[32..40].try_into()?).try_into()?;
     // read block
-    let meta_block_bytes =
-        Config::compute_root_block(n_bmap + n_md + n_stats + n_marker + 40).try_into()?;
+    let meta_block_bytes = {
+        let n_total = n_bmap + n_md + n_stats + n_marker + 40;
+        Config::compute_root_block(n_total).try_into()?
+    };
     let block: Vec<u8> = util::read_buffer(
         &mut fd,
         m - meta_block_bytes,
@@ -1352,13 +1368,13 @@ pub struct Stats {
 impl Stats {
     pub fn merge(self, other: Stats) -> Stats {
         Stats {
-            name: self.name.clone(),
-            z_blocksize: self.z_blocksize,
-            m_blocksize: self.m_blocksize,
-            v_blocksize: self.v_blocksize,
-            delta_ok: self.delta_ok,
+            name: other.name.clone(),
+            z_blocksize: other.z_blocksize,
+            m_blocksize: other.m_blocksize,
+            v_blocksize: other.v_blocksize,
+            delta_ok: other.delta_ok,
             vlog_file: None,
-            value_in_vlog: self.value_in_vlog,
+            value_in_vlog: other.value_in_vlog,
 
             n_count: self.n_count + other.n_count,
             n_deleted: self.n_deleted + other.n_deleted,
@@ -1374,8 +1390,8 @@ impl Stats {
             mem_bitmap: self.mem_bitmap + other.mem_bitmap,
             n_bitmap: self.n_bitmap + other.n_bitmap,
 
-            build_time: Default::default(),
-            epoch: Default::default(),
+            build_time: other.build_time,
+            epoch: other.epoch,
         }
     }
 }
@@ -2303,15 +2319,13 @@ where
         unsafe { self.index_fd.set_mmap(ok) }
     }
 
-    pub fn set_bitmap(&mut self, bitmap: Arc<B>) -> bool {
-        let res = if cfg!(debug_assertions) {
-            bitmap.to_vec() == self.bitmap.to_vec()
-        } else {
-            true
+    pub fn set_bitmap(&mut self, bitmap: Arc<B>) {
+        if cfg!(debug_assertions) {
+            assert_eq!(bitmap.to_vec().len(), self.bitmap.to_vec().len());
+            assert_eq!(bitmap.to_vec(), self.bitmap.to_vec());
         };
 
         self.bitmap = bitmap;
-        res
     }
 
     pub fn is_snapshot(file_name: &ffi::OsStr) -> bool {
@@ -2502,23 +2516,6 @@ where
             r.next();
         }
         Ok(r)
-    }
-}
-
-impl<K, V, B> Snapshot<K, V, B>
-where
-    K: Clone + Ord + Serialize,
-    V: Clone + Diff + Serialize,
-    <V as Diff>::D: Clone + Serialize,
-    B: Bloom,
-{
-    fn to_bitmap(&self) -> Result<B> {
-        if let MetaItem::Bitmap(data) = &self.meta[1] {
-            <B as Bloom>::from_vec(&data)
-        } else {
-            let msg = "robt snapshot app-bitmap missing".to_string();
-            Err(Error::InvalidSnapshot(msg))
-        }
     }
 }
 

@@ -7,8 +7,7 @@ use crate::{
     croaring::CRoaring,
     llrb::Llrb,
     nobitmap::NoBitmap,
-    robt,
-    scans::{self, CommitWrapper},
+    robt, scans,
 };
 
 #[test]
@@ -373,7 +372,7 @@ fn test_robt_shards() {
         let iter = {
             let iter = scans::SkipScan::new(llrb.to_reader().unwrap());
             core::CommitIter::new(
-                CommitWrapper::new(Box::new(iter)),
+                scans::CommitWrapper::new(vec![Box::new(iter)]),
                 (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded),
             )
         };
@@ -450,7 +449,7 @@ fn test_robt_partitions() {
         let iter = {
             let iter = scans::SkipScan::new(mindex.to_reader().unwrap());
             core::CommitIter::new(
-                CommitWrapper::new(Box::new(iter)),
+                scans::CommitWrapper::new(vec![Box::new(iter)]),
                 (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded),
             )
         };
@@ -813,7 +812,7 @@ fn test_commit_iterator_scans1() {
         let mut index = robtf.new(&dir, "snapshot-scans").unwrap();
         let iter = {
             let iter = scans::SkipScan::new(mindex.to_reader().unwrap());
-            let iter = CommitWrapper::new(Box::new(iter));
+            let iter = scans::CommitWrapper::new(vec![Box::new(iter)]);
             core::CommitIter::new(iter, within.clone())
         };
         index.commit(iter, std::convert::identity).unwrap();

@@ -363,9 +363,10 @@ where
                 None => break None,
                 Some(iter) => loop {
                     match iter.next() {
-                        Some(Ok(entry)) if self.skip_filter => break Some(Ok(entry)),
+                        Some(Ok(e)) if self.skip_filter => break Some(Ok(e)),
                         Some(Ok(entry)) => {
-                            match entry.filter_within(self.start.clone(), self.end.clone()) {
+                            let (s, e) = (self.start.clone(), self.end.clone());
+                            match entry.filter_within(s, e) {
                                 Some(entry) => break Some(Ok(entry)),
                                 None => (),
                             }
@@ -534,11 +535,21 @@ where
         Ok(Box::new(FilterScans::new(iters, within)))
     }
 
-    fn scans<G>(&mut self, _: usize, _within: G) -> Result<Vec<IndexIter<K, V>>>
+    fn scans<G>(&mut self, n_shards: usize, _within: G) -> Result<Vec<IndexIter<K, V>>>
     where
         G: RangeBounds<u64>,
     {
-        Ok(self.iters.drain(..).collect())
+        let mut iters: Vec<IndexIter<K, V>> = self.iters.drain(..).collect();
+
+        // If there are not enough shards push empty iterators.
+        for _ in iters.len()..n_shards {
+            let ss = vec![];
+            iters.push(Box::new(ss.into_iter()));
+        }
+
+        assert_eq!(iters.len(), n_shards);
+
+        Ok(iters)
     }
 
     fn range_scans<N, G>(&mut self, _: Vec<N>, _within: G) -> Result<Vec<IndexIter<K, V>>>
@@ -564,7 +575,7 @@ where
         Ok(Box::new(FilterScans::new(iters, within)))
     }
 
-    fn scans<G>(&mut self, shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
+    fn scans<G>(&mut self, n_shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
     where
         G: Clone + RangeBounds<u64>,
     {
@@ -574,13 +585,21 @@ where
         }
 
         let mut iters = vec![];
-        for shard in util::as_sharded_array(&entries, shards).into_iter() {
+        for shard in util::as_sharded_array(&entries, n_shards).into_iter() {
             let iter: IndexIter<K, V> = {
                 let iter = shard.to_vec().into_iter().map(|e| Ok(e)).into_iter();
                 Box::new(FilterScans::new(vec![iter], within.clone()))
             };
             iters.push(iter)
         }
+
+        // If there are not enough shards push empty iterators.
+        for _ in iters.len()..n_shards {
+            let ss = vec![];
+            iters.push(Box::new(ss.into_iter()));
+        }
+
+        assert_eq!(iters.len(), n_shards);
 
         Ok(iters)
     }

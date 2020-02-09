@@ -984,11 +984,11 @@ where
         self.as_mut().scan(within)
     }
 
-    fn scans<G>(&mut self, shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
+    fn scans<G>(&mut self, n_shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
     where
         G: Clone + RangeBounds<u64>,
     {
-        self.as_mut().scans(shards, within)
+        self.as_mut().scans(n_shards, within)
     }
 
     fn range_scans<N, G>(&mut self, ranges: Vec<N>, within: G) -> Result<Vec<IndexIter<K, V>>>
@@ -1026,7 +1026,7 @@ where
         Ok(iter)
     }
 
-    fn scans<G>(&mut self, _shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
+    fn scans<G>(&mut self, n_shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
     where
         G: Clone + RangeBounds<u64>,
     {
@@ -1045,6 +1045,15 @@ where
                 Arc::clone(&shards),
             )) as IndexIter<K, V>)
         }
+
+        // If there are not enough shards push empty iterators.
+        for _ in iters.len()..n_shards {
+            let ss = vec![];
+            iters.push(Box::new(ss.into_iter()));
+        }
+
+        assert_eq!(iters.len(), n_shards);
+
         Ok(iters)
     }
 

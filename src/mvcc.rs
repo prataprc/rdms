@@ -1757,11 +1757,11 @@ where
         self.as_mut().scan(within)
     }
 
-    fn scans<G>(&mut self, shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
+    fn scans<G>(&mut self, n_shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
     where
         G: Clone + RangeBounds<u64>,
     {
-        self.as_mut().scans(shards, within)
+        self.as_mut().scans(n_shards, within)
     }
 
     fn range_scans<N, G>(&mut self, ranges: Vec<N>, within: G) -> Result<Vec<IndexIter<K, V>>>
@@ -1782,16 +1782,16 @@ where
     where
         G: Clone + RangeBounds<u64>,
     {
-        let mut ss = scans::SkipScan::new(self.to_reader()?);
+        let mut ss = Box::new(scans::SkipScan::new(self.to_reader()?));
         ss.set_seqno_range(within);
-        Ok(Box::new(ss))
+        Ok(ss)
     }
 
-    fn scans<G>(&mut self, shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
+    fn scans<G>(&mut self, n_shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
     where
         G: Clone + RangeBounds<u64>,
     {
-        match shards {
+        match n_shards {
             0 => return Ok(vec![]),
             1 => return Ok(vec![self.scan(within)?]),
             _ => (),
@@ -1800,24 +1800,38 @@ where
         let keys = {
             let snapshot: Arc<Snapshot<K, V>> = OuterSnapshot::clone(&self.snapshot);
             let mut keys = vec![];
-            do_shards(snapshot.as_root(), shards - 1, &mut keys);
+            do_shards(snapshot.as_root(), n_shards - 1, &mut keys);
             keys
         };
         let keys: Vec<K> = keys.into_iter().filter_map(convert::identity).collect();
 
-        let mut lkey = Bound::Unbounded;
         let mut scans: Vec<IndexIter<K, V>> = vec![];
+        let mut lkey = Bound::Unbounded;
         for hkey in keys {
-            let mut ss = scans::SkipScan::new(self.to_reader()?);
-            ss.set_key_range((lkey, Bound::Excluded(hkey.clone())))
-                .set_seqno_range(within.clone());
-            lkey = Bound::Included(hkey);
-            scans.push(Box::new(ss));
+            let range = (lkey.clone(), Bound::Excluded(hkey.clone()));
+            if self.range(range.clone())?.next().is_some() {
+                let mut ss = Box::new(scans::SkipScan::new(self.to_reader()?));
+                ss.set_key_range(range).set_seqno_range(within.clone());
+                lkey = Bound::Included(hkey);
+                scans.push(ss);
+            }
         }
-        let mut ss = scans::SkipScan::new(self.to_reader()?);
-        ss.set_key_range((lkey, Bound::Unbounded))
-            .set_seqno_range(within.clone());
-        scans.push(Box::new(ss));
+
+        let range = (lkey, Bound::Unbounded);
+        if self.range(range.clone())?.next().is_some() {
+            let mut ss = Box::new(scans::SkipScan::new(self.to_reader()?));
+            ss.set_key_range(range).set_seqno_range(within);
+            scans.push(ss);
+        }
+
+        // If there are not enough shards push empty iterators.
+        for _ in scans.len()..n_shards {
+            let ss = vec![];
+            scans.push(Box::new(ss.into_iter()));
+        }
+
+        assert_eq!(scans.len(), n_shards);
+
         Ok(scans)
     }
 
@@ -1828,9 +1842,9 @@ where
     {
         let mut scans: Vec<IndexIter<K, V>> = vec![];
         for range in ranges {
-            let mut ss = scans::SkipScan::new(self.to_reader()?);
+            let mut ss = Box::new(scans::SkipScan::new(self.to_reader()?));
             ss.set_key_range(range).set_seqno_range(within.clone());
-            scans.push(Box::new(ss));
+            scans.push(ss);
         }
         Ok(scans)
     }

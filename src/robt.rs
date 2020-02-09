@@ -864,7 +864,7 @@ where
         }
     }
 
-    fn scans<G>(&mut self, shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
+    fn scans<G>(&mut self, n_shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
     where
         G: Clone + RangeBounds<u64>,
     {
@@ -873,7 +873,7 @@ where
             InnerRobt::Snapshot { dir, name, .. } => {
                 let ranges = {
                     let mut snap = Snapshot::<K, V, B>::open(dir, &name.0)?;
-                    snap.to_shards(shards)?
+                    snap.to_shards(n_shards)?
                 };
 
                 let mut iters = vec![];
@@ -885,6 +885,14 @@ where
                     ));
                     iters.push(iter)
                 }
+
+                // If there are not enough shards push empty iterators.
+                for _ in iters.len()..n_shards {
+                    let ss = vec![];
+                    iters.push(Box::new(ss.into_iter()));
+                }
+
+                assert_eq!(iters.len(), n_shards);
 
                 Ok(iters)
             }
@@ -2642,6 +2650,7 @@ where
             let (_, hk) = part.last().unwrap();
             shards.push((lk.clone(), hk.clone()));
         }
+
         Ok(shards)
     }
 }
@@ -2676,13 +2685,16 @@ where
             let msg = format!("robt name {} != {}", c.name, s.name);
             return Err(Error::ValidationFail(msg));
         } else if c.z_blocksize != s.z_blocksize {
-            let msg = format!("robt z_blocksize {} != {}", c.z_blocksize, s.z_blocksize);
+            let (x, y) = (c.z_blocksize, s.z_blocksize);
+            let msg = format!("robt z_blocksize {} != {}", x, y);
             return Err(Error::ValidationFail(msg));
         } else if c.m_blocksize != s.m_blocksize {
-            let msg = format!("robt m_blocksize {} != {}", c.m_blocksize, s.m_blocksize);
+            let (x, y) = (c.m_blocksize, s.m_blocksize);
+            let msg = format!("robt m_blocksize {} != {}", x, y);
             return Err(Error::ValidationFail(msg));
         } else if c.v_blocksize != s.v_blocksize {
-            let msg = format!("robt v_blocksize {} != {}", c.v_blocksize, s.v_blocksize);
+            let (x, y) = (c.v_blocksize, s.v_blocksize);
+            let msg = format!("robt v_blocksize {} != {}", x, y);
             return Err(Error::ValidationFail(msg));
         } else if c.delta_ok != s.delta_ok {
             let msg = format!("robt delta_ok {} != {}", c.delta_ok, s.delta_ok);
@@ -2695,7 +2707,10 @@ where
             return Err(Error::ValidationFail(msg));
         }
 
-        let mut footprint: isize = (s.m_bytes + s.z_bytes + s.v_bytes + s.n_abytes).try_into()?;
+        let mut footprint: isize = {
+            let total = s.m_bytes + s.z_bytes + s.v_bytes + s.n_abytes;
+            total.try_into()?
+        };
         let (_, meta_block_bytes) = read_meta_items(&self.dir, &self.name)?;
         footprint += {
             let n: isize = meta_block_bytes.try_into()?;
@@ -3521,7 +3536,8 @@ where
     }
 }
 
-/// Iterate type, to range over [Robt] index, from a _lower bound_ to _upper bound_.
+/// Iterate type, to range over [Robt] index, from a _lower bound_ to
+/// _upper bound_.
 pub struct Range<'a, K, V, B, R, Q>
 where
     K: Clone + Ord + Borrow<Q> + Serialize,
@@ -3583,18 +3599,17 @@ where
         match self.mzs.pop() {
             None => None,
             Some(mut z) => match z.next() {
-                Some(Ok(mut entry)) => {
-                    if self.till_ok(&entry) {
-                        self.mzs.push(z);
-                        let shallow = false;
-                        match self.snap.fetch(&mut entry, shallow, self.versions) {
-                            Ok(()) => Some(Ok(entry)),
-                            Err(err) => Some(Err(err)),
-                        }
-                    } else {
-                        self.mzs.truncate(0);
-                        None
+                Some(Ok(mut entry)) if self.till_ok(&entry) => {
+                    self.mzs.push(z);
+                    let shallow = false;
+                    match self.snap.fetch(&mut entry, shallow, self.versions) {
+                        Ok(()) => Some(Ok(entry)),
+                        Err(err) => Some(Err(err)),
                     }
+                }
+                Some(Ok(_)) => {
+                    self.mzs.truncate(0);
+                    None
                 }
                 Some(Err(err)) => {
                     self.mzs.truncate(0);
@@ -3609,7 +3624,8 @@ where
     }
 }
 
-/// Iterate type, to range over [Robt] index, from an _upper bound_ to _lower bound_.
+/// Iterate type, to range over [Robt] index, from an _upper bound_ to
+/// _lower bound_.
 pub struct Reverse<'a, K, V, B, R, Q>
 where
     K: Clone + Ord + Borrow<Q> + Serialize,
@@ -3668,6 +3684,7 @@ where
     type Item = Result<Entry<K, V>>;
 
     fn next(&mut self) -> Option<Result<Entry<K, V>>> {
+        let shallow = false;
         match self.mzs.pop() {
             None => None,
             Some(mut z) => match z.next_back() {
@@ -3675,18 +3692,16 @@ where
                     self.mzs.truncate(0);
                     Some(Err(err))
                 }
-                Some(Ok(mut entry)) => {
-                    if self.till_ok(&entry) {
-                        self.mzs.push(z);
-                        let shallow = false;
-                        match self.snap.fetch(&mut entry, shallow, self.versions) {
-                            Ok(()) => Some(Ok(entry)),
-                            Err(err) => Some(Err(err)),
-                        }
-                    } else {
-                        self.mzs.truncate(0);
-                        None
+                Some(Ok(mut entry)) if self.till_ok(&entry) => {
+                    self.mzs.push(z);
+                    match self.snap.fetch(&mut entry, shallow, self.versions) {
+                        Ok(()) => Some(Ok(entry)),
+                        Err(err) => Some(Err(err)),
                     }
+                }
+                Some(Ok(_)) => {
+                    self.mzs.truncate(0);
+                    None
                 }
                 None => match self.snap.rebuild_rev(&mut self.mzs) {
                     Err(err) => Some(Err(err)),
@@ -3767,7 +3782,10 @@ fn purge_file(
         Ok(fd) => match fd.try_lock_exclusive() {
             Ok(_) => {
                 let res = match fs::remove_file(&file) {
-                    Err(err) => ("error", format!("remove_file {:?} {:?}", file, err)),
+                    Err(err) => (
+                        "error", // return error
+                        format!("remove_file {:?} {:?}", file, err),
+                    ),
                     Ok(_) => ("ok", format!("purged file {:?}", file)),
                 };
                 fd.unlock().ok();
@@ -3815,7 +3833,10 @@ fn purger(name: String, rx: rt::Rx<ffi::OsString, ()>) -> Result<()> {
             purge_file(file.clone(), &mut locked_files, &mut err_files);
         }
         if err_files.len() > 0 {
-            error!(target: "robtpr", "{:?}, failed purging {} files", name, err_files.len());
+            error!(
+                target: "robtpr", "{:?}, failed purging {} files",
+                name, err_files.len()
+            );
         }
         thread::sleep(time::Duration::from_secs(1));
     }

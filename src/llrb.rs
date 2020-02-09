@@ -35,7 +35,7 @@ use log::{debug, error, info, warn};
 use std::{
     borrow::Borrow,
     cmp::{self, Ord, Ordering},
-    convert::{self, TryInto},
+    convert::TryInto,
     ffi, fmt,
     hash::Hash,
     marker, mem,
@@ -1623,11 +1623,11 @@ where
         self.as_mut().scan(within)
     }
 
-    fn scans<G>(&mut self, shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
+    fn scans<G>(&mut self, n_shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
     where
         G: Clone + RangeBounds<u64>,
     {
-        self.as_mut().scans(shards, within)
+        self.as_mut().scans(n_shards, within)
     }
 
     fn range_scans<N, G>(&mut self, ranges: Vec<N>, within: G) -> Result<Vec<IndexIter<K, V>>>
@@ -1653,11 +1653,13 @@ where
         Ok(ss)
     }
 
-    fn scans<G>(&mut self, shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
+    fn scans<G>(&mut self, n_shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
     where
         G: Clone + RangeBounds<u64>,
     {
-        match shards {
+        use std::convert::identity;
+
+        match n_shards {
             0 => return Ok(vec![]),
             1 => return Ok(vec![self.scan(within)?]),
             _ => (),
@@ -1665,11 +1667,12 @@ where
 
         let keys = {
             let _latch = Some(self.latch.acquire_read(self.spin));
-            let (root, mut keys) = (self.root.as_ref().map(Deref::deref), vec![]);
-            do_shards(root, shards - 1, &mut keys);
+            let root = self.root.as_ref().map(Deref::deref);
+            let mut keys = vec![];
+            do_shards(root, n_shards - 1, &mut keys);
             keys
         };
-        let keys: Vec<K> = keys.into_iter().filter_map(convert::identity).collect();
+        let keys: Vec<K> = keys.into_iter().filter_map(identity).collect();
 
         let mut scans: Vec<IndexIter<K, V>> = vec![];
         let mut lkey = Bound::Unbounded;
@@ -1689,6 +1692,14 @@ where
             ss.set_key_range(range).set_seqno_range(within);
             scans.push(ss);
         }
+
+        // If there are not enough shards push empty iterators.
+        for _ in scans.len()..n_shards {
+            let ss = vec![];
+            scans.push(Box::new(ss.into_iter()));
+        }
+
+        assert_eq!(scans.len(), n_shards);
 
         Ok(scans)
     }

@@ -213,10 +213,8 @@ where
         G: Clone + RangeBounds<u64>;
 
     /// Return a list of equally balanced handles to iterate on
-    /// range-partitioned entries. Note that `shards` argument is
-    /// only a hint, implementing source can return _lesser_ number of
-    /// iterators or _greater_.
-    fn scans<G>(&mut self, shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
+    /// range-partitioned entries.
+    fn scans<G>(&mut self, n_shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
     where
         G: Clone + RangeBounds<u64>;
 
@@ -1351,9 +1349,9 @@ where
 
     /// Same as scan, except that it calls scanner's
     /// [scans][CommitIterator::scans] method.
-    pub fn scans(&mut self, shards: usize) -> Result<Vec<IndexIter<K, V>>> {
+    pub fn scans(&mut self, n_shards: usize) -> Result<Vec<IndexIter<K, V>>> {
         let within = (self.start.clone(), self.end.clone());
-        self.scanner.scans(shards, within)
+        self.scanner.scans(n_shards, within)
     }
 
     /// Same as scan, except that it calls scanner's

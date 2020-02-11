@@ -26,17 +26,21 @@ fn test_name() {
 }
 
 #[test]
-fn test_to_next_build() {
-    let name = "to_next_build1".to_string();
+fn test_to_next_version() {
+    let name = "to_next_version1".to_string();
     let mut config: Config = Default::default();
     config.name = name.clone();
 
     let dir = std::env::temp_dir().into_os_string();
 
-    let mut index = Robt::<i64, i64, NoBitmap>::new(&dir, &name, config).unwrap();
+    let mut index = Robt::<i64, i64, NoBitmap>::new(
+        //
+        &dir, &name, config,
+    )
+    .unwrap();
     assert_eq!(index.to_name().unwrap(), name);
     assert_eq!(index.to_version().unwrap(), 0);
-    index.to_next_build().unwrap();
+    index.to_next_version().unwrap();
     assert_eq!(index.to_name().unwrap(), name);
     assert_eq!(index.to_version().unwrap(), 1);
 }
@@ -393,7 +397,11 @@ fn test_robt_shards() {
         };
         let name = "test-robt-shards";
         let mut snapshot = {
-            let mut index = Robt::<i64, i64, NoBitmap>::new(&dir, name, config).unwrap();
+            let mut index = Robt::<i64, i64, NoBitmap>::new(
+                //
+                &dir, name, config,
+            )
+            .unwrap();
             let app_meta = "heloo world".to_string();
             index
                 .commit(iter, |_| app_meta.as_bytes().to_vec())
@@ -411,9 +419,20 @@ fn test_robt_shards() {
                 let es: Vec<Entry<i64, i64>> = iter.map(|e| e.unwrap()).collect();
                 entries.extend_from_slice(&es);
             }
-            println!("{} shard {} {} {}", n, shard_i, ranges.len(), entries.len());
+            println!(
+                //
+                "{} shard {} {} {}",
+                n,
+                shard_i,
+                ranges.len(),
+                entries.len()
+            );
             assert_eq!(llrb.len(), entries.len());
-            for (e, re) in entries.into_iter().zip(llrb.iter_with_versions().unwrap()) {
+            let iter = {
+                let iter = llrb.iter_with_versions().unwrap();
+                entries.into_iter().zip(iter)
+            };
+            for (e, re) in iter {
                 let re = re.unwrap();
                 check_entry1(&e, &re);
                 check_entry2(&e, &re);
@@ -470,7 +489,11 @@ fn test_robt_partitions() {
         };
         let name = "test-robt-partitions";
         let mut snapshot = {
-            let mut index = Robt::<i64, i64, NoBitmap>::new(&dir, name, config).unwrap();
+            let mut index = Robt::<i64, i64, NoBitmap>::new(
+                //
+                &dir, name, config,
+            )
+            .unwrap();
             let app_meta = "heloo world".to_string();
             index
                 .commit(iter, |_| app_meta.as_bytes().to_vec())
@@ -641,10 +664,21 @@ fn test_commit_scan() {
             )
             .unwrap();
 
-            let b = Builder::<i64, i64, NoBitmap>::initial(&dir, "snapshot1", config).unwrap();
+            let b = Builder::<i64, i64, NoBitmap>::initial(
+                //
+                &dir,
+                "snapshot1",
+                config,
+            )
+            .unwrap();
             b.build(llrb_snap.iter().unwrap(), app_meta.as_bytes().to_vec())
                 .unwrap();
-            robt::Snapshot::<i64, i64, NoBitmap>::open(&dir, "snapshot1").unwrap()
+            robt::Snapshot::<i64, i64, NoBitmap>::open(
+                //
+                &dir,
+                "snapshot1",
+            )
+            .unwrap()
         };
         let stats1 = snap1.to_stats().unwrap();
         let fp1 = snap1.footprint().unwrap();
@@ -669,10 +703,21 @@ fn test_commit_scan() {
             )
             .unwrap();
 
-            let b = Builder::<i64, i64, NoBitmap>::initial(&dir, "snapshot2", config).unwrap();
+            let b = Builder::<i64, i64, NoBitmap>::initial(
+                //
+                &dir,
+                "snapshot2",
+                config,
+            )
+            .unwrap();
             b.build(llrb_snap.iter().unwrap(), app_meta.as_bytes().to_vec())
                 .unwrap();
-            robt::Snapshot::<i64, i64, NoBitmap>::open(&dir, "snapshot2").unwrap()
+            robt::Snapshot::<i64, i64, NoBitmap>::open(
+                //
+                &dir,
+                "snapshot2",
+            )
+            .unwrap()
         };
         let stats2 = snap2.to_stats().unwrap();
         let fp2 = snap2.footprint().unwrap();
@@ -685,10 +730,21 @@ fn test_commit_scan() {
             snap1.build_fwd(snap1.to_root().unwrap(), &mut mzs).unwrap();
             CommitScan::new(new_scanner, Iter::new_shallow(&mut snap1, mzs))
         };
-        let b = Builder::<i64, i64, NoBitmap>::incremental(&dir, "snapshot3", config).unwrap();
+        let b = Builder::<i64, i64, NoBitmap>::incremental(
+            //
+            &dir,
+            "snapshot3",
+            config,
+        )
+        .unwrap();
         b.build(commit_scanner, app_meta.as_bytes().to_vec())
             .unwrap();
-        let mut snap = robt::Snapshot::<i64, i64, NoBitmap>::open(&dir, "snapshot3").unwrap();
+        let mut snap = robt::Snapshot::<i64, i64, NoBitmap>::open(
+            //
+            &dir,
+            "snapshot3",
+        )
+        .unwrap();
         let stats = snap.to_stats().unwrap();
         let fp = snap.footprint().unwrap();
 
@@ -726,12 +782,12 @@ fn test_commit_iterator_scan() {
         println!("temp dir {:?}", dir);
         dir.into_os_string()
     };
-    let mut config: robt::Config = Default::default();
-    config.delta_ok = true;
-    config.value_in_vlog = true;
-    let robtf = robt_factory::<i64, i64, NoBitmap>(config);
-
     for i in 0..50 {
+        let mut config: robt::Config = Default::default();
+        config.delta_ok = true;
+        config.value_in_vlog = true;
+        let robtf = robt_factory::<i64, i64, NoBitmap>(config);
+
         let (n_ops, key_max) = match rng.gen::<u8>() % 3 {
             1 => (1_i64, 20_000),
             _n => {
@@ -795,17 +851,24 @@ fn test_commit_iterator_scans1() {
         dir.into_os_string()
     };
 
-    let mut config: robt::Config = Default::default();
-    config.delta_ok = true;
-    config.value_in_vlog = true;
-    let robtf = robt_factory::<i64, i64, NoBitmap>(config);
-
     for i in 0..50 {
-        let (n_ops, key_max) = random_ops_keys(seed + (i * 100), 100_000, 300_000);
+        let mut config: robt::Config = Default::default();
+        config.delta_ok = true;
+        config.value_in_vlog = true;
+        let robtf = robt_factory::<i64, i64, NoBitmap>(config);
+
+        let (n_ops, key_max) = {
+            let (ops_limit, key_limit) = (100_000, 300_000);
+            random_ops_keys(seed + (i * 100), ops_limit, key_limit)
+        };
+        let n_shards = rng.gen::<usize>() % 31 + 1;
 
         let mut mindex: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
         random_llrb(n_ops, key_max, seed + (i + 1) * 10, &mut mindex);
-        println!("i:{} n_ops:{}, key_max:{}", i, n_ops, key_max);
+        println!(
+            //
+            "i:{} n_ops:{}, key_max:{} n_shards:{}", i, n_ops, key_max, n_shards
+        );
 
         let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
 
@@ -817,18 +880,20 @@ fn test_commit_iterator_scans1() {
         };
         index.commit(iter, std::convert::identity).unwrap();
 
-        let shards = rng.gen::<usize>() % 31 + 1;
-
-        let iters = index.scans(shards, within).unwrap();
+        let iters = index.scans(n_shards, within).unwrap();
 
         let mut counts: Vec<usize> = vec![];
         for iter in iters.into_iter() {
-            counts.push(iter.map(|_| 1).collect::<Vec<usize>>().into_iter().sum());
+            counts.push(
+                //
+                iter.map(|_| 1).collect::<Vec<usize>>().into_iter().sum(),
+            );
         }
-        println!("{} {} {:?}", i, shards, counts);
+        println!("{} {} {:?}", i, n_shards, counts);
 
-        let avg = mindex.len() / shards;
+        let avg = mindex.len() / n_shards;
         for (i, count) in counts.into_iter().enumerate() {
+            if count == 0 { continue; }
             assert!(
                 ((count as f64) / (avg as f64)) > 0.25,
                 "{} shard {} / {}",
@@ -854,12 +919,12 @@ fn test_commit_iterator_scans2() {
         dir.into_os_string()
     };
 
-    let mut config: robt::Config = Default::default();
-    config.delta_ok = true;
-    config.value_in_vlog = true;
-    let robtf = robt_factory::<i64, i64, NoBitmap>(config);
-
     for i in 0..50 {
+        let mut config: robt::Config = Default::default();
+        config.delta_ok = true;
+        config.value_in_vlog = true;
+        let robtf = robt_factory::<i64, i64, NoBitmap>(config);
+
         let (n_ops, key_max) = match rng.gen::<u8>() % 3 {
             1 => (1_i64, 20_000),
             _n => {
@@ -889,10 +954,10 @@ fn test_commit_iterator_scans2() {
             )
             .unwrap();
 
-        let shards = (i + 1) as usize;
+        let n_shards = (i + 1) as usize;
 
         let mut iter = {
-            let mut iters = index.scans(shards, within).unwrap();
+            let mut iters = index.scans(n_shards, within).unwrap();
             iters.reverse(); // make this to stack
             let w = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
             scans::FilterScans::new(iters, w)
@@ -929,12 +994,12 @@ fn test_commit_iterator_range_scans() {
         dir.into_os_string()
     };
 
-    let mut config: robt::Config = Default::default();
-    config.delta_ok = true;
-    config.value_in_vlog = true;
-    let robtf = robt_factory::<i64, i64, NoBitmap>(config);
-
     for i in 0..50 {
+        let mut config: robt::Config = Default::default();
+        config.delta_ok = true;
+        config.value_in_vlog = true;
+        let robtf = robt_factory::<i64, i64, NoBitmap>(config);
+
         let (n_ops, key_max) = match rng.gen::<u8>() % 3 {
             1 => (1_i64, 20_000),
             _n => {
@@ -964,17 +1029,26 @@ fn test_commit_iterator_range_scans() {
             )
             .unwrap();
 
-        let shards = (i + 1) as usize;
-        let (last_hk, mut ranges) = llrb_snap
-            .scans(shards, within.clone())
+        let n_shards = rng.gen::<usize>() % 31 + 1;
+        let ranges: Vec<(Bound<i64>, Bound<i64>)> = llrb_snap
+            .scans(n_shards, within.clone())
             .unwrap()
             .into_iter()
-            .fold((Bound::Unbounded, vec![]), |(lk, mut acc), mut iter| {
-                let hk = iter.next().unwrap().unwrap().to_key();
-                acc.push((lk, Bound::Excluded(hk.clone())));
-                (Bound::Included(hk), acc)
-            });
-        ranges.push((last_hk, Bound::Unbounded));
+            .map(|iter| {
+                let entries: Vec<Result<Entry<i64, i64>>> = iter.collect();
+                let lk = match entries.first() {
+                    Some(Ok(e)) => Bound::Included(e.to_key()),
+                    None => Bound::Excluded(std::i64::MAX),
+                    _ => unreachable!(),
+                };
+                let hk = match entries.last() {
+                    Some(Ok(e)) => Bound::Included(e.to_key()),
+                    None => Bound::Excluded(std::i64::MAX),
+                    _ => unreachable!(),
+                };
+                (lk, hk)
+            })
+            .collect();
         let mut iter = {
             let mut iters = index.range_scans(ranges, within).unwrap();
             iters.reverse(); // make this to stack
@@ -1038,7 +1112,8 @@ fn run_robt_llrb(name: &str, n_ops: u64, key_max: i64, repeat: usize, seed: u128
         };
         let mmap = rng.gen::<bool>();
         println!(
-            "seed:{} n_ops:{} lsm:{} sticky:{} delta:{} vlog:{} within:{:?} mmap:{}",
+            "seed:{} n_ops:{} lsm:{} sticky:{} delta:{} vlog:{}
+            within:{:?} mmap:{}",
             seed, n_ops, lsm, sticky, config.delta_ok, config.value_in_vlog, within, mmap,
         );
         let (mut llrb, refs) = llrb_to_refs1(llrb, within.clone(), &config);

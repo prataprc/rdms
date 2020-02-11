@@ -51,7 +51,7 @@ use std::{
     ffi, fmt, fs,
     hash::Hash,
     io::Write,
-    marker,
+    marker, mem,
     ops::{Bound, Deref, RangeBounds},
     path, result,
     str::FromStr,
@@ -84,6 +84,16 @@ impl Name {
     fn next(self) -> Name {
         let (s, ver): (String, usize) = TryFrom::try_from(self).unwrap();
         From::from((s, ver + 1))
+    }
+
+    #[allow(dead_code)] // TODO: remove if not required.
+    fn previous(self) -> Option<Name> {
+        let (s, ver): (String, usize) = TryFrom::try_from(self).unwrap();
+        if ver == 0 {
+            None
+        } else {
+            Some(From::from((s, ver - 1)))
+        }
     }
 }
 
@@ -181,6 +191,26 @@ impl From<Name> for VlogFileName {
         let file_name = format!("{}.vlog", name.0);
         let name: &ffi::OsStr = file_name.as_ref();
         VlogFileName(name.to_os_string())
+    }
+}
+
+impl TryFrom<VlogFileName> for Name {
+    type Error = Error;
+
+    fn try_from(fname: VlogFileName) -> Result<Name> {
+        use crate::error::Error::InvalidFile;
+        let err = format!("{} not robt vlog file", fname);
+
+        let check_file = |fname: VlogFileName| -> Option<String> {
+            let fname = path::Path::new(&fname.0);
+            match fname.extension()?.to_str()? {
+                "vlog" => Some(fname.file_stem()?.to_str()?.to_string()),
+                _ => None,
+            }
+        };
+
+        let name = check_file(fname.clone()).ok_or(InvalidFile(err.clone()))?;
+        Ok(Name(name))
     }
 }
 
@@ -385,6 +415,49 @@ where
             purger: Some(purger),
         })
     }
+
+    pub fn purge_files(&self, files: Vec<ffi::OsString>) -> Result<()> {
+        for file in files.into_iter() {
+            // verify that requested files to be purged belong to this Robt
+            // snapshot and also assert that it belongs to an older snapshot.
+            let file_name = match path::PathBuf::from(file.clone()).file_name() {
+                Some(file_name) => Ok(file_name.to_os_string()),
+                None => {
+                    let msg = format!("purge_files() {:?}", file);
+                    Err(Error::InvalidFile(msg))
+                }
+            }?;
+            let nm: Name = match IndexFileName(file_name.clone()).try_into() {
+                Ok(nm) => nm,
+                Err(_) => VlogFileName(file_name).try_into()?,
+            };
+            let (nm, ver): (String, usize) = nm.clone().try_into()?;
+
+            let (name, version) = match self.as_inner()?.deref() {
+                InnerRobt::Build { name, .. } => {
+                    let (name, ver): (String, usize) = name.clone().try_into()?;
+                    (name, ver)
+                }
+                InnerRobt::Snapshot { name, .. } => {
+                    let (name, ver): (String, usize) = name.clone().try_into()?;
+                    (name, ver)
+                }
+            };
+
+            if nm == name && ver < version {
+                self.purger.as_ref().unwrap().post(file)?;
+                Ok(())
+            } else {
+                let msg = format!(
+                    "purge_files() {:?} {} {} {} {}",
+                    file, nm, name, ver, version
+                );
+                Err(Error::InvalidFile(msg))
+            }?;
+        }
+
+        Ok(())
+    }
 }
 
 impl<K, V, B> Robt<K, V, B>
@@ -405,25 +478,40 @@ where
         Ok(parts.1) // version
     }
 
-    pub fn to_next_build(&mut self) -> Result<()> {
+    pub fn to_next_version(&mut self) -> Result<Vec<ffi::OsString>> {
         let mut inner = self.as_inner()?;
-        let (dir, name, config) = match inner.deref() {
-            InnerRobt::Build {
-                dir, name, config, ..
-            } => (dir.clone(), name.clone(), config.clone()),
+        let (new_inner, purge_files) = match inner.deref() {
+            InnerRobt::Build { .. } => unreachable!(),
             InnerRobt::Snapshot {
                 dir, name, config, ..
-            } => (dir.clone(), name.clone(), config.clone()),
-        };
-        *inner = InnerRobt::Build {
-            dir: dir.clone(),
-            name: name.next(),
-            config: config.clone(),
+            } => {
+                let mut purge_files = vec![];
+                let old = Snapshot::<K, V, B>::open(dir, &name.0)?;
 
-            _phantom_key: marker::PhantomData,
-            _phantom_val: marker::PhantomData,
+                // purge old snapshots file(s).
+                purge_files.push(old.index_fd.to_file());
+                if let Some((file, _)) = &old.valog_fd {
+                    purge_files.push(file.clone());
+                }
+
+                let mut config = config.clone();
+                config.vlog_file = None; // ignore the old file.
+
+                (
+                    InnerRobt::Build {
+                        dir: dir.clone(),
+                        name: name.clone().next(),
+                        config,
+
+                        _phantom_key: marker::PhantomData,
+                        _phantom_val: marker::PhantomData,
+                    },
+                    purge_files,
+                )
+            }
         };
-        Ok(())
+        *inner = new_inner;
+        Ok(purge_files)
     }
 
     fn as_inner(&self) -> Result<MutexGuard<InnerRobt<K, V, B>>> {
@@ -459,6 +547,20 @@ where
             InnerRobt::Build { .. } => {
                 let msg = format!("robt.len(), in build state");
                 Err(Error::UnInitialized(msg))
+            }
+        }
+    }
+
+    #[allow(dead_code)] // TODO: remove if not required.
+    fn is_vlog(&self) -> Result<bool> {
+        match self.as_inner()?.deref() {
+            InnerRobt::Build { config, .. } => {
+                //
+                Ok(config.delta_ok || config.value_in_vlog)
+            }
+            InnerRobt::Snapshot { config, .. } => {
+                //
+                Ok(config.delta_ok || config.value_in_vlog)
             }
         }
     }
@@ -2146,7 +2248,9 @@ fn thread_flush(
             return Err(Error::PartialWrite(msg));
         }
     }
+
     fd.sync_all()?;
+
     // file descriptor and receiver channel shall be dropped.
     fd.unlock()?; // <----- read un-lock
     Ok((file, fpos))
@@ -2378,6 +2482,10 @@ where
 
     pub fn purge(self) -> Result<()> {
         let index_file = self.index_fd.to_file();
+        let vlog_file = self.valog_fd.as_ref().map(|x| x.0.clone());
+
+        mem::drop(self); // IMPORTANT: Close this snapshot first.
+
         match purge_file(index_file.clone(), &mut vec![], &mut vec![]) {
             "ok" => Ok(()),
             "locked" => {
@@ -2391,8 +2499,8 @@ where
             _ => unreachable!(),
         }?;
 
-        match &self.valog_fd {
-            Some((vlog_file, _)) => match purge_file(vlog_file.clone(), &mut vec![], &mut vec![]) {
+        if let Some(vlog_file) = vlog_file {
+            match purge_file(vlog_file.clone(), &mut vec![], &mut vec![]) {
                 "ok" => Ok(()),
                 "locked" => {
                     let msg = format!("{:?} locked", vlog_file);
@@ -2403,11 +2511,10 @@ where
                     Err(Error::InvalidFile(msg))
                 }
                 _ => unreachable!(),
-            },
-            None => Ok(()),
-        }?;
-
-        Ok(())
+            }
+        } else {
+            Ok(())
+        }
     }
 
     pub fn log(&self) -> Result<()> {
@@ -2591,7 +2698,7 @@ where
             m_blocksize,
             "partitions, reading root",
         )?)?;
-        // println!("to_partitions root len {}", mblock1.len());
+        // println!("robt to_partitions root len {}", mblock1.len());
         for index in 0..mblock1.len() {
             let mentry = mblock1.to_entry(index)?;
 
@@ -3842,15 +3949,25 @@ fn purger(name: String, rx: rt::Rx<ffi::OsString, ()>) -> Result<()> {
     }
 
     for file in locked_files.drain(..).collect::<Vec<ffi::OsString>>() {
-        purge_file(file.clone(), &mut locked_files, &mut err_files);
+        purge_file(file, &mut locked_files, &mut err_files);
     }
-    for file in err_files.into_iter() {
+    for file in err_files.clone().into_iter() {
         error!(target: "robtpr", "{:?}, error purging file {:?}", name, file);
     }
 
     info!(target: "robtpr", "{:?}, stopping purger ...", name);
 
-    Ok(())
+    let files = {
+        let mut files = vec![];
+        files.extend_from_slice(&locked_files);
+        files.extend_from_slice(&err_files);
+        files
+    };
+    if files.len() == 0 {
+        Ok(())
+    } else {
+        Err(Error::PurgeFiles(files))
+    }
 }
 
 #[cfg(test)]

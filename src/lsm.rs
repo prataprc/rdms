@@ -82,29 +82,6 @@ where
     })
 }
 
-/// Same as [y_iter] but handles previous versions of iterated entries as well.
-///
-/// NOTE: Iterator `x` contains newer mutations than iterator `y`.
-pub fn y_iter_versions<'a, K, V>(
-    mut x: IndexIter<'a, K, V>, // newer
-    mut y: IndexIter<'a, K, V>, // older
-    reverse: bool,
-) -> IndexIter<'a, K, V>
-where
-    K: 'a + Clone + Ord + Footprint,
-    V: 'a + Clone + Diff + Footprint,
-{
-    let x_entry = x.next();
-    let y_entry = y.next();
-    Box::new(YIterVersions {
-        x,
-        y,
-        x_entry,
-        y_entry,
-        reverse,
-    })
-}
-
 /// Iterator type, returned by [y_iter].
 pub struct YIter<'a, K, V>
 where
@@ -128,7 +105,7 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         match (self.x_entry.take(), self.y_entry.take()) {
             (Some(Ok(xe)), Some(Ok(ye))) => {
-                // println!("yiter next xe {} ye {}", xe.to_seqno(), ye.to_seqno());
+                // println!("yiter nxt xe {} ye {}", xe.to_seqno(), ye.to_seqno());
                 let cmpval = if self.reverse {
                     xe.as_key().cmp(ye.as_key()).reverse()
                 } else {
@@ -171,6 +148,29 @@ where
     }
 }
 
+/// Same as [y_iter] but handles previous versions of iterated entries as well.
+///
+/// NOTE: Iterator `x` contains newer mutations than iterator `y`.
+pub fn y_iter_versions<'a, K, V>(
+    mut x: IndexIter<'a, K, V>, // newer
+    mut y: IndexIter<'a, K, V>, // older
+    reverse: bool,
+) -> IndexIter<'a, K, V>
+where
+    K: 'a + Clone + Ord + Footprint,
+    V: 'a + Clone + Diff + Footprint,
+{
+    let x_entry = x.next();
+    let y_entry = y.next();
+    Box::new(YIterVersions {
+        x,
+        y,
+        x_entry,
+        y_entry,
+        reverse,
+    })
+}
+
 /// Iterator type, returned by [y_iter_versions].
 pub struct YIterVersions<'a, K, V>
 where
@@ -194,13 +194,17 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         match (self.x_entry.take(), self.y_entry.take()) {
             (Some(Ok(xe)), Some(Ok(ye))) => {
-                // println!("yiter next xe {:?} {}", xe.to_key(), xe.to_seqno());
-                // println!("yiter next ye {:?} {}", ye.to_key(), ye.to_seqno());
                 let cmpval = if self.reverse {
                     xe.as_key().cmp(ye.as_key()).reverse()
                 } else {
                     xe.as_key().cmp(ye.as_key())
                 };
+                //println!(
+                //    "yiter_versions next xe:{} ye:{} {:?}",
+                //    xe.to_seqno(),
+                //    ye.to_seqno(),
+                //    cmpval
+                //);
                 match cmpval {
                     cmp::Ordering::Less => {
                         self.x_entry = self.x.next();

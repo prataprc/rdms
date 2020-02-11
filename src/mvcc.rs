@@ -189,7 +189,7 @@ where
             }
             error!(
                 target: "mvcc  ",
-                "{:?}, dropped before read/write handles {}", self.name, n
+                "{:?}, can't drop before read/write handles {}", self.name, n
             );
         }
 
@@ -1770,6 +1770,34 @@ where
         G: Clone + RangeBounds<u64>,
     {
         self.as_mut().range_scans(ranges, within)
+    }
+}
+
+impl<K, V> CommitIterator<K, V> for &mut Mvcc<K, V>
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+{
+    fn scan<G>(&mut self, within: G) -> Result<IndexIter<K, V>>
+    where
+        G: Clone + RangeBounds<u64>,
+    {
+        (*self).scan(within)
+    }
+
+    fn scans<G>(&mut self, n_shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
+    where
+        G: Clone + RangeBounds<u64>,
+    {
+        (*self).scans(n_shards, within)
+    }
+
+    fn range_scans<N, G>(&mut self, ranges: Vec<N>, within: G) -> Result<Vec<IndexIter<K, V>>>
+    where
+        N: Clone + RangeBounds<K>,
+        G: Clone + RangeBounds<u64>,
+    {
+        (*self).range_scans(ranges, within)
     }
 }
 

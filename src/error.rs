@@ -80,8 +80,10 @@ pub enum Error {
     Utf8Error(std::str::Utf8Error),
     /// Error converting from one type to another.
     ConversionError(String),
-    // internal error, given key is less than the entire data set.
+    /// Return list of files that needs to be purged.
+    PurgeFiles(Vec<ffi::OsString>),
     #[doc(hidden)]
+    // internal error, given key is less than the entire data set.
     __LessThan,
     // internal error, z-block of robt index has overflowed.
     #[doc(hidden)]

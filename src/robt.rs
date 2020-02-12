@@ -339,10 +339,13 @@ where
     B: Bloom,
 {
     fn drop(&mut self) {
-        let name = {
-            match self.inner.get_mut().unwrap() {
-                InnerRobt::Build { name, .. } => name.clone(),
-                InnerRobt::Snapshot { name, .. } => name.clone(),
+        let name = loop {
+            match self.inner.get_mut() {
+                Ok(inner) => match inner {
+                    InnerRobt::Build { name, .. } => break name.clone(),
+                    InnerRobt::Snapshot { name, .. } => break name.clone(),
+                },
+                Err(err) => error!(target: "robt  ", "drop {}", err),
             }
         };
 

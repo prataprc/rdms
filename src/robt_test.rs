@@ -1195,7 +1195,7 @@ fn run_robt_llrb(name: &str, n_ops: u64, key_max: i64, repeat: usize, seed: u128
             .purge(Bound::Excluded(entry.to_seqno()))
             .unwrap();
         check_entry1(&entry, &ref_entry);
-        check_entry1(&snap.first_versions().unwrap(), &refs.first().unwrap());
+        check_entry1(&snap.first_with_versions().unwrap(), &refs.first().unwrap());
         // test last entry
         let ref_entry = refs.last().unwrap();
         let ref_entry = ref_entry
@@ -1208,7 +1208,7 @@ fn run_robt_llrb(name: &str, n_ops: u64, key_max: i64, repeat: usize, seed: u128
             .purge(Bound::Excluded(entry.to_seqno()))
             .unwrap();
         check_entry1(&entry, &ref_entry);
-        check_entry1(&snap.last_versions().unwrap(), &refs.last().unwrap());
+        check_entry1(&snap.last_with_versions().unwrap(), &refs.last().unwrap());
 
         // test get_with_versions
         for entry in refs.iter() {

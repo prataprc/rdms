@@ -2996,7 +2996,7 @@ where
     }
 
     /// Return the first entry in index, with all versions.
-    pub fn first_versions(&mut self) -> Result<Entry<K, V>> {
+    pub fn first_with_versions(&mut self) -> Result<Entry<K, V>> {
         let zfpos = self.first_zpos(self.to_root()?)?;
 
         let z_blocksize = self.config.z_blocksize;
@@ -3028,7 +3028,7 @@ where
     }
 
     /// Return the last entry in index, with all versions.
-    pub fn last_versions(&mut self) -> Result<Entry<K, V>> {
+    pub fn last_with_versions(&mut self) -> Result<Entry<K, V>> {
         let zfpos = self.last_zfpos(self.to_root()?)?;
 
         let z_blocksize = self.config.z_blocksize;

@@ -1138,7 +1138,7 @@ where
     K: Ord + Clone + Serialize,
     V: Clone + Diff + Serialize,
 {
-    name: String,
+    _name: String,
     readers: Vec<ShardReader<K, V, B>>,
 }
 
@@ -1147,8 +1147,8 @@ where
     K: Ord + Clone + Serialize,
     V: Clone + Diff + Serialize,
 {
-    fn new(name: String, readers: Vec<ShardReader<K, V, B>>) -> Result<ShrobtReader<K, V, B>> {
-        Ok(ShrobtReader { name, readers })
+    fn new(_name: String, readers: Vec<ShardReader<K, V, B>>) -> Result<ShrobtReader<K, V, B>> {
+        Ok(ShrobtReader { _name, readers })
     }
 
     fn find<'a, Q>(
@@ -1195,14 +1195,14 @@ where
     }
 
     /// Return the first entry in index, with all versions.
-    pub fn first_versions(&mut self) -> Result<Entry<K, V>>
+    pub fn first_with_versions(&mut self) -> Result<Entry<K, V>>
     where
         K: Default,
         V: Default,
         <V as Diff>::D: Default + Serialize,
     {
         match self.readers.first_mut() {
-            Some(reader) => reader.snapshot.first_versions(),
+            Some(reader) => reader.snapshot.first_with_versions(),
             None => Err(Error::EmptyIndex),
         }
     }
@@ -1221,14 +1221,14 @@ where
     }
 
     /// Return the last entry in index, with all versions.
-    pub fn last_versions(&mut self) -> Result<Entry<K, V>>
+    pub fn last_with_versions(&mut self) -> Result<Entry<K, V>>
     where
         K: Default,
         V: Default,
         <V as Diff>::D: Default + Serialize,
     {
         match self.readers.last_mut() {
-            Some(reader) => reader.snapshot.last_versions(),
+            Some(reader) => reader.snapshot.last_with_versions(),
             None => Err(Error::EmptyIndex),
         }
     }

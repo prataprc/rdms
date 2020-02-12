@@ -24,7 +24,7 @@ use std::{
     marker,
     ops::{Bound, RangeBounds},
     path, result,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, MutexGuard},
     thread,
 };
 
@@ -417,7 +417,7 @@ where
     }
 
     fn to_state(&self) -> Result<String> {
-        let shards = self.shards.lock().unwrap();
+        let shards = self.as_shards()?;
 
         let is_build = shards.iter().all(|s| s.is_build());
         let is_snapshot = shards.iter().all(|s| s.is_snapshot());
@@ -498,13 +498,37 @@ where
         Ok(self.count)
     }
 
+    fn to_num_shards(&self) -> Result<usize> {
+        Ok(self.as_shards()?.len())
+    }
+
+    fn to_shard_files(&self) -> Result<Vec<Vec<ffi::OsString>>> {
+        let mut shards = self.as_shards()?;
+        let mut purge_files = vec![];
+        for shard in shards.iter_mut() {
+            let xs = shard.as_mut_robt().to_next_version()?;
+            purge_files.push(xs);
+        }
+        Ok(purge_files)
+    }
+
+    fn as_shards(&self) -> Result<MutexGuard<Vec<Shard<K, V, B>>>> {
+        match self.shards.lock() {
+            Ok(value) => Ok(value),
+            Err(err) => {
+                let msg = format!("shrobt.as_shards(), poison-lock {:?}", err);
+                Err(Error::ThreadFail(msg))
+            }
+        }
+    }
+
     #[inline]
     pub fn to_name(&self) -> String {
         self.name.clone()
     }
 
     pub fn to_stats(&mut self) -> Result<robt::Stats> {
-        let mut shards = self.shards.lock().unwrap();
+        let mut shards = self.as_shards()?;
 
         let mut stats: robt::Stats = Default::default();
         for shard in shards.iter_mut() {
@@ -516,18 +540,18 @@ where
         Ok(stats)
     }
 
-    fn to_ranges(&self) -> Vec<(Bound<K>, Bound<K>)> {
-        let mut shards = self.shards.lock().unwrap();
+    fn to_ranges(&self) -> Result<Vec<(Bound<K>, Bound<K>)>> {
+        let mut shards = self.as_shards()?;
 
         let high_keys: Vec<Bound<K>> = shards
             .iter_mut()
             .filter_map(|shard| shard.to_high_key())
             .collect();
-        util::high_keys_to_ranges(high_keys)
+        Ok(util::high_keys_to_ranges(high_keys))
     }
 
     fn to_footprints(&self) -> Result<Vec<isize>> {
-        let mut shards = self.shards.lock().unwrap();
+        let mut shards = self.as_shards()?;
 
         let mut footprints = vec![];
         for shard in shards.iter_mut() {
@@ -538,7 +562,7 @@ where
     }
 
     fn to_partitions(&self) -> Result<Vec<(isize, Bound<K>, Bound<K>)>> {
-        let mut shards = self.shards.lock().unwrap();
+        let mut shards = self.as_shards()?;
 
         let mut partitions: Vec<(isize, Bound<K>, Bound<K>)> = vec![];
         for (_i, shard) in shards.iter_mut().enumerate() {
@@ -584,7 +608,7 @@ where
         let footprints = self.to_footprints()?;
         let num_shards = footprints.len();
 
-        let footprint: usize = self.footprint()?.try_into().unwrap();
+        let footprint: usize = self.footprint()?.try_into()?;
         let avg = footprint / num_shards;
 
         let do_rebalance = footprints
@@ -632,7 +656,7 @@ where
         &mut self,
         re_ranges: Vec<Option<(Bound<K>, Bound<K>)>>,
     ) -> Result<Vec<IndexIter<'a, K, V>>> {
-        let mut shards = self.shards.lock().unwrap();
+        let mut shards = self.as_shards()?;
 
         let mut outer_iters = vec![];
         for re_range in re_ranges.into_iter() {
@@ -658,7 +682,7 @@ where
     where
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
-        let shards = self.shards.lock().unwrap();
+        let shards = self.as_shards()?;
 
         let mut metas = vec![];
         for shard in shards.iter() {
@@ -714,11 +738,15 @@ where
     }
 
     fn to_reader(&mut self) -> Result<Self::R> {
-        let mut shards = self.shards.lock().unwrap();
+        let err_msg = format!("shrobt.to_reader() in build state");
+
+        let mut shards = self.as_shards()?;
 
         let mut readers = vec![];
         for shard in shards.iter_mut().rev() {
-            let high_key = shard.to_high_key().unwrap();
+            let high_key = shard
+                .to_high_key()
+                .ok_or(Error::UnInitialized(err_msg.clone()))?;
             let mut snapshot = shard.as_mut_robt().to_reader()?;
             snapshot.set_mmap(self.mmap)?;
             readers.push(ShardReader::new(high_key, snapshot));
@@ -750,16 +778,15 @@ where
         };
         let metas = self.transform_metadatas(metacb, state.as_str())?;
 
-        let (mut shards, iters, purge_files) = match (state.as_str(), re_ranges, re_iters) {
+        let (iters, purge_files) = match (state.as_str(), re_ranges, re_iters) {
             ("build", _, _) => {
                 info!(
                     target: "shrobt", "{:?}, initial commit", self.name,
                 );
                 // println!("{:?}, initial shrobt-commit", self.name);
 
-                let shards = self.shards.lock().unwrap();
-                let iters = scanner.scans(shards.len())?;
-                (shards, iters, vec![])
+                let iters = scanner.scans(self.to_num_shards()?)?;
+                (iters, vec![])
             }
             ("snapshot", Some(re_ranges), Some(re_iters)) => {
                 info!(
@@ -767,12 +794,7 @@ where
                     "{:?}, commit with rebalance {}", self.name, re_ranges.len()
                 );
 
-                let mut shards = self.shards.lock().unwrap();
-                let mut purge_files = vec![];
-                for shard in shards.iter_mut() {
-                    let xs = shard.as_mut_robt().to_next_version()?;
-                    purge_files.push(xs);
-                }
+                let purge_files = self.to_shard_files()?;
 
                 let commit_iters = {
                     let ranges: Vec<(Bound<K>, Bound<K>)> = re_ranges
@@ -798,7 +820,7 @@ where
                     .map(|(i1, i2)| lsm::y_iter_versions(i1, i2, reverse))
                     .collect();
 
-                (shards, iters, purge_files)
+                (iters, purge_files)
             }
             ("snapshot", None, _) => {
                 info!(
@@ -807,12 +829,19 @@ where
                 );
                 // println!("{:?}, shrobt-commit without rebalance", self.name);
 
-                let ranges = self.to_ranges();
-                let shards = self.shards.lock().unwrap();
-                (shards, scanner.range_scans(ranges)?, vec![])
+                let ranges = self.to_ranges()?;
+                (scanner.range_scans(ranges)?, vec![])
             }
             _ => unreachable!(),
         };
+
+        let mut shards = match self.shards.lock() {
+            Ok(value) => Ok(value),
+            Err(err) => {
+                let msg = format!("shrobt.commit(), poison-lock {:?}", err);
+                Err(Error::ThreadFail(msg))
+            }
+        }?;
 
         if shards.len() != iters.len() {
             return Err(Error::UnexpectedFail(format!(
@@ -908,7 +937,7 @@ where
         let state = self.to_state()?;
         let metas = self.transform_metadatas(metacb, state.as_str())?;
 
-        let mut shards = self.shards.lock().unwrap();
+        let mut shards = self.as_shards()?;
 
         let indexes: Vec<Robt<K, V, B>> = {
             let iter = shards.drain(..).map(|shard| shard.into_robt());
@@ -963,7 +992,7 @@ where
     }
 
     fn close(self) -> Result<()> {
-        let mut shards = self.shards.lock().unwrap();
+        let mut shards = self.as_shards()?;
 
         for shard in shards.drain(..) {
             shard.into_robt().close()?
@@ -973,7 +1002,7 @@ where
     }
 
     fn purge(self) -> Result<()> {
-        let mut shards = self.shards.lock().unwrap();
+        let mut shards = self.as_shards()?;
 
         for shard in shards.drain(..) {
             shard.into_robt().purge()?
@@ -1027,7 +1056,7 @@ where
     B: 'static + Send + Bloom,
 {
     fn footprint(&self) -> Result<isize> {
-        let shards = self.shards.lock().unwrap();
+        let shards = self.as_shards()?;
 
         let mut footprint = 0;
         for shard in shards.iter() {
@@ -1048,7 +1077,7 @@ where
     where
         G: Clone + RangeBounds<u64>,
     {
-        let mut shards = self.shards.lock().unwrap();
+        let mut shards = self.as_shards()?;
 
         let mut iters = vec![];
         for shard in shards.iter_mut() {
@@ -1064,7 +1093,7 @@ where
     where
         G: Clone + RangeBounds<u64>,
     {
-        let mut shards = self.shards.lock().unwrap();
+        let mut shards = self.as_shards()?;
 
         let mut iters = vec![];
         for shard in shards.iter_mut() {
@@ -1092,7 +1121,7 @@ where
         N: Clone + RangeBounds<K>,
         G: Clone + RangeBounds<u64>,
     {
-        let mut shards = self.shards.lock().unwrap();
+        let mut shards = self.as_shards()?;
 
         let mut iters = vec![];
         for range in ranges.into_iter() {
@@ -1120,7 +1149,7 @@ where
     B: 'static + Send + Bloom,
 {
     fn validate(&mut self) -> Result<robt::Stats> {
-        let mut shards = self.shards.lock().unwrap();
+        let mut shards = self.as_shards()?;
 
         let mut stats: robt::Stats = Default::default();
 

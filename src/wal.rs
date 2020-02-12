@@ -281,7 +281,7 @@ where
     /// Append `set` operation into the log. Return the sequence-no
     /// for this mutation.
     pub fn set(&mut self, key: K, value: V) -> Result<u64> {
-        let shard = self.as_shard(&key);
+        let shard = self.as_shard(&key)?;
 
         let op = Op::new_set(key, value);
         match shard.request(OpRequest::new_op(op))? {
@@ -293,7 +293,7 @@ where
     /// Append `set_cas` operation into the log. Return the sequence-no
     /// for this mutation.
     pub fn set_cas(&mut self, key: K, value: V, cas: u64) -> Result<u64> {
-        let shard = self.as_shard(&key);
+        let shard = self.as_shard(&key)?;
 
         let op = Op::new_set_cas(key, value, cas);
         match shard.request(OpRequest::new_op(op))? {
@@ -311,7 +311,7 @@ where
     {
         let key: K = key.to_owned();
 
-        let shard = self.as_shard(&key);
+        let shard = self.as_shard(&key)?;
 
         let op = Op::new_delete(key);
         match shard.request(OpRequest::new_op(op))? {
@@ -320,16 +320,19 @@ where
         }
     }
 
-    fn as_shard<'a>(&'a mut self, key: &K) -> &'a mut rt::Writer<OpRequest<Op<K, V>>, OpResponse> {
+    fn as_shard<'a>(
+        &'a mut self,
+        key: &K,
+    ) -> Result<&'a mut rt::Writer<OpRequest<Op<K, V>>, OpResponse>> {
         let hash = {
             let mut hasher = self.hash_builder.build_hasher();
             key.hash(&mut hasher);
             hasher.finish()
         };
 
-        let n: u64 = self.shards.len().try_into().unwrap();
-        let n: usize = (hash % n).try_into().unwrap();
-        &mut self.shards[n]
+        let n: u64 = self.shards.len().try_into()?;
+        let n: usize = (hash % n).try_into()?;
+        Ok(&mut self.shards[n])
     }
 }
 

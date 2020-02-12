@@ -1042,10 +1042,15 @@ where
             Box::new(CommitIter::new(vec![], Arc::new(shards)))
         };
         let mut_shards = unsafe {
-            let mut_shards = Arc::get_mut(&mut iter.shards).unwrap();
-            (mut_shards.as_mut_slice() as *mut [Shard<K, V>])
-                .as_mut()
-                .unwrap()
+            match Arc::get_mut(&mut iter.shards) {
+                Some(mut_shards) => Ok((mut_shards.as_mut_slice() as *mut [Shard<K, V>])
+                    .as_mut()
+                    .unwrap()),
+                None => {
+                    let msg = format!("shllrb scan() shared shards");
+                    Err(Error::UnexpectedFail(msg))
+                }
+            }?
         };
 
         for shard in mut_shards {
@@ -1187,7 +1192,10 @@ where
         value
     }
 
-    fn find<'a, Q>(key: &Q, rs: &'a mut [ShardReader<K, V>]) -> (usize, &'a mut ShardReader<K, V>)
+    fn find<'a, Q>(
+        key: &Q,
+        rs: &'a mut [ShardReader<K, V>], // from shards
+    ) -> (usize, &'a mut ShardReader<K, V>)
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -1210,6 +1218,16 @@ where
                     let (off, sr) = Self::find(key, &mut rs[pivot + 1..]);
                     (pivot + 1 + off, sr)
                 }
+            }
+        }
+    }
+
+    fn as_readers(&self) -> Result<MutexGuard<Vec<ShardReader<K, V>>>> {
+        match self.readers.lock() {
+            Ok(value) => Ok(value),
+            Err(err) => {
+                let msg = format!("shllrb.as_readers(), poison-lock {:?}", err);
+                Err(Error::ThreadFail(msg))
             }
         }
     }
@@ -1236,7 +1254,7 @@ where
         Q: Ord + ?Sized + Hash,
     {
         'outer: loop {
-            let mut readers = self.readers.lock().unwrap();
+            let mut readers = self.as_readers()?;
 
             match Self::find(key, readers.as_mut_slice()) {
                 (_, ShardReader::Active { r, .. }) => break r.get(key),
@@ -1252,7 +1270,7 @@ where
     fn iter(&mut self) -> Result<IndexIter<K, V>> {
         'outer: loop {
             let mut iter = {
-                let readers = self.readers.lock().unwrap();
+                let readers = self.as_readers()?;
                 Box::new(Iter::new(vec![], readers))
             };
 
@@ -1282,9 +1300,11 @@ where
         R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
+        use std::ops::Bound::{Excluded, Included, Unbounded};
+
         'outer: loop {
             let mut iter = {
-                let readers = self.readers.lock().unwrap();
+                let readers = self.as_readers()?;
                 Box::new(Iter::new(vec![], readers))
             };
 
@@ -1307,10 +1327,10 @@ where
                     } => {
                         iter.iters.push(r.range(range.clone())?);
                         let ok = match (range.end_bound(), high_key) {
-                            (Bound::Unbounded, _) => true,
-                            (_, Bound::Unbounded) => false, // last shard.
-                            (Bound::Included(hr), Bound::Excluded(hk)) => hr.ge(hk.borrow()),
-                            (Bound::Excluded(hr), Bound::Excluded(hk)) => hr.gt(hk.borrow()),
+                            (Unbounded, _) => true,
+                            (_, Unbounded) => false, // last shard.
+                            (Included(hr), Excluded(hk)) => hr.ge(hk.borrow()),
+                            (Excluded(hr), Excluded(hk)) => hr.gt(hk.borrow()),
                             _ => unreachable!(),
                         };
                         if !ok {
@@ -1334,9 +1354,11 @@ where
         R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
+        use std::ops::Bound::{Excluded, Included, Unbounded};
+
         'outer: loop {
             let mut iter = {
-                let readers = self.readers.lock().unwrap();
+                let readers = self.as_readers()?;
                 Box::new(Iter::new(vec![], readers))
             };
 
@@ -1347,9 +1369,9 @@ where
             };
 
             let start = match range.start_bound() {
-                Bound::Excluded(lr) => Self::find(lr, readers).0,
-                Bound::Included(lr) => Self::find(lr, readers).0,
-                Bound::Unbounded => 0,
+                Excluded(lr) => Self::find(lr, readers).0,
+                Included(lr) => Self::find(lr, readers).0,
+                Unbounded => 0,
             };
 
             for reader in readers[start..].iter_mut() {
@@ -1358,10 +1380,10 @@ where
                         ref high_key, r, ..
                     } => {
                         let ok = match (range.end_bound(), high_key) {
-                            (Bound::Unbounded, _) => true,
-                            (_, Bound::Unbounded) => false, // last shard.
-                            (Bound::Included(hr), Bound::Excluded(hk))
-                            | (Bound::Excluded(hr), Bound::Excluded(hk)) => hr.ge(hk.borrow()),
+                            (Unbounded, _) => true,
+                            (_, Unbounded) => false, // last shard.
+                            (Included(hr), Excluded(hk)) => hr.ge(hk.borrow()),
+                            (Excluded(hr), Excluded(hk)) => hr.ge(hk.borrow()),
                             _ => unreachable!(),
                         };
                         iter.iters.push(r.reverse(range.clone())?);
@@ -1450,7 +1472,10 @@ where
         value
     }
 
-    fn find<'a>(rs: &'a mut [ShardWriter<K, V>], key: &K) -> (usize, &'a mut ShardWriter<K, V>) {
+    fn find<'a>(
+        key: &K,
+        rs: &'a mut [ShardWriter<K, V>], // from writers
+    ) -> (usize, &'a mut ShardWriter<K, V>) {
         match rs.len() {
             0 => unreachable!(),
             1 => (0, &mut rs[0]),
@@ -1464,11 +1489,21 @@ where
             n => {
                 let pivot = n / 2;
                 if ShardWriter::less(key, &rs[pivot]) {
-                    Self::find(&mut rs[..pivot + 1], key)
+                    Self::find(key, &mut rs[..pivot + 1])
                 } else {
-                    let (off, sr) = Self::find(&mut rs[pivot + 1..], key);
+                    let (off, sr) = Self::find(key, &mut rs[pivot + 1..]);
                     (pivot + 1 + off, sr)
                 }
+            }
+        }
+    }
+
+    fn as_writers(&self) -> Result<MutexGuard<Vec<ShardWriter<K, V>>>> {
+        match self.writers.lock() {
+            Ok(value) => Ok(value),
+            Err(err) => {
+                let msg = format!("shllrb.as_writers(), poison-lock {:?}", err);
+                Err(Error::ThreadFail(msg))
             }
         }
     }
@@ -1491,8 +1526,8 @@ where
 {
     fn set(&mut self, key: K, value: V) -> Result<Option<Entry<K, V>>> {
         loop {
-            let mut writers = self.writers.lock().unwrap();
-            match Self::find(writers.as_mut_slice(), &key) {
+            let mut writers = self.as_writers()?;
+            match Self::find(&key, writers.as_mut_slice()) {
                 (_, ShardWriter::Active { w, .. }) => {
                     let seqno = self.root_seqno.fetch_add(1, Ordering::SeqCst) + 1;
                     break Ok(w.set_index(key, value, Some(seqno))?.1);
@@ -1507,8 +1542,8 @@ where
 
     fn set_cas(&mut self, key: K, value: V, cas: u64) -> Result<Option<Entry<K, V>>> {
         loop {
-            let mut writers = self.writers.lock().unwrap();
-            match Self::find(writers.as_mut_slice(), &key) {
+            let mut writers = self.as_writers()?;
+            match Self::find(&key, writers.as_mut_slice()) {
                 (_, ShardWriter::Active { w, .. }) => {
                     let seqno = self.root_seqno.fetch_add(1, Ordering::SeqCst) + 1;
                     break w.set_cas_index(key, value, cas, Some(seqno))?.1;
@@ -1528,8 +1563,8 @@ where
     {
         let keyk: K = key.to_owned();
         loop {
-            let mut writers = self.writers.lock().unwrap();
-            match Self::find(writers.as_mut_slice(), &keyk) {
+            let mut writers = self.as_writers()?;
+            match Self::find(&keyk, writers.as_mut_slice()) {
                 (_, ShardWriter::Active { w, .. }) => {
                     let seqno = self.root_seqno.fetch_add(1, Ordering::SeqCst) + 1;
                     break w.delete_index(key, Some(seqno))?.1;
@@ -2157,7 +2192,7 @@ where
             };
             interval = time::Duration::from_secs(isecs);
         }
-        elapsed = start.elapsed().unwrap();
+        elapsed = start.elapsed()?;
 
         match resp_tx {
             Some(tx) => tx.send(n)?,

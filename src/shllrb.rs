@@ -616,7 +616,7 @@ where
             let [(c_off, curr), (o_off, other)] = item;
             // println!("merge at ({}, {})", c_off, o_off);
             threads.push(thread::spawn(move || {
-                do_merge((c_off, curr), (o_off, other))
+                thread_merge((c_off, curr), (o_off, other))
             }));
         }
 
@@ -687,7 +687,7 @@ where
         let (name, mut threads) = (self.to_name(), vec![]);
         for (off, curr) in splits.into_iter() {
             let nm = name.clone();
-            threads.push(thread::spawn(move || do_split(nm, off, curr)));
+            threads.push(thread::spawn(move || thread_split(nm, off, curr)));
         }
 
         // phase-3 gather threads, and update active shards.
@@ -2166,7 +2166,7 @@ where
     }
 }
 
-fn do_merge<K, V>(
+fn thread_merge<K, V>(
     (c_off, curr): (usize, Shard<K, V>),
     (o_off, mut other): (usize, Shard<K, V>),
 ) -> Result<(usize, usize, Option<Bound<K>>, Shard<K, V>)>
@@ -2211,7 +2211,7 @@ where
     }
 }
 
-fn do_split<K, V>(
+fn thread_split<K, V>(
     name: String,
     off: usize,
     curr: Shard<K, V>,

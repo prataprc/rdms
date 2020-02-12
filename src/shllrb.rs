@@ -213,7 +213,7 @@ where
     V: Clone + Diff + Footprint,
 {
     root_seqno: Arc<AtomicU64>,
-    shards: Arc<Mutex<Vec<Shard<K, V>>>>,
+    shards: Mutex<Vec<Shard<K, V>>>,
     rdrefns: Vec<Arc<Mutex<Vec<ShardReader<K, V>>>>>,
     wtrefns: Vec<Arc<Mutex<Vec<ShardWriter<K, V>>>>>,
 }
@@ -265,7 +265,7 @@ where
     fn default() -> Self {
         let snapshot = Snapshot {
             root_seqno: Arc::new(AtomicU64::new(0)),
-            shards: Arc::new(Mutex::new(vec![])),
+            shards: Mutex::new(vec![]),
             rdrefns: vec![],
             wtrefns: vec![],
         };

@@ -82,12 +82,12 @@ mod llrb_node;
 pub mod mvcc;
 pub mod shllrb;
 // disk index
+// pub mod dgm;
 pub mod nodisk;
 pub mod robt;
 mod robt_entry;
 mod robt_index;
 pub mod shrobt;
-// pub mod dgm; TODO
 // pub mod backup; TODO
 
 // bloom filters.

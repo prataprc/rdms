@@ -1,3 +1,5 @@
+//! [Work in progress]
+
 use std::{convert::TryInto, fmt, result};
 
 use crate::{

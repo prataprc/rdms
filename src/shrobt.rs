@@ -29,6 +29,61 @@ use std::{
 };
 
 #[derive(Clone)]
+struct Root {
+    num_shards: usize,
+}
+
+impl TryFrom<Root> for Vec<u8> {
+    type Error = crate::error::Error;
+
+    fn try_from(root: Root) -> Result<Vec<u8>> {
+        use toml::Value;
+
+        let text = {
+            let mut dict = toml::map::Map::new();
+
+            dict.insert(
+                "num_shards".to_string(),
+                Value::Integer(root.num_shards.try_into()?),
+            );
+
+            Value::Table(dict).to_string()
+        };
+
+        Ok(text.as_bytes().to_vec())
+    }
+}
+
+impl TryFrom<Vec<u8>> for Root {
+    type Error = crate::error::Error;
+
+    fn try_from(bytes: Vec<u8>) -> Result<Root> {
+        use crate::error::Error::InvalidFile;
+
+        let err1 = InvalidFile(format!("shrobt, not a table"));
+        let err2 = InvalidFile(format!("shrobt, missing num_shards"));
+        let err3 = InvalidFile(format!("shrobt, num_shards not int"));
+
+        let text = std::str::from_utf8(&bytes)?.to_string();
+
+        let value: toml::Value = text
+            .parse()
+            .map_err(|_| InvalidFile(format!("shrobt, invalid root file")))?;
+
+        let num_shards = value
+            .as_table()
+            .ok_or(err1)?
+            .get("num_shards")
+            .ok_or(err2)?
+            .as_integer()
+            .ok_or(err3)?
+            .try_into()?;
+
+        Ok(Root { num_shards })
+    }
+}
+
+#[derive(Clone)]
 struct RootFileName(ffi::OsString);
 
 impl From<String> for RootFileName {
@@ -192,9 +247,7 @@ where
     V: 'static + Send + Clone + Diff + Serialize,
     <V as Diff>::D: Serialize,
 {
-    fn new_root_file(dir: &ffi::OsStr, name: &str, num_shards: usize) -> Result<ffi::OsString> {
-        use toml::Value;
-
+    fn new_root_file(dir: &ffi::OsStr, name: &str, root: Root) -> Result<ffi::OsString> {
         let root_file: ffi::OsString = {
             let rootf: RootFileName = name.to_string().into();
             let mut rootp = path::PathBuf::from(dir);
@@ -202,21 +255,14 @@ where
             rootp.into_os_string()
         };
 
-        let text = {
-            let num_shards: i64 = num_shards.try_into()?;
-            let mut dict = toml::map::Map::new();
-            dict.insert("num_shards".to_string(), Value::Integer(num_shards));
-            Value::Table(dict).to_string()
-        };
+        let data: Vec<u8> = root.try_into()?;
 
         let mut fd = util::create_file_a(root_file.clone())?;
-        fd.write(text.as_bytes())?;
+        fd.write(&data)?;
         Ok(root_file.into())
     }
 
-    fn open_root_file(dir: &ffi::OsStr, root: &ffi::OsStr) -> Result<toml::Value> {
-        use crate::error::Error::InvalidFile;
-
+    fn open_root_file(dir: &ffi::OsStr, root: &ffi::OsStr) -> Result<Root> {
         let _: String = TryFrom::try_from(RootFileName(root.to_os_string()))?;
         let root_file = {
             let mut rootp = path::PathBuf::from(dir);
@@ -224,16 +270,11 @@ where
             rootp.into_os_string()
         };
 
-        let text = {
-            let mut fd = util::open_file_r(&root_file)?;
-            let mut bytes = vec![];
-            fd.read_to_end(&mut bytes)?;
-            std::str::from_utf8(&bytes)?.to_string()
-        };
-        let value: toml::Value = text
-            .parse()
-            .map_err(|_| InvalidFile(format!("shrobt, invalid root file")))?;
-        Ok(value)
+        let mut fd = util::open_file_r(&root_file)?;
+        let mut bytes = vec![];
+        fd.read_to_end(&mut bytes)?;
+
+        Ok(bytes.try_into()?)
     }
 }
 
@@ -298,7 +339,9 @@ where
     ) -> Result<ShRobt<K, V, B>> {
         let root = ShrobtFactory::<K, V, B>::new_root_file(
             // create a new root file
-            dir, name, num_shards,
+            dir,
+            name,
+            Root { num_shards },
         )?;
 
         let mut shards = vec![];
@@ -332,26 +375,13 @@ where
         let name: String = TryFrom::try_from(RootFileName(root.clone()))?;
 
         let num_shards: usize = {
-            let err1 = InvalidFile(format!("shrobt, not a table"));
-            let err2 = InvalidFile(format!("shrobt, missing num_shards"));
-            let err3 = InvalidFile(format!("shrobt, num_shards not int"));
-
             let root = root.as_os_str();
-            let value = ShrobtFactory::<K, V, B>::open_root_file(dir, root)?;
-
-            let num_shards = value
-                .as_table()
-                .ok_or(err1)?
-                .get("num_shards")
-                .ok_or(err2)?
-                .as_integer()
-                .ok_or(err3)?
-                .try_into()?;
-
-            if num_shards > 0 {
-                Ok(num_shards)
+            let root = ShrobtFactory::<K, V, B>::open_root_file(dir, root)?;
+            if root.num_shards > 0 {
+                Ok(root.num_shards)
             } else {
-                Err(InvalidFile(format!("shrobt, num_shards == {}", num_shards)))
+                let msg = format!("shrobt, num_shards == {}", root.num_shards);
+                Err(InvalidFile(msg))
             }
         }?;
 

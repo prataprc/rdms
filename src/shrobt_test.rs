@@ -58,7 +58,9 @@ fn test_root_file() {
     let name = "test-root-file";
     let root = ShrobtFactory::<i64, i64, NoBitmap>::new_root_file(
         //
-        &dir, name, num_shards,
+        &dir,
+        name,
+        Root { num_shards },
     )
     .unwrap();
     assert!(root
@@ -67,21 +69,12 @@ fn test_root_file() {
         .unwrap()
         .contains("test-root-file"));
 
-    let value = ShrobtFactory::<i64, i64, NoBitmap>::open_root_file(
+    let root = ShrobtFactory::<i64, i64, NoBitmap>::open_root_file(
         //
         &dir, &root,
     )
     .unwrap();
-    let num_shards_value = value
-        .as_table()
-        .unwrap()
-        .get("num_shards")
-        .unwrap()
-        .as_integer()
-        .unwrap()
-        .try_into()
-        .unwrap();
-    assert_eq!(num_shards, num_shards_value);
+    assert_eq!(num_shards, root.num_shards);
 }
 
 #[test]

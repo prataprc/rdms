@@ -241,43 +241,6 @@ where
     _phantom_bmap: marker::PhantomData<B>,
 }
 
-impl<K, V, B> ShrobtFactory<K, V, B>
-where
-    K: 'static + Send + Clone + Ord + Serialize,
-    V: 'static + Send + Clone + Diff + Serialize,
-    <V as Diff>::D: Serialize,
-{
-    fn new_root_file(dir: &ffi::OsStr, name: &str, root: Root) -> Result<ffi::OsString> {
-        let root_file: ffi::OsString = {
-            let rootf: RootFileName = name.to_string().into();
-            let mut rootp = path::PathBuf::from(dir);
-            rootp.push(&rootf.0);
-            rootp.into_os_string()
-        };
-
-        let data: Vec<u8> = root.try_into()?;
-
-        let mut fd = util::create_file_a(root_file.clone())?;
-        fd.write(&data)?;
-        Ok(root_file.into())
-    }
-
-    fn open_root_file(dir: &ffi::OsStr, root: &ffi::OsStr) -> Result<Root> {
-        let _: String = TryFrom::try_from(RootFileName(root.to_os_string()))?;
-        let root_file = {
-            let mut rootp = path::PathBuf::from(dir);
-            rootp.push(root);
-            rootp.into_os_string()
-        };
-
-        let mut fd = util::open_file_r(&root_file)?;
-        let mut bytes = vec![];
-        fd.read_to_end(&mut bytes)?;
-
-        Ok(bytes.try_into()?)
-    }
-}
-
 impl<K, V, B> DiskIndexFactory<K, V> for ShrobtFactory<K, V, B>
 where
     K: 'static + Send + Default + Clone + Ord + Hash + Footprint + Serialize,
@@ -336,7 +299,7 @@ where
         num_shards: usize,
         mmap: bool,
     ) -> Result<ShRobt<K, V, B>> {
-        ShrobtFactory::<K, V, B>::new_root_file(dir, name, Root { num_shards })?;
+        Self::new_root_file(dir, name, Root { num_shards })?;
 
         let mut shards = vec![];
         for shard_i in 0..num_shards {
@@ -369,7 +332,7 @@ where
 
         let num_shards: usize = {
             let root = root.as_os_str();
-            let root = ShrobtFactory::<K, V, B>::open_root_file(dir, root)?;
+            let root = Self::open_root_file(dir, root)?;
             if root.num_shards > 0 {
                 Ok(root.num_shards)
             } else {
@@ -445,6 +408,36 @@ where
         let metadata = metadata.unwrap_or(vec![]);
 
         Ok((seqno, count, metadata, build_time, epoch))
+    }
+
+    fn new_root_file(dir: &ffi::OsStr, name: &str, root: Root) -> Result<ffi::OsString> {
+        let root_file: ffi::OsString = {
+            let rootf: RootFileName = name.to_string().into();
+            let mut rootp = path::PathBuf::from(dir);
+            rootp.push(&rootf.0);
+            rootp.into_os_string()
+        };
+
+        let data: Vec<u8> = root.try_into()?;
+
+        let mut fd = util::create_file_a(root_file.clone())?;
+        fd.write(&data)?;
+        Ok(root_file.into())
+    }
+
+    fn open_root_file(dir: &ffi::OsStr, root: &ffi::OsStr) -> Result<Root> {
+        let _: String = TryFrom::try_from(RootFileName(root.to_os_string()))?;
+        let root_file = {
+            let mut rootp = path::PathBuf::from(dir);
+            rootp.push(root);
+            rootp.into_os_string()
+        };
+
+        let mut fd = util::open_file_r(&root_file)?;
+        let mut bytes = vec![];
+        fd.read_to_end(&mut bytes)?;
+
+        Ok(bytes.try_into()?)
     }
 
     fn find_root_file(dir: &ffi::OsStr, name: &str) -> Result<ffi::OsString> {

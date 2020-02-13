@@ -391,7 +391,7 @@ where
     }
 
     pub fn open(dir: &ffi::OsStr, name: &str) -> Result<Robt<K, V, B>> {
-        let index_file = Self::open_index_file(dir, name)?;
+        let index_file = Self::find_index_file(dir, name)?;
         let name: Name = TryFrom::try_from(IndexFileName(index_file))?;
 
         let snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
@@ -461,7 +461,7 @@ where
         Ok(())
     }
 
-    fn open_index_file(dir: &ffi::OsStr, name: &str) -> Result<ffi::OsString> {
+    fn find_index_file(dir: &ffi::OsStr, name: &str) -> Result<ffi::OsString> {
         use crate::error::Error::InvalidFile;
 
         let mut versions = vec![];

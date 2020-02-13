@@ -26,5 +26,10 @@ if [ $? -ne 0 ] ; then
     exit 1
 fi
 
-echo "cargo test --release -- --ignored .................."
-for i in 0 0 0 0 0 0 0 0 0; do cargo test --release shrobt_commit_compact; done
+echo "cargo test --release shrobt_commit_compact .................."
+for i in 0 0 0 0 0 0 0 0 0; do
+    cargo test --release shrobt_commit_compact;
+    if [ $? -ne 0 ] ; then
+        exit 1
+    fi
+done

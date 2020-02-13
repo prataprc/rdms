@@ -48,12 +48,7 @@ fn test_to_next_version() {
         .commit(scanner, |_| app_meta.as_bytes().to_vec())
         .unwrap();
 
-    let root = {
-        let root = index.to_root().unwrap();
-        path::Path::new(&root).file_name().unwrap().to_os_string()
-    };
-
-    let mut index = Robt::<i64, i64, NoBitmap>::open(&dir, root).unwrap();
+    let mut index = Robt::<i64, i64, NoBitmap>::open(&dir, &name).unwrap();
 
     assert_eq!(index.to_name().unwrap(), name);
     assert_eq!(index.to_version().unwrap(), 0);

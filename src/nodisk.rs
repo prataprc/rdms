@@ -13,7 +13,6 @@ use crate::{
     core::{Diff, DiskIndexFactory, Entry, Footprint, Index, IndexIter, Reader},
     error::Error,
     panic::Panic,
-    types::Empty,
 };
 
 /// Factory type, to construct NoDisk indexes.
@@ -38,7 +37,7 @@ where
     }
 
     #[inline]
-    fn open(&self, _: &ffi::OsStr, _: Empty) -> Result<NoDisk<K, V>> {
+    fn open(&self, _dir: &ffi::OsStr, _name: &str) -> Result<NoDisk<K, V>> {
         Ok(NoDisk::new())
     }
 
@@ -82,16 +81,10 @@ where
 {
     type R = Panic;
     type W = Panic;
-    type O = Empty;
 
     #[inline]
     fn to_name(&self) -> Result<String> {
         Ok("no-disk mama !!".to_string())
-    }
-
-    #[inline]
-    fn to_root(&self) -> Result<Empty> {
-        Ok(Empty)
     }
 
     #[inline]

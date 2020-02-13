@@ -277,15 +277,13 @@ where
         Robt::new(dir, name, config)
     }
 
-    fn open(&self, dir: &ffi::OsStr, root: ffi::OsString) -> Result<Robt<K, V, B>> {
-        let name: Name = TryFrom::try_from(IndexFileName(root.clone()))?;
-
+    fn open(&self, dir: &ffi::OsStr, name: &str) -> Result<Robt<K, V, B>> {
         info!(
             target: "robtfc",
-            "{:?}, open from {:?}/{:?} ...", name, dir, root
+            "{:?}, open from {:?} ...", name, dir,
         );
 
-        Robt::open(dir, root)
+        Robt::open(dir, name)
     }
 
     fn to_type(&self) -> String {
@@ -392,8 +390,9 @@ where
         })
     }
 
-    pub fn open(dir: &ffi::OsStr, root: ffi::OsString) -> Result<Robt<K, V, B>> {
-        let name: Name = TryFrom::try_from(IndexFileName(root))?;
+    pub fn open(dir: &ffi::OsStr, name: &str) -> Result<Robt<K, V, B>> {
+        let index_file = Self::open_index_file(dir, name)?;
+        let name: Name = TryFrom::try_from(IndexFileName(index_file))?;
 
         let snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
         snapshot.log()?;
@@ -460,6 +459,38 @@ where
         }
 
         Ok(())
+    }
+
+    fn open_index_file(dir: &ffi::OsStr, name: &str) -> Result<ffi::OsString> {
+        use crate::error::Error::InvalidFile;
+
+        let mut versions = vec![];
+        for item in fs::read_dir(dir)? {
+            match item {
+                Ok(item) => {
+                    let index_file = IndexFileName(item.file_name());
+                    let nm: Result<Name> = index_file.try_into();
+                    match nm {
+                        Ok(nm) => match nm.try_into() {
+                            Ok((nm, ver)) if nm == name => versions.push(ver),
+                            _ => continue,
+                        },
+                        _ => continue,
+                    }
+                }
+                _ => continue,
+            }
+        }
+
+        let version = {
+            let err = InvalidFile(format!("robt, missing index file"));
+            versions.into_iter().max().ok_or(err)
+        }?;
+
+        let nm: Name = (name.to_string(), version).into();
+        let index_file: IndexFileName = nm.into();
+
+        Ok(index_file.into())
     }
 }
 
@@ -578,7 +609,6 @@ where
 {
     type R = Snapshot<K, V, B>;
     type W = Panic;
-    type O = ffi::OsString;
 
     fn to_name(&self) -> Result<String> {
         let name = match self.as_inner()?.deref() {
@@ -587,16 +617,6 @@ where
         };
         let parts: (String, usize) = TryFrom::try_from(name)?;
         Ok(parts.0) // just the name as passed to new().
-    }
-
-    fn to_root(&self) -> Result<Self::O> {
-        let name: Name = match self.as_inner()?.deref() {
-            InnerRobt::Build { name, .. } => name.clone(),
-            InnerRobt::Snapshot { name, .. } => name.clone(),
-        };
-
-        let index_file: IndexFileName = name.into();
-        Ok(index_file.into())
     }
 
     fn to_metadata(&self) -> Result<Vec<u8>> {

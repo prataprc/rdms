@@ -23,9 +23,7 @@ use crate::{
     },
     error::Error,
     llrb::{Llrb, LlrbReader, LlrbWriter, Stats as LlrbStats},
-    scans, thread as rt,
-    types::Empty,
-    util,
+    scans, thread as rt, util,
 };
 use log::{debug, error, info, warn};
 
@@ -733,19 +731,11 @@ where
     V: Clone + Diff + Footprint,
 {
     type W = ShllrbWriter<K, V>;
-
     type R = ShllrbReader<K, V>;
-
-    type O = Empty;
 
     #[inline]
     fn to_name(&self) -> Result<String> {
         Ok(self.as_ref().to_name())
-    }
-
-    #[inline]
-    fn to_root(&self) -> Result<Empty> {
-        self.as_ref().to_root()
     }
 
     #[inline]
@@ -801,19 +791,11 @@ where
     V: Clone + Diff + Footprint,
 {
     type W = ShllrbWriter<K, V>;
-
     type R = ShllrbReader<K, V>;
-
-    type O = Empty;
 
     #[inline]
     fn to_name(&self) -> Result<String> {
         Ok(self.name.clone())
-    }
-
-    #[inline]
-    fn to_root(&self) -> Result<Empty> {
-        Ok(Empty)
     }
 
     #[inline]

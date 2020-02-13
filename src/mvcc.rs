@@ -60,7 +60,6 @@ use crate::{
     llrb_node::{LlrbDepth, Node},
     scans,
     spinlock::{self, RWSpinlock},
-    types::Empty,
     util,
 };
 
@@ -497,16 +496,10 @@ where
 {
     type W = MvccWriter<K, V>;
     type R = MvccReader<K, V>;
-    type O = Empty;
 
     #[inline]
     fn to_name(&self) -> Result<String> {
         Ok(self.as_ref().to_name())
-    }
-
-    #[inline]
-    fn to_root(&self) -> Result<Empty> {
-        self.as_ref().to_root()
     }
 
     #[inline]
@@ -564,14 +557,9 @@ where
 {
     type W = MvccWriter<K, V>;
     type R = MvccReader<K, V>;
-    type O = Empty;
 
     fn to_name(&self) -> Result<String> {
         Ok(self.name.clone())
-    }
-
-    fn to_root(&self) -> Result<Empty> {
-        Ok(Empty)
     }
 
     fn to_metadata(&self) -> Result<Vec<u8>> {

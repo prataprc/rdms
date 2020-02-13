@@ -186,9 +186,7 @@ fn test_shrobt_commit_compact() {
         }
 
         index = {
-            let root = index.to_root().unwrap();
-            let root = path::Path::new(&root).file_name().unwrap().to_os_string();
-            println!("dir:{:?} root:{:?}", dir, root);
+            println!("dir:{:?} name:{:?}", dir, name);
             match index.close() {
                 Ok(()) => (),
                 Err(Error::PurgeFiles(files)) => {
@@ -199,7 +197,7 @@ fn test_shrobt_commit_compact() {
                 }
                 Err(err) => panic!("{:?}", err),
             }
-            ShRobt::<i64, i64, CRoaring>::open(&dir, root, mmap).unwrap()
+            ShRobt::<i64, i64, CRoaring>::open(&dir, name, mmap).unwrap()
         };
 
         within_low_seqno = Bound::Excluded(index.to_seqno().unwrap());
@@ -642,12 +640,6 @@ fn run_shrobt_llrb(
 
         assert_eq!(index.len().unwrap(), refs.len());
         assert_eq!(index.to_name(), name);
-        {
-            let root = index.to_root().unwrap();
-            let root = path::Path::new(&root).file_name().unwrap();
-            let ref_root: RootFileName = name.to_string().into();
-            assert_eq!(root, &ref_root.0);
-        }
 
         match index.validate() {
             Err(Error::EmptyIndex) if refs.len() == 0 => continue,

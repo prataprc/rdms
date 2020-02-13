@@ -291,8 +291,8 @@ where
         ShRobt::new(dir, name, self.config.clone(), self.num_shards, self.mmap)
     }
 
-    fn open(&self, dir: &ffi::OsStr, root: ffi::OsString) -> Result<ShRobt<K, V, B>> {
-        ShRobt::open(dir, root, self.mmap)
+    fn open(&self, dir: &ffi::OsStr, name: &str) -> Result<ShRobt<K, V, B>> {
+        ShRobt::open(dir, name, self.mmap)
     }
 
     fn to_type(&self) -> String {
@@ -309,7 +309,6 @@ where
     B: 'static + Send + Bloom,
 {
     name: String,
-    root: ffi::OsString,
     mmap: bool,
 
     seqno: u64,
@@ -337,12 +336,7 @@ where
         num_shards: usize,
         mmap: bool,
     ) -> Result<ShRobt<K, V, B>> {
-        let root = ShrobtFactory::<K, V, B>::new_root_file(
-            // create a new root file
-            dir,
-            name,
-            Root { num_shards },
-        )?;
+        ShrobtFactory::<K, V, B>::new_root_file(dir, name, Root { num_shards })?;
 
         let mut shards = vec![];
         for shard_i in 0..num_shards {
@@ -356,7 +350,6 @@ where
 
         Ok(ShRobt {
             name: name.to_string(),
-            root,
             mmap,
 
             seqno: std::u64::MIN,
@@ -369,10 +362,10 @@ where
         })
     }
 
-    pub fn open(dir: &ffi::OsStr, root: ffi::OsString, mmap: bool) -> Result<ShRobt<K, V, B>> {
+    pub fn open(dir: &ffi::OsStr, name: &str, mmap: bool) -> Result<ShRobt<K, V, B>> {
         use crate::error::Error::InvalidFile;
 
-        let name: String = TryFrom::try_from(RootFileName(root.clone()))?;
+        let root = Self::find_root_file(dir, name)?;
 
         let num_shards: usize = {
             let root = root.as_os_str();
@@ -385,54 +378,20 @@ where
             }
         }?;
 
-        let mut indexes: Vec<Option<Robt<K, V, B>>> = vec![];
-        (0..num_shards).for_each(|_| indexes.push(None));
-
-        let items: Vec<(usize, Robt<K, V, B>)> = fs::read_dir(dir)?
-            .filter_map(|item| item.ok())
-            .filter_map(|item| Robt::open(dir, item.file_name()).ok())
-            .filter_map(|index| match index.to_name().ok() {
-                Some(nm) => Some((nm, index)),
-                None => None,
-            })
-            .filter_map(|(nm, index)| {
-                let nm = ShardName(nm);
-                let (nm, shardid): (String, usize) = TryFrom::try_from(nm).ok()?;
-                Some((nm, shardid, index))
-            })
-            .filter(|(nm, _, _)| &name == nm)
-            .filter_map(|(_, shard_id, index)| Some((shard_id, index)))
-            .collect();
-
-        for (shard_id, index) in items.into_iter() {
-            indexes[shard_id] = match indexes[shard_id].take() {
-                None => Some(index),
-                Some(old_index) => {
-                    if old_index.to_version()? < index.to_version()? {
-                        Some(index)
-                    } else {
-                        Some(old_index)
-                    }
-                }
-            };
+        let mut indexes = vec![];
+        for shard_id in 0..num_shards {
+            let sname: ShardName = (name.to_string(), shard_id).into();
+            let sname = sname.to_string();
+            indexes.push(Robt::open(&dir, &sname)?);
         }
 
-        if indexes.iter().all(|index| index.is_some()) {
-            Ok(())
-        } else {
-            Err(InvalidFile(format!("shrobt, missing index")))
-        }?;
-
-        let mut indexes: Vec<Robt<K, V, B>> =
-            indexes.into_iter().filter_map(convert::identity).collect();
         let (seqno, count, metadata, build_time, epoch) =
             // get metadata
             Self::get_metadata(&mut indexes)?;
         let shards = Arc::new(Mutex::new(robts_to_shards(indexes)?));
 
         let index = ShRobt {
-            name: name.clone(),
-            root,
+            name: name.to_string(),
             mmap,
 
             seqno,
@@ -486,6 +445,26 @@ where
         let metadata = metadata.unwrap_or(vec![]);
 
         Ok((seqno, count, metadata, build_time, epoch))
+    }
+
+    fn find_root_file(dir: &ffi::OsStr, name: &str) -> Result<ffi::OsString> {
+        use crate::error::Error::InvalidFile;
+
+        for item in fs::read_dir(dir)? {
+            match item {
+                Ok(item) => {
+                    let root_file = RootFileName(item.file_name());
+                    let nm: Result<String> = root_file.clone().try_into();
+                    match nm {
+                        Ok(nm) if nm == name => return Ok(root_file.into()),
+                        _ => continue,
+                    }
+                }
+                _ => continue,
+            }
+        }
+
+        Err(InvalidFile(format!("robt, missing index file")))
     }
 }
 
@@ -739,16 +718,10 @@ where
 {
     type R = ShrobtReader<K, V, B>;
     type W = Panic;
-    type O = ffi::OsString;
 
     #[inline]
     fn to_name(&self) -> Result<String> {
         Ok(self.name.clone())
-    }
-
-    #[inline]
-    fn to_root(&self) -> Result<Self::O> {
-        Ok(self.root.clone())
     }
 
     #[inline]

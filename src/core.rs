@@ -182,9 +182,7 @@ where
     fn new(&self, dir: &ffi::OsStr, name: &str) -> Result<Self::I>;
 
     /// Open an existing index instance with predefined configuration.
-    /// Typically called while bootstrapping an index from disk, and/or
-    /// compacting them.
-    fn open(&self, dir: &ffi::OsStr, root: <Self::I as Index<K, V>>::O) -> Result<Self::I>;
+    fn open(&self, dir: &ffi::OsStr, name: &str) -> Result<Self::I>;
 
     /// Index type for identification purpose.
     fn to_type(&self) -> String;
@@ -245,14 +243,8 @@ where
     /// and writers.
     type R: Reader<K, V>;
 
-    /// Root-file / root-block for index.
-    type O: From<ffi::OsString>;
-
     /// Return the name of the index.
     fn to_name(&self) -> Result<String>;
-
-    /// Applicable only to disk index, identifies the index's master file.
-    fn to_root(&self) -> Result<Self::O>;
 
     /// Return application metadata, that was previously commited into index.
     fn to_metadata(&self) -> Result<Vec<u8>>;

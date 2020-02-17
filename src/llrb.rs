@@ -46,8 +46,8 @@ use std::{
 
 #[allow(unused_imports)]
 use crate::{
-    core::{CommitIter, Replay, Result, ScanEntry, ScanIter, Value, WalWriter, WriteIndexFactory},
-    core::{CommitIterator, ToJson, Validate, Writer},
+    core::{CommitIter, Replay, Result, ScanEntry, ScanIter, Value, WalWriter},
+    core::{CommitIterator, Cutoff, ToJson, Validate, WriteIndexFactory, Writer},
     core::{Diff, Entry, Footprint, Index, IndexIter, PiecewiseScan, Reader},
     error::Error,
     llrb_node::Node,
@@ -547,7 +547,7 @@ where
         self.as_mut().commit(scanner, metacb)
     }
 
-    fn compact<F>(&mut self, cutoff: Bound<u64>, metacb: F) -> Result<usize>
+    fn compact<F>(&mut self, cutoff: Cutoff, metacb: F) -> Result<usize>
     where
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
@@ -643,21 +643,23 @@ where
         Ok(())
     }
 
-    fn compact<F>(&mut self, cutoff: Bound<u64>, _metacb: F) -> Result<usize>
+    fn compact<F>(&mut self, cutoff: Cutoff, _metacb: F) -> Result<usize>
     where
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
+        let c_seqno = cutoff.to_bound();
+
         // before proceeding with compaction, verify the cutoff argument for
         // unusual values.
-        match cutoff {
+        match c_seqno {
             Bound::Unbounded => {
                 warn!(target: "llrb  ", "compact with unbounded cutoff");
             }
             Bound::Included(seqno) if seqno >= self.to_seqno()? => {
-                warn!(target: "llrb  ", "compact cutsoff the entire index {}", seqno);
+                warn!(target: "llrb  ", "compact the entire index {}", seqno);
             }
             Bound::Excluded(seqno) if seqno > self.to_seqno()? => {
-                warn!(target: "llrb  ", "compact cutsoff the entire index {}", seqno);
+                warn!(target: "llrb  ", "compact the entire index {}", seqno);
             }
             _ => (),
         }
@@ -673,10 +675,13 @@ where
                 dels: vec![],
                 tree_footprint: &mut self.tree_footprint,
             };
-            let (seen, limit) = Llrb::<K, V>::compact_loop(root, low, &mut cc, LIMIT)?;
+            let (seen, limit) =
+                // entry-point
+                Llrb::<K, V>::compact_loop(root, low, &mut cc, LIMIT)?;
             for key in cc.dels {
                 self.delete_index_entry(key)?;
             }
+
             match (seen, limit) {
                 (_, limit) if limit > 0 => break count + (LIMIT - limit),
                 (Some(key), _) => low = Bound::Excluded(key),
@@ -1192,11 +1197,8 @@ where
                         let mut size = node.footprint()?;
                         let entry = node.entry.clone();
                         node.delete(seqno)?;
-                        node.entry = node
-                            .entry
-                            .clone()
-                            .purge(Bound::Included(entry.to_seqno()))
-                            .unwrap();
+                        let cutoff = Cutoff::new_lsm(Bound::Included(entry.to_seqno()));
+                        node.entry = node.entry.clone().purge(cutoff).unwrap();
                         size = node.footprint()? - size; // TODO
                         Ok(DeleteResult {
                             node: Some(Llrb::walkuprot_23(node)),
@@ -1359,7 +1361,7 @@ struct CompactCtxt<'a, K>
 where
     K: Clone + Ord + Footprint,
 {
-    cutoff: Bound<u64>,
+    cutoff: Cutoff,
     dels: Vec<K>,
     tree_footprint: &'a mut isize,
 }
@@ -1381,12 +1383,14 @@ where
             (None, _) => Ok((None, limit)),
             // find the starting point
             (Some(node), Unbounded) => {
-                match Self::compact_loop(node.as_left_deref_mut(), Unbounded, cc, limit)? {
+                let left = node.as_left_deref_mut();
+                match Self::compact_loop(left, Unbounded, cc, limit)? {
                     (seen, limit) if limit == 0 => Ok((seen, limit)),
-                    (_, limit) => {
+                    (_, mut limit) => {
                         Self::compact_entry(node, cc)?;
                         let right = node.as_right_deref_mut();
-                        match Self::compact_loop(right, Unbounded, cc, limit - 1)? {
+                        limit -= 1;
+                        match Self::compact_loop(right, Unbounded, cc, limit)? {
                             (None, limit) => Ok((Some(node.to_key()), limit)),
                             (seen, limit) => Ok((seen, limit)),
                         }
@@ -1395,36 +1399,43 @@ where
             }
             (Some(node), Excluded(key)) => match key.cmp(node.as_key()) {
                 Ordering::Less => {
-                    match Self::compact_loop(node.as_left_deref_mut(), Excluded(key), cc, limit)? {
+                    let left = node.as_left_deref_mut();
+                    match Self::compact_loop(left, Excluded(key), cc, limit)? {
                         (seen, limit) if limit == 0 => Ok((seen, limit)),
-                        (_, limit) => {
+                        (_, mut limit) => {
                             Self::compact_entry(node, cc)?;
-                            let rnode = node.as_right_deref_mut();
-                            match Self::compact_loop(rnode, Unbounded, cc, limit - 1)? {
+                            let r = node.as_right_deref_mut();
+                            limit -= 1;
+                            match Self::compact_loop(r, Unbounded, cc, limit)? {
                                 (None, limit) => Ok((Some(node.to_key()), limit)),
                                 (seen, limit) => Ok((seen, limit)),
                             }
                         }
                     }
                 }
-                _ => Self::compact_loop(node.as_right_deref_mut(), Excluded(key), cc, limit),
+                _ => {
+                    let right = node.as_right_deref_mut();
+                    Self::compact_loop(right, Excluded(key), cc, limit)
+                }
             },
             _ => unreachable!(),
         }
     }
 
     fn compact_entry(node: &mut Node<K, V>, cc: &mut CompactCtxt<K>) -> Result<()> {
-        let size = node.entry.footprint()?;
-        *cc.tree_footprint += match node.entry.clone().purge(cc.cutoff) {
+        let tree_footprint = match node.entry.clone().purge(cc.cutoff) {
             None => {
-                cc.dels.push(node.entry.to_key());
+                cc.dels.push(node.to_key());
                 0
             }
             Some(entry) => {
+                let size = node.entry.footprint()?;
                 node.entry = entry;
                 node.entry.footprint()? - size
             }
         };
+
+        *cc.tree_footprint += tree_footprint;
 
         Ok(())
     }

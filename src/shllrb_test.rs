@@ -3,7 +3,7 @@ use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
 use std::{convert, mem, ops::Bound};
 
 use super::*;
-use crate::{llrb_node::Node, scans, types::Empty, util};
+use crate::{core::Reader, llrb_node::Node, scans, types::Empty, util};
 
 include!("./ref_test.rs");
 
@@ -928,6 +928,11 @@ fn test_compact() {
             2 => Bound::Unbounded,
             _ => unreachable!(),
         };
+        let cutoff = match rng.gen::<u8>() % 2 {
+            0 => Cutoff::new_tombstone(cutoff),
+            1 => Cutoff::new_lsm(cutoff),
+            _ => unreachable!(),
+        };
         println!(
             "index-config: lsm:{} sticky:{} n_ops:{} cutoff:{:?}",
             lsm, sticky, n_ops, cutoff
@@ -942,7 +947,7 @@ fn test_compact() {
 fn check_compact_nodes(
     index: &mut ShLlrb<i64, i64>,
     rindex: &mut ShLlrb<i64, i64>,
-    cutoff: Bound<u64>,
+    cutoff: Cutoff, // either tombstone/lsm.
 ) {
     // verify root index
     assert_eq!(index.to_seqno().unwrap(), rindex.to_seqno().unwrap());
@@ -952,41 +957,34 @@ fn check_compact_nodes(
     let mut key_footprint = 0;
     let mut tree_footprint = 0;
 
-    // verify each entry
+    let mut rr = rindex.to_reader().unwrap();
+    let res: Vec<Entry<i64, i64>> = rr
+        .iter()
+        .unwrap()
+        .map(|e| e.unwrap())
+        .filter_map(|e| e.purge(cutoff.clone()))
+        .collect();
+
     {
         let mut r = index.to_reader().unwrap();
-        let mut rr = rindex.to_reader().unwrap();
-
         let mut iter = r.iter().unwrap();
-
-        let within = match cutoff {
-            Bound::Included(cutoff) => (Bound::Excluded(cutoff), Bound::Unbounded),
-            Bound::Excluded(cutoff) => (Bound::Included(cutoff), Bound::Unbounded),
-            Bound::Unbounded => (
-                Bound::Excluded(rindex.to_seqno().unwrap()),
-                Bound::Unbounded,
-            ),
-        };
-        let mut refiter = {
-            let iters = vec![rr.iter().unwrap()];
-            scans::FilterScans::new(iters, within)
-        };
+        let mut refiter = res.into_iter();
         loop {
             let entry = iter.next().transpose().unwrap();
-            let refentry = refiter.next().transpose().unwrap();
-
-            let (entry, refentry) = match (entry, refentry) {
-                (Some(entry), Some(refentry)) => {
-                    assert!(within.contains(&entry.to_seqno()));
-                    assert!(within.contains(&refentry.to_seqno()));
-                    (entry, refentry)
+            let refn = refiter.next();
+            let (entry, refn) = match (entry, refn) {
+                (Some(entry), Some(refn)) => (entry, refn),
+                (None, Some(refn)) => {
+                    let (key, seqno) = (refn.to_key(), refn.to_seqno());
+                    panic!("refn is {} {}", key, seqno)
                 }
-                (Some(entry), None) => {
-                    panic!("unexpected entry {} in compact index", entry.to_seqno())
+                (Some(refn), None) => {
+                    let (key, seqno) = (refn.to_key(), refn.to_seqno());
+                    panic!("refn is {} {}", key, seqno)
                 }
-                (None, Some(entry)) => panic!("unexpected entry {} in ref index", entry.to_seqno()),
                 (None, None) => break,
             };
+            check_node1(&entry, &refn);
 
             n_count += 1;
             if entry.is_deleted() {
@@ -998,38 +996,6 @@ fn check_compact_nodes(
                 let overhead: isize = size.try_into().unwrap();
                 overhead + entry.footprint().unwrap()
             };
-
-            assert_eq!(entry.to_key(), refentry.to_key());
-            let key = entry.to_key();
-            assert_eq!(entry.to_seqno(), refentry.to_seqno(), "key {}", key);
-            assert_eq!(entry.is_deleted(), refentry.is_deleted(), "key {}", key);
-            assert_eq!(
-                entry.to_native_value(),
-                refentry.to_native_value(),
-                "key {}",
-                key
-            );
-
-            let mut ei = entry.versions();
-            let mut ri = refentry.versions();
-            loop {
-                let (e, re) = (ei.next(), ri.next());
-
-                let (e, re) = match (e, re) {
-                    (Some(e), Some(re)) => {
-                        assert!(within.contains(&e.to_seqno()));
-                        assert!(within.contains(&re.to_seqno()));
-                        (e, re)
-                    }
-                    (Some(e), None) => panic!("version {}", e.to_seqno()),
-                    (None, Some(e)) => panic!("version {}", e.to_seqno()),
-                    (None, None) => break,
-                };
-                assert_eq!(e.to_seqno(), re.to_seqno(), "key {}", key);
-                assert_eq!(e.to_native_value(), re.to_native_value(), "key {}", key);
-                assert_eq!(e.is_deleted(), re.is_deleted(), "key {}", key);
-                assert_eq!(e.to_seqno_state(), re.to_seqno_state(), "key {}", key);
-            }
         }
     }
 

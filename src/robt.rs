@@ -62,6 +62,7 @@ use std::{
 #[allow(unused_imports)] // for documentation
 use crate::rdms::Rdms;
 use crate::{
+    core::Cutoff,
     core::{self, Bloom, CommitIterator, Index, Serialize, ToJson, Validate},
     core::{Diff, DiskIndexFactory, Entry, Footprint, IndexIter, Reader, Result},
     error::Error,
@@ -830,7 +831,7 @@ where
         Ok(())
     }
 
-    fn compact<F>(&mut self, cutoff: Bound<u64>, _metacb: F) -> Result<usize>
+    fn compact<F>(&mut self, cutoff: Cutoff, _metacb: F) -> Result<usize>
     where
         F: Fn(Vec<u8>) -> Vec<u8>,
     {

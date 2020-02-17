@@ -46,6 +46,34 @@ pub type ScanIter<'a, K, V> = Box<dyn Iterator<Item = Result<ScanEntry<K, V>>> +
 /// A convenience trait to group thread-safe trait conditions.
 pub trait ThreadSafe: 'static + Send {}
 
+/// Cutoff enumerated parameter to [compact][Index::compact] method. Refer
+/// to [rdms] library documentation for more information on compaction.
+#[derive(Clone, Copy, Debug)]
+pub enum Cutoff {
+    /// Tombstone-compaction, refer to [rdms] for more detail.
+    Tombstone(Bound<u64>),
+    /// Lsm-compaction, refer to [rdms] for more detail.
+    Lsm(Bound<u64>),
+}
+
+impl Cutoff {
+    pub fn new_tombstone(b: Bound<u64>) -> Cutoff {
+        Cutoff::Tombstone(b)
+    }
+
+    pub fn new_lsm(b: Bound<u64>) -> Cutoff {
+        Cutoff::Lsm(b)
+    }
+
+    pub fn to_bound(&self) -> Bound<u64> {
+        match self {
+            Cutoff::Tombstone(b) => b,
+            Cutoff::Lsm(b) => b,
+        }
+        .clone()
+    }
+}
+
 /// Trait for diffable values.
 ///
 /// Version control is a unique feature built into [rdms]. And this is possible
@@ -279,7 +307,7 @@ where
     /// `cutoff` bound can be purged permenantly.
     ///
     /// Return number of items in index.
-    fn compact<F>(&mut self, cutoff: Bound<u64>, mf: F) -> Result<usize>
+    fn compact<F>(&mut self, cutoff: Cutoff, metacb: F) -> Result<usize>
     where
         F: Fn(Vec<u8>) -> Vec<u8>;
 
@@ -919,8 +947,20 @@ where
     V: Clone + Diff,
 {
     // purge all versions whose seqno <= or < `cutoff`.
-    pub(crate) fn purge(mut self, cutoff: Bound<u64>) -> Option<Entry<K, V>> {
+    pub(crate) fn purge(mut self, cutoff: Cutoff) -> Option<Entry<K, V>> {
         let n = self.to_seqno();
+
+        let cutoff = match cutoff {
+            Cutoff::Lsm(cutoff) => cutoff,
+            Cutoff::Tombstone(cutoff) if self.is_deleted() => match cutoff {
+                Bound::Included(cutoff) if n <= cutoff => return None,
+                Bound::Excluded(cutoff) if n < cutoff => return None,
+                Bound::Unbounded => return None,
+                _ => return Some(self),
+            },
+            Cutoff::Tombstone(_) => return Some(self),
+        };
+
         // If all versions of this entry are before cutoff, then purge entry
         match cutoff {
             Bound::Included(0) => return Some(self),
@@ -964,8 +1004,14 @@ where
         let entry = self.skip_till(start.clone(), end)?;
         // purge versions older than request range.
         match start {
-            Bound::Included(x) => entry.purge(Bound::Excluded(x)),
-            Bound::Excluded(x) => entry.purge(Bound::Included(x)),
+            Bound::Included(x) => {
+                let cutoff = Cutoff::new_lsm(Bound::Excluded(x));
+                entry.purge(cutoff)
+            }
+            Bound::Excluded(x) => {
+                let cutoff = Cutoff::new_lsm(Bound::Included(x));
+                entry.purge(cutoff)
+            }
             Bound::Unbounded => Some(entry),
         }
     }

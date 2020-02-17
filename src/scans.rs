@@ -75,8 +75,8 @@ use std::{
 };
 
 use crate::{
-    core::ScanEntry,
     core::{Bloom, CommitIterator, Diff, Entry, IndexIter, PiecewiseScan, Result},
+    core::{Cutoff, ScanEntry},
     util,
 };
 
@@ -456,7 +456,7 @@ where
     I: Iterator<Item = Result<Entry<K, V>>>,
 {
     iter: I,
-    cutoff: Bound<u64>,
+    cutoff: Cutoff,
 }
 
 impl<K, V, I> CompactScan<K, V, I>
@@ -465,7 +465,7 @@ where
     V: Clone + Diff,
     I: Iterator<Item = Result<Entry<K, V>>>,
 {
-    pub fn new(iter: I, cutoff: Bound<u64>) -> CompactScan<K, V, I> {
+    pub fn new(iter: I, cutoff: Cutoff) -> CompactScan<K, V, I> {
         CompactScan { iter, cutoff }
     }
 

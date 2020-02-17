@@ -56,7 +56,7 @@ fn test_root_file() {
 
     let num_shards = (rng.gen::<usize>() % 8) + 1;
     let name = "test-root-file";
-    let root = ShrobtFactory::<i64, i64, NoBitmap>::new_root_file(
+    let root = ShRobt::<i64, i64, NoBitmap>::new_root_file(
         //
         &dir,
         name,
@@ -69,11 +69,7 @@ fn test_root_file() {
         .unwrap()
         .contains("test-root-file"));
 
-    let root = ShrobtFactory::<i64, i64, NoBitmap>::open_root_file(
-        //
-        &dir, &root,
-    )
-    .unwrap();
+    let root = ShRobt::<i64, i64, NoBitmap>::open_root_file(&dir, &root).unwrap();
     assert_eq!(num_shards, root.num_shards);
 }
 
@@ -176,9 +172,16 @@ fn test_shrobt_commit_compact() {
             .unwrap();
 
         if rng.gen::<bool>() {
-            let cutoff = {
-                let seqno = rng.gen::<u64>() % index.to_seqno().unwrap();
-                Bound::Included(seqno)
+            let cutoff = match rng.gen::<u8>() % 3 {
+                0 => Bound::Excluded(rng.gen::<u64>() % (n_ops as u64) / 2),
+                1 => Bound::Included(rng.gen::<u64>() % (n_ops as u64) / 2),
+                2 => Bound::Unbounded,
+                _ => unreachable!(),
+            };
+            let cutoff = match rng.gen::<u8>() % 2 {
+                0 => Cutoff::new_tombstone(cutoff),
+                1 => Cutoff::new_lsm(cutoff),
+                _ => unreachable!(),
             };
             println!("cutoff {:?}", cutoff);
             mindex.compact(cutoff, std::convert::identity).unwrap();
@@ -680,12 +683,12 @@ fn run_shrobt_llrb(
         let ref_entry = refs.first().unwrap();
         let ref_entry = ref_entry
             .clone()
-            .purge(Bound::Excluded(ref_entry.to_seqno()))
+            .purge(Cutoff::new_lsm(Bound::Excluded(ref_entry.to_seqno())))
             .unwrap();
         let entry = r.first().unwrap();
         let entry = entry
             .clone()
-            .purge(Bound::Excluded(entry.to_seqno()))
+            .purge(Cutoff::new_lsm(Bound::Excluded(entry.to_seqno())))
             .unwrap();
         check_entry1(&entry, &ref_entry);
         check_entry1(&r.first_with_versions().unwrap(), &refs.first().unwrap());
@@ -693,12 +696,12 @@ fn run_shrobt_llrb(
         let ref_entry = refs.last().unwrap();
         let ref_entry = ref_entry
             .clone()
-            .purge(Bound::Excluded(ref_entry.to_seqno()))
+            .purge(Cutoff::new_lsm(Bound::Excluded(ref_entry.to_seqno())))
             .unwrap();
         let entry = r.last().unwrap();
         let entry = entry
             .clone()
-            .purge(Bound::Excluded(entry.to_seqno()))
+            .purge(Cutoff::new_lsm(Bound::Excluded(entry.to_seqno())))
             .unwrap();
         check_entry1(&entry, &ref_entry);
         check_entry1(&r.last_with_versions().unwrap(), &refs.last().unwrap());

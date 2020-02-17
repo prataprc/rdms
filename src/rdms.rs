@@ -16,7 +16,8 @@ use std::{
 #[allow(unused_imports)]
 use crate::core;
 use crate::{
-    core::{CommitIter, CommitIterator, Diff, Entry, Footprint, Index, Result, Validate},
+    core::{CommitIter, CommitIterator, Diff, Entry, Footprint, Index},
+    core::{Cutoff, Result, Validate},
     thread as rt,
 };
 
@@ -200,7 +201,7 @@ where
         index.commit(scanner, metacb)
     }
 
-    pub fn compact<F>(&mut self, cutoff: Bound<u64>, metacb: F) -> Result<usize>
+    pub fn compact<F>(&mut self, cutoff: Cutoff, metacb: F) -> Result<usize>
     where
         F: Fn(Vec<u8>) -> Vec<u8>,
     {

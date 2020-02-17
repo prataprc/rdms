@@ -1182,12 +1182,12 @@ fn run_robt_llrb(name: &str, n_ops: u64, key_max: i64, repeat: usize, seed: u128
         let ref_entry = refs.first().unwrap();
         let ref_entry = ref_entry
             .clone()
-            .purge(Bound::Excluded(ref_entry.to_seqno()))
+            .purge(Cutoff::new_lsm(Bound::Excluded(ref_entry.to_seqno())))
             .unwrap();
         let entry = snap.first().unwrap();
         let entry = entry
             .clone()
-            .purge(Bound::Excluded(entry.to_seqno()))
+            .purge(Cutoff::new_lsm(Bound::Excluded(entry.to_seqno())))
             .unwrap();
         check_entry1(&entry, &ref_entry);
         check_entry1(&snap.first_with_versions().unwrap(), &refs.first().unwrap());
@@ -1195,12 +1195,12 @@ fn run_robt_llrb(name: &str, n_ops: u64, key_max: i64, repeat: usize, seed: u128
         let ref_entry = refs.last().unwrap();
         let ref_entry = ref_entry
             .clone()
-            .purge(Bound::Excluded(ref_entry.to_seqno()))
+            .purge(Cutoff::new_lsm(Bound::Excluded(ref_entry.to_seqno())))
             .unwrap();
         let entry = snap.last().unwrap();
         let entry = entry
             .clone()
-            .purge(Bound::Excluded(entry.to_seqno()))
+            .purge(Cutoff::new_lsm(Bound::Excluded(entry.to_seqno())))
             .unwrap();
         check_entry1(&entry, &ref_entry);
         check_entry1(&snap.last_with_versions().unwrap(), &refs.last().unwrap());

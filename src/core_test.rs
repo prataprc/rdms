@@ -1,5 +1,7 @@
 use std::ops::Bound;
 
+use super::*;
+
 use crate::{
     core::{Delta, Entry, Value},
     vlog,
@@ -68,7 +70,7 @@ fn test_entry_new() {
     // testcase2 upsert
     let value = Value::new_upsert(Box::new(vlog::Value::new_native(20)), 1001);
     let entry2 = Entry::new(100, value);
-    entry1.prepend_version(entry2, false /*lsm*/).ok();
+    entry1.prepend_version(entry2, false /*lsm*/).unwrap();
     // verify latest entry
     assert_eq!(entry1.as_deltas().len(), 0);
     verify_latest(&entry1, 100, Some(20), 1001, false);
@@ -79,7 +81,10 @@ fn test_entry_new() {
     assert!(vers.next().is_none());
 
     // testcase3 purge noop
-    let entry1 = entry1.purge(Bound::Included(1000)).unwrap();
+    let entry1 = {
+        let cutoff = Cutoff::new_lsm(Bound::Included(1000));
+        entry1.purge(cutoff).unwrap()
+    };
     // verify latest entry
     assert_eq!(entry1.as_deltas().len(), 0);
     verify_latest(&entry1, 100, Some(20), 1001, false);
@@ -90,7 +95,10 @@ fn test_entry_new() {
     assert!(vers.next().is_none());
 
     // testcase4 actual purge
-    let entry = entry1.purge(Bound::Included(1002));
+    let entry = {
+        let cutoff = Cutoff::new_lsm(Bound::Included(1002));
+        entry1.purge(cutoff)
+    };
     assert!(entry.is_none());
 }
 
@@ -111,7 +119,7 @@ fn test_entry_new_lsm() {
     // testcase2 upsert
     let value = Value::new_upsert(Box::new(vlog::Value::new_native(20)), 1001);
     let entry2 = Entry::new(100, value);
-    entry1.prepend_version(entry2, true /*lsm*/).ok();
+    entry1.prepend_version(entry2, true /*lsm*/).unwrap();
     // verify latest entry
     assert_eq!(entry1.as_deltas().len(), 1);
     verify_latest(&entry1, 100, Some(20), 1001, false);
@@ -141,7 +149,7 @@ fn test_entry_new_lsm() {
     // testcase4 upsert
     let value = Value::new_upsert(Box::new(vlog::Value::new_native(30)), 1003);
     let entry3 = Entry::new(100, value);
-    entry1.prepend_version(entry3, true /*lsm*/).ok();
+    entry1.prepend_version(entry3, true /*lsm*/).unwrap();
     // verify latest entry
     assert_eq!(entry1.as_deltas().len(), 3);
     verify_latest(&entry1, 100, Some(30), 1003, false);
@@ -158,7 +166,10 @@ fn test_entry_new_lsm() {
     assert!(vers.next().is_none());
 
     // testcase5 purge noop
-    let entry1 = entry1.purge(Bound::Excluded(1000)).unwrap();
+    let entry1 = {
+        let cutoff = Cutoff::new_lsm(Bound::Excluded(1000));
+        entry1.purge(cutoff).unwrap()
+    };
     assert_eq!(entry1.as_deltas().len(), 3);
     let mut vers = entry1.versions();
     let mut entry = vers.next().expect("expected valid entry");
@@ -172,7 +183,10 @@ fn test_entry_new_lsm() {
     assert!(vers.next().is_none());
 
     // testcase6 purge noop
-    let entry1 = entry1.purge(Bound::Included(1000)).unwrap();
+    let entry1 = {
+        let cutoff = Cutoff::new_lsm(Bound::Included(1000));
+        entry1.purge(cutoff).unwrap()
+    };
     // verify latest entry
     assert_eq!(entry1.as_deltas().len(), 2);
     verify_latest(&entry1, 100, Some(30), 1003, false);
@@ -187,7 +201,10 @@ fn test_entry_new_lsm() {
     assert!(vers.next().is_none());
 
     // testcase7 purge
-    let entry1 = entry1.purge(Bound::Included(1002)).unwrap();
+    let entry1 = {
+        let cutoff = Cutoff::new_lsm(Bound::Included(1002));
+        entry1.purge(cutoff).unwrap()
+    };
     // verify latest entry
     assert_eq!(entry1.as_deltas().len(), 0);
     verify_latest(&entry1, 100, Some(30), 1003, false);
@@ -197,7 +214,84 @@ fn test_entry_new_lsm() {
     verify_version(&entry, 100, Some(30), 1003, false);
     assert!(vers.next().is_none());
 
-    assert!(entry1.purge(Bound::Included(1004)).is_none());
+    let entry = {
+        let cutoff = Cutoff::new_lsm(Bound::Included(1004));
+        entry1.purge(cutoff)
+    };
+    assert!(entry.is_none());
+}
+
+#[test]
+fn test_entry_tombstone_purge1() {
+    let value = Value::new_upsert(Box::new(vlog::Value::new_native(10)), 1000);
+    let mut entry = Entry::new(100, value);
+    {
+        let v = Box::new(vlog::Value::new_native(20));
+        let value = Value::new_upsert(v, 1001);
+        let e = Entry::new(100, value);
+        entry.prepend_version(e, true /*lsm*/).unwrap();
+    }
+    entry.delete(1002).unwrap();
+
+    let cutoff = Cutoff::new_tombstone(Bound::Excluded(1002));
+    let ent = entry.clone().purge(cutoff).unwrap();
+    assert_eq!(ent.as_deltas().len(), 2);
+    let mut vers = ent.versions();
+    let mut e = vers.next().expect("expected valid ent");
+    verify_version(&e, 100, None, 1002, true);
+    e = vers.next().expect("expected valid ent");
+    verify_version(&e, 100, Some(20), 1001, false);
+    e = vers.next().expect("expected valid ent");
+    verify_version(&e, 100, Some(10), 1000, false);
+    assert!(vers.next().is_none());
+
+    let cutoff = Cutoff::new_tombstone(Bound::Included(1002));
+    assert!(entry.clone().purge(cutoff).is_none());
+
+    let cutoff = Cutoff::new_tombstone(Bound::Unbounded);
+    assert!(entry.clone().purge(cutoff).is_none());
+}
+
+#[test]
+fn test_entry_tombstone_purge2() {
+    let value = Value::new_upsert(Box::new(vlog::Value::new_native(10)), 1000);
+    let mut entry = Entry::new(100, value);
+    {
+        let v = Box::new(vlog::Value::new_native(20));
+        let value = Value::new_upsert(v, 1001);
+        let e = Entry::new(100, value);
+        entry.prepend_version(e, true /*lsm*/).unwrap();
+    }
+    entry.delete(1002).unwrap();
+    {
+        let v = Box::new(vlog::Value::new_native(30));
+        let value = Value::new_upsert(v, 1003);
+        let e = Entry::new(100, value);
+        entry.prepend_version(e, true /*lsm*/).unwrap();
+    }
+
+    let cutoffs = vec![
+        Bound::Excluded(1002),
+        Bound::Included(1002),
+        Bound::Excluded(1003),
+        Bound::Included(1003),
+        Bound::Unbounded,
+    ];
+    for cutoff in cutoffs.into_iter() {
+        let cutoff = Cutoff::new_tombstone(cutoff);
+        let ent = entry.clone().purge(cutoff).unwrap();
+        assert_eq!(ent.as_deltas().len(), 3);
+        let mut vers = ent.versions();
+        let mut e = vers.next().expect("expected valid ent");
+        verify_version(&e, 100, Some(30), 1003, false);
+        e = vers.next().expect("expected valid ent");
+        verify_version(&e, 100, None, 1002, true);
+        e = vers.next().expect("expected valid ent");
+        verify_version(&e, 100, Some(20), 1001, false);
+        e = vers.next().expect("expected valid ent");
+        verify_version(&e, 100, Some(10), 1000, false);
+        assert!(vers.next().is_none());
+    }
 }
 
 #[test]
@@ -215,9 +309,9 @@ fn test_entry_filter_within() {
     let value = Value::new_upsert_value(4000_i32, 40);
     let entry4 = Entry::new(100_i32, value);
 
-    entry.prepend_version(entry2, true /*lsm*/).ok();
-    entry.prepend_version(entry3, true /*lsm*/).ok();
-    entry.prepend_version(entry4, true /*lsm*/).ok();
+    entry.prepend_version(entry2, true /*lsm*/).unwrap();
+    entry.prepend_version(entry3, true /*lsm*/).unwrap();
+    entry.prepend_version(entry4, true /*lsm*/).unwrap();
 
     let vers: Vec<Entry<i32, i32>> = entry.versions().collect();
     assert_eq!(vers.len(), 4);

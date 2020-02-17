@@ -425,7 +425,7 @@ fn test_bitmapped_scan() {
 
 #[test]
 fn test_compact_scan() {
-    use std::ops::Bound;
+    use std::ops::Bound::{Included, Unbounded};
 
     let seed: u128 = random();
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
@@ -435,15 +435,15 @@ fn test_compact_scan() {
     random_llrb(n_ops, key_max, seed, &mut llrb);
 
     let cutoffs = vec![
-        Bound::Included(0),
-        Bound::Included(6000),
-        Bound::Included(4000),
-        Bound::Excluded(5000),
-        Bound::Excluded(5000),
-        Bound::Excluded(5000),
-        Bound::Unbounded,
-        Bound::Unbounded,
-        Bound::Unbounded,
+        Cutoff::new_lsm(Bound::Included(0)),
+        Cutoff::new_lsm(Bound::Included(6000)),
+        Cutoff::new_lsm(Bound::Included(4000)),
+        Cutoff::new_lsm(Bound::Excluded(5000)),
+        Cutoff::new_lsm(Bound::Excluded(5000)),
+        Cutoff::new_lsm(Bound::Excluded(5000)),
+        Cutoff::new_lsm(Bound::Unbounded),
+        Cutoff::new_lsm(Bound::Unbounded),
+        Cutoff::new_lsm(Bound::Unbounded),
     ];
     for _i in 0..1000 {
         let j = rng.gen::<usize>() % (cutoffs.len() * 2);
@@ -451,15 +451,16 @@ fn test_compact_scan() {
         let cutoff = if j < cutoffs.len() {
             cutoffs[j].clone()
         } else {
-            match rng.gen::<i64>() {
-                n if (n >= 0) && (n % 4 == 0) => Bound::Included((n % n_ops) as u64),
-                n if (n >= 0) && (n % 4 == 1) => Bound::Included(0),
-                n if (n >= 0) && (n % 4 == 2) => Bound::Included((n % n_ops) as u64),
-                n if (n >= 0) && (n % 4 == 3) => Bound::Included(((n % n_ops) + 1) as u64),
-                _ => Bound::Unbounded,
-            }
+            let cutoff = match rng.gen::<i64>() {
+                n if (n >= 0) && (n % 4 == 0) => Included((n % n_ops) as u64),
+                n if (n >= 0) && (n % 4 == 1) => Included(0),
+                n if (n >= 0) && (n % 4 == 2) => Included((n % n_ops) as u64),
+                n if (n >= 0) && (n % 4 == 3) => Included(((n % n_ops) + 1) as u64),
+                _ => Unbounded,
+            };
+            Cutoff::new_lsm(cutoff)
         };
-        let within = (Bound::Unbounded, cutoff.clone());
+        let within = (Bound::Unbounded, cutoff.to_bound());
 
         let scanner = CompactScan::new(llrb.iter().unwrap(), cutoff.clone());
 

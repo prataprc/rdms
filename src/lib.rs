@@ -44,6 +44,36 @@
 //! while allowing background read/write operations. Piece-wise scanning
 //! can help in those situations, provided the index is configured for LSM.
 //!
+//! **Compaction**
+//!
+//! Compaction is the process of de-duplicating/removing entries from an
+//! index instance. In `rdms` there are three types of compaction.
+//!
+//! _deduplication_
+//!
+//! This is typically applicable only for disk indexes. Disk index types,
+//! that use append only design, leave behind old entries as garbage blocks
+//! when they are modified. This involves a periodic clean up of garbage
+//! entries/blocks to reduce disk foot-print.
+//!
+//! _lsm-compaction_
+//!
+//! Rdms, unlike other lsm-based-storage, can have the entire index
+//! as LSM for system level database designs. To be more precise, in lsm
+//! mode, even the root level that holds the entire dataset can retain
+//! older versions. With this feature it is possible to design secondary
+//! indexes, network distribution and other features like `backup` and
+//! `archival` ensuring consistency. This also means the index footprint
+//! will indefinitely accumulate older versions. With limited disk space,
+//! it is upto the application logic to issue `lsm-compaction` when
+//! it is safe to purge entries/versions that are older than certain seqno.
+//!
+//! _tombstone-compaction_
+//!
+//! Tombstone compaction is similar to `lsm-compaction` which one main
+//! difference. When application logic issue `tombstone-compaction` only
+//! deleted entries that are older than specified seqno will be purged.
+//!
 //! [LSM]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
 //! [CRUD]: https://en.wikipedia.org/wiki/Create,_read,_update_and_delete
 //!
@@ -82,7 +112,7 @@ mod llrb_node;
 pub mod mvcc;
 pub mod shllrb;
 // disk index
-pub mod dgm;
+// pub mod dgm;
 pub mod nodisk;
 pub mod robt;
 mod robt_entry;

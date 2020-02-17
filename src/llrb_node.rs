@@ -168,7 +168,6 @@ where
         self.entry.as_key()
     }
 
-    #[allow(dead_code)] // TODO: remove if not required.
     pub(crate) fn to_key(&self) -> K {
         self.entry.to_key()
     }

@@ -4,8 +4,8 @@ use log::{error, info};
 use toml;
 
 use crate::{
-    core::Validate,
     core::{self, Bloom, CommitIter, CommitIterator, Diff, DiskIndexFactory},
+    core::{Cutoff, Validate},
     core::{Entry, Footprint, Index, IndexIter, Reader, Result, Serialize},
     error::Error,
     lsm,
@@ -926,7 +926,7 @@ where
         Ok(())
     }
 
-    fn compact<F>(&mut self, cutoff: Bound<u64>, metacb: F) -> Result<usize>
+    fn compact<F>(&mut self, cutoff: Cutoff, metacb: F) -> Result<usize>
     where
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
@@ -1031,7 +1031,7 @@ where
 fn thread_compact<K, V, B>(
     off: usize,
     mut index: Robt<K, V, B>,
-    cutoff: Bound<u64>,
+    cutoff: Cutoff,
     meta: Vec<u8>,
 ) -> Result<(usize, usize, Robt<K, V, B>)>
 where

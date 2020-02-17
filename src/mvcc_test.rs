@@ -998,6 +998,11 @@ fn test_compact() {
             2 => Bound::Unbounded,
             _ => unreachable!(),
         };
+        let cutoff = match rng.gen::<u8>() % 2 {
+            0 => Cutoff::new_tombstone(cutoff),
+            1 => Cutoff::new_lsm(cutoff),
+            _ => unreachable!(),
+        };
         println!(
             "index-config: lsm:{} sticky:{} n_ops:{} cutoff:{:?}",
             lsm, sticky, n_ops, cutoff
@@ -1012,7 +1017,7 @@ fn test_compact() {
 fn check_compact_nodes(
     index: &mut Mvcc<i64, i64>,
     rindex: &mut Mvcc<i64, i64>,
-    cutoff: Bound<u64>,
+    cutoff: Cutoff, // either tombstone/lsm.
 ) {
     // verify root index
     assert_eq!(index.to_seqno(), rindex.to_seqno());
@@ -1022,37 +1027,32 @@ fn check_compact_nodes(
     let mut key_footprint = 0;
     let mut tree_footprint = 0;
 
-    // verify each entry
+    let res: Vec<Entry<i64, i64>> = rindex
+        .iter()
+        .unwrap()
+        .map(|e| e.unwrap())
+        .filter_map(|e| e.purge(cutoff.clone()))
+        .collect();
+
     {
         let mut iter = index.iter().unwrap();
-        let within = match cutoff {
-            Bound::Included(cutoff) => (Bound::Excluded(cutoff), Bound::Unbounded),
-            Bound::Excluded(cutoff) => (Bound::Included(cutoff), Bound::Unbounded),
-            Bound::Unbounded => (
-                Bound::Excluded(rindex.to_seqno().unwrap()),
-                Bound::Unbounded,
-            ),
-        };
-        let mut refiter = {
-            let iters = vec![rindex.iter().unwrap()];
-            scans::FilterScans::new(iters, within)
-        };
+        let mut refiter = res.into_iter();
         loop {
             let entry = iter.next().transpose().unwrap();
-            let refentry = refiter.next().transpose().unwrap();
-
-            let (entry, refentry) = match (entry, refentry) {
-                (Some(entry), Some(refentry)) => {
-                    assert!(within.contains(&entry.to_seqno()));
-                    assert!(within.contains(&refentry.to_seqno()));
-                    (entry, refentry)
+            let refn = refiter.next();
+            let (entry, refn) = match (entry, refn) {
+                (Some(entry), Some(refn)) => (entry, refn),
+                (None, Some(refn)) => {
+                    let (key, seqno) = (refn.to_key(), refn.to_seqno());
+                    panic!("refn is {} {}", key, seqno)
                 }
-                (Some(entry), None) => {
-                    panic!("unexpected entry {} in compact index", entry.to_seqno())
+                (Some(refn), None) => {
+                    let (key, seqno) = (refn.to_key(), refn.to_seqno());
+                    panic!("refn is {} {}", key, seqno)
                 }
-                (None, Some(entry)) => panic!("unexpected entry {} in ref index", entry.to_seqno()),
                 (None, None) => break,
             };
+            check_node1(&entry, &refn);
 
             n_count += 1;
             if entry.is_deleted() {
@@ -1064,49 +1064,9 @@ fn check_compact_nodes(
                 let overhead: isize = size.try_into().unwrap();
                 overhead + entry.footprint().unwrap()
             };
-
-            assert_eq!(entry.to_key(), refentry.to_key());
-            let key = entry.to_key();
-            assert_eq!(entry.to_seqno(), refentry.to_seqno(), "key {}", key);
-            assert_eq!(entry.is_deleted(), refentry.is_deleted(), "key {}", key);
-            assert_eq!(
-                entry.to_native_value(),
-                refentry.to_native_value(),
-                "key {}",
-                key
-            );
-
-            let mut di = entry.as_deltas().iter();
-            let mut ri = refentry.as_deltas().iter();
-            loop {
-                let (delta, refdelta) = (di.next(), ri.next());
-
-                let (delta, refdelta) = match (delta, refdelta) {
-                    (Some(delta), Some(refdelta)) => {
-                        assert!(within.contains(&delta.to_seqno()));
-                        assert!(within.contains(&refdelta.to_seqno()));
-                        (delta, refdelta)
-                    }
-                    (Some(delta), None) => {
-                        panic!("unexpected delta {} in compact index", delta.to_seqno())
-                    }
-                    (None, Some(delta)) => {
-                        panic!("unexpected delta {} in ref index", delta.to_seqno())
-                    }
-                    (None, None) => break,
-                };
-                assert_eq!(delta.to_seqno(), refdelta.to_seqno(), "key {}", key);
-                assert_eq!(delta.to_diff(), refdelta.to_diff(), "key {}", key);
-                assert_eq!(delta.is_deleted(), refdelta.is_deleted(), "key {}", key);
-                assert_eq!(
-                    delta.to_seqno_state(),
-                    refdelta.to_seqno_state(),
-                    "key {}",
-                    key
-                );
-            }
         }
     }
+
     assert_eq!(n_count, index.to_stats().unwrap().entries);
     assert_eq!(n_deleted, index.n_deleted);
     assert_eq!(key_footprint, index.key_footprint);
@@ -1116,6 +1076,7 @@ fn check_compact_nodes(
         n_count, n_deleted
     );
 }
+
 #[test]
 fn test_commit_iterator_scan() {
     let seed: u128 = random();

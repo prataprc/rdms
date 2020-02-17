@@ -1,15 +1,9 @@
 //! Module `nodisk` define a dummy disk index.
 
-use std::{
-    borrow::Borrow,
-    ffi,
-    hash::Hash,
-    marker,
-    ops::{Bound, RangeBounds},
-};
+use std::{borrow::Borrow, ffi, hash::Hash, marker, ops::RangeBounds};
 
 use crate::{
-    core::{CommitIter, CommitIterator, Result, Serialize, Writer},
+    core::{CommitIter, CommitIterator, Cutoff, Result, Serialize, Writer},
     core::{Diff, DiskIndexFactory, Entry, Footprint, Index, IndexIter, Reader},
     error::Error,
     panic::Panic,
@@ -123,7 +117,7 @@ where
     }
 
     #[inline]
-    fn compact<F>(&mut self, _: Bound<u64>, _: F) -> Result<usize>
+    fn compact<F>(&mut self, _: Cutoff, _: F) -> Result<usize>
     where
         F: Fn(Vec<u8>) -> Vec<u8>,
     {

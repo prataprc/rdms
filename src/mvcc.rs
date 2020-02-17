@@ -52,8 +52,8 @@ use std::{
 };
 
 use crate::{
-    core::{CommitIter, Result, ScanEntry, ScanIter, Value, WalWriter, WriteIndexFactory},
-    core::{CommitIterator, ToJson, Validate, Writer},
+    core::{CommitIter, Cutoff, Result, ScanEntry, ScanIter, Value, WalWriter},
+    core::{CommitIterator, ToJson, Validate, WriteIndexFactory, Writer},
     core::{Diff, Entry, Footprint, Index, IndexIter, PiecewiseScan, Reader},
     error::Error,
     llrb::Llrb,
@@ -533,7 +533,7 @@ where
         self.as_mut().commit(scanner, metacb)
     }
 
-    fn compact<F>(&mut self, cutoff: Bound<u64>, metacb: F) -> Result<usize>
+    fn compact<F>(&mut self, cutoff: Cutoff, metacb: F) -> Result<usize>
     where
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
@@ -627,21 +627,23 @@ where
         Ok(())
     }
 
-    fn compact<F>(&mut self, cutoff: Bound<u64>, _metacb: F) -> Result<usize>
+    fn compact<F>(&mut self, cutoff: Cutoff, _metacb: F) -> Result<usize>
     where
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
+        let c_seqno = cutoff.to_bound();
+
         // before proceeding with compaction, verify the cutoff argument for
         // unusual values.
-        match cutoff {
+        match c_seqno {
             Bound::Unbounded => {
                 warn!(target: "mvcc  ", "compact with unbounded cutoff");
             }
             Bound::Included(seqno) if seqno >= self.to_seqno()? => {
-                warn!(target: "mvcc  ", "compact cutsoff the entire index {}", seqno);
+                warn!(target: "mvcc  ", "compact the entire index {}", seqno);
             }
             Bound::Excluded(seqno) if seqno > self.to_seqno()? => {
-                warn!(target: "mvcc  ", "compact cutsoff the entire index {}", seqno);
+                warn!(target: "mvcc  ", "compact the entire index {}", seqno);
             }
             _ => (),
         }
@@ -660,7 +662,9 @@ where
                     tree_footprint: self.tree_footprint,
                     reclaim: vec![],
                 };
-                let (root, seen, limit) = self.compact_loop(root, low, &mut cc, LIMIT)?;
+                let (root, seen, limit) =
+                    // entry-point
+                    self.compact_loop(root, low, &mut cc, LIMIT)?;
                 self.n_reclaimed += cc.reclaim.len();
                 self.tree_footprint = cc.tree_footprint;
                 self.snapshot
@@ -1257,7 +1261,7 @@ where
             }
             Ordering::Equal => {
                 let mut size = node.footprint()?;
-                let cutoff = Bound::Included(node.to_seqno());
+                let cutoff = Cutoff::new_lsm(Bound::Included(node.to_seqno()));
                 let mut new_node = self.node_mvcc_clone(&node, reclaim, true);
                 let old_entry = node.entry.clone();
                 new_node.delete(seqno)?;
@@ -1465,7 +1469,7 @@ where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
 {
-    cutoff: Bound<u64>,
+    cutoff: Cutoff,
     dels: Vec<K>,
     tree_footprint: isize,
     reclaim: Vec<Box<Node<K, V>>>,
@@ -1554,17 +1558,19 @@ where
     }
 
     fn compact_entry(node: &mut Node<K, V>, cc: &mut CompactCtxt<K, V>) -> Result<()> {
-        let (size, key) = (node.entry.footprint()?, node.entry.to_key());
-        cc.tree_footprint += match node.entry.clone().purge(cc.cutoff) {
+        let tree_footprint = match node.entry.clone().purge(cc.cutoff) {
             None => {
-                cc.dels.push(key);
+                cc.dels.push(node.to_key());
                 0
             }
             Some(entry) => {
+                let size = node.entry.footprint()?;
                 node.entry = entry;
                 node.entry.footprint()? - size
             }
         };
+
+        cc.tree_footprint += tree_footprint;
 
         Ok(())
     }

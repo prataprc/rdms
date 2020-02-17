@@ -17,10 +17,8 @@ use std::{
 };
 
 use crate::{
-    core::{
-        self, CommitIterator, Diff, Entry, Footprint, Index, IndexIter, Reader, Result, Validate,
-        WriteIndexFactory, Writer,
-    },
+    core::{self, CommitIterator, Diff, Entry, Footprint, Index, IndexIter},
+    core::{Cutoff, Reader, Result, Validate, WriteIndexFactory, Writer},
     error::Error,
     llrb::{Llrb, LlrbReader, LlrbWriter, Stats as LlrbStats},
     scans, thread as rt, util,
@@ -769,7 +767,7 @@ where
         self.as_mut().commit(scanner, metacb)
     }
 
-    fn compact<F>(&mut self, cutoff: Bound<u64>, metacb: F) -> Result<usize>
+    fn compact<F>(&mut self, cutoff: Cutoff, metacb: F) -> Result<usize>
     where
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
@@ -896,7 +894,7 @@ where
         Ok(())
     }
 
-    fn compact<F>(&mut self, cutoff: Bound<u64>, metacb: F) -> Result<usize>
+    fn compact<F>(&mut self, cutoff: Cutoff, metacb: F) -> Result<usize>
     where
         F: Fn(Vec<u8>) -> Vec<u8>,
     {

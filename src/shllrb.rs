@@ -4,7 +4,7 @@ use std::{
     borrow::Borrow,
     cmp,
     convert::TryFrom,
-    ffi, fmt,
+    fmt,
     hash::Hash,
     mem,
     ops::{Bound, RangeBounds},
@@ -82,6 +82,7 @@ impl fmt::Debug for ShardName {
 ///
 /// By implementing `WriteIndexFactory` trait this can be
 /// used with other, more sophisticated, index implementations.
+#[derive(Clone)]
 pub struct ShllrbFactory {
     lsm: bool,
     sticky: bool,
@@ -167,15 +168,74 @@ where
     }
 
     fn new(&self, name: &str) -> Result<Self::I> {
-        let mut index = ShLlrb::new(name);
-        index
-            .set_lsm(self.lsm)
-            .set_spinlatch(self.spin)
-            .set_sticky(self.sticky)
-            .set_shard_config(self.max_shards, self.max_entries)
-            .set_interval(self.interval);
+        let index = ShLlrb::<K, V>::new(name, self.clone().into());
         index.log();
         Ok(index)
+    }
+}
+
+/// Configuration type for [ShLlrb].
+#[derive(Clone, Default)]
+pub struct Config {
+    // llrb-options.
+    lsm: bool,
+    sticky: bool,
+    spin: bool,
+    // shard-options.
+    interval: time::Duration,
+    max_shards: usize,
+    max_entries: usize,
+}
+
+impl From<ShllrbFactory> for Config {
+    fn from(sf: ShllrbFactory) -> Config {
+        Config {
+            lsm: sf.lsm,
+            sticky: sf.sticky,
+            spin: sf.spin,
+            interval: sf.interval,
+            max_shards: sf.max_shards,
+            max_entries: sf.max_entries,
+        }
+    }
+}
+
+impl Config {
+    /// Configure Llrb for LSM, refer to Llrb:new_lsm() for more details.
+    pub fn set_lsm(&mut self, lsm: bool) -> &mut Self {
+        self.lsm = lsm;
+        self
+    }
+
+    /// Configure Llrb in sticky mode, refer to Llrb::set_sticky() for
+    /// more details.
+    pub fn set_sticky(&mut self, sticky: bool) -> &mut Self {
+        self.sticky = sticky;
+        self
+    }
+
+    /// Configure spin-latch behaviour for Llrb, refer to
+    /// Llrb::set_spinlatch() for more details.
+    pub fn set_spinlatch(&mut self, spin: bool) -> &mut Self {
+        self.spin = spin;
+        self
+    }
+
+    /// Configure shard parameters.
+    ///
+    /// * _max_shards_, maximum number for shards allowed.
+    /// * _max_entries_, maximum number of entries allowed in a single
+    ///   shard, beyond which the shard splits into two.
+    pub fn set_shard_config(&mut self, max_shards: usize, max_entries: usize) -> &mut Self {
+        self.max_shards = max_shards;
+        self.max_entries = max_entries;
+        self
+    }
+
+    /// Configure periodic interval for auto-sharding.
+    pub fn set_interval(&mut self, interval: time::Duration) -> &mut Self {
+        self.interval = interval;
+        self
     }
 }
 
@@ -200,7 +260,7 @@ where
     max_entries: usize,
 
     auto_shard: Option<rt::Thread<String, usize, ()>>,
-    snapshot: Snapshot<K, V>,
+    snapshot: Arc<Mutex<Snapshot<K, V>>>,
 }
 
 struct Snapshot<K, V>
@@ -209,9 +269,56 @@ where
     V: Clone + Diff + Footprint,
 {
     root_seqno: Arc<AtomicU64>,
-    shards: Mutex<Vec<Shard<K, V>>>,
+    shards: Vec<Shard<K, V>>,
     rdrefns: Vec<Arc<Mutex<Vec<ShardReader<K, V>>>>>,
     wtrefns: Vec<Arc<Mutex<Vec<ShardWriter<K, V>>>>>,
+}
+
+// A global lock is similar to lock_snapshot(), that along with the guarantee
+// that there wont be any concurrent reader or writer threads access the
+// shard.
+fn to_global_lock<'a, K, V>(
+    snapshot: MutexGuard<'a, Snapshot<K, V>>,
+) -> Result<GlobalLock<'a, K, V>>
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+{
+    use crate::error::Error::ThreadFail;
+
+    let mut readers = vec![];
+    let rdrefns = unsafe {
+        let ss = snapshot.rdrefns.as_slice();
+        (ss as *const [Arc<Mutex<Vec<ShardReader<K, V>>>>])
+            .as_ref()
+            .unwrap()
+    };
+    for rd in rdrefns.iter() {
+        let r = rd
+            .lock()
+            .map_err(|e| ThreadFail(format!("shllrb poison-rd {:?}", e)))?;
+        readers.push(r);
+    }
+
+    let mut writers = vec![];
+    let wtrefns = unsafe {
+        let ss = snapshot.wtrefns.as_slice();
+        (ss as *const [Arc<Mutex<Vec<ShardWriter<K, V>>>>])
+            .as_ref()
+            .unwrap()
+    };
+    for wt in wtrefns.iter() {
+        let w = wt
+            .lock()
+            .map_err(|e| ThreadFail(format!("shllrb poison-wt {:?}", e)))?;
+        writers.push(w);
+    }
+
+    Ok(GlobalLock {
+        snapshot,
+        readers,
+        writers,
+    })
 }
 
 impl<K, V> Drop for ShLlrb<K, V>
@@ -220,8 +327,19 @@ where
     V: Clone + Diff + Footprint,
 {
     fn drop(&mut self) {
-        loop {
-            match self.prune_rw() {
+        'outer: loop {
+            let snapshot = match self.as_snapshot() {
+                Ok(snapshot) => snapshot,
+                Err(err) => {
+                    error!(
+                        target: "shllrb", "{:?}, lock snapshot:{:?}",
+                        self.name, err
+                    );
+                    break 'outer;
+                }
+            };
+
+            match Self::prune_rw(snapshot) {
                 Ok((_, _, active)) if active > 0 => {
                     error!(
                         target: "shllrb",
@@ -259,12 +377,12 @@ where
     V: Clone + Diff + Footprint,
 {
     fn default() -> Self {
-        let snapshot = Snapshot {
+        let snapshot = Arc::new(Mutex::new(Snapshot {
             root_seqno: Arc::new(AtomicU64::new(0)),
-            shards: Mutex::new(vec![]),
+            shards: vec![],
             rdrefns: vec![],
             wtrefns: vec![],
-        };
+        }));
         ShLlrb {
             name: Default::default(),
             lsm: false,
@@ -287,61 +405,45 @@ where
     V: Clone + Diff + Footprint,
 {
     /// Create a new instance of range-partitioned index using Llrb tree.
-    pub fn new<S: AsRef<str>>(name: S) -> Box<ShLlrb<K, V>> {
-        let name = name.as_ref().to_string();
-        let mut index: ShLlrb<K, V> = Default::default();
-        index.name = name.to_string();
-        Box::new(index)
-    }
-
-    /// Configure Llrb for LSM, refer to Llrb:new_lsm() for more details.
-    pub fn set_lsm(&mut self, lsm: bool) -> &mut Self {
-        self.lsm = lsm;
-        self
-    }
-
-    /// Configure Llrb in sticky mode, refer to Llrb::set_sticky() for
-    /// more details.
-    pub fn set_sticky(&mut self, sticky: bool) -> &mut Self {
-        self.sticky = sticky;
-        self
-    }
-
-    /// Configure spin-latch behaviour for Llrb, refer to
-    /// Llrb::set_spinlatch() for more details.
-    pub fn set_spinlatch(&mut self, spin: bool) -> &mut Self {
-        self.spin = spin;
-        self
-    }
-
-    /// Configure shard parameters.
-    ///
-    /// * _max_shards_, maximum number for shards allowed.
-    /// * _max_entries_, maximum number of entries allowed in a single
-    ///   shard, beyond which the shard splits into two.
-    pub fn set_shard_config(&mut self, max_shards: usize, max_entries: usize) -> &mut Self {
-        self.max_shards = max_shards;
-        self.max_entries = max_entries;
-        self
-    }
-
-    /// Configure periodic interval for auto-sharding.
-    pub fn set_interval(&mut self, interval: time::Duration) -> &mut ShLlrb<K, V>
+    pub fn new<S: AsRef<str>>(name: S, config: Config) -> Box<ShLlrb<K, V>>
     where
         K: 'static + Send,
         V: 'static + Send,
         <V as Diff>::D: Send,
     {
-        self.auto_shard = match self.auto_shard.take() {
-            auto_shard @ Some(_) => auto_shard,
-            None if interval.as_secs() > 0 => {
-                self.interval = interval;
-                let index = unsafe { Box::from_raw(self as *mut Self as *mut ffi::c_void) };
-                Some(rt::Thread::new(move |rx| || auto_shard::<K, V>(index, rx)))
-            }
-            None => None,
+        let name = name.as_ref().to_string();
+
+        let snapshot = Arc::new(Mutex::new(Snapshot {
+            root_seqno: Arc::new(AtomicU64::new(0)),
+            shards: vec![],
+            rdrefns: vec![],
+            wtrefns: vec![],
+        }));
+
+        let mut index = Box::new(ShLlrb {
+            name: name.to_string(),
+            lsm: config.lsm,
+            sticky: config.sticky,
+            spin: config.spin,
+            interval: config.interval,
+            max_shards: config.max_shards,
+            max_entries: config.max_entries,
+
+            auto_shard: None,
+            snapshot,
+        });
+
+        index.auto_shard = if index.interval.as_secs() > 0 {
+            let name = index.name.clone();
+            let snapshot = Arc::clone(&index.snapshot);
+            Some(rt::Thread::new(move |rx| {
+                || auto_shard::<K, V>(name, config, snapshot, rx)
+            }))
+        } else {
+            None
         };
-        self
+
+        index
     }
 }
 
@@ -371,9 +473,13 @@ where
     /// Return number of entries in this index.
     #[inline]
     pub fn len(&self) -> Result<usize> {
-        let (shards, _) = self.lock_snapshot()?;
+        let snapshot = self.lock_snapshot()?;
 
-        Ok(shards.iter().map(|shard| shard.as_index().len()).sum())
+        Ok(snapshot
+            .shards
+            .iter()
+            .map(|shard| shard.as_index().len())
+            .sum())
     }
 
     /// Identify this index. Applications can choose unique names while
@@ -386,10 +492,10 @@ where
     /// Gather quick statistics from each shard and return the
     /// consolidated statisics.
     pub fn to_stats(&self) -> Result<LlrbStats> {
-        let (shards, _) = self.lock_snapshot()?;
+        let snapshot = self.lock_snapshot()?;
 
         let mut statss: Vec<LlrbStats> = vec![];
-        for shard in shards.iter() {
+        for shard in snapshot.shards.iter() {
             statss.push(shard.as_index().to_stats()?);
         }
 
@@ -398,6 +504,7 @@ where
         stats.name = self.to_name();
         Ok(stats)
     }
+
     /// Applications can call this to log Information log for application
     pub fn log(&self) {
         info!(
@@ -432,87 +539,29 @@ where
         ss.join("\n")
     }
 
-    fn as_shards(&self) -> Result<MutexGuard<Vec<Shard<K, V>>>> {
+    fn as_snapshot(&self) -> Result<MutexGuard<Snapshot<K, V>>> {
         use crate::error::Error::ThreadFail;
 
         self.snapshot
-            .shards
             .lock()
             .map_err(|e| ThreadFail(format!("shllrb: lock poisened, {:?}", e)))
     }
 
-    fn try_init(&self) -> Result<()> {
-        let mut shards = self.as_shards()?;
-        if shards.len() == 0 {
-            let shard_name: ShardName = (self.name.clone(), 0).into();
-            let mut llrb = if self.lsm {
-                Llrb::new_lsm(shard_name.to_string())
-            } else {
-                Llrb::new(shard_name.to_string())
-            };
-            llrb.set_sticky(self.sticky).set_spinlatch(self.spin);
-            shards.push(Shard::new_active(llrb, Bound::Unbounded));
-        }
-
-        Ok(())
-    }
-
-    fn as_mut_ptr_snapshot(&self) -> *mut Snapshot<K, V> {
-        &self.snapshot as *const Snapshot<K, V> as *mut Snapshot<K, V>
-    }
-
     // Return only if shards are locked and all shards are in active state.
-    fn lock_snapshot(&self) -> Result<(MutexGuard<Vec<Shard<K, V>>>, &mut Snapshot<K, V>)> {
-        self.try_init()?;
-
+    fn lock_snapshot(&self) -> Result<MutexGuard<Snapshot<K, V>>> {
         'outer: loop {
-            let snapshot = unsafe { self.as_mut_ptr_snapshot().as_mut().unwrap() };
-            let mut shards = self.as_shards()?;
+            let mut snapshot = self.as_snapshot()?;
             // make sure that all shards are in Active state.
-            for shard in shards.iter_mut() {
+            for shard in snapshot.shards.iter_mut() {
                 if shard.to_index().is_none() {
-                    mem::drop(shards);
+                    mem::drop(snapshot);
                     thread::sleep(RETRY_INTERVAL);
                     continue 'outer;
                 }
             }
 
-            break Ok((shards, snapshot));
+            break Ok(snapshot);
         }
-    }
-
-    // A global lock is similar to lock_snapshot(), that along with the guarantee
-    // that there wont be any concurrent reader or writer threads access the
-    // shard.
-    fn to_global_lock(&self) -> Result<GlobalLock<K, V>> {
-        use crate::error::Error::ThreadFail;
-
-        self.try_init()?;
-
-        let snapshot = unsafe { self.as_mut_ptr_snapshot().as_mut().unwrap() };
-        let shards = self.as_shards()?;
-
-        let mut readers = vec![];
-        for rd in snapshot.rdrefns.iter() {
-            let r = rd
-                .lock()
-                .map_err(|e| ThreadFail(format!("shllrb rd poisened, {:?}", e)))?;
-            readers.push(r);
-        }
-
-        let mut writers = vec![];
-        for wt in snapshot.wtrefns.iter() {
-            let w = wt
-                .lock()
-                .map_err(|e| ThreadFail(format!("shllrb wt poisened, {:?}", e)))?;
-            writers.push(w);
-        }
-
-        Ok(GlobalLock {
-            shards,
-            readers,
-            writers,
-        })
     }
 
     // reader and writer threads migh exit as part of application's ongoing
@@ -520,34 +569,32 @@ where
     // up itself with dead readers and writers.
     //
     // Return (no-of-readers-pruned, no-of-writers-pruned, no-of-active-refs)
-    fn prune_rw(&mut self) -> Result<(usize, usize, usize)> {
-        loop {
-            let (_shards, snapshot) = self.lock_snapshot()?;
-
-            let mut roffs = vec![];
-            for (off, arc_rs) in snapshot.rdrefns.iter().enumerate() {
-                if Arc::strong_count(&arc_rs) == 1 {
-                    roffs.push(off)
-                }
+    fn prune_rw(
+        mut snapshot: MutexGuard<Snapshot<K, V>>, // with locked snapshot.
+    ) -> Result<(usize, usize, usize)> {
+        let mut roffs = vec![];
+        for (off, arc_rs) in snapshot.rdrefns.iter().enumerate() {
+            if Arc::strong_count(&arc_rs) == 1 {
+                roffs.push(off)
             }
-            for off in roffs.iter().rev() {
-                snapshot.rdrefns.remove(*off);
-            }
-
-            let mut woffs = vec![];
-            for (off, arc_ws) in snapshot.wtrefns.iter().enumerate() {
-                if Arc::strong_count(&arc_ws) == 1 {
-                    woffs.push(off)
-                }
-            }
-            for off in woffs.iter().rev() {
-                snapshot.wtrefns.remove(*off);
-            }
-
-            let mut active = self.snapshot.rdrefns.len();
-            active += self.snapshot.wtrefns.len();
-            break Ok((roffs.len(), woffs.len(), active));
         }
+        for off in roffs.iter().rev() {
+            snapshot.rdrefns.remove(*off);
+        }
+
+        let mut woffs = vec![];
+        for (off, arc_ws) in snapshot.wtrefns.iter().enumerate() {
+            if Arc::strong_count(&arc_ws) == 1 {
+                woffs.push(off)
+            }
+        }
+        for off in woffs.iter().rev() {
+            snapshot.wtrefns.remove(*off);
+        }
+
+        let mut active = snapshot.rdrefns.len();
+        active += snapshot.wtrefns.len();
+        Ok((roffs.len(), woffs.len(), active))
     }
 }
 
@@ -557,43 +604,55 @@ where
     V: 'static + Send + Clone + Diff + Footprint,
     <V as Diff>::D: Send,
 {
-    fn do_balance(&mut self) -> Result<usize> {
-        let old_count = {
-            let (shards, _) = self.lock_snapshot()?; // should be a quick call
-            shards.len()
+    fn do_balance(
+        name: String,
+        snapshot: MutexGuard<Snapshot<K, V>>,
+        config: Config,
+    ) -> Result<usize> {
+        let old_count = snapshot.shards.len();
+
+        let (snapshot, n) = {
+            let name = name.clone();
+            Self::try_merging_shards(name, snapshot, config.clone())?
+        };
+        let (snapshot, m) = {
+            let name = name.clone();
+            Self::try_spliting_shards(name, snapshot, config.clone())?
         };
 
-        let n = self.try_merging_shards()? + self.try_spliting_shards()?;
-
-        let new_count = {
-            let (shards, _) = self.lock_snapshot()?; // should be a quick call
-            shards.len()
-        };
+        let new_count = snapshot.shards.len();
 
         if old_count != new_count {
             info!(
                 target: "shllrb",
                 "{}, {} old-shards balanced to {} new-shards",
-                self.name, old_count, new_count,
+                name, old_count, new_count,
             );
         }
 
-        Ok(n)
+        Ok(n + m)
     }
 
     // merge happens when.
     // * number of shards have reached max_shards.
     // * there are atleast 2 shards.
-    fn try_merging_shards(&mut self) -> Result<usize> {
+    fn try_merging_shards(
+        name: String,
+        snapshot: MutexGuard<Snapshot<K, V>>,
+        config: Config,
+    ) -> Result<(MutexGuard<Snapshot<K, V>>, usize)> {
         // phase-1 mark shards that are going to be affected by the merge.
-        let mut merges = {
-            let mut gl = self.to_global_lock()?;
+        let (mut snapshot, mut merges) = {
+            let mut gl = to_global_lock(snapshot)?;
+            let n_shards = gl.snapshot.shards.len();
 
-            let n = (self.max_shards / 5) + 1; // TODO: no magic formula
-            if gl.shards.len() >= self.max_shards && gl.shards.len() > 1 {
-                gl.mark_merges(MergeOrder::new(&gl.shards).filter().take(n))
+            let n = (config.max_shards / 5) + 1; // TODO: no magic formula
+            if n_shards >= config.max_shards && n_shards > 1 {
+                let mo = MergeOrder::new(&gl.snapshot.shards);
+                let merges = gl.mark_merges(mo.filter().take(n));
+                (gl.snapshot, merges)
             } else {
-                return Ok(0);
+                return Ok((gl.snapshot, 0));
             }
         };
         // MergeOrder shall order by entries, now re-order by offset.
@@ -602,7 +661,7 @@ where
         let n_merges = merges.len();
         if n_merges > 0 {
             info!(
-                target: "shllrb", "{:?}, {} shards to merge", self.name, n_merges
+                target: "shllrb", "{:?}, {} shards to merge", name, n_merges
             );
         }
 
@@ -621,7 +680,7 @@ where
         for t in threads.into_iter() {
             match t.join() {
                 Ok(Ok((c_off, o_off, curr_hk, other))) => {
-                    let mut gl = self.to_global_lock()?;
+                    let mut gl = to_global_lock(snapshot)?;
 
                     match gl.insert_active(o_off, vec![other], curr_hk) {
                         Ok(_) => (),
@@ -631,6 +690,8 @@ where
                         Err(err) => errs.push(err),
                         Ok(_) => (),
                     }
+
+                    snapshot = gl.snapshot;
                 }
                 Ok(Err(err)) => {
                     error!(target: "shllrb", "merge: {:?}", err);
@@ -645,7 +706,7 @@ where
 
         // return
         if errs.len() == 0 {
-            Ok(n_merges)
+            Ok((snapshot, n_merges))
         } else {
             Err(Error::MemIndexFail(
                 errs.into_iter()
@@ -656,17 +717,25 @@ where
         }
     }
 
-    fn try_spliting_shards(&mut self) -> Result<usize> {
+    fn try_spliting_shards(
+        name: String,
+        snapshot: MutexGuard<Snapshot<K, V>>,
+        config: Config,
+    ) -> Result<(MutexGuard<Snapshot<K, V>>, usize)> {
         // phase-1 mark shards that will be affected by the split.
-        let mut splits = {
-            let mut gl = self.to_global_lock()?;
+        let (mut snapshot, mut splits) = {
+            let mut gl = to_global_lock(snapshot)?;
+            let n_shards = gl.snapshot.shards.len();
 
-            let n = self.max_shards - gl.shards.len(); // TODO: no magic formula
-            if gl.shards.len() < self.max_shards {
-                let offsets = SplitOrder::new(&gl.shards).filter().take(n);
-                offsets.into_iter().map(|off| gl.mark_split(off)).collect()
+            let n = config.max_shards - n_shards; // TODO: no magic formula
+            if n_shards < config.max_shards {
+                let so = SplitOrder::new(&gl.snapshot.shards);
+                let offsets = so.filter().take(n);
+                let splits: Vec<(usize, Shard<K, V>)> =
+                    offsets.into_iter().map(|off| gl.mark_split(off)).collect();
+                (gl.snapshot, splits)
             } else {
-                vec![]
+                (gl.snapshot, vec![])
             }
         };
         // SortOrder shall order by entries, no re-order by offset.
@@ -675,12 +744,12 @@ where
         let n_splits = splits.len();
         if n_splits > 0 {
             info!(
-                target: "shllrb", "{}, {} shards to split", self.name, n_splits
+                target: "shllrb", "{}, {} shards to split", name, n_splits
             );
         }
 
         // phase-2 spawn threads to split shard into two new shards.
-        let (name, mut threads) = (self.to_name(), vec![]);
+        let mut threads = vec![];
         for (off, curr) in splits.into_iter() {
             let nm = name.clone();
             threads.push(thread::spawn(move || thread_split(nm, off, curr)));
@@ -691,12 +760,14 @@ where
         for t in threads.into_iter() {
             match t.join() {
                 Ok(Ok((off, one, two))) => {
-                    let mut gl = self.to_global_lock()?;
+                    let mut gl = to_global_lock(snapshot)?;
 
                     match gl.insert_active(off, vec![one, two], None) {
                         Ok(_) => (),
                         Err(err) => errs.push(err),
                     }
+
+                    snapshot = gl.snapshot;
                 }
                 Ok(Err(err)) => {
                     error!(target: "shllrb", "split: {:?}", err);
@@ -711,7 +782,7 @@ where
 
         // return
         if errs.len() == 0 {
-            Ok(n_splits)
+            Ok((snapshot, n_splits))
         } else {
             Err(Error::MemIndexFail(
                 errs.into_iter()
@@ -803,12 +874,14 @@ where
 
     #[inline]
     fn to_seqno(&self) -> Result<u64> {
-        Ok(self.snapshot.root_seqno.load(Ordering::SeqCst))
+        let snapshot = self.lock_snapshot()?;
+
+        Ok(snapshot.root_seqno.load(Ordering::SeqCst))
     }
 
     #[inline]
     fn set_seqno(&mut self, seqno: u64) -> Result<()> {
-        let (_shards, snapshot) = self.lock_snapshot()?;
+        let snapshot = self.lock_snapshot()?;
 
         let n = snapshot.rdrefns.len() + snapshot.wtrefns.len();
         if n > 0 {
@@ -823,11 +896,11 @@ where
     }
 
     fn to_reader(&mut self) -> Result<Self::R> {
-        let (mut shards, snapshot) = self.lock_snapshot()?;
+        let mut snapshot = self.lock_snapshot()?;
 
         let readers = {
             let mut readers = vec![];
-            for shard in shards.iter_mut() {
+            for shard in snapshot.shards.iter_mut() {
                 readers.push(shard.to_reader()?);
             }
             Arc::new(Mutex::new(readers))
@@ -839,11 +912,11 @@ where
     }
 
     fn to_writer(&mut self) -> Result<Self::W> {
-        let (mut shards, snapshot) = self.lock_snapshot()?;
+        let mut snapshot = self.lock_snapshot()?;
 
         let writers = {
             let mut writers = vec![];
-            for shard in shards.iter_mut() {
+            for shard in snapshot.shards.iter_mut() {
                 writers.push(shard.to_writer()?);
             }
             Arc::new(Mutex::new(writers))
@@ -861,10 +934,12 @@ where
         C: CommitIterator<K, V>,
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
-        let mut gl = self.to_global_lock()?;
+        let snapshot = self.lock_snapshot()?;
+        let mut gl = to_global_lock(snapshot)?;
 
         let ranges = util::high_keys_to_ranges(
-            gl.shards
+            gl.snapshot
+                .shards
                 .iter()
                 .map(|s| s.to_high_key())
                 .collect::<Vec<Bound<K>>>(),
@@ -878,18 +953,19 @@ where
         // println!("num ranges {}", ranges.len());
         let within = scanner.to_within();
         let iters = scanner.range_scans(ranges)?;
-        assert_eq!(iters.len(), gl.shards.len());
+        assert_eq!(iters.len(), gl.snapshot.shards.len());
         for (i, iter) in iters.into_iter().enumerate() {
-            let index = &mut gl.shards[i].as_mut_index();
+            let mut seqno = gl.snapshot.root_seqno.load(Ordering::SeqCst);
+
+            let index = &mut gl.snapshot.shards[i].as_mut_index();
             let within = within.clone();
             let iter = {
                 let iter = scans::CommitWrapper::new(vec![iter]);
                 core::CommitIter::new(iter, within)
             };
             index.commit(iter, |meta| metacb(meta))?;
-            let mut seqno = self.snapshot.root_seqno.load(Ordering::SeqCst);
             seqno = cmp::max(seqno, index.to_seqno()?);
-            self.snapshot.root_seqno.store(seqno, Ordering::SeqCst);
+            gl.snapshot.root_seqno.store(seqno, Ordering::SeqCst);
         }
         Ok(())
     }
@@ -898,10 +974,10 @@ where
     where
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
-        let (mut shards, _) = self.lock_snapshot()?;
+        let mut snapshot = self.lock_snapshot()?;
 
         let mut count = 0;
-        for shard in shards.iter_mut() {
+        for shard in snapshot.shards.iter_mut() {
             count += shard
                 .as_mut_index()
                 .compact(cutoff.clone(), |meta| metacb(meta))?
@@ -942,10 +1018,10 @@ where
     V: Clone + Diff + Footprint,
 {
     fn footprint(&self) -> Result<isize> {
-        let (shards, _) = self.lock_snapshot()?;
+        let snapshot = self.lock_snapshot()?;
 
         let mut footprint = 0;
-        for shard in shards.iter() {
+        for shard in snapshot.shards.iter() {
             footprint += shard.as_index().footprint()?;
         }
         Ok(footprint)
@@ -1017,45 +1093,38 @@ where
     where
         G: Clone + RangeBounds<u64>,
     {
-        let mut iter = {
-            let (shards, _) = self.lock_snapshot()?;
-            Box::new(CommitIter::new(vec![], Arc::new(shards)))
-        };
-        let mut_shards = unsafe {
-            match Arc::get_mut(&mut iter.shards) {
-                Some(mut_shards) => Ok((mut_shards.as_mut_slice() as *mut [Shard<K, V>])
-                    .as_mut()
-                    .unwrap()),
-                None => {
-                    let msg = format!("shllrb scan() shared shards");
-                    Err(Error::UnexpectedFail(msg))
-                }
-            }?
+        let mut snapshot = self.lock_snapshot()?; // should be a quick call
+        let shards = unsafe {
+            (snapshot.shards.as_mut_slice() as *mut [Shard<K, V>])
+                .as_mut()
+                .unwrap()
         };
 
-        for shard in mut_shards {
-            iter.iters.push(shard.as_mut_index().scan(within.clone())?);
+        let mut iters = vec![];
+        for shard in shards.iter_mut() {
+            iters.push(shard.as_mut_index().scan(within.clone())?);
         }
-        Ok(iter)
+
+        Ok(Box::new(CommitIter::new(iters, Arc::new(snapshot))))
     }
 
     fn scans<G>(&mut self, n_shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
     where
         G: Clone + RangeBounds<u64>,
     {
-        let (mut shards, _) = self.lock_snapshot()?;
-        let mut_shards = unsafe {
-            ((&mut shards).as_mut_slice() as *mut [Shard<K, V>])
+        let mut snapshot = self.lock_snapshot()?;
+        let shards = unsafe {
+            (snapshot.shards.as_mut_slice() as *mut [Shard<K, V>])
                 .as_mut()
                 .unwrap()
         };
-        let shards = Arc::new(shards);
+        let snapshot = Arc::new(snapshot);
 
         let mut iters = vec![];
-        for shard in mut_shards {
+        for shard in shards.iter_mut() {
             iters.push(Box::new(CommitIter::new(
                 vec![shard.as_mut_index().scan(within.clone())?],
-                Arc::clone(&shards),
+                Arc::clone(&snapshot),
             )) as IndexIter<K, V>)
         }
 
@@ -1075,28 +1144,30 @@ where
         N: Clone + RangeBounds<K>,
         G: Clone + RangeBounds<u64>,
     {
-        let (mut shards, _) = self.lock_snapshot()?;
-        let mut mut_shardss = vec![];
+        let mut snapshot = self.lock_snapshot()?;
+        let mut shardss = vec![];
         for _ in 0..ranges.len() {
-            mut_shardss.push(unsafe {
-                ((&mut shards).as_mut_slice() as *mut [Shard<K, V>])
+            shardss.push(unsafe {
+                (snapshot.shards.as_mut_slice() as *mut [Shard<K, V>])
                     .as_mut()
                     .unwrap()
             })
         }
-        let shards = Arc::new(shards);
+        let snapshot = Arc::new(snapshot);
 
         let mut outer_iters = vec![];
-        for (range, mut_shards) in ranges.into_iter().zip(mut_shardss.into_iter()) {
-            let mut iter = Box::new(CommitIter::new(vec![], Arc::clone(&shards)));
-            for shard in mut_shards.iter_mut() {
-                iter.iters.push(
+        let zip_iter = ranges.into_iter().zip(shardss.into_iter());
+        for (range, shards) in zip_iter {
+            let mut iters = vec![];
+            for shard in shards.iter_mut() {
+                iters.push(
                     shard
                         .as_mut_index()
                         .range_scans(vec![range.clone()], within.clone())?
                         .remove(0),
                 );
             }
+            let iter = Box::new(CommitIter::new(iters, Arc::clone(&snapshot)));
             outer_iters.push(iter as IndexIter<K, V>);
         }
         Ok(outer_iters)
@@ -1119,13 +1190,13 @@ where
     V: Clone + Diff + Footprint,
 {
     fn validate(&mut self) -> Result<LlrbStats> {
-        let (mut shards, _) = self.lock_snapshot()?;
+        let mut snapshot = self.lock_snapshot()?;
         let mut statss = vec![];
-        for shard in shards.iter_mut() {
+        for shard in snapshot.shards.iter_mut() {
             statss.push(shard.as_mut_index().validate()?)
         }
         let mut within = (Bound::<K>::Unbounded, Bound::<K>::Unbounded);
-        for shard in shards.iter_mut() {
+        for shard in snapshot.shards.iter_mut() {
             within.0 = util::high_key_to_low_key(&within.1);
             within.1 = shard.to_high_key();
             let index = &mut shard.as_mut_index();
@@ -1814,25 +1885,25 @@ where
 
 struct CommitIter<'a, K, V>
 where
-    K: Clone + Ord,
-    V: Clone + Diff,
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
 {
-    shards: Arc<MutexGuard<'a, Vec<Shard<K, V>>>>,
+    _snapshot: Arc<MutexGuard<'a, Snapshot<K, V>>>,
     iter: Option<IndexIter<'a, K, V>>,
     iters: Vec<IndexIter<'a, K, V>>,
 }
 
 impl<'a, K, V> CommitIter<'a, K, V>
 where
-    K: Clone + Ord,
-    V: Clone + Diff,
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
 {
     pub fn new(
         iters: Vec<IndexIter<'a, K, V>>,
-        shards: Arc<MutexGuard<'a, Vec<Shard<K, V>>>>,
+        _snapshot: Arc<MutexGuard<'a, Snapshot<K, V>>>,
     ) -> CommitIter<'a, K, V> {
         CommitIter {
-            shards,
+            _snapshot,
             iter: None,
             iters,
         }
@@ -1841,8 +1912,8 @@ where
 
 impl<'a, K, V> Iterator for CommitIter<'a, K, V>
 where
-    K: Clone + Ord,
-    V: Clone + Diff,
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
 {
     type Item = Result<Entry<K, V>>;
 
@@ -1913,7 +1984,7 @@ where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
 {
-    shards: MutexGuard<'a, Vec<Shard<K, V>>>,
+    snapshot: MutexGuard<'a, Snapshot<K, V>>,
     readers: Vec<MutexGuard<'a, Vec<ShardReader<K, V>>>>,
     writers: Vec<MutexGuard<'a, Vec<ShardWriter<K, V>>>>,
 }
@@ -1924,7 +1995,7 @@ where
     V: Clone + Diff + Footprint,
 {
     fn mark_merges(&mut self, offsets: Vec<usize>) -> Vec<[(usize, Shard<K, V>); 2]> {
-        if self.shards.len() < 2 {
+        if self.snapshot.shards.len() < 2 {
             unreachable!()
         }
 
@@ -1933,18 +2004,18 @@ where
             let (left, curr, right) = match off {
                 0 => (
                     None,
-                    self.shards[off].to_index(),
-                    self.shards[off + 1].to_index(),
+                    self.snapshot.shards[off].to_index(),
+                    self.snapshot.shards[off + 1].to_index(),
                 ),
-                off if off == self.shards.len() - 1 => (
-                    self.shards[off - 1].to_index(),
-                    self.shards[off].to_index(),
+                off if off == self.snapshot.shards.len() - 1 => (
+                    self.snapshot.shards[off - 1].to_index(),
+                    self.snapshot.shards[off].to_index(),
                     None,
                 ),
                 off => (
-                    self.shards[off - 1].to_index(),
-                    self.shards[off].to_index(),
-                    self.shards[off + 1].to_index(),
+                    self.snapshot.shards[off - 1].to_index(),
+                    self.snapshot.shards[off].to_index(),
+                    self.snapshot.shards[off + 1].to_index(),
                 ),
             };
             match (left, curr, right) {
@@ -1962,15 +2033,15 @@ where
     }
 
     fn right_merge(&mut self, off: usize) -> [(usize, Shard<K, V>); 2] {
-        if off >= (self.shards.len() - 1) {
+        if off >= (self.snapshot.shards.len() - 1) {
             unreachable!()
         }
 
-        let curr = self.shards.remove(off);
-        self.shards.insert(off, curr.to_merge());
+        let curr = self.snapshot.shards.remove(off);
+        self.snapshot.shards.insert(off, curr.to_merge());
 
-        let right = self.shards.remove(off + 1);
-        self.shards.insert(off + 1, right.to_merge());
+        let right = self.snapshot.shards.remove(off + 1);
+        self.snapshot.shards.insert(off + 1, right.to_merge());
 
         for rs in self.readers.iter_mut() {
             let r = rs.remove(off);
@@ -2000,11 +2071,11 @@ where
             unreachable!()
         }
 
-        let curr = self.shards.remove(off);
-        self.shards.insert(off, curr.to_merge());
+        let curr = self.snapshot.shards.remove(off);
+        self.snapshot.shards.insert(off, curr.to_merge());
 
-        let left = self.shards.remove(off - 1);
-        self.shards.insert(off - 1, left.to_merge());
+        let left = self.snapshot.shards.remove(off - 1);
+        self.snapshot.shards.insert(off - 1, left.to_merge());
 
         for rs in self.readers.iter_mut() {
             let r = rs.remove(off);
@@ -2030,8 +2101,8 @@ where
     }
 
     fn mark_split(&mut self, off: usize) -> (usize, Shard<K, V>) {
-        let curr = self.shards.remove(off);
-        self.shards.insert(off, curr.to_split());
+        let curr = self.snapshot.shards.remove(off);
+        self.snapshot.shards.insert(off, curr.to_split());
 
         for rs in self.readers.iter_mut() {
             let r = rs.remove(off);
@@ -2071,7 +2142,7 @@ where
                 ShardWriter::Active { .. } => unreachable!(),
             }
         }
-        match self.shards.remove(off) {
+        match self.snapshot.shards.remove(off) {
             Shard::Merge { high_key } => assert!(hk == high_key),
             Shard::Split { high_key } => assert!(hk == high_key),
             Shard::Active { .. } => unreachable!(),
@@ -2086,7 +2157,7 @@ where
             for ws in self.writers.iter_mut() {
                 ws.insert(off, shard.to_writer()?);
             }
-            self.shards.insert(off, shard);
+            self.snapshot.shards.insert(off, shard);
             off += 1;
         }
         Ok(off)
@@ -2107,7 +2178,7 @@ where
                 ShardWriter::Active { .. } => unreachable!(),
             }
         }
-        match self.shards.remove(off) {
+        match self.snapshot.shards.remove(off) {
             Shard::Merge { .. } => (),
             Shard::Split { .. } => unreachable!(),
             Shard::Active { .. } => unreachable!(),
@@ -2116,21 +2187,22 @@ where
     }
 }
 
-fn auto_shard<K, V>(mut index: Box<ffi::c_void>, rx: rt::Rx<String, usize>) -> Result<()>
+fn auto_shard<K, V>(
+    index_name: String,
+    config: Config,
+    snapshot: Arc<Mutex<Snapshot<K, V>>>,
+    rx: rt::Rx<String, usize>,
+) -> Result<()>
 where
     K: 'static + Send + Clone + Ord + Footprint,
     V: 'static + Send + Clone + Diff + Footprint,
     <V as Diff>::D: Send,
 {
-    let mut elapsed = time::Duration::new(0, 0);
-    let index: &mut ShLlrb<K, V> = unsafe {
-        let index_ptr: &mut ffi::c_void = index.as_mut();
-        let index_ptr = index_ptr as *mut ffi::c_void;
-        (index_ptr as *mut ShLlrb<K, V>).as_mut().unwrap()
-    };
+    use crate::error::Error::ThreadFail;
 
-    let index_name = index.to_name();
-    let index_interval = index.interval.as_secs();
+    let mut elapsed = time::Duration::new(0, 0);
+
+    let index_interval = config.interval.as_secs();
     let mut interval = time::Duration::from_secs(1); // TODO: no magic
 
     info!(
@@ -2152,7 +2224,12 @@ where
             Err(mpsc::RecvTimeoutError::Disconnected) => break Ok(()),
         };
 
-        let (r, w, _) = index.prune_rw()?;
+        let (r, w, _) = {
+            let s = snapshot
+                .lock()
+                .map_err(|e| ThreadFail(format!("shllrb: poisened, {:?}", e)))?;
+            ShLlrb::<K, V>::prune_rw(s)?
+        };
         if r > 0 || w > 0 {
             info!(
                 target: "shllrb",
@@ -2161,11 +2238,19 @@ where
         }
 
         let start = time::SystemTime::now();
-        let n = index.do_balance()?;
+        let n = {
+            let name = index_name.clone();
+            let s = snapshot
+                .lock()
+                .map_err(|e| ThreadFail(format!("shllrb: poisened, {:?}", e)))?;
+            ShLlrb::<K, V>::do_balance(name, s, config.clone())?
+        };
 
         {
-            let (shards, _) = index.lock_snapshot()?;
-            let isecs = if (n as f64) < ((shards.len() as f64) * 0.05) {
+            let s = snapshot
+                .lock()
+                .map_err(|e| ThreadFail(format!("shllrb: poisened, {:?}", e)))?;
+            let isecs = if (n as f64) < ((s.shards.len() as f64) * 0.05) {
                 cmp::min(interval.as_secs() * 2, index_interval)
             } else {
                 cmp::max(interval.as_secs() / 2, 1)
@@ -2273,7 +2358,7 @@ where
 struct MergeOrder(Vec<(usize, usize)>); // (offset, entries)
 
 impl MergeOrder {
-    fn new<'a, K, V>(shards: &MutexGuard<'a, Vec<Shard<K, V>>>) -> MergeOrder
+    fn new<K, V>(shards: &Vec<Shard<K, V>>) -> MergeOrder
     where
         K: Ord + Clone,
         V: Clone + Diff,
@@ -2314,7 +2399,7 @@ impl MergeOrder {
 struct SplitOrder(Vec<(usize, usize)>); // (offset, entries)
 
 impl SplitOrder {
-    fn new<'a, K, V>(shards: &MutexGuard<'a, Vec<Shard<K, V>>>) -> SplitOrder
+    fn new<K, V>(shards: &Vec<Shard<K, V>>) -> SplitOrder
     where
         K: Ord + Clone,
         V: Clone + Diff,

@@ -27,7 +27,8 @@ fn test_name() {
 
 #[test]
 fn test_len() {
-    let mut index: Box<ShLlrb<i32, Empty>> = ShLlrb::new("test-shllrb");
+    let config: Config = Default::default();
+    let mut index: Box<ShLlrb<i32, Empty>> = ShLlrb::new("test-shllrb", config);
     assert_eq!(index.len().unwrap(), 0);
     assert!(index.validate().is_ok());
 }
@@ -56,7 +57,8 @@ fn test_lsm_sticky() {
     };
 
     // without lsm
-    let mut index: Box<ShLlrb<i64, i64>> = ShLlrb::new("test-shllrb");
+    let config: Config = Default::default();
+    let mut index: Box<ShLlrb<i64, i64>> = ShLlrb::new("test-shllrb", config);
     let mut r = index.to_reader().unwrap();
     let key = populate(&mut index);
     match r.get(&key) {
@@ -71,8 +73,9 @@ fn test_lsm_sticky() {
     };
 
     // without lsm, with sticky
-    let mut index: Box<ShLlrb<i64, i64>> = ShLlrb::new("test-shllrb");
-    index.set_sticky(true);
+    let mut config: Config = Default::default();
+    config.set_sticky(true);
+    let mut index: Box<ShLlrb<i64, i64>> = ShLlrb::new("test-shllrb", config);
     let key = populate(&mut index);
     let mut r = index.to_reader().unwrap();
     match r.get(&key) {
@@ -103,8 +106,9 @@ fn test_lsm_sticky() {
     };
 
     // with lsm
-    let mut index: Box<ShLlrb<i64, i64>> = ShLlrb::new("test-shllrb");
-    index.set_lsm(true).set_sticky(true);
+    let mut config: Config = Default::default();
+    config.set_lsm(true).set_sticky(true);
+    let mut index: Box<ShLlrb<i64, i64>> = ShLlrb::new("test-shllrb", config);
     let key = populate(&mut index);
     let mut r = index.to_reader().unwrap();
     match r.get(&key) {
@@ -186,7 +190,8 @@ fn test_n_deleted() {
 
 #[test]
 fn test_set() {
-    let mut index: Box<ShLlrb<i64, i64>> = ShLlrb::new("test-shllrb");
+    let config: Config = Default::default();
+    let mut index: Box<ShLlrb<i64, i64>> = ShLlrb::new("test-shllrb", config);
     let mut refns = RefNodes::new(false /*lsm*/, 10);
 
     let mut w = index.to_writer().unwrap();
@@ -239,8 +244,9 @@ fn test_set() {
 
 #[test]
 fn test_cas_lsm() {
-    let mut index: Box<ShLlrb<i64, i64>> = ShLlrb::new("test-shllrb");
-    index.set_lsm(true);
+    let mut config: Config = Default::default();
+    config.set_lsm(true);
+    let mut index: Box<ShLlrb<i64, i64>> = ShLlrb::new("test-shllrb", config);
     let mut refns = RefNodes::new(true /*lsm*/, 11);
 
     let mut w = index.to_writer().unwrap();
@@ -330,7 +336,8 @@ fn test_cas_lsm() {
 
 #[test]
 fn test_delete() {
-    let mut index: Box<ShLlrb<i64, i64>> = ShLlrb::new("test-shllrb");
+    let config: Config = Default::default();
+    let mut index: Box<ShLlrb<i64, i64>> = ShLlrb::new("test-shllrb", config);
     let mut refns = RefNodes::new(false /*lsm*/, 11);
 
     let mut w = index.to_writer().unwrap();
@@ -395,7 +402,8 @@ fn test_delete() {
 
 #[test]
 fn test_iter() {
-    let mut index: Box<ShLlrb<i64, i64>> = ShLlrb::new("test-shllrb");
+    let config: Config = Default::default();
+    let mut index: Box<ShLlrb<i64, i64>> = ShLlrb::new("test-shllrb", config);
     let mut refns = RefNodes::new(false /*lsm*/, 10);
 
     let mut w = index.to_writer().unwrap();
@@ -443,7 +451,8 @@ fn test_iter() {
 
 #[test]
 fn test_range() {
-    let mut index: Box<ShLlrb<i64, i64>> = ShLlrb::new("test-shllrb");
+    let config: Config = Default::default();
+    let mut index: Box<ShLlrb<i64, i64>> = ShLlrb::new("test-shllrb", config);
     let mut refns = RefNodes::new(false /*lsm*/, 10);
 
     let mut w = index.to_writer().unwrap();
@@ -514,7 +523,8 @@ fn test_range() {
 #[test]
 fn test_crud() {
     let size = 1000;
-    let mut index: Box<ShLlrb<i64, i64>> = ShLlrb::new("test-shllrb");
+    let config: Config = Default::default();
+    let mut index: Box<ShLlrb<i64, i64>> = ShLlrb::new("test-shllrb", config);
     let mut refns = RefNodes::new(false /*lsm*/, size);
 
     let mut w = index.to_writer().unwrap();
@@ -604,8 +614,9 @@ fn test_crud() {
 #[test]
 fn test_crud_lsm() {
     let size = 1000;
-    let mut index: Box<ShLlrb<i64, i64>> = ShLlrb::new("test-shllrb");
-    index.set_lsm(true);
+    let mut config: Config = Default::default();
+    config.set_lsm(true);
+    let mut index: Box<ShLlrb<i64, i64>> = ShLlrb::new("test-shllrb", config);
     let mut refns = RefNodes::new(true /*lsm*/, size as usize);
 
     let mut w = index.to_writer().unwrap();
@@ -700,12 +711,11 @@ fn test_crud_lsm() {
 
 #[test]
 fn test_commit1() {
-    let mut index1: Box<ShLlrb<i64, i64>> = ShLlrb::new("test-index1");
-    index1.set_lsm(true);
-    let mut index2: Box<ShLlrb<i64, i64>> = ShLlrb::new("test-index2");
-    index2.set_lsm(true);
-    let mut rindex: Box<ShLlrb<i64, i64>> = ShLlrb::new("test-ref-index");
-    rindex.set_lsm(true);
+    let mut config: Config = Default::default();
+    config.set_lsm(true);
+    let mut index1: Box<ShLlrb<i64, i64>> = ShLlrb::new("ti1", config.clone());
+    let index2: Box<ShLlrb<i64, i64>> = ShLlrb::new("ti2", config.clone());
+    let mut rindex: Box<ShLlrb<i64, i64>> = ShLlrb::new("tri", config.clone());
 
     index1
         .commit(
@@ -718,12 +728,11 @@ fn test_commit1() {
 
 #[test]
 fn test_commit2() {
-    let mut index1: Box<ShLlrb<i64, i64>> = ShLlrb::new("test-index1");
-    index1.set_lsm(true);
-    let mut index2: Box<ShLlrb<i64, i64>> = ShLlrb::new("test-index2");
-    index2.set_lsm(true);
-    let mut rindex: Box<ShLlrb<i64, i64>> = ShLlrb::new("test-ref-index");
-    rindex.set_lsm(true);
+    let mut config: Config = Default::default();
+    config.set_lsm(true);
+    let mut index1: Box<ShLlrb<i64, i64>> = ShLlrb::new("ti1", config.clone());
+    let mut index2: Box<ShLlrb<i64, i64>> = ShLlrb::new("ti2", config.clone());
+    let mut rindex: Box<ShLlrb<i64, i64>> = ShLlrb::new("tri", config.clone());
 
     {
         let mut w = index2.to_writer().unwrap();
@@ -754,19 +763,11 @@ fn test_commit3() {
         let lsm: bool = rng.gen();
         let sticky: bool = lsm || true;
 
-        let (mut index1, mut index2, mut rindex) = (
-            ShLlrb::<i64, i64>::new("test-index1"),
-            ShLlrb::<i64, i64>::new("test-index2"),
-            ShLlrb::<i64, i64>::new("test-ref-index"),
-        );
-        if lsm {
-            index1.set_lsm(true);
-            index2.set_lsm(true);
-            rindex.set_lsm(true);
-        };
-        index1.set_sticky(sticky);
-        index2.set_sticky(sticky);
-        rindex.set_sticky(sticky);
+        let mut config: Config = Default::default();
+        config.set_lsm(lsm).set_sticky(sticky);
+        let mut index1 = ShLlrb::<i64, i64>::new("ti1", config.clone());
+        let mut index2 = ShLlrb::<i64, i64>::new("ti2", config.clone());
+        let mut rindex = ShLlrb::<i64, i64>::new("tri", config.clone());
 
         //  println!("index-config: lsm:{} sticky:{}", lsm, sticky);
 
@@ -889,16 +890,10 @@ fn test_compact() {
         let lsm: bool = rng.gen();
         let sticky: bool = lsm || true;
 
-        let (mut index, mut rindex) = (
-            ShLlrb::<i64, i64>::new("test-index"),
-            ShLlrb::<i64, i64>::new("test-ref-index"),
-        );
-        if lsm {
-            index.set_lsm(true);
-            rindex.set_lsm(true);
-        };
-        index.set_sticky(sticky);
-        rindex.set_sticky(sticky);
+        let mut config: Config = Default::default();
+        config.set_lsm(lsm).set_sticky(sticky);
+        let mut index = ShLlrb::<i64, i64>::new("ti1", config.clone());
+        let mut rindex = ShLlrb::<i64, i64>::new("tri", config.clone());
 
         let mut w = index.to_writer().unwrap();
         let mut rw = rindex.to_writer().unwrap();
@@ -1016,8 +1011,9 @@ fn test_commit_iterator_scan() {
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
     let (n_ops, key_max) = (60_000_i64, 20_000);
-    let mut index: Box<ShLlrb<i64, i64>> = ShLlrb::new("test-shllrb");
-    index.set_lsm(true);
+    let mut config: Config = Default::default();
+    config.set_lsm(true);
+    let mut index: Box<ShLlrb<i64, i64>> = ShLlrb::new("test-shllrb", config);
 
     random_index(n_ops, key_max, seed, &mut index);
 
@@ -1062,8 +1058,9 @@ fn test_commit_iterator_scans() {
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
     let (n_ops, key_max) = (60_000_i64, 20_000);
-    let mut index: Box<ShLlrb<i64, i64>> = ShLlrb::new("test-shllrb");
-    index.set_lsm(true);
+    let mut config: Config = Default::default();
+    config.set_lsm(true);
+    let mut index: Box<ShLlrb<i64, i64>> = ShLlrb::new("test-shllrb", config);
 
     random_index(n_ops, key_max, seed, &mut index);
 
@@ -1117,8 +1114,9 @@ fn test_commit_iterator_range_scans() {
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
     let (n_ops, key_max) = (128_000_i64, 20_000);
-    let mut index: Box<ShLlrb<i64, i64>> = ShLlrb::new("test-shllrb");
-    index.set_lsm(true);
+    let mut config: Config = Default::default();
+    config.set_lsm(true);
+    let mut index: Box<ShLlrb<i64, i64>> = ShLlrb::new("test-shllrb", config);
 
     random_index(n_ops, key_max, seed, &mut index);
 

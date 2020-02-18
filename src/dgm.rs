@@ -19,7 +19,7 @@ use std::{
 };
 
 use crate::{
-    core::Writer,
+    core::{self, Cutoff, Writer},
     core::{CommitIter, CommitIterator, Result, Serialize, WriteIndexFactory},
     core::{Diff, DiskIndexFactory, Entry, Footprint, Index, IndexIter, Reader},
     error::Error,
@@ -358,12 +358,14 @@ where
     readers: Vec<Arc<Mutex<Rs<K, V, M, D>>>>,
 }
 
-struct InnerDgm<K, V, M, D>
+impl<K, V, M, D> InnerDgm<K, V, M, D>
 where
     K: Clone + Ord + Serialize + Footprint,
     V: Clone + Diff + Serialize + Footprint,
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
+    M::I: Index<K, V> + Footprint,
+    D::I: Index<K, V> + Footprint,
 {
     fn shift_in_m0(&mut self) -> Result<()> {
         // block all the readers.
@@ -374,16 +376,20 @@ where
 
         // shift memory snapshot into writers
         let m0 = self.shift_into_m0_writers(self.mem_factory.new(&self.name)?)?;
+        let m0 = Snapshot::new_write(m0);
 
         self.m1 = match mem::replace(&mut self.m0, m0) {
-            Snapshot::Write(m1) => Some(Snapshot::new_fluss(m1)),
+            Snapshot::Write(m1) => Some(Snapshot::new_flush(m1)),
             _ => unreachable!(),
         };
 
         // update readers and unblock them one by one.
         for r in rs.iter_mut() {
             r.r_m0 = self.m0.as_mut_m0()?.to_reader()?;
-            r.r_m1 = self.m1.as_mut_m1()?.to_reader()?;
+            r.r_m1 = match &mut self.m1 {
+                Some(m1) => Some(m1.as_mut_m1()?.to_reader()?),
+                None => None,
+            };
 
             r.r_disks.drain(..);
             for disk in self.disks.iter_mut() {
@@ -397,7 +403,7 @@ where
     }
 
     // should be called while holding the levels lock.
-    fn shift_into_m0_writers(&mut self, mut m0: M::I) -> Result<M::I> {
+    fn shift_into_m0_writers(&self, mut m0: M::I) -> Result<M::I> {
         // block all the writer threads.
         let mut handles = vec![];
         for writer in self.writers.iter() {
@@ -428,17 +434,19 @@ where
         loop {
             match iter.next() {
                 None => break Ok(self.disks.len() - 1), // first commit
-                Some((lvl, Snapshot::None)) => (), // continue loop
+                Some((lvl, Snapshot::None)) => (),      // continue loop
                 Some((lvl, disk)) => {
                     let df = disk.footprint()? as f64;
                     match disk {
                         Compact(_) => break Ok(lvl - 1),
-                        Active(_) if (mf / df) < self.mem_ratio => if lvl == 0 {
-                            break Err(Error::DiskIndexFail(msg));
-                        } else {
-                            break Ok(lvl-1)
+                        Active(_) if (mf / df) < self.config.mem_ratio => {
+                            if lvl == 0 {
+                                break Err(Error::DiskIndexFail(msg));
+                            } else {
+                                break Ok(lvl - 1);
+                            }
                         }
-                        Active(_) => Ok(lvl),
+                        Active(_) => break Ok(lvl),
                         Write(_) | Flush(_) | Commit(_) => unreachable!(),
                         _ => unreachable!(),
                     }
@@ -1011,6 +1019,7 @@ where
     D: DiskIndexFactory<K, V>,
     M::I: Footprint,
     D::I: Footprint,
+    <M::I as Index<K, V>>::R: CommitIterator<K, V>,
 {
     type W = DgmWriter<K, V, <M::I as Index<K, V>>::W>;
     type R = DgmReader<K, V, M, D>;
@@ -1078,7 +1087,7 @@ where
         Ok(DgmReader::new(&inner.name, arc_rs))
     }
 
-    fn commit<C, F>(&mut self, scanner: CommitIter<K, V, C>, metacb: F) -> Result<()>
+    fn commit<C, F>(&mut self, _: CommitIter<K, V, C>, metacb: F) -> Result<()>
     where
         C: CommitIterator<K, V>,
         F: Fn(Vec<u8>) -> Vec<u8>,
@@ -1093,31 +1102,34 @@ where
         }
 
         let mut inner = self.as_inner()?;
-        let d = Default::default();
 
         inner.shift_in_m0();
+        let level = inner.commit_level()?;
 
         {
-            let level = inner.commit_level()?;
-
             let d = mem::replace(&mut inner.disks[level], Default::default());
             let d = match d {
-                Snapshot::Active(d) => d,
+                Active(d) => d,
                 Snapshot::None => {
-                    let name: Name = (inner.name.clone(), level).into();
+                    let name: LevelName = (inner.name.clone(), level).into();
                     let name = name.to_string();
                     inner.disk_factory.new(&inner.dir, &name)?
-                },
+                }
+                _ => unreachable!(),
             };
 
             inner.disks[level] = Snapshot::new_commit(d);
 
             let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
-            let m1 = inner.m1.as_mut_m1();
-            let d = inner.disks[level].as_mut_disk()?.unwrap();
-            d.commit(core::CommitIter::new(m1, within), metacb)?;
+            match &mut inner.m1 {
+                Some(m1) => {
+                    let r_m1 = m1.as_mut_m1()?.to_reader()?;
+                    let d = inner.disks[level].as_mut_disk()?.unwrap();
+                    d.commit(core::CommitIter::new(r_m1, within), metacb)?;
+                }
+                None => (),
+            }
         }
-
 
         {
             let d = mem::replace(&mut inner.disks[level], Default::default());
@@ -1129,15 +1141,24 @@ where
             inner.m1 = None;
             inner.disks[level] = Snapshot::new_active(d);
 
-            for readers in inner.readers.iter_mut() {
+            let mut r_diskss = vec![];
+            for _ in 0..inner.readers.len() {
+                let mut r_disks = vec![];
+                for disk in inner.disks.iter_mut() {
+                    match disk.as_mut_disk()? {
+                        Some(d) => r_disks.push(d.to_reader()?),
+                        None => (),
+                    }
+                }
+                r_diskss.push(r_disks);
+            }
+
+            for readers in inner.readers.iter() {
                 let mut rs = readers.lock().unwrap();
                 rs.r_m1 = None;
                 rs.r_disks.drain(..);
-                for disk in inner.disks.iter_mut() {
-                    match disk.as_mut_disk()? {
-                        Some(d) => rs.r_disks.push(d.to_reader()?),
-                        None => (),
-                    }
+                for r_disk in r_diskss.remove(0).into_iter() {
+                    rs.r_disks.push(r_disk)
                 }
             }
         }
@@ -1145,7 +1166,7 @@ where
         Ok(())
     }
 
-    fn compact<F>(&mut self, _cutoff: Bound<u64>, metacb: F) -> Result<usize>
+    fn compact<F>(&mut self, _cutoff: Cutoff, metacb: F) -> Result<usize>
     where
         F: Fn(Vec<u8>) -> Vec<u8>,
     {

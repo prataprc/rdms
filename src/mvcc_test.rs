@@ -797,11 +797,11 @@ fn test_pw_scan() {
 #[test]
 fn test_commit1() {
     let mut index1: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-index1");
-    let index2: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-index2");
+    let mut index2: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-index2");
     let mut rindex: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-ref-index");
 
     let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
-    let scanner = CommitIter::new(index2, within);
+    let scanner = CommitIter::new(index2.to_reader().unwrap(), within);
     index1.commit(scanner, |meta| meta.clone()).unwrap();
     check_commit_nodes(index1.as_mut(), rindex.as_mut());
 }
@@ -816,7 +816,7 @@ fn test_commit2() {
     rindex.set(100, 200).unwrap();
 
     let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
-    let scanner = CommitIter::new(index2, within);
+    let scanner = CommitIter::new(index2.to_reader().unwrap(), within);
     index1.commit(scanner, |meta| meta.clone()).unwrap();
     check_commit_nodes(index1.as_mut(), rindex.as_mut());
 }
@@ -890,7 +890,7 @@ fn test_commit3() {
         }
 
         let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
-        let scanner = CommitIter::new(index2, within);
+        let scanner = CommitIter::new(index2.to_reader().unwrap(), within);
         index1.commit(scanner, |meta| meta.clone()).unwrap();
         check_commit_nodes(index1.as_mut(), rindex.as_mut());
     }

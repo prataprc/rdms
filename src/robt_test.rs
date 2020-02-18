@@ -386,7 +386,7 @@ fn test_robt_shards() {
         random_llrb(n_ops as i64, key_max, seed, &mut llrb);
 
         let iter = {
-            let iter = scans::SkipScan::new(llrb.to_reader().unwrap());
+            let mut iter = scans::SkipScan::new(llrb.to_reader().unwrap());
             core::CommitIter::new(
                 scans::CommitWrapper::new(vec![Box::new(iter)]),
                 (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded),

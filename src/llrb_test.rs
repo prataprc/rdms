@@ -1193,12 +1193,15 @@ fn test_split() {
 #[test]
 fn test_commit1() {
     let mut index1: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-index1");
-    let index2: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-index2");
+    let mut index2: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-index2");
     let mut rindex: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-ref-index");
 
     index1
         .commit(
-            CommitIter::new(index2, (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded)),
+            CommitIter::new(
+                index2.to_reader().unwrap(),
+                (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded),
+            ),
             |meta| meta.clone(),
         )
         .unwrap();
@@ -1216,7 +1219,10 @@ fn test_commit2() {
 
     index1
         .commit(
-            CommitIter::new(index2, (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded)),
+            CommitIter::new(
+                index2.to_reader().unwrap(),
+                (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded),
+            ),
             |meta| meta.clone(),
         )
         .unwrap();
@@ -1293,7 +1299,10 @@ fn test_commit3() {
 
         index1
             .commit(
-                CommitIter::new(index2, (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded)),
+                CommitIter::new(
+                    index2.to_reader().unwrap(),
+                    (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded),
+                ),
                 |meta| meta.clone(),
             )
             .unwrap();

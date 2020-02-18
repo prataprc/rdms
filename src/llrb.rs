@@ -2116,6 +2116,37 @@ where
     }
 }
 
+impl<K, V> CommitIterator<K, V> for LlrbReader<K, V>
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+{
+    fn scan<G>(&mut self, within: G) -> Result<IndexIter<K, V>>
+    where
+        G: Clone + RangeBounds<u64>,
+    {
+        let index: &mut Llrb<K, V> = self.as_mut();
+        index.scan(within)
+    }
+
+    fn scans<G>(&mut self, n_shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
+    where
+        G: Clone + RangeBounds<u64>,
+    {
+        let index: &mut Llrb<K, V> = self.as_mut();
+        index.scans(n_shards, within)
+    }
+
+    fn range_scans<N, G>(&mut self, ranges: Vec<N>, within: G) -> Result<Vec<IndexIter<K, V>>>
+    where
+        N: Clone + RangeBounds<K>,
+        G: Clone + RangeBounds<u64>,
+    {
+        let index: &mut Llrb<K, V> = self.as_mut();
+        index.range_scans(ranges, within)
+    }
+}
+
 impl<K, V> PiecewiseScan<K, V> for LlrbReader<K, V>
 where
     K: Clone + Ord,

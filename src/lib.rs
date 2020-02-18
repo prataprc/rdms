@@ -112,7 +112,7 @@ mod llrb_node;
 pub mod mvcc;
 pub mod shllrb;
 // disk index
-// pub mod dgm;
+pub mod dgm;
 pub mod nodisk;
 pub mod robt;
 mod robt_entry;

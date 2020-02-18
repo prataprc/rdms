@@ -274,6 +274,104 @@ where
     wtrefns: Vec<Arc<Mutex<Vec<ShardWriter<K, V>>>>>,
 }
 
+fn do_scan<'a, K, V, G>(
+    mut snapshot: MutexGuard<'a, Snapshot<K, V>>,
+    within: G,
+) -> Result<IndexIter<'a, K, V>>
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+    G: Clone + RangeBounds<u64>,
+{
+    let shards = unsafe {
+        (snapshot.shards.as_mut_slice() as *mut [Shard<K, V>])
+            .as_mut()
+            .unwrap()
+    };
+
+    let mut iters = vec![];
+    for shard in shards.iter_mut() {
+        iters.push(shard.as_mut_index().scan(within.clone())?);
+    }
+
+    Ok(Box::new(CommitIter::new(iters, Arc::new(snapshot))))
+}
+
+fn do_scans<'a, K, V, G>(
+    mut snapshot: MutexGuard<'a, Snapshot<K, V>>,
+    n_shards: usize,
+    within: G,
+) -> Result<Vec<IndexIter<'a, K, V>>>
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+    G: Clone + RangeBounds<u64>,
+{
+    let shards = unsafe {
+        (snapshot.shards.as_mut_slice() as *mut [Shard<K, V>])
+            .as_mut()
+            .unwrap()
+    };
+    let snapshot = Arc::new(snapshot);
+
+    let mut iters = vec![];
+    for shard in shards.iter_mut() {
+        iters.push(Box::new(CommitIter::new(
+            vec![shard.as_mut_index().scan(within.clone())?],
+            Arc::clone(&snapshot),
+        )) as IndexIter<K, V>)
+    }
+
+    // If there are not enough shards push empty iterators.
+    for _ in iters.len()..n_shards {
+        let ss = vec![];
+        iters.push(Box::new(ss.into_iter()));
+    }
+
+    assert_eq!(iters.len(), n_shards);
+
+    Ok(iters)
+}
+
+fn do_range_scans<'a, K, V, N, G>(
+    mut snapshot: MutexGuard<'a, Snapshot<K, V>>,
+    ranges: Vec<N>,
+    within: G,
+) -> Result<Vec<IndexIter<'a, K, V>>>
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+    N: Clone + RangeBounds<K>,
+    G: Clone + RangeBounds<u64>,
+{
+    let mut shardss = vec![];
+    for _ in 0..ranges.len() {
+        shardss.push(unsafe {
+            (snapshot.shards.as_mut_slice() as *mut [Shard<K, V>])
+                .as_mut()
+                .unwrap()
+        })
+    }
+    let snapshot = Arc::new(snapshot);
+
+    let mut outer_iters = vec![];
+    let zip_iter = ranges.into_iter().zip(shardss.into_iter());
+    for (range, shards) in zip_iter {
+        let mut iters = vec![];
+        for shard in shards.iter_mut() {
+            iters.push(
+                shard
+                    .as_mut_index()
+                    .range_scans(vec![range.clone()], within.clone())?
+                    .remove(0),
+            );
+        }
+        let iter = Box::new(CommitIter::new(iters, Arc::clone(&snapshot)));
+        outer_iters.push(iter as IndexIter<K, V>);
+    }
+    Ok(outer_iters)
+}
+
 // A global lock is similar to lock_snapshot(), that along with the guarantee
 // that there wont be any concurrent reader or writer threads access the
 // shard.
@@ -907,19 +1005,23 @@ where
     }
 
     fn to_reader(&mut self) -> Result<Self::R> {
-        let mut snapshot = self.lock_snapshot()?;
+        let (readers, id) = {
+            let mut snapshot = self.lock_snapshot()?;
 
-        let readers = {
-            let mut readers = vec![];
-            for shard in snapshot.shards.iter_mut() {
-                readers.push(shard.to_reader()?);
-            }
-            Arc::new(Mutex::new(readers))
+            let readers = {
+                let mut readers = vec![];
+                for shard in snapshot.shards.iter_mut() {
+                    readers.push(shard.to_reader()?);
+                }
+                Arc::new(Mutex::new(readers))
+            };
+            let id = snapshot.rdrefns.len();
+            snapshot.rdrefns.push(Arc::clone(&readers));
+            (readers, id)
         };
-        let id = snapshot.rdrefns.len();
-        snapshot.rdrefns.push(Arc::clone(&readers));
 
-        Ok(ShllrbReader::new(self.name.clone(), id, readers))
+        let snapshot = Arc::clone(&self.snapshot);
+        Ok(ShllrbReader::new(self.name.clone(), id, snapshot, readers))
     }
 
     fn to_writer(&mut self) -> Result<Self::W> {
@@ -1044,6 +1146,7 @@ where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
 {
+    #[inline]
     fn scan<G>(&mut self, within: G) -> Result<IndexIter<K, V>>
     where
         G: Clone + RangeBounds<u64>,
@@ -1051,6 +1154,7 @@ where
         self.as_mut().scan(within)
     }
 
+    #[inline]
     fn scans<G>(&mut self, n_shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
     where
         G: Clone + RangeBounds<u64>,
@@ -1058,6 +1162,7 @@ where
         self.as_mut().scans(n_shards, within)
     }
 
+    #[inline]
     fn range_scans<N, G>(&mut self, ranges: Vec<N>, within: G) -> Result<Vec<IndexIter<K, V>>>
     where
         N: Clone + RangeBounds<K>,
@@ -1072,6 +1177,7 @@ where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
 {
+    #[inline]
     fn scan<G>(&mut self, within: G) -> Result<IndexIter<K, V>>
     where
         G: Clone + RangeBounds<u64>,
@@ -1079,6 +1185,7 @@ where
         (*self).scan(within)
     }
 
+    #[inline]
     fn scans<G>(&mut self, n_shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
     where
         G: Clone + RangeBounds<u64>,
@@ -1086,6 +1193,7 @@ where
         (*self).scans(n_shards, within)
     }
 
+    #[inline]
     fn range_scans<N, G>(&mut self, ranges: Vec<N>, within: G) -> Result<Vec<IndexIter<K, V>>>
     where
         N: Clone + RangeBounds<K>,
@@ -1104,50 +1212,16 @@ where
     where
         G: Clone + RangeBounds<u64>,
     {
-        let mut snapshot = self.lock_snapshot()?; // should be a quick call
-        let shards = unsafe {
-            (snapshot.shards.as_mut_slice() as *mut [Shard<K, V>])
-                .as_mut()
-                .unwrap()
-        };
-
-        let mut iters = vec![];
-        for shard in shards.iter_mut() {
-            iters.push(shard.as_mut_index().scan(within.clone())?);
-        }
-
-        Ok(Box::new(CommitIter::new(iters, Arc::new(snapshot))))
+        let snapshot = self.lock_snapshot()?; // should be a quick call
+        do_scan(snapshot, within)
     }
 
     fn scans<G>(&mut self, n_shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
     where
         G: Clone + RangeBounds<u64>,
     {
-        let mut snapshot = self.lock_snapshot()?;
-        let shards = unsafe {
-            (snapshot.shards.as_mut_slice() as *mut [Shard<K, V>])
-                .as_mut()
-                .unwrap()
-        };
-        let snapshot = Arc::new(snapshot);
-
-        let mut iters = vec![];
-        for shard in shards.iter_mut() {
-            iters.push(Box::new(CommitIter::new(
-                vec![shard.as_mut_index().scan(within.clone())?],
-                Arc::clone(&snapshot),
-            )) as IndexIter<K, V>)
-        }
-
-        // If there are not enough shards push empty iterators.
-        for _ in iters.len()..n_shards {
-            let ss = vec![];
-            iters.push(Box::new(ss.into_iter()));
-        }
-
-        assert_eq!(iters.len(), n_shards);
-
-        Ok(iters)
+        let snapshot = self.lock_snapshot()?;
+        do_scans(snapshot, n_shards, within)
     }
 
     fn range_scans<N, G>(&mut self, ranges: Vec<N>, within: G) -> Result<Vec<IndexIter<K, V>>>
@@ -1155,33 +1229,8 @@ where
         N: Clone + RangeBounds<K>,
         G: Clone + RangeBounds<u64>,
     {
-        let mut snapshot = self.lock_snapshot()?;
-        let mut shardss = vec![];
-        for _ in 0..ranges.len() {
-            shardss.push(unsafe {
-                (snapshot.shards.as_mut_slice() as *mut [Shard<K, V>])
-                    .as_mut()
-                    .unwrap()
-            })
-        }
-        let snapshot = Arc::new(snapshot);
-
-        let mut outer_iters = vec![];
-        let zip_iter = ranges.into_iter().zip(shardss.into_iter());
-        for (range, shards) in zip_iter {
-            let mut iters = vec![];
-            for shard in shards.iter_mut() {
-                iters.push(
-                    shard
-                        .as_mut_index()
-                        .range_scans(vec![range.clone()], within.clone())?
-                        .remove(0),
-                );
-            }
-            let iter = Box::new(CommitIter::new(iters, Arc::clone(&snapshot)));
-            outer_iters.push(iter as IndexIter<K, V>);
-        }
-        Ok(outer_iters)
+        let snapshot = self.lock_snapshot()?;
+        do_range_scans(snapshot, ranges, within)
     }
 }
 
@@ -1231,25 +1280,32 @@ where
 /// Read handle into [ShLlrb] index.
 pub struct ShllrbReader<K, V>
 where
-    K: Ord + Clone,
-    V: Clone + Diff,
+    K: Ord + Clone + Footprint,
+    V: Clone + Diff + Footprint,
 {
     name: String,
     id: usize,
+    snapshot: Arc<Mutex<Snapshot<K, V>>>,
     readers: Arc<Mutex<Vec<ShardReader<K, V>>>>,
 }
 
 impl<K, V> ShllrbReader<K, V>
 where
-    K: Ord + Clone,
-    V: Clone + Diff,
+    K: Ord + Clone + Footprint,
+    V: Clone + Diff + Footprint,
 {
     fn new(
         name: String,
         id: usize,
+        snapshot: Arc<Mutex<Snapshot<K, V>>>,
         readers: Arc<Mutex<Vec<ShardReader<K, V>>>>,
     ) -> ShllrbReader<K, V> {
-        let value = ShllrbReader { name, id, readers };
+        let value = ShllrbReader {
+            name,
+            id,
+            snapshot,
+            readers,
+        };
         info!(target: "shllrb", "{:?}, new reader {} ...", value.name, value.id);
         value
     }
@@ -1284,6 +1340,31 @@ where
         }
     }
 
+    fn as_snapshot(&self) -> Result<MutexGuard<Snapshot<K, V>>> {
+        use crate::error::Error::ThreadFail;
+
+        self.snapshot
+            .lock()
+            .map_err(|e| ThreadFail(format!("shllrbr: lock poisened, {:?}", e)))
+    }
+
+    // Return only if shards are locked and all shards are in active state.
+    fn lock_snapshot(&self) -> Result<MutexGuard<Snapshot<K, V>>> {
+        'outer: loop {
+            let mut snapshot = self.as_snapshot()?;
+            // make sure that all shards are in Active state.
+            for shard in snapshot.shards.iter_mut() {
+                if shard.to_index().is_none() {
+                    mem::drop(snapshot);
+                    thread::sleep(RETRY_INTERVAL);
+                    continue 'outer;
+                }
+            }
+
+            break Ok(snapshot);
+        }
+    }
+
     fn as_readers(&self) -> Result<MutexGuard<Vec<ShardReader<K, V>>>> {
         match self.readers.lock() {
             Ok(value) => Ok(value),
@@ -1297,8 +1378,8 @@ where
 
 impl<K, V> Drop for ShllrbReader<K, V>
 where
-    K: Clone + Ord,
-    V: Clone + Diff,
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
 {
     fn drop(&mut self) {
         debug!(target: "shllrb", "{:?}, dropping reader {}", self.name, self.id);
@@ -1307,8 +1388,8 @@ where
 
 impl<K, V> Reader<K, V> for ShllrbReader<K, V>
 where
-    K: Clone + Ord,
-    V: Clone + Diff,
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
 {
     fn get<Q>(&mut self, key: &Q) -> Result<Entry<K, V>>
     where
@@ -1499,6 +1580,37 @@ where
         Q: 'a + Ord + ?Sized,
     {
         self.reverse(r)
+    }
+}
+
+impl<K, V> CommitIterator<K, V> for ShllrbReader<K, V>
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+{
+    fn scan<G>(&mut self, within: G) -> Result<IndexIter<K, V>>
+    where
+        G: Clone + RangeBounds<u64>,
+    {
+        let snapshot = self.lock_snapshot()?; // should be a quick call
+        do_scan(snapshot, within)
+    }
+
+    fn scans<G>(&mut self, n_shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
+    where
+        G: Clone + RangeBounds<u64>,
+    {
+        let snapshot = self.lock_snapshot()?;
+        do_scans(snapshot, n_shards, within)
+    }
+
+    fn range_scans<N, G>(&mut self, ranges: Vec<N>, within: G) -> Result<Vec<IndexIter<K, V>>>
+    where
+        N: Clone + RangeBounds<K>,
+        G: Clone + RangeBounds<u64>,
+    {
+        let snapshot = self.lock_snapshot()?;
+        do_range_scans(snapshot, ranges, within)
     }
 }
 

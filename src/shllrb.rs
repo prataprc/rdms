@@ -413,9 +413,20 @@ where
     {
         let name = name.as_ref().to_string();
 
+        let shard = {
+            let shard_name: ShardName = (name.clone(), 0).into();
+            let mut llrb = if config.lsm {
+                Llrb::new_lsm(shard_name.to_string())
+            } else {
+                Llrb::new(shard_name.to_string())
+            };
+            llrb.set_sticky(config.sticky).set_spinlatch(config.spin);
+            Shard::new_active(llrb, Bound::Unbounded)
+        };
+
         let snapshot = Arc::new(Mutex::new(Snapshot {
             root_seqno: Arc::new(AtomicU64::new(0)),
-            shards: vec![],
+            shards: vec![shard],
             rdrefns: vec![],
             wtrefns: vec![],
         }));

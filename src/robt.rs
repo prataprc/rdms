@@ -382,7 +382,7 @@ where
 
         let purger = {
             let name = name.to_string();
-            rt::Thread::new(move |rx| move || purger(name, rx))
+            rt::Thread::new(move |rx| move || thread_purger(name, rx))
         };
 
         Ok(Robt {
@@ -410,7 +410,7 @@ where
 
         let purger = {
             let name = name.0.clone();
-            rt::Thread::new(move |rx| move || purger(name, rx))
+            rt::Thread::new(move |rx| move || thread_purger(name, rx))
         };
 
         Ok(Robt {
@@ -3945,7 +3945,7 @@ fn purge_file(
     }
 }
 
-fn purger(name: String, rx: rt::Rx<ffi::OsString, ()>) -> Result<()> {
+fn thread_purger(name: String, rx: rt::Rx<ffi::OsString, ()>) -> Result<()> {
     info!(target: "robtpr", "{:?}, starting purger ...", name);
 
     let mut locked_files = vec![];

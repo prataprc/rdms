@@ -3,13 +3,12 @@
 //! [Rdms] can be composed using underlying components and mechanisms defined
 //! in [core] module.
 
-use log::error;
+use log::{error, info};
 
 use std::{
     convert, fmt, marker,
     ops::Bound,
     sync::{self, mpsc, Arc, MutexGuard},
-    thread,
     time::{Duration, SystemTime},
 };
 
@@ -126,12 +125,13 @@ where
     /// Set interval in time duration, for invoking auto commit.
     /// Calling this method will spawn an auto compaction thread.
     pub fn set_commit_interval(&mut self, interval: Duration) -> &mut Rdms<K, V, I> {
+        let name = self.name.clone();
         self.auto_commit = match self.auto_commit.take() {
             Some(auto_commit) => Some(auto_commit),
             None if interval.as_secs() > 0 => {
                 let index = Arc::clone(self.index.as_ref().unwrap());
                 Some(rt::Thread::new(move |rx| {
-                    move || auto_commit::<K, V, I>(index, interval, rx)
+                    move || auto_commit::<K, V, I>(name, index, interval, rx)
                 }))
             }
             None => None,
@@ -225,8 +225,9 @@ where
 
 // TODO: return some valid stats.
 fn auto_commit<K, V, I>(
+    name: String,
     index: Arc<sync::Mutex<I>>,
-    interval: Duration,
+    commit_interval: Duration,
     rx: rt::Rx<(), ()>,
 ) -> Result<()>
 where
@@ -236,17 +237,20 @@ where
 {
     use crate::error::Error::ThreadFail;
 
+    info!(
+        target: "rdms  ",
+        "{}, auto-commit thread started with interval {:?}",
+        name, commit_interval,
+    );
+
     let mut elapsed = Duration::new(0, 0);
     loop {
-        if elapsed < interval {
-            thread::sleep(interval - elapsed);
-        }
-
-        match rx.try_recv() {
-            Err(mpsc::TryRecvError::Empty) => (),
-            Err(mpsc::TryRecvError::Disconnected) => break Ok(()),
+        let interval = (commit_interval + elapsed) / 2;
+        match rx.recv_timeout(interval) {
+            Err(mpsc::RecvTimeoutError::Timeout) => (),
+            Err(mpsc::RecvTimeoutError::Disconnected) => break Ok(()),
             Ok(_) => unreachable!(),
-        }
+        };
 
         elapsed = {
             let start = SystemTime::now();

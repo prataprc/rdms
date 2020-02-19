@@ -834,7 +834,7 @@ where
 
             let n = config.max_shards - n_shards; // TODO: no magic formula
             if n_shards < config.max_shards {
-                let so = SplitOrder::new(&gl.snapshot.shards);
+                let so = SplitOrder::new(&gl.snapshot.shards, config.max_entries);
                 let offsets = so.filter().take(n);
                 let splits: Vec<(usize, Shard<K, V>)> =
                     offsets.into_iter().map(|off| gl.mark_split(off)).collect();
@@ -2315,28 +2315,30 @@ where
 {
     use crate::error::Error::ThreadFail;
 
-    let mut elapsed = time::Duration::new(0, 0);
-
-    let index_interval = config.interval.as_secs();
-    let mut interval = time::Duration::from_secs(1); // TODO: no magic
-
     info!(
         target: "shllrb",
         "{}, auto-sharding thread started with interval {:?}",
-        index_name, interval
+        index_name, config.interval,
     );
 
+    let mut elapsed = time::Duration::new(0, 0);
     loop {
-        let resp_tx = match rx.recv_timeout(interval - elapsed) {
-            Ok((cmd, resp_tx)) => {
-                if cmd == "balance" {
-                    resp_tx
-                } else {
-                    unreachable!()
+        let resp_tx = {
+            let interval = {
+                let interval = ((config.interval * 2) + elapsed) / 2;
+                cmp::min(interval, elapsed)
+            };
+            match rx.recv_timeout(interval) {
+                Ok((cmd, resp_tx)) => {
+                    if cmd == "balance" {
+                        resp_tx
+                    } else {
+                        unreachable!()
+                    }
                 }
+                Err(mpsc::RecvTimeoutError::Timeout) => None,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break Ok(()),
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => None,
-            Err(mpsc::RecvTimeoutError::Disconnected) => break Ok(()),
         };
 
         let (r, w, _) = {
@@ -2361,17 +2363,6 @@ where
             ShLlrb::<K, V>::do_balance(name, s, config.clone())?
         };
 
-        {
-            let s = snapshot
-                .lock()
-                .map_err(|e| ThreadFail(format!("shllrb: poisened, {:?}", e)))?;
-            let isecs = if (n as f64) < ((s.shards.len() as f64) * 0.05) {
-                cmp::min(interval.as_secs() * 2, index_interval)
-            } else {
-                cmp::max(interval.as_secs() / 2, 1)
-            };
-            interval = time::Duration::from_secs(isecs);
-        }
         elapsed = start.elapsed()?;
 
         match resp_tx {
@@ -2511,47 +2502,61 @@ impl MergeOrder {
     }
 }
 
-struct SplitOrder(Vec<(usize, usize)>); // (offset, entries)
+struct SplitOrder {
+    shards: Vec<(usize, usize)>, // (offset, entries)
+    max_entries: usize,
+}
 
 impl SplitOrder {
-    fn new<K, V>(shards: &Vec<Shard<K, V>>) -> SplitOrder
+    fn new<K, V>(shards: &Vec<Shard<K, V>>, max_entries: usize) -> SplitOrder
     where
         K: Ord + Clone,
         V: Clone + Diff,
     {
-        let mut so = SplitOrder(
-            shards
-                .iter()
-                .enumerate()
-                .map(|(off, shard)| (off, shard.as_index().len()))
-                .collect(),
-        );
+        let shards: Vec<(usize, usize)> = shards
+            .iter()
+            .enumerate()
+            .map(|(off, shard)| (off, shard.as_index().len()))
+            .collect();
+        let mut so = SplitOrder {
+            shards,
+            max_entries,
+        };
         // dsc_order
-        so.0.sort_by(|x, y| x.1.cmp(&y.1));
-        so.0.reverse();
+        so.shards.sort_by(|x, y| x.1.cmp(&y.1));
+        so.shards.reverse();
 
         so
     }
 
     fn avg_len(&self) -> usize {
         let total: usize = self
-            .0
+            .shards
             .clone()
             .into_iter()
             .map(|x| x.1)
             .collect::<Vec<usize>>()
             .into_iter()
             .sum();
-        total / self.0.len()
+        total / self.shards.len()
     }
 
     fn filter(self) -> SplitOrder {
         let avg_len = self.avg_len(); // TODO: no magic formula
-        SplitOrder(self.0.into_iter().filter(|x| x.1 >= avg_len).collect())
+        let threshold = self.max_entries / 10; // 10% threshold
+        let shards: Vec<(usize, usize)> = self
+            .shards
+            .into_iter()
+            .filter(|x| (x.1 > threshold) && (x.1 >= avg_len))
+            .collect();
+        SplitOrder {
+            shards,
+            max_entries: self.max_entries,
+        }
     }
 
     fn take(self, n: usize) -> Vec<usize> {
-        self.0.into_iter().take(n).map(|x| x.0).collect()
+        self.shards.into_iter().take(n).map(|x| x.0).collect()
     }
 }
 

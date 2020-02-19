@@ -368,16 +368,17 @@ where
         Ok(index)
     }
 
-    fn to_state(&self) -> Result<String> {
+    fn to_state(&self) -> Result<(String, usize)> {
         let shards = self.as_shards()?;
+        let num_shards = shards.len();
 
         let is_build = shards.iter().all(|s| s.is_build());
         let is_snapshot = shards.iter().all(|s| s.is_snapshot());
 
         if is_build {
-            Ok("build".to_string())
+            Ok(("build".to_string(), num_shards))
         } else if is_snapshot {
-            Ok("snapshot".to_string())
+            Ok(("snapshot".to_string(), num_shards))
         } else {
             Err(Error::UnexpectedFail(format!("shrobt, mixed shard state")))
         }
@@ -545,10 +546,24 @@ where
     fn to_ranges(&self) -> Result<Vec<(Bound<K>, Bound<K>)>> {
         let mut shards = self.as_shards()?;
 
-        let high_keys: Vec<Bound<K>> = shards
+        let mut high_keys: Vec<Bound<K>> = shards
             .iter_mut()
             .filter_map(|shard| shard.to_high_key())
+            .take_while(|high_key| match high_key {
+                Bound::Unbounded => false,
+                Bound::Excluded(hk) => true,
+                Bound::Included(hk) => unreachable!(),
+            })
             .collect();
+
+        assert!(
+            high_keys.len() < shards.len(),
+            "{}/{}",
+            high_keys.len(),
+            shards.len()
+        );
+
+        high_keys.push(Bound::Unbounded);
         Ok(util::high_keys_to_ranges(high_keys))
     }
 
@@ -762,7 +777,7 @@ where
         C: CommitIterator<K, V>,
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
-        let state = self.to_state()?;
+        let (state, num_shards) = self.to_state()?;
         let re_ranges = match state.as_str() {
             "build" => None,
             "snapshot" => self.rebalance()?,
@@ -825,8 +840,14 @@ where
                 );
                 // println!("{:?}, shrobt-commit without rebalance", self.name);
 
-                let ranges = self.to_ranges()?;
-                (scanner.range_scans(ranges)?, vec![])
+                let iters = {
+                    let ranges = self.to_ranges()?;
+                    let mut iters = scanner.range_scans(ranges)?;
+                    (iters.len()..num_shards)
+                        .for_each(|_| iters.push(Box::new(vec![].into_iter())));
+                    iters
+                };
+                (iters, vec![])
             }
             _ => unreachable!(),
         };
@@ -926,7 +947,7 @@ where
     where
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
-        let state = self.to_state()?;
+        let (state, _num_shards) = self.to_state()?;
         let metas = self.transform_metadatas(metacb, state.as_str())?;
 
         let mut shards = self.as_shards()?;

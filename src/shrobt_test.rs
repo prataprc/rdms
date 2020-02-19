@@ -223,7 +223,7 @@ fn test_shrobt_commit_compact() {
         let iter = r.iter_with_versions().unwrap();
         iter.map(|e| e.unwrap()).collect()
     };
-    // assert_eq!(es.len(), refs.len());
+    // assert_eq!(es.len(), refs.len()); TODO uncomment this ?
     for (e, re) in es.into_iter().zip(refs.into_iter()) {
         // println!("check key {} {}", e.to_key(), re.to_key());
         check_entry1(&e, &re);

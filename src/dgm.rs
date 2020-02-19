@@ -26,6 +26,7 @@ use crate::{
     lsm,
     panic::Panic,
     sync::CCMu,
+    thread as rt,
     types::{Empty, EmptyIter},
     util,
 };
@@ -333,6 +334,7 @@ where
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
 {
+    auto_compact: Option<rt::Thread<String, usize, ()>>,
     inner: Arc<Mutex<InnerDgm<K, V, M, D>>>,
 }
 
@@ -699,7 +701,19 @@ where
         mem_factory: M,
         disk_factory: D,
         config: Config,
-    ) -> Result<Box<Dgm<K, V, M, D>>> {
+    ) -> Result<Box<Dgm<K, V, M, D>>>
+    where
+        K: 'static + Send,
+        V: 'static + Send,
+        M: 'static + Send,
+        D: 'static + Send,
+        <M as WriteIndexFactory<K, V>>::I: 'static + Send,
+        <<M as WriteIndexFactory<K, V>>::I as Index<K, V>>::R: 'static + Send,
+        <<M as WriteIndexFactory<K, V>>::I as Index<K, V>>::W: 'static + Send,
+        <D as DiskIndexFactory<K, V>>::I: 'static + Send,
+        <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::R: 'static + Send,
+        <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::W: 'static + Send,
+    {
         fs::remove_dir_all(dir)?;
         fs::create_dir_all(dir)?;
 
@@ -731,9 +745,14 @@ where
             readers: Default::default(),
         };
 
-        Ok(Box::new(Dgm {
+        let mut index = Box::new(Dgm {
+            auto_compact: Default::default(),
             inner: Arc::new(Mutex::new(inner)),
-        }))
+        });
+
+        index.start_auto_compact()?;
+
+        Ok(index)
     }
 
     pub fn open(
@@ -741,7 +760,19 @@ where
         name: &str,
         mem_factory: M,
         disk_factory: D,
-    ) -> Result<Box<Dgm<K, V, M, D>>> {
+    ) -> Result<Box<Dgm<K, V, M, D>>>
+    where
+        K: 'static + Send,
+        V: 'static + Send,
+        M: 'static + Send,
+        D: 'static + Send,
+        <M as WriteIndexFactory<K, V>>::I: 'static + Send,
+        <<M as WriteIndexFactory<K, V>>::I as Index<K, V>>::R: 'static + Send,
+        <<M as WriteIndexFactory<K, V>>::I as Index<K, V>>::W: 'static + Send,
+        <D as DiskIndexFactory<K, V>>::I: 'static + Send,
+        <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::R: 'static + Send,
+        <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::W: 'static + Send,
+    {
         let root = Self::find_root_file(dir, name)?;
         let root_file: RootFileName = (name.to_string(), root.version).into();
 
@@ -778,20 +809,56 @@ where
                 writers: Default::default(),
                 readers: Default::default(),
             };
-            Ok(Box::new(Dgm {
+
+            let mut index = Box::new(Dgm {
+                auto_compact: Default::default(),
                 inner: Arc::new(Mutex::new(inner)),
-            }))
+            });
+
+            index.start_auto_compact()?;
+
+            Ok(index)
         }
     }
 
-    // TODO
-    ///// Set interval in time duration, for invoking disk compaction
-    ///// between dgm disk-levels. Calling this method will spawn an auto
-    ///// compaction thread.
-    //pub fn set_compact_interval(&mut self, interval: Duration) {
-    //    let mu = CCMu::clone(&self.compact_mu);
-    //    thread::spawn(move || auto_compact::<K, V, M, D>(mu, interval));
-    //}
+    fn start_auto_compact(&mut self) -> Result<()>
+    where
+        K: 'static + Send,
+        V: 'static + Send,
+        M: 'static + Send,
+        D: 'static + Send,
+        <M as WriteIndexFactory<K, V>>::I: 'static + Send,
+        <<M as WriteIndexFactory<K, V>>::I as Index<K, V>>::R: 'static + Send,
+        <<M as WriteIndexFactory<K, V>>::I as Index<K, V>>::W: 'static + Send,
+        <D as DiskIndexFactory<K, V>>::I: 'static + Send,
+        <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::R: 'static + Send,
+        <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::W: 'static + Send,
+    {
+        let config = self.to_config()?;
+        let name = {
+            let inner = self.as_inner()?;
+            inner.name.clone()
+        };
+        self.auto_compact = if config.compact_interval.as_secs() > 0 {
+            let inner = Arc::clone(&self.inner);
+            Some(rt::Thread::new(move |rx| {
+                || auto_compact::<K, V, M, D>(name, config, inner, rx)
+            }))
+        } else {
+            None
+        };
+
+        Ok(())
+    }
+
+    fn to_config(&self) -> Result<Config> {
+        let inner = self.as_inner()?;
+        Ok(Config {
+            mem_ratio: inner.config.mem_ratio,
+            disk_ratio: inner.config.disk_ratio,
+            compact_interval: inner.config.compact_interval,
+        })
+    }
 
     fn new_root_file(
         //
@@ -1830,39 +1897,48 @@ where
     }
 }
 
-//fn auto_compact<K, V, M, D>(ccmu: CCMu, interval: Duration)
-//where
-//    K: Clone + Ord + Serialize + Footprint,
-//    V: Clone + Diff + Serialize + Footprint,
-//    <V as Diff>::D: Serialize,
-//    M: WriteIndexFactory<K, V>,
-//    D: DiskIndexFactory<K, V>,
-//    M::I: Footprint,
-//    D::I: Footprint,
-//{
-//    let mut elapsed = Duration::new(0, 0);
-//    let initial_count = ccmu.strong_count();
-//    loop {
-//        if elapsed < interval {
-//            thread::sleep(interval - elapsed); // TODO: fix the subraction
-//        }
-//        if ccmu.strong_count() < initial_count {
-//            break; // cascading quit.
-//        }
-//
-//        let start = SystemTime::now();
-//        let dgm = unsafe {
-//            // unsafe
-//            (ccmu.get_ptr() as *mut Dgm<K, V, M, D>).as_mut().unwrap()
-//        };
-//        match dgm.compact(Bound::Unbounded, |metas| metas[0].clone()) {
-//            Ok(_) => info!(target: "dgm   ", "{:?}, compaction completed ", dgm.name),
-//            Err(err) => info!(target: "dgm   ", "{:?}, compaction error, {:?}", dgm.name, err),
-//        }
-//        elapsed = start.elapsed().ok().unwrap();
-//    }
-//}
-//
+fn auto_compact<K, V, M, D>(
+    name: String,
+    config: Config,
+    inner: Arc<Mutex<InnerDgm<K, V, M, D>>>,
+    rx: rt::Rx<String, usize>,
+) -> Result<()>
+where
+    K: 'static + Send + Clone + Ord + Serialize + Footprint,
+    V: 'static + Send + Clone + Diff + Serialize + Footprint,
+    M: 'static + Send + WriteIndexFactory<K, V>,
+    D: 'static + Send + DiskIndexFactory<K, V>,
+    <M as WriteIndexFactory<K, V>>::I: 'static + Send,
+    <<M as WriteIndexFactory<K, V>>::I as Index<K, V>>::R: 'static + Send,
+    <<M as WriteIndexFactory<K, V>>::I as Index<K, V>>::W: 'static + Send,
+    <D as DiskIndexFactory<K, V>>::I: 'static + Send,
+    <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::R: 'static + Send,
+    <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::W: 'static + Send,
+{
+    unimplemented!()
+    //let mut elapsed = Duration::new(0, 0);
+    //let initial_count = ccmu.strong_count();
+    //loop {
+    //    if elapsed < interval {
+    //        thread::sleep(interval - elapsed); // TODO: fix the subraction
+    //    }
+    //    if ccmu.strong_count() < initial_count {
+    //        break; // cascading quit.
+    //    }
+
+    //    let start = SystemTime::now();
+    //    let dgm = unsafe {
+    //        // unsafe
+    //        (ccmu.get_ptr() as *mut Dgm<K, V, M, D>).as_mut().unwrap()
+    //    };
+    //    match dgm.compact(Bound::Unbounded, |metas| metas[0].clone()) {
+    //        Ok(_) => info!(target: "dgm   ", "{:?}, compaction completed ", dgm.name),
+    //        Err(err) => info!(target: "dgm   ", "{:?}, compaction error, {:?}", dgm.name, err),
+    //    }
+    //    elapsed = start.elapsed().ok().unwrap();
+    //}
+}
+
 //#[cfg(test)]
 //#[path = "dgm_test.rs"]
 //mod dgm_test;

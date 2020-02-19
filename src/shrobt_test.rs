@@ -103,7 +103,7 @@ fn test_shrobt_llrb3() {
 #[test]
 fn test_shrobt_commit_compact() {
     let seed: u128 = random();
-    // let seed: u128 = 144266528530515493932420032816488684722;
+    let seed: u128 = 75218120974958672431747468158806217602;
 
     let name = "test-shrobt-commit-compact";
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
@@ -895,9 +895,15 @@ fn random_low_high(key_max: i64, seed: u128) -> (Bound<i64>, Bound<i64>) {
 fn check_entry1(e1: &Entry<i64, i64>, e2: &Entry<i64, i64>) {
     assert_eq!(e1.to_key(), e2.to_key());
     let key = e1.to_key();
-    assert_eq!(e1.to_seqno(), e2.to_seqno(), "key:{}", key);
-    assert_eq!(e1.to_native_value(), e2.to_native_value(), "key:{}", key);
     assert_eq!(e1.is_deleted(), e2.is_deleted(), "key:{}", key);
+    assert_eq!(
+        e1.to_seqno(),
+        e2.to_seqno(),
+        "key:{} {}",
+        key,
+        e1.is_deleted()
+    );
+    assert_eq!(e1.to_native_value(), e2.to_native_value(), "key:{}", key);
     assert_eq!(e1.as_deltas().len(), e2.as_deltas().len(), "key:{}", key);
 }
 

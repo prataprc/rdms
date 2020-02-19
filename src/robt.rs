@@ -736,6 +736,7 @@ where
                 info!(target: "robt  ", "{:?}, incremental commit ...", name);
 
                 let mut old = Snapshot::<K, V, B>::open(dir, &name.0)?;
+                let old_seqno = old.to_seqno()?;
                 let old_bitmap = Arc::clone(&old.bitmap);
 
                 let (name, snapshot, meta_block_bytes) = {
@@ -750,7 +751,7 @@ where
                         let old_iter = Iter::new_shallow(&mut old, mzs);
                         CommitScan::new(bitmap_iter, old_iter)
                     };
-                    let mut build_iter = BuildScan::new(commit_iter);
+                    let mut build_iter = BuildScan::new(commit_iter, old_seqno);
 
                     let (name, mut b) = {
                         let name = name.clone().next();
@@ -865,8 +866,9 @@ where
             } => {
                 let (name, snapshot, meta_block_bytes) = {
                     let mut old = Snapshot::<K, V, B>::open(dir, &name.0)?;
+                    let old_seqno: u64 = old.to_seqno()?;
 
-                    let compact_iter = {
+                    let comp_iter = {
                         let iter = old.iter_with_versions()?;
                         scans::CompactScan::new(iter, cutoff)
                     };
@@ -884,8 +886,21 @@ where
                             MetaItem::AppMetadata(data) => data.clone(),
                             _ => unreachable!(),
                         };
-                        let b = Builder::<K, V, B>::initial(dir, &name.0, conf)?;
-                        let mbbytes = b.build(compact_iter, meta)?;
+                        let mut b = Builder::<K, V, B>::initial(dir, &name.0, conf)?;
+                        // let mbbytes = b.build(comp_iter, meta)?;
+
+                        let (root, bitmap): (u64, B) = {
+                            let mut bditer = {
+                                let btiter = scans::BitmappedScan::new(comp_iter);
+                                BuildScan::new(btiter, old_seqno)
+                            };
+                            let root = b.build_tree(&mut bditer)?;
+                            let btiter = bditer.update_stats(&mut b.stats)?;
+                            let (_, bitmap) = btiter.close()?;
+                            (root, bitmap)
+                        };
+                        let mbbytes = b.build_finish(meta, bitmap, root)?;
+
                         (mbbytes, Snapshot::<K, V, B>::open(dir, &name.0)?)
                     };
                     snapshot.log()?;
@@ -1872,7 +1887,10 @@ where
         I: Iterator<Item = Result<Entry<K, V>>>,
     {
         let (root, bitmap): (u64, B) = {
-            let mut bscanner = BuildScan::new(scans::BitmappedScan::new(iter));
+            let mut bscanner = {
+                let seqno: u64 = Default::default();
+                BuildScan::new(scans::BitmappedScan::new(iter), seqno)
+            };
             let root = self.build_tree(&mut bscanner)?;
             let (_, bitmap) = bscanner.update_stats(&mut self.stats)?.close()?;
             (root, bitmap)
@@ -1889,7 +1907,10 @@ where
     where
         I: Iterator<Item = Result<Entry<K, V>>>,
     {
-        let mut build_scanner = BuildScan::new(iter);
+        let mut build_scanner = {
+            let seqno: u64 = Default::default();
+            BuildScan::new(iter, seqno)
+        };
         let root = self.build_tree(&mut build_scanner)?;
         build_scanner.update_stats(&mut self.stats)?;
         Ok(root)
@@ -2115,12 +2136,12 @@ where
     <V as Diff>::D: Serialize,
     I: Iterator<Item = Result<Entry<K, V>>>,
 {
-    fn new(iter: I) -> BuildScan<K, V, I> {
+    fn new(iter: I, seqno: u64) -> BuildScan<K, V, I> {
         BuildScan {
             iter,
 
             start: time::SystemTime::now(),
-            seqno: Default::default(),
+            seqno,
             n_count: Default::default(),
             n_deleted: Default::default(),
         }
@@ -2874,8 +2895,8 @@ where
         } else if n_deleted != s.n_deleted {
             let msg = format!("robt n_deleted {} > {}", n_deleted, s.n_deleted);
             Err(Error::ValidationFail(msg))
-        } else if seqno != s.seqno {
-            let msg = format!("robt seqno {} > {}", seqno, s.seqno);
+        } else if seqno > 0 && seqno != s.seqno {
+            let msg = format!("robt seqno {} != {}", seqno, s.seqno);
             Err(Error::ValidationFail(msg))
         } else {
             Ok(s)

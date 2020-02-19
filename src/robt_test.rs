@@ -622,7 +622,10 @@ fn test_build_scan() {
         random_llrb(n_ops, key_max, seed, &mut llrb);
 
         let stats = {
-            let mut scanner = BuildScan::new(llrb.iter().unwrap());
+            let mut scanner = {
+                let seqno: u64 = Default::default();
+                BuildScan::new(llrb.iter().unwrap(), seqno)
+            };
             loop {
                 match scanner.next() {
                     Some(_) => (),

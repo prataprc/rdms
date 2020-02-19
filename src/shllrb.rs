@@ -787,8 +787,8 @@ where
         // phase-3 gather threads, and update active shards.
         let mut errs: Vec<Error> = vec![];
         for t in threads.into_iter() {
-            match t.join() {
-                Ok(Ok((c_off, o_off, curr_hk, other))) => {
+            match t.join().unwrap() {
+                Ok((c_off, o_off, curr_hk, other)) => {
                     let mut gl = to_global_lock(snapshot)?;
 
                     match gl.insert_active(o_off, vec![other], curr_hk) {
@@ -802,13 +802,9 @@ where
 
                     snapshot = gl.snapshot;
                 }
-                Ok(Err(err)) => {
+                Err(err) => {
                     error!(target: "shllrb", "merge: {:?}", err);
                     errs.push(err);
-                }
-                Err(err) => {
-                    error!(target: "shllrb", "thread: {:?}", err);
-                    errs.push(Error::ThreadFail(format!("{:?}", err)));
                 }
             }
         }
@@ -867,8 +863,8 @@ where
         // phase-3 gather threads, and update active shards.
         let mut errs: Vec<Error> = vec![];
         for t in threads.into_iter() {
-            match t.join() {
-                Ok(Ok((off, one, two))) => {
+            match t.join().unwrap() {
+                Ok((off, one, two)) => {
                     let mut gl = to_global_lock(snapshot)?;
 
                     match gl.insert_active(off, vec![one, two], None) {
@@ -878,13 +874,9 @@ where
 
                     snapshot = gl.snapshot;
                 }
-                Ok(Err(err)) => {
+                Err(err) => {
                     error!(target: "shllrb", "split: {:?}", err);
                     errs.push(err);
-                }
-                Err(err) => {
-                    error!(target: "shllrb", "thread: {:?}", err);
-                    errs.push(Error::ThreadFail(format!("{:?}", err)));
                 }
             }
         }

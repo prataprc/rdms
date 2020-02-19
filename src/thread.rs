@@ -63,13 +63,9 @@ impl<Q, R, T> Inner<Q, R, T> {
     fn close_wait(self) -> Result<T> {
         mem::drop(self.tx); // drop input channel to thread.
 
-        match self.handle.join() {
-            Ok(Ok(exit)) => Ok(exit),
-            Ok(Err(err)) => Err(err),
-            Err(err) => {
-                let err = Error::ThreadFail(format!("{:?}", err));
-                Err(err)
-            }
+        match self.handle.join().unwrap() {
+            Ok(exit) => Ok(exit),
+            Err(err) => Err(err),
         }
     }
 }

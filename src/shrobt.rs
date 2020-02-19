@@ -878,15 +878,11 @@ where
         let mut indexes = vec![];
         let mut errs = vec![];
         for t in threads.into_iter() {
-            match t.join() {
-                Ok(Ok((off, index))) => indexes.push((off, index)),
-                Ok(Err(err)) => {
+            match t.join().unwrap() {
+                Ok((off, index)) => indexes.push((off, index)),
+                Err(err) => {
                     error!(target: "shrobt", "commit: {:?}", err);
                     errs.push(err);
-                }
-                Err(err) => {
-                    error!(target: "shrobt", "commit-thread: {:?}", err);
-                    errs.push(Error::ThreadFail(format!("{:?}", err)));
                 }
             }
         }
@@ -952,18 +948,14 @@ where
         // gather
         let (mut indexes, mut errs, mut count) = (vec![], vec![], 0);
         for t in threads.into_iter() {
-            match t.join() {
-                Ok(Ok((off, cnt, index))) => {
+            match t.join().unwrap() {
+                Ok((off, cnt, index)) => {
                     count += cnt;
                     indexes.push((off, index));
                 }
-                Ok(Err(err)) => {
+                Err(err) => {
                     error!(target: "shrobt", "compact: {:?}", err);
                     errs.push(err);
-                }
-                Err(err) => {
-                    error!(target: "shrobt", "compact-thread: {:?}", err);
-                    errs.push(Error::ThreadFail(format!("{:?}", err)));
                 }
             }
         }

@@ -551,8 +551,8 @@ where
             .filter_map(|shard| shard.to_high_key())
             .take_while(|high_key| match high_key {
                 Bound::Unbounded => false,
-                Bound::Excluded(hk) => true,
-                Bound::Included(hk) => unreachable!(),
+                Bound::Excluded(_) => true,
+                Bound::Included(_) => unreachable!(),
             })
             .collect();
 

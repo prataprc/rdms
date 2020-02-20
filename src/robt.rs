@@ -304,7 +304,6 @@ where
     purger: Option<rt::Thread<ffi::OsString, (), ()>>,
 }
 
-#[derive(Clone)]
 enum InnerRobt<K, V, B>
 where
     K: Clone + Ord + Serialize,
@@ -328,6 +327,45 @@ where
         stats: Stats,
         bitmap: Arc<B>,
     },
+}
+
+impl<K, V, B> Clone for InnerRobt<K, V, B>
+where
+    K: Clone + Ord + Serialize,
+    V: Clone + Diff + Serialize,
+    <V as Diff>::D: Serialize,
+{
+    fn clone(&self) -> Self {
+        match self {
+            InnerRobt::Build {
+                dir, name, config, ..
+            } => InnerRobt::Build {
+                dir: dir.clone(),
+                name: name.clone(),
+                config: config.clone(),
+
+                _phantom_key: marker::PhantomData,
+                _phantom_val: marker::PhantomData,
+            },
+            InnerRobt::Snapshot {
+                dir,
+                name,
+                footprint,
+                meta,
+                config,
+                stats,
+                bitmap,
+            } => InnerRobt::Snapshot {
+                dir: dir.clone(),
+                name: name.clone(),
+                footprint: footprint.clone(),
+                meta: meta.clone(),
+                config: config.clone(),
+                stats: stats.clone(),
+                bitmap: Arc::clone(bitmap),
+            },
+        }
+    }
 }
 
 impl<K, V, B> Drop for Robt<K, V, B>
@@ -415,6 +453,19 @@ where
 
         Ok(Robt {
             inner: sync::Mutex::new(inner),
+            purger: Some(purger),
+        })
+    }
+
+    pub(crate) fn to_clone(&self) -> Result<Self> {
+        let inner = self.as_inner()?;
+        let name = match inner.deref() {
+            InnerRobt::Build { name, .. } => name.clone(),
+            InnerRobt::Snapshot { name, .. } => name.clone(),
+        };
+        let purger = rt::Thread::new(move |rx| move || thread_purger(name.0, rx));
+        Ok(Robt {
+            inner: sync::Mutex::new(inner.deref().clone()),
             purger: Some(purger),
         })
     }

@@ -283,6 +283,32 @@ where
     shards: Arc<Mutex<Vec<Shard<K, V, B>>>>,
 }
 
+impl<K, V, B> Clone for ShRobt<K, V, B>
+where
+    K: 'static + Send + Default + Clone + Ord + Hash + Footprint + Serialize,
+    V: 'static + Send + Default + Clone + Diff + Footprint + Serialize,
+    <V as Diff>::D: Default + Clone + Serialize,
+    B: 'static + Send + Bloom,
+{
+    fn clone(&self) -> Self {
+        let shards: Vec<Shard<K, V, B>> = {
+            let shards = self.as_shards().unwrap();
+            shards.iter().map(|shard| shard.clone()).collect()
+        };
+
+        ShRobt {
+            name: self.name.clone(),
+            mmap: self.mmap.clone(),
+            seqno: self.seqno.clone(),
+            count: self.count.clone(),
+            metadata: self.metadata.clone(),
+            build_time: self.build_time.clone(),
+            epoch: self.epoch.clone(),
+            shards: Arc::new(Mutex::new(shards)),
+        }
+    }
+}
+
 /// Create and configure a range partitioned index.
 impl<K, V, B> ShRobt<K, V, B>
 where
@@ -1456,6 +1482,26 @@ where
         high_key: Bound<K>,
         inner: Robt<K, V, B>,
     },
+}
+
+impl<K, V, B> Clone for Shard<K, V, B>
+where
+    K: Clone + Ord + Hash + Footprint + Serialize,
+    V: Clone + Diff + Footprint + Serialize,
+    <V as Diff>::D: Serialize,
+    B: Bloom,
+{
+    fn clone(&self) -> Self {
+        match self {
+            Shard::Build { inner } => Shard::Build {
+                inner: inner.to_clone().unwrap(),
+            },
+            Shard::Snapshot { high_key, inner } => Shard::Snapshot {
+                high_key: high_key.clone(),
+                inner: inner.to_clone().unwrap(),
+            },
+        }
+    }
 }
 
 impl<K, V, B> Shard<K, V, B>

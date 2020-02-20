@@ -65,6 +65,14 @@ impl Cutoff {
         Cutoff::Lsm(b)
     }
 
+    pub fn new_lsm_empty() -> Cutoff {
+        Cutoff::Lsm(Bound::Excluded(std::u64::MIN))
+    }
+
+    pub fn new_tombstone_empty() -> Cutoff {
+        Cutoff::Lsm(Bound::Excluded(std::u64::MIN))
+    }
+
     pub fn to_bound(&self) -> Bound<u64> {
         match self {
             Cutoff::Tombstone(b) => b,

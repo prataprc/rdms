@@ -6,14 +6,15 @@ use toml;
 
 use std::{
     borrow::Borrow,
-    convert::{TryFrom, TryInto},
+    cmp,
+    convert::{self, TryFrom, TryInto},
     ffi, fmt, fs,
     hash::Hash,
     io::{Read, Write},
     marker, mem,
     ops::{Bound, DerefMut, RangeBounds},
     path, result,
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{mpsc, Arc, Mutex, MutexGuard},
     thread, time,
     time::{Duration, SystemTime},
 };
@@ -334,7 +335,8 @@ where
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
 {
-    auto_compact: Option<rt::Thread<String, usize, ()>>,
+    name: String,
+    auto_compact: Option<rt::Thread<(), (), ()>>,
     inner: Arc<Mutex<InnerDgm<K, V, M, D>>>,
 }
 
@@ -466,6 +468,135 @@ where
             Commit(_) | Compact(_) => true,
             _ => unreachable!(),
         }
+    }
+
+    fn do_compact<F>(&mut self, cutoff: Cutoff, metacb: F) -> Result<usize>
+    where
+        F: Fn(Vec<u8>) -> Vec<u8>,
+    {
+        unimplemented!()
+        //use Snapshot::{Active, Commit, Compact, Flush, Write};
+
+        //self.cleanup_handles();
+
+        //let (mut r1, mut r2, meta, level, disk) = {
+        //    let mut levels = self.as_inner()?; // lock with compact
+
+        //    // find compact levels
+        //    let [l1, l2, level] = Dgm::compact_at(&mut levels)?;
+        //    let empty = (l1 == 0) && (l2 == 0) && (level == 0);
+        //    let mut compact = l1 == l2 && l2 == level;
+        //    compact = compact && level == levels.disks.len() - 1;
+
+        //    if empty {
+        //        (None, None, None, None, None)
+        //    } else if compact {
+        //        let d: Snapshot<K, V, D::I> = Default::default();
+        //        let disk = match mem::replace(&mut levels.disks[level], d) {
+        //            Active(disk) => {
+        //                let root = disk.to_root();
+        //                levels.disks[level] = Snapshot::Compact(disk);
+        //                self.disk_factory.open(&self.dir, root)?
+        //            }
+        //            _ => unreachable!(),
+        //        };
+
+        //        (None, None, None, Some(level), Some(disk))
+        //    } else {
+        //        let d: Snapshot<K, V, D::I> = Default::default();
+        //        let mut d1 = match mem::replace(&mut levels.disks[l1], d) {
+        //            Active(d) => Snapshot::Compact(d),
+        //            _ => unreachable!(),
+        //        };
+        //        let d: Snapshot<K, V, D::I> = Default::default();
+        //        let mut d2 = match mem::replace(&mut levels.disks[l2], d) {
+        //            Active(d) => Snapshot::Compact(d),
+        //            _ => unreachable!(),
+        //        };
+        //        let (r1, r2) = match (&mut d1, &mut d2) {
+        //            (Compact(d1), Compact(d2)) => (
+        //                // get the reader handles
+        //                d1.to_reader()?,
+        //                d2.to_reader()?,
+        //            ),
+        //            _ => unreachable!(),
+        //        };
+        //        let meta = metacb(vec![
+        //            d1.as_mut_disk().unwrap().to_metadata()?,
+        //            d2.as_mut_disk().unwrap().to_metadata()?,
+        //        ]);
+        //        levels.disks[l1] = d1;
+        //        levels.disks[l1] = d2;
+
+        //        let d: Snapshot<K, V, D::I> = Default::default();
+        //        let disk = match mem::replace(&mut levels.disks[level], d) {
+        //            Snapshot::None => {
+        //                let name: Name = (self.name.clone(), level).into();
+        //                self.disk_factory.new(&self.dir, &name.0)?
+        //            }
+        //            Active(disk) => {
+        //                let root = disk.to_root();
+        //                levels.disks[level] = Snapshot::Compact(disk);
+        //                self.disk_factory.open(&self.dir, root)?
+        //            }
+        //            _ => unreachable!(),
+        //        };
+        //        (
+        //            Some((l1, r1)),
+        //            Some((l2, r2)),
+        //            Some(meta),
+        //            Some(level),
+        //            Some(disk),
+        //        )
+        //    }
+        //};
+
+        //let disk = match (r1.as_mut(), r2.as_mut(), meta, disk) {
+        //    (None, None, None, None) => {
+        //        return Ok(());
+        //    }
+        //    (None, None, None, Some(mut disk)) => {
+        //        disk.compact(_cutoff, metacb)?;
+        //        disk
+        //    }
+        //    (Some(r1), Some(r2), Some(meta), Some(mut disk)) => {
+        //        let no_reverse = false;
+        //        let (iter1, iter2) = (r1.1.iter()?, r2.1.iter()?);
+        //        let scan = lsm::y_iter_versions(iter1, iter2, no_reverse);
+        //        disk.commit(scan, |_| meta.clone())?;
+        //        disk
+        //    }
+        //    _ => unreachable!(),
+        //};
+
+        //// update the readers
+        //{
+        //    let mut levels = self.as_inner()?; // lock with compact
+        //    match (r1, r2) {
+        //        (Some((l1, _)), Some((l2, _))) => {
+        //            levels.disks[l1] = Default::default();
+        //            levels.disks[l2] = Default::default();
+        //        }
+        //        (None, None) => (),
+        //        _ => unreachable!(),
+        //    }
+        //    levels.disks[level.unwrap()] = Snapshot::Active(disk);
+
+        //    for readers in self.readers.iter_mut() {
+        //        let mut rs = readers.lock().unwrap();
+        //        rs.r_disks.drain(..);
+        //        for disk in levels.disks.iter_mut() {
+        //            match disk {
+        //                Write(_) | Flush(_) | Compact(_) => unreachable!(),
+        //                Commit(d) => rs.r_disks.push(d.to_reader()?),
+        //                Active(d) => rs.r_disks.push(d.to_reader()?),
+        //                Snapshot::None => (),
+        //                _ => unreachable!(),
+        //            }
+        //        }
+        //    }
+        //}
+        //Ok(())
     }
 }
 
@@ -662,24 +793,32 @@ where
 {
     fn drop(&mut self) {
         loop {
-            let name = match self.as_inner() {
+            match self.as_inner() {
                 Ok(nnr) => {
                     let w = nnr.writers.iter().any(|w| Arc::strong_count(w) > 1);
                     let r = nnr.readers.iter().any(|r| Arc::strong_count(r) > 1);
                     if w == false && r == false {
                         break;
                     }
-                    nnr.name.clone()
                 }
                 Err(err) => {
                     error!(target: "dgm   ", "lock {:?}", err);
                     break;
                 }
             };
-            error!(target: "dgm   ", "{:?}, open read/write handles", name);
+            error!(target: "dgm   ", "{:?}, open read/write handles", self.name);
             thread::sleep(time::Duration::from_millis(10)); // TODO: no magic
         }
-        // TODO: close threads, free other resources.
+
+        match self.auto_compact.take() {
+            Some(auto_compact) => match auto_compact.close_wait() {
+                Err(err) => error!(
+                    target: "dgm   ", "{:?}, auto-compact {:?}", self.name, err
+                ),
+                Ok(_) => (),
+            },
+            None => (),
+        }
     }
 }
 
@@ -746,6 +885,7 @@ where
         };
 
         let mut index = Box::new(Dgm {
+            name: name.to_string(),
             auto_compact: Default::default(),
             inner: Arc::new(Mutex::new(inner)),
         });
@@ -811,6 +951,7 @@ where
             };
 
             let mut index = Box::new(Dgm {
+                name: name.to_string(),
                 auto_compact: Default::default(),
                 inner: Arc::new(Mutex::new(inner)),
             });
@@ -1233,133 +1374,12 @@ where
         Ok(())
     }
 
-    fn compact<F>(&mut self, _cutoff: Cutoff, metacb: F) -> Result<usize>
+    fn compact<F>(&mut self, cutoff: Cutoff, metacb: F) -> Result<usize>
     where
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
-        unimplemented!()
-        //use Snapshot::{Active, Commit, Compact, Flush, Write};
-
-        //self.cleanup_handles();
-
-        //let (mut r1, mut r2, meta, level, disk) = {
-        //    let mut levels = self.as_inner()?; // lock with compact
-
-        //    // find compact levels
-        //    let [l1, l2, level] = Dgm::compact_at(&mut levels)?;
-        //    let empty = (l1 == 0) && (l2 == 0) && (level == 0);
-        //    let mut compact = l1 == l2 && l2 == level;
-        //    compact = compact && level == levels.disks.len() - 1;
-
-        //    if empty {
-        //        (None, None, None, None, None)
-        //    } else if compact {
-        //        let d: Snapshot<K, V, D::I> = Default::default();
-        //        let disk = match mem::replace(&mut levels.disks[level], d) {
-        //            Active(disk) => {
-        //                let root = disk.to_root();
-        //                levels.disks[level] = Snapshot::Compact(disk);
-        //                self.disk_factory.open(&self.dir, root)?
-        //            }
-        //            _ => unreachable!(),
-        //        };
-
-        //        (None, None, None, Some(level), Some(disk))
-        //    } else {
-        //        let d: Snapshot<K, V, D::I> = Default::default();
-        //        let mut d1 = match mem::replace(&mut levels.disks[l1], d) {
-        //            Active(d) => Snapshot::Compact(d),
-        //            _ => unreachable!(),
-        //        };
-        //        let d: Snapshot<K, V, D::I> = Default::default();
-        //        let mut d2 = match mem::replace(&mut levels.disks[l2], d) {
-        //            Active(d) => Snapshot::Compact(d),
-        //            _ => unreachable!(),
-        //        };
-        //        let (r1, r2) = match (&mut d1, &mut d2) {
-        //            (Compact(d1), Compact(d2)) => (
-        //                // get the reader handles
-        //                d1.to_reader()?,
-        //                d2.to_reader()?,
-        //            ),
-        //            _ => unreachable!(),
-        //        };
-        //        let meta = metacb(vec![
-        //            d1.as_mut_disk().unwrap().to_metadata()?,
-        //            d2.as_mut_disk().unwrap().to_metadata()?,
-        //        ]);
-        //        levels.disks[l1] = d1;
-        //        levels.disks[l1] = d2;
-
-        //        let d: Snapshot<K, V, D::I> = Default::default();
-        //        let disk = match mem::replace(&mut levels.disks[level], d) {
-        //            Snapshot::None => {
-        //                let name: Name = (self.name.clone(), level).into();
-        //                self.disk_factory.new(&self.dir, &name.0)?
-        //            }
-        //            Active(disk) => {
-        //                let root = disk.to_root();
-        //                levels.disks[level] = Snapshot::Compact(disk);
-        //                self.disk_factory.open(&self.dir, root)?
-        //            }
-        //            _ => unreachable!(),
-        //        };
-        //        (
-        //            Some((l1, r1)),
-        //            Some((l2, r2)),
-        //            Some(meta),
-        //            Some(level),
-        //            Some(disk),
-        //        )
-        //    }
-        //};
-
-        //let disk = match (r1.as_mut(), r2.as_mut(), meta, disk) {
-        //    (None, None, None, None) => {
-        //        return Ok(());
-        //    }
-        //    (None, None, None, Some(mut disk)) => {
-        //        disk.compact(_cutoff, metacb)?;
-        //        disk
-        //    }
-        //    (Some(r1), Some(r2), Some(meta), Some(mut disk)) => {
-        //        let no_reverse = false;
-        //        let (iter1, iter2) = (r1.1.iter()?, r2.1.iter()?);
-        //        let scan = lsm::y_iter_versions(iter1, iter2, no_reverse);
-        //        disk.commit(scan, |_| meta.clone())?;
-        //        disk
-        //    }
-        //    _ => unreachable!(),
-        //};
-
-        //// update the readers
-        //{
-        //    let mut levels = self.as_inner()?; // lock with compact
-        //    match (r1, r2) {
-        //        (Some((l1, _)), Some((l2, _))) => {
-        //            levels.disks[l1] = Default::default();
-        //            levels.disks[l2] = Default::default();
-        //        }
-        //        (None, None) => (),
-        //        _ => unreachable!(),
-        //    }
-        //    levels.disks[level.unwrap()] = Snapshot::Active(disk);
-
-        //    for readers in self.readers.iter_mut() {
-        //        let mut rs = readers.lock().unwrap();
-        //        rs.r_disks.drain(..);
-        //        for disk in levels.disks.iter_mut() {
-        //            match disk {
-        //                Write(_) | Flush(_) | Compact(_) => unreachable!(),
-        //                Commit(d) => rs.r_disks.push(d.to_reader()?),
-        //                Active(d) => rs.r_disks.push(d.to_reader()?),
-        //                Snapshot::None => (),
-        //                _ => unreachable!(),
-        //            }
-        //        }
-        //    }
-        //}
-        //Ok(())
+        let mut inner = self.as_inner()?;
+        inner.do_compact(cutoff, metacb)
     }
 
     fn close(self) -> Result<()> {
@@ -1901,42 +1921,64 @@ fn auto_compact<K, V, M, D>(
     name: String,
     config: Config,
     inner: Arc<Mutex<InnerDgm<K, V, M, D>>>,
-    rx: rt::Rx<String, usize>,
+    rx: rt::Rx<(), ()>,
 ) -> Result<()>
 where
     K: 'static + Send + Clone + Ord + Serialize + Footprint,
     V: 'static + Send + Clone + Diff + Serialize + Footprint,
     M: 'static + Send + WriteIndexFactory<K, V>,
     D: 'static + Send + DiskIndexFactory<K, V>,
-    <M as WriteIndexFactory<K, V>>::I: 'static + Send,
+    <M as WriteIndexFactory<K, V>>::I: 'static + Send + Footprint,
     <<M as WriteIndexFactory<K, V>>::I as Index<K, V>>::R: 'static + Send,
     <<M as WriteIndexFactory<K, V>>::I as Index<K, V>>::W: 'static + Send,
-    <D as DiskIndexFactory<K, V>>::I: 'static + Send,
+    <D as DiskIndexFactory<K, V>>::I: 'static + Send + Footprint,
     <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::R: 'static + Send,
     <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::W: 'static + Send,
 {
-    unimplemented!()
-    //let mut elapsed = Duration::new(0, 0);
-    //let initial_count = ccmu.strong_count();
-    //loop {
-    //    if elapsed < interval {
-    //        thread::sleep(interval - elapsed); // TODO: fix the subraction
-    //    }
-    //    if ccmu.strong_count() < initial_count {
-    //        break; // cascading quit.
-    //    }
+    info!(
+        target: "dgm   ",
+        "{}, auto-compacting thread started with interval {:?}",
+        name, config.compact_interval,
+    );
 
-    //    let start = SystemTime::now();
-    //    let dgm = unsafe {
-    //        // unsafe
-    //        (ccmu.get_ptr() as *mut Dgm<K, V, M, D>).as_mut().unwrap()
-    //    };
-    //    match dgm.compact(Bound::Unbounded, |metas| metas[0].clone()) {
-    //        Ok(_) => info!(target: "dgm   ", "{:?}, compaction completed ", dgm.name),
-    //        Err(err) => info!(target: "dgm   ", "{:?}, compaction error, {:?}", dgm.name, err),
-    //    }
-    //    elapsed = start.elapsed().ok().unwrap();
-    //}
+    let mut elapsed = Duration::new(0, 0);
+    loop {
+        let interval = {
+            let interval = ((config.compact_interval * 2) + elapsed) / 2;
+            cmp::min(interval, elapsed)
+        };
+        match rx.recv_timeout(interval) {
+            Ok(_) => unreachable!(),
+            Err(mpsc::RecvTimeoutError::Timeout) => (),
+            Err(mpsc::RecvTimeoutError::Disconnected) => break Ok(()),
+        }
+
+        let start = SystemTime::now();
+
+        let res = {
+            let mut dgm_inner = match inner.lock() {
+                Ok(value) => value,
+                Err(err) => {
+                    error!(
+                        target: "dgm   ", "auto-compact, poisonlock {:?}", name
+                    );
+                    let msg = format!("Dgm.auto-compact poisonlock {:?}", err);
+                    break Err(Error::ThreadFail(msg));
+                }
+            };
+
+            dgm_inner.do_compact(Cutoff::new_lsm_empty(), convert::identity)
+        };
+
+        match res {
+            Ok(_) => info!(target: "dgm   ", "{:?}, compaction done", name),
+            Err(err) => info!(
+                target: "dgm   ", "{:?}, compaction err, {:?}", name, err
+            ),
+        }
+
+        elapsed = start.elapsed().ok().unwrap();
+    }
 }
 
 //#[cfg(test)]

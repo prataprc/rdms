@@ -330,7 +330,7 @@ where
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
     M::I: Footprint,
-    D::I: Footprint,
+    D::I: Footprint + Clone,
 {
     name: String,
     auto_compact: Option<rt::Thread<(), (), ()>>,
@@ -366,8 +366,52 @@ where
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
     M::I: Index<K, V> + Footprint,
-    D::I: Index<K, V> + Footprint,
+    D::I: Index<K, V> + Footprint + Clone,
 {
+    fn cleanup_writers(&mut self) -> Result<()> {
+        // cleanup dropped writer threads.
+        let dropped: Vec<usize> = self
+            .writers
+            .iter()
+            .enumerate()
+            .filter_map(|(i, w)| {
+                if Arc::strong_count(w) == 1 {
+                    Some(i)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for i in dropped.into_iter().rev() {
+            self.writers.remove(i);
+        }
+
+        Ok(())
+    }
+
+    fn cleanup_readers(&mut self) -> Result<()> {
+        // cleanup dropped reader threads.
+        let dropped: Vec<usize> = self
+            .readers
+            .iter()
+            .enumerate()
+            .filter_map(|(i, r)| {
+                if Arc::strong_count(r) == 1 {
+                    Some(i)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for i in dropped.into_iter().rev() {
+            self.readers.remove(i);
+        }
+
+        Ok(())
+    }
+
     fn shift_in_m0(&mut self) -> Result<()> {
         // block all the readers.
         let mut rs = vec![];
@@ -483,129 +527,155 @@ where
         Ok(())
     }
 
-    fn move_to_compact(&mut self, levels: Vec<usize>) {
+    fn active_compact_levels(disks: &[Snapshot<K, V, D::I>]) -> Vec<usize> {
+        // ignore empty levels in the begining.
+        let mut disks = disks
+            .iter()
+            .enumerate()
+            .skip_while(|(_, disk)| match disk {
+                Snapshot::None => true,
+                _ => false,
+            })
+            .collect::<Vec<(usize, &Snapshot<K, V, D::I>)>>();
+
+        let mut res = vec![];
+        if disks.len() > 0 {
+            // ignore the commit level.
+            if disks[0].1.is_commit() {
+                disks.remove(0);
+            }
+            // pick only active levels, skip empty levels, validate on the go.
+            for (level, disk) in disks.iter() {
+                match disk {
+                    Snapshot::Active(_) => res.push(*level),
+                    Snapshot::None => continue,
+                    _ => unreachable!(),
+                }
+            }
+        }
+
+        res
+    }
+
+    fn find_compact_levels(
+        disks: &[Snapshot<K, V, D::I>],
+        disk_ratio: f64,
+    ) -> Result<Option<(Vec<usize>, usize)>> {
+        let mut levels = Self::active_compact_levels(disks);
+
+        loop {
+            match levels.len() {
+                0 | 1 => {
+                    let mut levels = Self::active_compact_levels(disks);
+                    break if levels.len() > 0 {
+                        Ok(Some((vec![], levels.remove(levels.len() - 1))))
+                    } else {
+                        Ok(None)
+                    };
+                }
+                _n => {
+                    let target_level = levels.remove(levels.len() - 1);
+                    let ratio = {
+                        let t_footprint = disks[target_level].footprint()?;
+                        let mut footprint = 0;
+                        for level in levels.clone().into_iter() {
+                            footprint += disks[level].footprint()?;
+                        }
+                        (t_footprint as f64) / (footprint as f64)
+                    };
+
+                    if ratio > disk_ratio {
+                        break Ok(Some((levels, target_level)));
+                    }
+                }
+            }
+        }
+    }
+
+    fn compact_levels(&mut self) -> Result<Option<(Vec<usize>, usize)>> {
+        let levels = {
+            let disk_ratio = self.config.disk_ratio;
+            Self::find_compact_levels(&self.disks, disk_ratio)?
+        };
+
+        let (levels, src_levels, dst_level) = match levels {
+            None => return Ok(None),
+            Some((ss, d)) if ss.len() == 0 => (vec![d], ss, d),
+            Some((ss, d)) => {
+                let mut levels = ss.clone();
+                levels.push(d);
+                (levels, ss, d)
+            }
+        };
+
         for level in levels {
             let d = mem::replace(&mut self.disks[level], Default::default());
             let d = match d {
                 Snapshot::Active(d) => d,
                 _ => unreachable!(),
             };
-
             self.disks[level] = Snapshot::new_compact(d);
         }
+
+        let d = mem::replace(&mut self.disks[dst_level], Default::default());
+        let d = match d {
+            Snapshot::Active(d) => d,
+            _ => unreachable!(),
+        };
+        self.disks[dst_level] = Snapshot::new_compact(d);
+
+        Ok(Some((src_levels, dst_level)))
     }
 
-    fn do_compact<F>(&mut self, _cutoff: Cutoff, _metacb: F) -> Result<usize>
-    where
-        F: Fn(Vec<u8>) -> Vec<u8>,
-    {
-        unimplemented!();
-        //use Snapshot::{Active, Commit, Compact, Flush, Write};
+    fn repopulate_readers(&mut self) -> Result<()> {
+        let mut r_diskss = vec![];
+        for _ in 0..self.readers.len() {
+            let mut r_disks = vec![];
+            for disk in self.disks.iter_mut() {
+                match disk.as_mut_disk()? {
+                    Some(d) => r_disks.push(d.to_reader()?),
+                    None => (),
+                }
+            }
+            r_diskss.push(r_disks);
+        }
 
-        //self.cleanup_writers()?;
-        //self.cleanup_readers()?;
+        for readers in self.readers.iter() {
+            let mut rs = readers.lock().unwrap();
+            rs.r_m1 = None;
+            rs.r_disks.drain(..);
+            for r_disk in r_diskss.remove(0).into_iter() {
+                rs.r_disks.push(r_disk)
+            }
+        }
 
-        //let (src_levels, dst_level) = {
-        //    let inner = self.as_inner()?;
+        Ok(())
+    }
 
-        //    let clevels = {
-        //        let disk_ratio = inner.config.disk_ratio;
-        //        Self::find_compact_levels(&inner.disks, disk_ratio)?
-        //    };
-        //    match clevels {
-        //        None => return Ok(0)
-        //        Some((src_levels, dst_level)) => {
-        //            if src_levels.len() == 0 {
-        //                self.move_to_compact(vec![dst_level])
-        //            } else {
-        //                let clevels = src_levels.clone();
-        //                clevels.push(dst_level);
-        //                self.move_to_compact(clevels)
-        //            }
-        //            (src_levels, dst_level)
-        //        }
-        //    }
-        //};
+    fn do_compact_commit(
+        &mut self,
+        src_levels: Vec<usize>,
+        dst_level: usize, // target
+    ) -> Result<(
+        Vec<<<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::R>,
+        D::I,
+    )> {
+        assert!(
+            src_levels.clone().into_iter().all(|l| l < dst_level),
+            "src_levels:{:?} dst_level:{}",
+            src_levels,
+            dst_level
+        );
 
-        //if src_levels.len() == 0 {
-        //    let high_disk = {
-        //        let inner = self.as_inner()?;
-        //        let d = inner.disks[dst_level].as_disk()?.unwrap();
-        //        Arc::clone(d)
-        //    };
-        //    high_disk.get_mut().unwrap().compact(cutoff, metacb);
+        let mut rs = vec![];
+        for level in src_levels.clone().into_iter() {
+            let d = self.disks[level].as_mut_disk()?.unwrap();
+            rs.push(d.to_reader()?);
+        }
 
-        //} else {
-        //    assert!(
-        //        src_levels.clone().into_iter().all(|l| l < dst_level),
-        //        "src_levels:{:?} dst_level:{}",
-        //        src_levels,
-        //        dst_level
-        //    );
+        let disk = self.disks[dst_level].as_disk()?.unwrap().clone();
 
-        //    {
-        //        let inner = self.as_inner()?
-        //        let rs = vec![];
-        //        for level in src_levels.clone().into_iter() {
-        //            let d = inner.disks[level].as_disk()?.unwrap();
-        //        }
-
-        //    let no_reverse = false;
-
-        //    let mut y_iter = match &inner.disks[src_levels.remove(0)] {
-        //        Active(disk) => {
-        //            let r = disk.to_reader();
-        //            let iter = r.iter_with_versions()?;
-        //            rs.push(r);
-        //            iter as IndexIter<K,V>
-        //        };
-        //        _ => unreachable!()
-        //    }
-
-        //    while src_levels.len() > 0 {
-        //        y_iter = match &inner.disks[src_levels.remove(0)] {
-        //            Active(disk) => {
-        //                let r = disk.to_reader();
-        //                let iter = r.iter_with_versions()? as IndexIter<K,V>;
-        //                rs.push(r);
-        //                lsm::y_iter_versions(y_iter, iter, no_reverse)
-        //            };
-        //            _ => unreachable!()
-        //        }
-        //    }
-
-        //        inner.disks[dst_level].commit(y_iter, metacb)?
-        //        Ok(0)
-        //    }
-
-        //    // update the readers
-        //    {
-        //        match (r1, r2) {
-        //            (Some((l1, _)), Some((l2, _))) => {
-        //                levels.disks[l1] = Default::default();
-        //                levels.disks[l2] = Default::default();
-        //            }
-        //            (None, None) => (),
-        //            _ => unreachable!(),
-        //        }
-        //        levels.disks[level.unwrap()] = Snapshot::Active(disk);
-
-        //        for readers in self.readers.iter_mut() {
-        //            let mut rs = readers.lock().unwrap();
-        //            rs.r_disks.drain(..);
-        //            for disk in levels.disks.iter_mut() {
-        //                match disk {
-        //                    Write(_) | Flush(_) | Compact(_) => unreachable!(),
-        //                    Commit(d) => rs.r_disks.push(d.to_reader()?),
-        //                    Active(d) => rs.r_disks.push(d.to_reader()?),
-        //                    Snapshot::None => (),
-        //                    _ => unreachable!(),
-        //                }
-        //            }
-        //        }
-        //    }
-        //    Ok(())
-        //}
+        Ok((rs, disk))
     }
 }
 
@@ -816,7 +886,7 @@ where
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
     M::I: Footprint,
-    D::I: Footprint,
+    D::I: Footprint + Clone,
 {
     fn drop(&mut self) {
         loop {
@@ -857,7 +927,7 @@ where
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
     M::I: Footprint,
-    D::I: Footprint,
+    D::I: Footprint + Clone,
 {
     /// Create a new Dgm instance on disk. Supplied directory `dir` will be
     /// removed, if it already exist, and new directory shall be created.
@@ -1092,7 +1162,7 @@ where
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
     M::I: Footprint,
-    D::I: Footprint,
+    D::I: Footprint + Clone,
 {
     fn as_inner(&self) -> Result<MutexGuard<InnerDgm<K, V, M, D>>> {
         match self.inner.lock() {
@@ -1137,116 +1207,67 @@ where
         Ok(std::u64::MIN)
     }
 
-    fn cleanup_writers(&mut self) -> Result<()> {
-        let mut inner = self.as_inner()?;
-
-        // cleanup dropped writer threads.
-        let dropped: Vec<usize> = inner
-            .writers
-            .iter()
-            .enumerate()
-            .filter_map(|(i, w)| {
-                if Arc::strong_count(w) == 1 {
-                    Some(i)
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        for i in dropped.into_iter().rev() {
-            inner.writers.remove(i);
+    fn do_compact<F>(
+        inner: &Arc<Mutex<InnerDgm<K, V, M, D>>>,
+        cutoff: Cutoff,
+        metacb: F,
+    ) -> Result<usize>
+    where
+        F: Fn(Vec<u8>) -> Vec<u8>,
+    {
+        {
+            let mut inn = to_inner_lock(inner)?;
+            inn.cleanup_writers()?;
+            inn.cleanup_readers()?;
         }
 
-        Ok(())
-    }
+        let (src_levels, dst_level) = {
+            let mut inn = to_inner_lock(inner)?;
 
-    fn cleanup_readers(&mut self) -> Result<()> {
-        let mut inner = self.as_inner()?;
-
-        // cleanup dropped reader threads.
-        let dropped: Vec<usize> = inner
-            .readers
-            .iter()
-            .enumerate()
-            .filter_map(|(i, r)| {
-                if Arc::strong_count(r) == 1 {
-                    Some(i)
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        for i in dropped.into_iter().rev() {
-            inner.readers.remove(i);
-        }
-
-        Ok(())
-    }
-
-    fn active_compact_levels(disks: &[Snapshot<K, V, D::I>]) -> Vec<usize> {
-        // ignore empty levels in the begining.
-        let mut disks = disks
-            .iter()
-            .enumerate()
-            .skip_while(|(_, disk)| match disk {
-                Snapshot::None => true,
-                _ => false,
-            })
-            .collect::<Vec<(usize, &Snapshot<K, V, D::I>)>>();
-
-        let mut res = vec![];
-        if disks.len() > 0 {
-            // ignore the commit level.
-            if disks[0].1.is_commit() {
-                disks.remove(0);
+            match inn.compact_levels()? {
+                None => return Ok(0),
+                Some((src_levels, dst_level)) => (src_levels, dst_level),
             }
-            // pick only active levels, skip empty levels, and validate on the go.
-            for (level, disk) in disks.iter() {
-                match disk {
-                    Snapshot::Active(_) => res.push(*level),
-                    Snapshot::None => continue,
-                    _ => unreachable!(),
-                }
+        };
+
+        if src_levels.len() == 0 {
+            let mut high_disk = {
+                let inn = to_inner_lock(inner)?;
+                inn.disks[dst_level].as_disk()?.unwrap().clone()
+            };
+            high_disk.compact(cutoff, metacb)
+        } else {
+            let (mut rs, disk) = {
+                let mut inn = to_inner_lock(inner)?;
+                inn.do_compact_commit(src_levels.clone(), dst_level)?
+            };
+            let no_reverse = false;
+
+            let mut rs_refs: Vec<&mut <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::R> =
+                rs.iter_mut().collect();
+            let mut y_iter = rs_refs.remove(0).iter_with_versions()?;
+            while rs_refs.len() > 0 {
+                let iter = rs_refs.remove(0).iter_with_versions()?;
+                y_iter = lsm::y_iter_versions(y_iter, iter, no_reverse);
             }
-        }
 
-        res
-    }
+            let todo = "check below";
+            // disk.commit(y_iter, metacb)?; TODO
 
-    fn find_compact_levels(
-        disks: &[Snapshot<K, V, D::I>],
-        disk_ratio: f64,
-    ) -> Result<Option<(Vec<usize>, usize)>> {
-        let mut levels = Self::active_compact_levels(disks);
+            {
+                let mut inn = to_inner_lock(inner)?;
 
-        loop {
-            match levels.len() {
-                0 | 1 => {
-                    let mut levels = Self::active_compact_levels(disks);
-                    break if levels.len() > 0 {
-                        Ok(Some((vec![], levels.remove(levels.len() - 1))))
-                    } else {
-                        Ok(None)
-                    };
+                // update the disk-levels.
+                for level in src_levels.clone().into_iter() {
+                    mem::replace(&mut inn.disks[level], Default::default());
                 }
-                _n => {
-                    let target_level = levels.remove(levels.len() - 1);
-                    let ratio = {
-                        let t_footprint = disks[target_level].footprint()?;
-                        let mut footprint = 0;
-                        for level in levels.clone().into_iter() {
-                            footprint += disks[level].footprint()?;
-                        }
-                        (t_footprint as f64) / (footprint as f64)
-                    };
+                let disk = Snapshot::new_active(disk);
+                mem::replace(&mut inn.disks[dst_level], disk);
 
-                    if ratio > disk_ratio {
-                        break Ok(Some((levels, target_level)));
-                    }
-                }
+                inn.repopulate_readers()?;
             }
+
+            Ok(0)
         }
     }
 }
@@ -1258,7 +1279,7 @@ where
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
     M::I: Footprint,
-    D::I: Footprint,
+    D::I: Footprint + Clone,
 {
     fn footprint(&self) -> Result<isize> {
         Ok(self.disk_footprint()? + self.mem_footprint()?)
@@ -1347,8 +1368,11 @@ where
         C: CommitIterator<K, V>,
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
-        self.cleanup_writers()?;
-        self.cleanup_readers()?;
+        {
+            let mut inner = self.as_inner()?;
+            inner.cleanup_writers()?;
+            inner.cleanup_readers()?;
+        }
 
         if self.to_disk_seqno()? == self.to_seqno()? {
             return Ok(());
@@ -1384,29 +1408,8 @@ where
             let mut inner = self.as_inner()?;
             let disk = Snapshot::new_active(d);
             mem::replace(&mut inner.disks[level], disk);
-
             inner.m1 = None;
-
-            let mut r_diskss = vec![];
-            for _ in 0..inner.readers.len() {
-                let mut r_disks = vec![];
-                for disk in inner.disks.iter_mut() {
-                    match disk.as_mut_disk()? {
-                        Some(d) => r_disks.push(d.to_reader()?),
-                        None => (),
-                    }
-                }
-                r_diskss.push(r_disks);
-            }
-
-            for readers in inner.readers.iter() {
-                let mut rs = readers.lock().unwrap();
-                rs.r_m1 = None;
-                rs.r_disks.drain(..);
-                for r_disk in r_diskss.remove(0).into_iter() {
-                    rs.r_disks.push(r_disk)
-                }
-            }
+            inner.repopulate_readers()?;
         }
 
         Ok(())
@@ -1416,8 +1419,7 @@ where
     where
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
-        let mut inner = self.as_inner()?;
-        inner.do_compact(cutoff, metacb)
+        Self::do_compact(&self.inner, cutoff, metacb)
     }
 
     fn close(self) -> Result<()> {
@@ -1428,40 +1430,6 @@ where
         unimplemented!()
     }
 }
-
-//impl<K, V, I> Snapshot<K, V, I>
-//where
-//    K: Clone + Ord,
-//    V: Clone + Diff,
-//    I: Index<K, V>,
-//{
-//    fn swap_with_newer(&mut self, index: I) {
-//        use Snapshot::Active;
-//
-//        let disk = mem::replace(self, Default::default());
-//        let index = match disk {
-//            Active(disk) => {
-//                if index.to_seqno() <= disk.to_seqno() {
-//                    Active(disk)
-//                } else {
-//                    Active(index)
-//                }
-//            }
-//            Snapshot::None => Active(index),
-//            _ => unreachable!(),
-//        };
-//        mem::replace(self, index);
-//    }
-//}
-//
-//impl<K, V, M, D> Levels<K, V, M, D>
-//where
-//    K: Clone + Ord,
-//    V: Clone + Diff,
-//    M: WriteIndexFactory<K, V>,
-//    D: DiskIndexFactory<K, V>,
-//{
-//}
 
 pub struct DgmWriter<K, V, W>
 where
@@ -1948,7 +1916,7 @@ where
     <M as WriteIndexFactory<K, V>>::I: 'static + Send + Footprint,
     <<M as WriteIndexFactory<K, V>>::I as Index<K, V>>::R: 'static + Send,
     <<M as WriteIndexFactory<K, V>>::I as Index<K, V>>::W: 'static + Send,
-    <D as DiskIndexFactory<K, V>>::I: 'static + Send + Footprint,
+    <D as DiskIndexFactory<K, V>>::I: 'static + Send + Footprint + Clone,
     <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::R: 'static + Send,
     <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::W: 'static + Send,
 {
@@ -1972,20 +1940,12 @@ where
 
         let start = SystemTime::now();
 
-        let res = {
-            let mut dgm_inner = match inner.lock() {
-                Ok(value) => value,
-                Err(err) => {
-                    error!(
-                        target: "dgm   ", "auto-compact, poisonlock {:?}", name
-                    );
-                    let msg = format!("Dgm.auto-compact poisonlock {:?}", err);
-                    break Err(Error::ThreadFail(msg));
-                }
-            };
-
-            dgm_inner.do_compact(Cutoff::new_lsm_empty(), convert::identity)
-        };
+        let res = Dgm::do_compact(
+            //
+            &inner,
+            Cutoff::new_lsm_empty(),
+            convert::identity,
+        );
 
         match res {
             Ok(_) => info!(target: "dgm   ", "{:?}, compaction done", name),
@@ -1995,6 +1955,26 @@ where
         }
 
         elapsed = start.elapsed().ok().unwrap();
+    }
+}
+
+fn to_inner_lock<K, V, M, D>(
+    inner: &Arc<Mutex<InnerDgm<K, V, M, D>>>,
+) -> Result<MutexGuard<InnerDgm<K, V, M, D>>>
+where
+    K: Clone + Ord + Serialize + Footprint,
+    V: Clone + Diff + Serialize + Footprint,
+    M: WriteIndexFactory<K, V>,
+    D: DiskIndexFactory<K, V>,
+    M::I: Footprint,
+    D::I: Footprint + Clone,
+{
+    match inner.lock() {
+        Ok(value) => Ok(value),
+        Err(err) => {
+            let msg = format!("Dgm.as_inner(), poisonlock {:?}", err);
+            Err(Error::ThreadFail(msg))
+        }
     }
 }
 

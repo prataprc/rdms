@@ -80,7 +80,7 @@ impl From<Root> for Config {
         Config {
             mem_ratio: root.mem_ratio,
             disk_ratio: root.disk_ratio,
-            compact_interval: time::Duration::from_secs(root.compact_interval),
+            compact_interval: root.compact_interval,
         }
     }
 }
@@ -92,7 +92,9 @@ struct Root {
     levels: usize,
     mem_ratio: f64,
     disk_ratio: f64,
-    compact_interval: u64, // in seconds.
+    compact_interval: time::Duration, // in seconds.
+    lsm_cutoff: Option<Bound<u64>>,
+    tombstone_cutoff: Option<Bound<u64>>,
 }
 
 impl From<Config> for Root {
@@ -102,7 +104,9 @@ impl From<Config> for Root {
             levels: NLEVELS,
             mem_ratio: config.mem_ratio,
             disk_ratio: config.disk_ratio,
-            compact_interval: config.compact_interval.as_secs(),
+            compact_interval: config.compact_interval,
+            lsm_cutoff: Default::default(),
+            tombstone_cutoff: Default::default(),
         }
     }
 }
@@ -111,8 +115,7 @@ impl TryFrom<Root> for Vec<u8> {
     type Error = crate::error::Error;
 
     fn try_from(root: Root) -> Result<Vec<u8>> {
-        use toml::Value;
-        use toml::Value::{Float, Integer};
+        use toml::Value::{self, Array, Float, Integer, String as TomlStr};
 
         let text = {
             let mut dict = toml::map::Map::new();
@@ -121,13 +124,45 @@ impl TryFrom<Root> for Vec<u8> {
             let levels: i64 = root.levels.try_into()?;
             let mem_ratio: f64 = root.mem_ratio.into();
             let disk_ratio: f64 = root.disk_ratio.into();
-            let compt_interval: i64 = root.compact_interval.try_into()?;
+            let c_interval: i64 = root.compact_interval.as_secs().try_into()?;
 
             dict.insert("version".to_string(), Integer(version));
             dict.insert("levels".to_string(), Integer(levels));
             dict.insert("mem_ratio".to_string(), Float(mem_ratio));
             dict.insert("disk_ratio".to_string(), Float(disk_ratio));
-            dict.insert("compact_interval".to_string(), Integer(compt_interval));
+            dict.insert("compact_interval".to_string(), Integer(c_interval));
+
+            let lsm_cutoff = Array(match root.lsm_cutoff {
+                Some(cutoff) => {
+                    let (arg1, arg2) = match cutoff {
+                        Bound::Excluded(cutoff) => ("excluded", cutoff),
+                        Bound::Included(cutoff) => ("included", cutoff),
+                        Bound::Unbounded => unreachable!(),
+                    };
+                    vec![TomlStr(arg1.to_string()), TomlStr(arg2.to_string())]
+                }
+                None => {
+                    //
+                    vec![TomlStr("none".to_string()), TomlStr(0.to_string())]
+                }
+            });
+            dict.insert("lsm_cutoff".to_string(), lsm_cutoff);
+
+            let tombstone_cutoff = Array(match root.tombstone_cutoff {
+                Some(cutoff) => {
+                    let (arg1, arg2) = match cutoff {
+                        Bound::Excluded(cutoff) => ("excluded", cutoff),
+                        Bound::Included(cutoff) => ("included", cutoff),
+                        Bound::Unbounded => unreachable!(),
+                    };
+                    vec![TomlStr(arg1.to_string()), TomlStr(arg2.to_string())]
+                }
+                None => {
+                    //
+                    vec![TomlStr("none".to_string()), TomlStr(0.to_string())]
+                }
+            });
+            dict.insert("tombstone_cutoff".to_string(), tombstone_cutoff);
 
             Value::Table(dict).to_string()
         };
@@ -188,14 +223,90 @@ impl TryFrom<Vec<u8>> for Root {
         };
         root.compact_interval = {
             let field = dict.get("compact_interval");
-            field
+            let duration: u64 = field
                 .ok_or(InvalidFile(err2.clone()))?
                 .as_integer()
                 .ok_or(InvalidFile(err2.clone()))?
-                .try_into()?
+                .try_into()?;
+            time::Duration::from_secs(duration)
+        };
+        root.lsm_cutoff = {
+            let field = dict.get("lsm_cutoff").ok_or(InvalidFile(err2.clone()))?;
+            let arr = field.as_array().ok_or(InvalidFile(err2.clone()))?;
+            let bound = arr[0].as_str().ok_or(InvalidFile(err2.clone()))?;
+            let cutoff: u64 = {
+                let cutoff = &arr[1].as_str().ok_or(InvalidFile(err2.clone()))?;
+                cutoff.parse()?
+            };
+            match bound {
+                "excluded" => Some(Bound::Excluded(cutoff)),
+                "included" => Some(Bound::Included(cutoff)),
+                "unbounded" => Some(Bound::Unbounded),
+                "none" => None,
+                _ => unreachable!(),
+            }
+        };
+        root.tombstone_cutoff = {
+            let field = dict
+                .get("tombstone_cutoff")
+                .ok_or(InvalidFile(err2.clone()))?;
+            let arr = field.as_array().ok_or(InvalidFile(err2.clone()))?;
+            let bound = arr[0].as_str().ok_or(InvalidFile(err2.clone()))?;
+            let cutoff: u64 = {
+                let cutoff = &arr[1].as_str().ok_or(InvalidFile(err2.clone()))?;
+                cutoff.parse()?
+            };
+            match bound {
+                "excluded" => Some(Bound::Excluded(cutoff)),
+                "included" => Some(Bound::Included(cutoff)),
+                "unbounded" => Some(Bound::Unbounded),
+                "none" => None,
+                _ => unreachable!(),
+            }
         };
 
         Ok(root)
+    }
+}
+
+impl Root {
+    fn to_next(&self) -> Root {
+        let mut new_root = self.clone();
+        new_root.version += 1;
+        new_root
+    }
+
+    fn update_cutoff(&mut self, cutoff: Cutoff, tip_seqno: u64) {
+        use std::ops::Bound::{Excluded, Included, Unbounded};
+
+        match cutoff {
+            Cutoff::Lsm(n_cutoff) => match self.lsm_cutoff.clone() {
+                None => self.lsm_cutoff = Some(n_cutoff),
+                Some(o) => {
+                    let range = (Unbounded, o.clone());
+                    self.lsm_cutoff = Some(match n_cutoff {
+                        Excluded(n) if range.contains(&n) => o,
+                        Excluded(n) => Excluded(n),
+                        Included(n) if range.contains(&n) => o,
+                        Included(n) => Included(n),
+                        Unbounded => Included(tip_seqno),
+                    });
+                }
+            },
+            Cutoff::Tombstone(n_cutoff) => match self.tombstone_cutoff.clone() {
+                None => self.tombstone_cutoff = Some(n_cutoff),
+                Some(o) => {
+                    let range = (Unbounded, o.clone());
+                    self.tombstone_cutoff = Some(match n_cutoff {
+                        Excluded(n) if range.contains(&n) => o,
+                        Excluded(n) => Excluded(n),
+                        Included(n) if range.contains(&n) => o,
+                        Included(n) => Included(n),
+                        Unbounded => Included(tip_seqno),
+                    });
+                }
+            },
+        }
     }
 }
 
@@ -349,7 +460,7 @@ where
     mem_factory: M,
     disk_factory: D,
     root_file: ffi::OsString,
-    config: Config,
+    root: Root,
 
     m0: Snapshot<K, V, M::I>,         // write index
     m1: Option<Snapshot<K, V, M::I>>, // flush index
@@ -484,7 +595,7 @@ where
                     let df = disk.footprint()? as f64;
                     match disk {
                         Compact(_) => break Ok(lvl - 1),
-                        Active(_) if (mf / df) < self.config.mem_ratio => {
+                        Active(_) if (mf / df) < self.root.mem_ratio => {
                             if lvl == 0 {
                                 break Err(Error::DiskIndexFail(msg));
                             } else {
@@ -594,7 +705,7 @@ where
 
     fn compact_levels(&mut self) -> Result<Option<(Vec<usize>, usize)>> {
         let levels = {
-            let disk_ratio = self.config.disk_ratio;
+            let disk_ratio = self.root.disk_ratio;
             Self::find_compact_levels(&self.disks, disk_ratio)?
         };
 
@@ -953,10 +1064,8 @@ where
         fs::remove_dir_all(dir)?;
         fs::create_dir_all(dir)?;
 
-        let root_file = {
-            let root: Root = config.clone().into();
-            Self::new_root_file(dir, name, root)?
-        };
+        let root: Root = config.clone().into();
+        let root_file = Self::new_root_file(dir, name, root.clone())?;
 
         let disks = {
             let mut disks: Vec<Snapshot<K, V, D::I>> = vec![];
@@ -971,7 +1080,7 @@ where
             mem_factory,
             disk_factory,
             root_file,
-            config,
+            root,
 
             m0,
             m1: None,
@@ -1024,7 +1133,7 @@ where
             };
         }
 
-        let config = root.into();
+        let config = root.clone().into();
 
         if disks.iter().any(|s| s.is_active()) == false {
             // no active disk snapshots found, create a new instance.
@@ -1037,7 +1146,7 @@ where
                 mem_factory,
                 disk_factory,
                 root_file: root_file.into(),
-                config,
+                root,
 
                 m0,
                 m1: None,
@@ -1072,30 +1181,24 @@ where
         <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::R: 'static + Send,
         <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::W: 'static + Send,
     {
-        let config = self.to_config()?;
+        let root = {
+            let inner = self.as_inner()?;
+            inner.root.clone()
+        };
         let name = {
             let inner = self.as_inner()?;
             inner.name.clone()
         };
-        self.auto_compact = if config.compact_interval.as_secs() > 0 {
+        self.auto_compact = if root.compact_interval.as_secs() > 0 {
             let inner = Arc::clone(&self.inner);
             Some(rt::Thread::new(move |rx| {
-                || auto_compact::<K, V, M, D>(name, config, inner, rx)
+                || auto_compact::<K, V, M, D>(name, root, inner, rx)
             }))
         } else {
             None
         };
 
         Ok(())
-    }
-
-    fn to_config(&self) -> Result<Config> {
-        let inner = self.as_inner()?;
-        Ok(Config {
-            mem_ratio: inner.config.mem_ratio,
-            disk_ratio: inner.config.disk_ratio,
-            compact_interval: inner.config.compact_interval,
-        })
     }
 
     fn new_root_file(
@@ -1904,7 +2007,7 @@ where
 
 fn auto_compact<K, V, M, D>(
     name: String,
-    config: Config,
+    root: Root,
     inner: Arc<Mutex<InnerDgm<K, V, M, D>>>,
     rx: rt::Rx<(), ()>,
 ) -> Result<()>
@@ -1923,13 +2026,13 @@ where
     info!(
         target: "dgm   ",
         "{}, auto-compacting thread started with interval {:?}",
-        name, config.compact_interval,
+        name, root.compact_interval,
     );
 
     let mut elapsed = Duration::new(0, 0);
     loop {
         let interval = {
-            let interval = ((config.compact_interval * 2) + elapsed) / 2;
+            let interval = ((root.compact_interval * 2) + elapsed) / 2;
             cmp::min(interval, elapsed)
         };
         match rx.recv_timeout(interval) {

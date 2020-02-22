@@ -473,7 +473,7 @@ where
     pub fn purge_files(&self, files: Vec<ffi::OsString>) -> Result<()> {
         for file in files.into_iter() {
             // verify that requested files to be purged belong to this Robt
-            // snapshot and also assert that it belongs to an older snapshot.
+            // instance and also assert that it belongs to an older snapshot.
             let file_name = match path::PathBuf::from(file.clone()).file_name() {
                 Some(file_name) => Ok(file_name.to_os_string()),
                 None => {
@@ -837,7 +837,7 @@ where
                     let snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
                     snapshot.log()?;
 
-                    // purge old snapshots file(s).
+                    // purge old snapshot's index file.
                     self.purger.as_ref().unwrap().post(old.index_fd.to_file())?;
 
                     (name, snapshot, meta_block_bytes)

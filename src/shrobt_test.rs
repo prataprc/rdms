@@ -103,7 +103,7 @@ fn test_shrobt_llrb3() {
 #[test]
 fn test_shrobt_commit_compact() {
     let seed: u128 = random();
-    let seed: u128 = 75218120974958672431747468158806217602;
+    // let seed: u128 = 75218120974958672431747468158806217602;
 
     let name = "test-shrobt-commit-compact";
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());

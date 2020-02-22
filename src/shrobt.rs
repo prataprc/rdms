@@ -3,6 +3,20 @@
 use log::{error, info};
 use toml;
 
+use std::{
+    borrow::Borrow,
+    cmp,
+    convert::{self, TryFrom, TryInto},
+    ffi, fmt, fs,
+    hash::Hash,
+    io::{Read, Write},
+    marker, mem,
+    ops::{Bound, RangeBounds},
+    path, result,
+    sync::{Arc, Mutex, MutexGuard},
+    thread,
+};
+
 use crate::{
     core::{self, Bloom, CommitIter, CommitIterator, Diff, DiskIndexFactory},
     core::{Cutoff, Validate},
@@ -12,20 +26,6 @@ use crate::{
     panic::Panic,
     robt::{self, Robt},
     scans, util,
-};
-
-use std::{
-    borrow::Borrow,
-    cmp,
-    convert::{self, TryFrom, TryInto},
-    ffi, fmt, fs,
-    hash::Hash,
-    io::{Read, Write},
-    marker,
-    ops::{Bound, RangeBounds},
-    path, result,
-    sync::{Arc, Mutex, MutexGuard},
-    thread,
 };
 
 #[derive(Clone)]
@@ -815,7 +815,7 @@ where
         };
         let metas = self.transform_metadatas(metacb, state.as_str())?;
 
-        let (iters, purge_files) = match (state.as_str(), re_ranges, re_iters) {
+        let (iters, pfs, r) = match (state.as_str(), re_ranges, re_iters) {
             ("build", _, _) => {
                 info!(
                     target: "shrobt", "{:?}, initial commit", self.name,
@@ -823,7 +823,7 @@ where
                 // println!("{:?}, initial shrobt-commit", self.name);
 
                 let iters = scanner.scans(self.to_num_shards()?)?;
-                (iters, vec![])
+                (iters, vec![], None)
             }
             ("snapshot", Some(re_ranges), Some(re_iters)) => {
                 info!(
@@ -857,7 +857,7 @@ where
                     .map(|(i1, i2)| lsm::y_iter_versions(i1, i2, reverse))
                     .collect();
 
-                (iters, purge_files)
+                (iters, purge_files, None)
             }
             ("snapshot", None, _) => {
                 info!(
@@ -866,6 +866,8 @@ where
                 );
                 // println!("{:?}, shrobt-commit without rebalance", self.name);
 
+                let r = self.to_reader()?;
+
                 let iters = {
                     let ranges = self.to_ranges()?;
                     let mut iters = scanner.range_scans(ranges)?;
@@ -873,7 +875,7 @@ where
                         .for_each(|_| iters.push(Box::new(vec![].into_iter())));
                     iters
                 };
-                (iters, vec![])
+                (iters, vec![], Some(r))
             }
             _ => unreachable!(),
         };
@@ -958,13 +960,19 @@ where
         }
 
         // now finally clean up the purged files due to rebalance.
-        for (index, files) in indexes.iter_mut().zip(purge_files.into_iter()) {
+        for (index, files) in indexes.iter_mut().zip(pfs.into_iter()) {
             index.purge_files(files)?;
         }
 
         robts_to_shards(indexes)?
             .drain(..)
             .for_each(|shard| shards.push(shard));
+
+        // In one scenario it is important to hold on to a reader snapshot,
+        // of older version. This is to make sure that older snapshot is
+        // purged only after new version for all shards are persisted. So
+        // that recovery is possible.
+        mem::drop(r);
 
         Ok(())
     }
@@ -975,6 +983,15 @@ where
     {
         let (state, _num_shards) = self.to_state()?;
         let metas = self.transform_metadatas(metacb, state.as_str())?;
+
+        let r = {
+            let (state, _) = self.to_state()?;
+            match state.as_str() {
+                "build" => None,
+                "snapshot" => Some(self.to_reader()?),
+                _ => unreachable!(),
+            };
+        };
 
         let mut shards = self.as_shards()?;
 
@@ -1022,6 +1039,12 @@ where
         robts_to_shards(indexes)?
             .drain(..)
             .for_each(|shard| shards.push(shard));
+
+        // In one scenario it is important to hold on to a reader snapshot,
+        // of older version. This is to make sure that older snapshot is
+        // purged only after new version for all shards are persisted. So
+        // that recovery is possible.
+        mem::drop(r);
 
         Ok(count)
     }

@@ -24,7 +24,7 @@ use crate::{
     core::{CommitIter, CommitIterator, Result, Serialize, WriteIndexFactory},
     core::{Diff, DiskIndexFactory, Entry, Footprint, Index, IndexIter, Reader},
     error::Error,
-    lsm, thread as rt, util,
+    lsm, scans, thread as rt, util,
 };
 
 #[derive(Clone)]
@@ -276,6 +276,24 @@ impl Root {
         new_root
     }
 
+    fn as_cutoff(&self) -> Cutoff {
+        if self.lsm_cutoff.is_some() {
+            Cutoff::new_lsm(self.lsm_cutoff.as_ref().unwrap().clone())
+        } else if self.tombstone_cutoff.is_some() {
+            let c = self.tombstone_cutoff.as_ref().unwrap().clone();
+            Cutoff::new_tombstone(c)
+        } else {
+            Cutoff::new_lsm_empty()
+        }
+    }
+
+    fn reset_cutoff(&mut self, cutoff: Cutoff) {
+        match cutoff {
+            Cutoff::Tombstone(_) => self.tombstone_cutoff.take(),
+            Cutoff::Lsm(_) => self.lsm_cutoff.take(),
+        };
+    }
+
     fn update_cutoff(&mut self, cutoff: Cutoff, tip_seqno: u64) {
         use std::ops::Bound::{Excluded, Included, Unbounded};
 
@@ -441,7 +459,7 @@ where
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
     M::I: Footprint,
-    D::I: Footprint + Clone,
+    D::I: CommitIterator<K, V> + Footprint + Clone,
 {
     name: String,
     auto_compact: Option<rt::Thread<(), (), ()>>,
@@ -477,7 +495,7 @@ where
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
     M::I: Index<K, V> + Footprint,
-    D::I: Index<K, V> + Footprint + Clone,
+    D::I: Index<K, V> + CommitIterator<K, V> + Footprint + Clone,
 {
     fn cleanup_writers(&mut self) -> Result<()> {
         // cleanup dropped writer threads.
@@ -728,13 +746,6 @@ where
             self.disks[level] = Snapshot::new_compact(d);
         }
 
-        let d = mem::replace(&mut self.disks[dst_level], Default::default());
-        let d = match d {
-            Snapshot::Active(d) => d,
-            _ => unreachable!(),
-        };
-        self.disks[dst_level] = Snapshot::new_compact(d);
-
         Ok(Some((src_levels, dst_level)))
     }
 
@@ -764,13 +775,10 @@ where
     }
 
     fn do_compact_commit(
-        &mut self,
+        &self,
         src_levels: Vec<usize>,
-        dst_level: usize, // target
-    ) -> Result<(
-        Vec<<<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::R>,
-        D::I,
-    )> {
+        dst_level: usize,
+    ) -> Result<Vec<<D as DiskIndexFactory<K, V>>::I>> {
         assert!(
             src_levels.clone().into_iter().all(|l| l < dst_level),
             "src_levels:{:?} dst_level:{}",
@@ -778,15 +786,12 @@ where
             dst_level
         );
 
-        let mut rs = vec![];
+        let mut src_disks = vec![];
         for level in src_levels.clone().into_iter() {
-            let d = self.disks[level].as_mut_disk()?.unwrap();
-            rs.push(d.to_reader()?);
+            src_disks.push(self.disks[level].as_disk()?.unwrap().clone());
         }
 
-        let disk = self.disks[dst_level].as_disk()?.unwrap().clone();
-
-        Ok((rs, disk))
+        Ok(src_disks)
     }
 }
 
@@ -997,7 +1002,7 @@ where
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
     M::I: Footprint,
-    D::I: Footprint + Clone,
+    D::I: CommitIterator<K, V> + Footprint + Clone,
 {
     fn drop(&mut self) {
         loop {
@@ -1038,7 +1043,7 @@ where
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
     M::I: Footprint,
-    D::I: Footprint + Clone,
+    D::I: CommitIterator<K, V> + Footprint + Clone,
 {
     /// Create a new Dgm instance on disk. Supplied directory `dir` will be
     /// removed, if it already exist, and new directory shall be created.
@@ -1200,6 +1205,143 @@ where
 
         Ok(())
     }
+}
+
+impl<K, V, M, D> Dgm<K, V, M, D>
+where
+    K: Clone + Ord + Serialize + Footprint,
+    V: Clone + Diff + Serialize + Footprint,
+    M: WriteIndexFactory<K, V>,
+    D: DiskIndexFactory<K, V>,
+    M::I: Footprint,
+    D::I: CommitIterator<K, V> + Footprint + Clone,
+{
+    fn as_inner(&self) -> Result<MutexGuard<InnerDgm<K, V, M, D>>> {
+        match self.inner.lock() {
+            Ok(value) => Ok(value),
+            Err(err) => {
+                let msg = format!("Dgm.as_inner(), poisonlock {:?}", err);
+                Err(Error::ThreadFail(msg))
+            }
+        }
+    }
+
+    fn disk_footprint(&self) -> Result<isize> {
+        let inner = self.as_inner()?;
+
+        let mut footprint: isize = Default::default();
+        for disk in inner.disks.iter() {
+            footprint += disk.footprint()?;
+        }
+        Ok(footprint)
+    }
+
+    fn mem_footprint(&self) -> Result<isize> {
+        let inner = self.as_inner()?;
+
+        Ok(inner.m0.footprint()?
+            + match &inner.m1 {
+                None => 0,
+                Some(m) => m.footprint()?,
+            })
+    }
+
+    fn to_disk_seqno(&self) -> Result<u64> {
+        let inner = self.as_inner()?;
+
+        for d in inner.disks.iter() {
+            match d.as_disk()? {
+                Some(d) => return d.to_seqno(),
+                None => (),
+            }
+        }
+
+        Ok(std::u64::MIN)
+    }
+
+    fn do_compact<F>(
+        inner: &Arc<Mutex<InnerDgm<K, V, M, D>>>,
+        cutoff: Cutoff,
+        metacb: F,
+    ) -> Result<usize>
+    where
+        F: Fn(Vec<u8>) -> Vec<u8>,
+    {
+        let cutoff = {
+            let mut inn = to_inner_lock(inner)?;
+            inn.cleanup_writers()?;
+            inn.cleanup_readers()?;
+
+            inn.root = inn.root.to_next();
+            let tip_seqno = inn.m0.as_m0()?.to_seqno()?;
+            inn.root.update_cutoff(cutoff, tip_seqno);
+
+            inn.root.as_cutoff()
+        };
+
+        let (src_levels, dst_level) = {
+            let mut inn = to_inner_lock(inner)?;
+
+            match inn.compact_levels()? {
+                None => return Ok(0),
+                Some((src_levels, dst_level)) => (src_levels, dst_level),
+            }
+        };
+
+        let res = if src_levels.len() == 0 {
+            let mut high_disk = {
+                let inn = to_inner_lock(inner)?;
+                inn.disks[dst_level].as_disk()?.unwrap().clone()
+            };
+            high_disk.compact(cutoff, metacb)
+        } else {
+            let (src_disks, mut disk) = {
+                let inn = to_inner_lock(inner)?;
+                let ds = inn.do_compact_commit(src_levels.clone(), dst_level)?;
+                let d = inn.disks[dst_level].as_disk()?.unwrap().clone();
+                (ds, d)
+            };
+            let scanner = {
+                let scanner = CommitScanner::<K, V, D>::new(src_disks)?;
+                let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
+                core::CommitIter::new(scanner, within)
+            };
+
+            disk.commit(scanner, metacb)?;
+
+            {
+                let mut inn = to_inner_lock(inner)?;
+
+                // update the disk-levels.
+                for level in src_levels.clone().into_iter() {
+                    mem::replace(&mut inn.disks[level], Default::default());
+                }
+                let d = mem::replace(&mut inn.disks[dst_level], Default::default());
+                let d = match d {
+                    Snapshot::Compact(d) => d,
+                    _ => unreachable!(),
+                };
+                inn.disks[dst_level] = Snapshot::new_active(d);
+
+                inn.repopulate_readers()?;
+            }
+
+            Ok(0)
+        };
+
+        {
+            let mut inn = to_inner_lock(inner)?;
+            inn.root.reset_cutoff(cutoff);
+            inn.root_file = Self::new_root_file(
+                //
+                &inn.dir,
+                &inn.name,
+                inn.root.clone(),
+            )?;
+        }
+
+        res
+    }
 
     fn new_root_file(
         //
@@ -1258,123 +1400,6 @@ where
     }
 }
 
-impl<K, V, M, D> Dgm<K, V, M, D>
-where
-    K: Clone + Ord + Serialize + Footprint,
-    V: Clone + Diff + Serialize + Footprint,
-    M: WriteIndexFactory<K, V>,
-    D: DiskIndexFactory<K, V>,
-    M::I: Footprint,
-    D::I: Footprint + Clone,
-{
-    fn as_inner(&self) -> Result<MutexGuard<InnerDgm<K, V, M, D>>> {
-        match self.inner.lock() {
-            Ok(value) => Ok(value),
-            Err(err) => {
-                let msg = format!("Dgm.as_inner(), poisonlock {:?}", err);
-                Err(Error::ThreadFail(msg))
-            }
-        }
-    }
-
-    fn disk_footprint(&self) -> Result<isize> {
-        let inner = self.as_inner()?;
-
-        let mut footprint: isize = Default::default();
-        for disk in inner.disks.iter() {
-            footprint += disk.footprint()?;
-        }
-        Ok(footprint)
-    }
-
-    fn mem_footprint(&self) -> Result<isize> {
-        let inner = self.as_inner()?;
-
-        Ok(inner.m0.footprint()?
-            + match &inner.m1 {
-                None => 0,
-                Some(m) => m.footprint()?,
-            })
-    }
-
-    fn to_disk_seqno(&self) -> Result<u64> {
-        let inner = self.as_inner()?;
-
-        for d in inner.disks.iter() {
-            match d.as_disk()? {
-                Some(d) => return d.to_seqno(),
-                None => (),
-            }
-        }
-
-        Ok(std::u64::MIN)
-    }
-
-    fn do_compact<F>(
-        inner: &Arc<Mutex<InnerDgm<K, V, M, D>>>,
-        cutoff: Cutoff,
-        metacb: F,
-    ) -> Result<usize>
-    where
-        F: Fn(Vec<u8>) -> Vec<u8>,
-    {
-        {
-            let mut inn = to_inner_lock(inner)?;
-            inn.cleanup_writers()?;
-            inn.cleanup_readers()?;
-        }
-
-        let (src_levels, dst_level) = {
-            let mut inn = to_inner_lock(inner)?;
-
-            match inn.compact_levels()? {
-                None => return Ok(0),
-                Some((src_levels, dst_level)) => (src_levels, dst_level),
-            }
-        };
-
-        if src_levels.len() == 0 {
-            let mut high_disk = {
-                let inn = to_inner_lock(inner)?;
-                inn.disks[dst_level].as_disk()?.unwrap().clone()
-            };
-            high_disk.compact(cutoff, metacb)
-        } else {
-            let (mut rs, disk) = {
-                let mut inn = to_inner_lock(inner)?;
-                inn.do_compact_commit(src_levels.clone(), dst_level)?
-            };
-            let no_reverse = false;
-
-            let mut rs_refs: Vec<&mut <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::R> =
-                rs.iter_mut().collect();
-            let mut y_iter = rs_refs.remove(0).iter_with_versions()?;
-            while rs_refs.len() > 0 {
-                let iter = rs_refs.remove(0).iter_with_versions()?;
-                y_iter = lsm::y_iter_versions(y_iter, iter, no_reverse);
-            }
-
-            let todo = "check below";
-            // disk.commit(y_iter, metacb)?; TODO
-
-            {
-                let mut inn = to_inner_lock(inner)?;
-
-                // update the disk-levels.
-                for level in src_levels.clone().into_iter() {
-                    mem::replace(&mut inn.disks[level], Default::default());
-                }
-                let disk = Snapshot::new_active(disk);
-                mem::replace(&mut inn.disks[dst_level], disk);
-
-                inn.repopulate_readers()?;
-            }
-
-            Ok(0)
-        }
-    }
-}
-
 impl<K, V, M, D> Footprint for Dgm<K, V, M, D>
 where
     K: Clone + Ord + Serialize + Footprint,
@@ -1382,7 +1407,7 @@ where
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
     M::I: Footprint,
-    D::I: Footprint + Clone,
+    D::I: CommitIterator<K, V> + Footprint + Clone,
 {
     fn footprint(&self) -> Result<isize> {
         Ok(self.disk_footprint()? + self.mem_footprint()?)
@@ -1397,7 +1422,7 @@ where
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
     M::I: Footprint,
-    D::I: Footprint + Clone,
+    D::I: CommitIterator<K, V> + Footprint + Clone,
     <M::I as Index<K, V>>::R: CommitIterator<K, V>,
 {
     type W = DgmWriter<K, V, <M::I as Index<K, V>>::W>;
@@ -1477,6 +1502,8 @@ where
             inner.cleanup_readers()?;
         }
 
+        let r = self.to_reader()?;
+
         if self.to_disk_seqno()? == self.to_seqno()? {
             return Ok(());
         }
@@ -1513,7 +1540,21 @@ where
             mem::replace(&mut inner.disks[level], disk);
             inner.m1 = None;
             inner.repopulate_readers()?;
+
+            inner.root = inner.root.to_next();
+            inner.root_file = Self::new_root_file(
+                //
+                &inner.dir,
+                &inner.name,
+                inner.root.clone(),
+            )?;
         }
+
+        // In one scenario it is important to hold on to a reader snapshot,
+        // of older version. This is to make sure that older snapshot is
+        // purged only after disk snapshot and root-file are both persisted,
+        // so that recovery is possible.
+        mem::drop(r);
 
         Ok(())
     }
@@ -1522,7 +1563,17 @@ where
     where
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
-        Self::do_compact(&self.inner, cutoff, metacb)
+        let r = self.to_reader()?;
+
+        let res = Self::do_compact(&self.inner, cutoff, metacb);
+
+        // In one scenario it is important to hold on to a reader snapshot,
+        // of older version. This is to make sure that older snapshot is
+        // purged only after new version is persisted. So that recovery is
+        // possible.
+        mem::drop(r);
+
+        res
     }
 
     fn close(self) -> Result<()> {
@@ -2019,7 +2070,7 @@ where
     <M as WriteIndexFactory<K, V>>::I: 'static + Send + Footprint,
     <<M as WriteIndexFactory<K, V>>::I as Index<K, V>>::R: 'static + Send,
     <<M as WriteIndexFactory<K, V>>::I as Index<K, V>>::W: 'static + Send,
-    <D as DiskIndexFactory<K, V>>::I: 'static + Send + Footprint + Clone,
+    <D as DiskIndexFactory<K, V>>::I: 'static + Send + CommitIterator<K, V> + Footprint + Clone,
     <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::R: 'static + Send,
     <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::W: 'static + Send,
 {
@@ -2078,6 +2129,130 @@ where
             let msg = format!("Dgm.as_inner(), poisonlock {:?}", err);
             Err(Error::ThreadFail(msg))
         }
+    }
+}
+
+struct CommitScanner<K, V, D>
+where
+    K: Clone + Ord + Serialize + Footprint,
+    V: Clone + Diff + Serialize + Footprint,
+    D: DiskIndexFactory<K, V>,
+    D::I: Footprint + Clone,
+{
+    src_disks: Vec<<D as DiskIndexFactory<K, V>>::I>,
+    rs: Vec<<<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::R>,
+}
+
+impl<K, V, D> CommitScanner<K, V, D>
+where
+    K: Clone + Ord + Serialize + Footprint,
+    V: Clone + Diff + Serialize + Footprint,
+    D: DiskIndexFactory<K, V>,
+    D::I: Footprint + Clone,
+{
+    fn new(mut src_disks: Vec<<D as DiskIndexFactory<K, V>>::I>) -> Result<CommitScanner<K, V, D>> {
+        let mut rs = vec![];
+        for disk in src_disks.iter_mut() {
+            rs.push(disk.to_reader()?);
+        }
+
+        Ok(CommitScanner { src_disks, rs })
+    }
+}
+
+impl<K, V, D> CommitIterator<K, V> for CommitScanner<K, V, D>
+where
+    K: Clone + Ord + Serialize + Footprint,
+    V: Clone + Diff + Serialize + Footprint,
+    D: DiskIndexFactory<K, V>,
+    D::I: CommitIterator<K, V> + Footprint + Clone,
+{
+    fn scan<G>(&mut self, within: G) -> Result<IndexIter<K, V>>
+    where
+        G: Clone + RangeBounds<u64>,
+    {
+        match self.rs.len() {
+            0 => unreachable!(),
+            1 => Ok(self.rs[0].iter_with_versions()?),
+            _n => {
+                let mut y_iter = unsafe {
+                    let r = &self.rs[0];
+                    let r = r as *const <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::R;
+                    let r = r as *mut <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::R;
+                    let r = r.as_mut().unwrap();
+                    r.iter_with_versions()?
+                };
+                let no_reverse = false;
+                for r in self.rs[1..].iter() {
+                    let r = unsafe {
+                        let r = r as *const <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::R;
+                        let r = r as *mut <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::R;
+                        r.as_mut().unwrap()
+                    };
+                    let iter = r.iter_with_versions()?;
+                    y_iter = lsm::y_iter_versions(y_iter, iter, no_reverse);
+                }
+                Ok(Box::new(scans::FilterScans::new(
+                    vec![y_iter],
+                    within.clone(),
+                )))
+            }
+        }
+    }
+
+    fn scans<G>(&mut self, n_shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
+    where
+        G: Clone + RangeBounds<u64>,
+    {
+        let mut result_iters = vec![];
+        let no_reverse = false;
+        for disk in self.src_disks.iter_mut() {
+            let iters = disk.scans(n_shards, within.clone())?;
+            assert_eq!(iters.len(), n_shards);
+            if result_iters.len() == 0 {
+                result_iters = iters;
+            } else {
+                let ziter = {
+                    let a = iters.into_iter();
+                    let b = result_iters.into_iter();
+                    a.zip(b)
+                };
+                result_iters = vec![];
+                for (a, b) in ziter {
+                    result_iters.push(lsm::y_iter_versions(a, b, no_reverse));
+                }
+            }
+        }
+
+        Ok(result_iters)
+    }
+
+    fn range_scans<N, G>(&mut self, ranges: Vec<N>, within: G) -> Result<Vec<IndexIter<K, V>>>
+    where
+        N: Clone + RangeBounds<K>,
+        G: Clone + RangeBounds<u64>,
+    {
+        let mut result_iters = vec![];
+        let no_reverse = false;
+        for disk in self.src_disks.iter_mut() {
+            let iters = disk.range_scans(ranges.clone(), within.clone())?;
+            assert_eq!(iters.len(), ranges.len());
+            if result_iters.len() == 0 {
+                result_iters = iters;
+            } else {
+                let ziter = {
+                    let a = iters.into_iter();
+                    let b = result_iters.into_iter();
+                    a.zip(b)
+                };
+                result_iters = vec![];
+                for (a, b) in ziter {
+                    result_iters.push(lsm::y_iter_versions(a, b, no_reverse));
+                }
+            }
+        }
+
+        Ok(result_iters)
     }
 }
 

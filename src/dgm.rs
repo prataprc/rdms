@@ -915,13 +915,6 @@ where
         }
     }
 
-    fn is_none(&self) -> bool {
-        match self {
-            Snapshot::None => true,
-            _ => false,
-        }
-    }
-
     fn as_disk(&self) -> Result<Option<&I>> {
         use Snapshot::{Active, Commit, Compact, Flush, Write};
 
@@ -967,16 +960,6 @@ where
     fn as_mut_m0(&mut self) -> Result<&mut I> {
         match self {
             Snapshot::Write(m) => Ok(m),
-            _ => {
-                let msg = format!("dgm m0 not a write snapshot");
-                Err(Error::UnexpectedFail(msg))
-            }
-        }
-    }
-
-    fn as_m1(&self) -> Result<&I> {
-        match self {
-            Snapshot::Flush(m) => Ok(m),
             _ => {
                 let msg = format!("dgm m0 not a write snapshot");
                 Err(Error::UnexpectedFail(msg))
@@ -1511,7 +1494,7 @@ where
         let (mut d, r_m1, level) = {
             let mut inner = self.as_inner()?;
 
-            inner.shift_in_m0();
+            inner.shift_in_m0()?;
             let level = inner.commit_level()?;
 
             inner.move_to_commit(level)?;
@@ -1591,7 +1574,7 @@ where
     V: Clone + Diff,
     W: Writer<K, V>,
 {
-    name: String,
+    _name: String,
     w: Arc<Mutex<W>>,
 
     _phantom_key: marker::PhantomData<K>,
@@ -1606,7 +1589,7 @@ where
 {
     fn new(name: &str, w: Arc<Mutex<W>>) -> DgmWriter<K, V, W> {
         DgmWriter {
-            name: name.to_string(),
+            _name: name.to_string(),
             w,
 
             _phantom_key: marker::PhantomData,
@@ -1671,7 +1654,7 @@ where
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
 {
-    name: String,
+    _name: String,
     rs: Arc<Mutex<Rs<K, V, M, D>>>,
 
     _phantom_key: marker::PhantomData<K>,
@@ -1687,7 +1670,7 @@ where
 {
     fn new(name: &str, rs: Arc<Mutex<Rs<K, V, M, D>>>) -> DgmReader<K, V, M, D> {
         DgmReader {
-            name: name.to_string(),
+            _name: name.to_string(),
             rs,
 
             _phantom_key: marker::PhantomData,

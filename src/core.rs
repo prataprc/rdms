@@ -48,7 +48,7 @@ pub trait ThreadSafe: 'static + Send {}
 
 /// Cutoff enumerated parameter to [compact][Index::compact] method. Refer
 /// to [rdms] library documentation for more information on compaction.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Cutoff {
     /// Tombstone-compaction, refer to [rdms] for more detail.
     Tombstone(Bound<u64>),

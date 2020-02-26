@@ -395,12 +395,12 @@ impl fmt::Display for RootFileName {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct LevelName(String);
 
 impl From<(String, usize)> for LevelName {
     fn from((name, level): (String, usize)) -> LevelName {
-        LevelName(format!("{}-dgmlevel-{}", name, level))
+        LevelName(format!("{}-dgmlevel-{:03}", name, level))
     }
 }
 
@@ -444,18 +444,18 @@ pub const NLEVELS: usize = 16;
 /// Default threshold between memory index footprint and
 /// the latest disk index footprint, below which a newer level
 /// shall be created, for commiting latest batch of entries.
-/// Refer to [set_mem_ratio][Dgm::set_mem_ratio] method for details.
+/// Refer to [set_mem_ratio][Config::set_mem_ratio] method for details.
 pub const MEM_RATIO: f64 = 0.5;
 
 /// Default threshold between a disk index footprint and
 /// the next-level disk index footprint, above which the two
 /// levels shall be compacted into a single disk-index.
-/// Refer to [set_disk_ratio][Dgm::set_disk_ratio] method for details.
+/// Refer to [set_disk_ratio][Config::set_disk_ratio] method for details.
 pub const DISK_RATIO: f64 = 0.5;
 
 /// Default interval in time duration, for invoking disk compaction
 /// between dgm disk-levels.
-/// Refer to [set_compact_interval][Dgm::set_compact_interval] method
+/// Refer to [set_compact_interval][Config::set_compact_interval] method
 /// for details.
 pub const COMPACT_INTERVAL: Duration = Duration::from_secs(1800);
 

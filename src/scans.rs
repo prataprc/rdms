@@ -40,10 +40,10 @@
 //! **From [lsm]**
 //!
 //! * [YIter][lsm::YIter], returned by [y_iter][lsm::y_iter] for lsm iteration
-//!   used in multi-level indexes like [Dgm] and [WorkingSet].
+//!   used in multi-level indexes like [Dgm].
 //! * [YIterVersions][lsm::YIterVersions], returned by
 //!   [y_iter_versions][lsm::y_iter_versions] for lsm iteration used in
-//!   multi-level indexes like [Dgm] and [WorkingSet].
+//!   multi-level indexes like [Dgm].
 //!
 //! **From [robt]**
 //!
@@ -83,6 +83,7 @@ use crate::{
 #[allow(unused_imports)]
 use crate::{
     core,
+    dgm::Dgm,
     llrb::{self, Llrb},
     lsm,
     mvcc::{self, Mvcc},

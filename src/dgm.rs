@@ -27,7 +27,7 @@ use crate::{
     lsm, scans, thread as rt, util,
 };
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Config {
     mem_ratio: f64,
     disk_ratio: f64,
@@ -85,16 +85,16 @@ impl From<Root> for Config {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug, PartialEq)]
 struct Root {
     version: usize,
-
     levels: usize,
+    lsm_cutoff: Option<Bound<u64>>,
+    tombstone_cutoff: Option<Bound<u64>>,
+
     mem_ratio: f64,
     disk_ratio: f64,
     compact_interval: time::Duration, // in seconds.
-    lsm_cutoff: Option<Bound<u64>>,
-    tombstone_cutoff: Option<Bound<u64>>,
 }
 
 impl From<Config> for Root {
@@ -102,11 +102,12 @@ impl From<Config> for Root {
         Root {
             version: 0,
             levels: NLEVELS,
+            lsm_cutoff: Default::default(),
+            tombstone_cutoff: Default::default(),
+
             mem_ratio: config.mem_ratio,
             disk_ratio: config.disk_ratio,
             compact_interval: config.compact_interval,
-            lsm_cutoff: Default::default(),
-            tombstone_cutoff: Default::default(),
         }
     }
 }
@@ -132,37 +133,31 @@ impl TryFrom<Root> for Vec<u8> {
             dict.insert("disk_ratio".to_string(), Float(disk_ratio));
             dict.insert("compact_interval".to_string(), Integer(c_interval));
 
-            let lsm_cutoff = Array(match root.lsm_cutoff {
-                Some(cutoff) => {
-                    let (arg1, arg2) = match cutoff {
-                        Bound::Excluded(cutoff) => ("excluded", cutoff),
-                        Bound::Included(cutoff) => ("included", cutoff),
-                        Bound::Unbounded => unreachable!(),
-                    };
-                    vec![TomlStr(arg1.to_string()), TomlStr(arg2.to_string())]
-                }
-                None => {
-                    //
-                    vec![TomlStr("none".to_string()), TomlStr(0.to_string())]
-                }
-            });
-            dict.insert("lsm_cutoff".to_string(), lsm_cutoff);
+            let (arg1, arg2) = match root.lsm_cutoff {
+                Some(cutoff) => match cutoff {
+                    Bound::Excluded(cutoff) => ("excluded", cutoff),
+                    Bound::Included(cutoff) => ("included", cutoff),
+                    Bound::Unbounded => unreachable!(),
+                },
+                None => ("none", 0),
+            };
+            dict.insert(
+                "lsm_cutoff".to_string(),
+                Array(vec![TomlStr(arg1.to_string()), TomlStr(arg2.to_string())]),
+            );
 
-            let tombstone_cutoff = Array(match root.tombstone_cutoff {
-                Some(cutoff) => {
-                    let (arg1, arg2) = match cutoff {
-                        Bound::Excluded(cutoff) => ("excluded", cutoff),
-                        Bound::Included(cutoff) => ("included", cutoff),
-                        Bound::Unbounded => unreachable!(),
-                    };
-                    vec![TomlStr(arg1.to_string()), TomlStr(arg2.to_string())]
-                }
-                None => {
-                    //
-                    vec![TomlStr("none".to_string()), TomlStr(0.to_string())]
-                }
-            });
-            dict.insert("tombstone_cutoff".to_string(), tombstone_cutoff);
+            let (arg1, arg2) = match root.tombstone_cutoff {
+                Some(cutoff) => match cutoff {
+                    Bound::Excluded(cutoff) => ("excluded", cutoff),
+                    Bound::Included(cutoff) => ("included", cutoff),
+                    Bound::Unbounded => unreachable!(),
+                },
+                None => ("none", 0),
+            };
+            dict.insert(
+                "tombstone_cutoff".to_string(),
+                Array(vec![TomlStr(arg1.to_string()), TomlStr(arg2.to_string())]),
+            );
 
             Value::Table(dict).to_string()
         };
@@ -289,13 +284,25 @@ impl Root {
 
     fn reset_cutoff(&mut self, cutoff: Cutoff) {
         match cutoff {
-            Cutoff::Tombstone(_) => self.tombstone_cutoff.take(),
             Cutoff::Lsm(_) => self.lsm_cutoff.take(),
+            Cutoff::Tombstone(_) => self.tombstone_cutoff.take(),
         };
     }
 
     fn update_cutoff(&mut self, cutoff: Cutoff, tip_seqno: u64) {
         use std::ops::Bound::{Excluded, Included, Unbounded};
+
+        let cutoff = match cutoff {
+            Cutoff::Lsm(Bound::Unbounded) => {
+                let cutoff = Bound::Excluded(tip_seqno);
+                Cutoff::new_lsm(cutoff)
+            }
+            Cutoff::Tombstone(Bound::Unbounded) => {
+                let cutoff = Bound::Excluded(tip_seqno);
+                Cutoff::new_tombstone(cutoff)
+            }
+            cutoff => cutoff,
+        };
 
         match cutoff {
             Cutoff::Lsm(n_cutoff) => match self.lsm_cutoff.clone() {
@@ -2239,6 +2246,6 @@ where
     }
 }
 
-//#[cfg(test)]
-//#[path = "dgm_test.rs"]
-//mod dgm_test;
+#[cfg(test)]
+#[path = "dgm_test.rs"]
+mod dgm_test;

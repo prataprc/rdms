@@ -9,7 +9,9 @@ use croaring::bitmap::Bitmap;
 
 use std::{convert::TryInto, hash::Hash};
 
+use crate::convert_at;
 use crate::core::{Bloom, Result};
+use crate::error::Error;
 
 // TODO: right now we are using crc32, make hasher generic.
 
@@ -29,7 +31,7 @@ impl Bloom for CRoaring {
 
     #[inline]
     fn len(&self) -> Result<usize> {
-        Ok(self.bitmap.cardinality().try_into()?)
+        Ok(convert_at!(self.bitmap.cardinality())?)
     }
 
     #[inline]

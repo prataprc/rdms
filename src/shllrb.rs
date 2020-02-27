@@ -58,7 +58,10 @@ impl TryFrom<ShardName> for (String, usize) {
         } else if parts[parts.len() - 2] != "shard" {
             Err(err)
         } else {
-            let shard = parts[parts.len() - 1].parse::<usize>()?;
+            let shard = {
+                let off = parts.len() - 1;
+                parse_at!(parts[off].parse::<usize>())?
+            };
             let s = parts[..(parts.len() - 2)].join("-");
             Ok((s, shard))
         }

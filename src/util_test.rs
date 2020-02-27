@@ -14,14 +14,14 @@ fn test_open_file_rw() {
     let dir = PathBuf::new();
     let fd = create_file_a(dir.as_os_str().to_os_string());
     let err = fd.expect_err("expected invalid-file");
-    assert_eq!(err, Error::InvalidFile("".to_string()));
+    assert_eq!(err, Error::InvalidFile(format!("{:?}", "")));
 
     // case 2: try to create root dir as file.
     let mut dir = PathBuf::new();
     dir.push("/");
     let fd = create_file_a(dir.as_os_str().to_os_string());
     let err = fd.expect_err("expected invalid-file");
-    assert_eq!(err, Error::InvalidFile("/".to_string()));
+    assert_eq!(err, Error::InvalidFile(format!("{:?}", "/")));
 
     // case 3: with valid file, reuse: false
     let mut dir = std::env::temp_dir();

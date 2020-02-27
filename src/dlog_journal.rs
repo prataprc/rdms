@@ -15,7 +15,6 @@ use std::{
     vec,
 };
 
-use crate::io_err_at;
 use crate::{
     core::{Result, Serialize},
     dlog::{DlogState, OpRequest, OpResponse},
@@ -23,6 +22,7 @@ use crate::{
     error::Error,
     thread as rt, util,
 };
+use crate::{io_err_at, parse_at};
 
 // default size for flush buffer.
 const FLUSH_SIZE: usize = 1 * 1024 * 1024;
@@ -85,8 +85,8 @@ impl TryFrom<JournalFile> for (String, String, usize, usize) {
 
         match &parts[..] {
             [typ, "shard", shard_id, "journal", num] => {
-                let shard_id: usize = shard_id.parse()?;
-                let num: usize = num.parse()?;
+                let shard_id: usize = parse_at!(shard_id.parse())?;
+                let num: usize = parse_at!(num.parse())?;
                 Ok((name.to_string(), typ.to_string(), shard_id, num))
             }
             _ => Err(InvalidFile(err.clone())),

@@ -1067,12 +1067,12 @@ where
     {
         match self.as_inner()?.deref() {
             InnerRobt::Snapshot { dir, name, .. } => {
-                let mut snap = Snapshot::<K, V, B>::open(dir, &name.0)?;
-                let r = unsafe {
-                    let snap = &mut snap as *mut Snapshot<K, V, B>;
-                    snap.as_mut().unwrap()
+                let snap = Snapshot::<K, V, B>::open(dir, &name.0)?;
+                let iter = {
+                    let iter = snap.into_scan()?;
+                    scans::FilterScans::new(vec![iter], within)
                 };
-                r.scan(within)
+                Ok(Box::new(iter))
             }
             InnerRobt::Build { .. } => {
                 let err = "Robt.scan(), in build state".to_string();
@@ -1088,12 +1088,30 @@ where
         let inner = self.as_inner()?;
         match inner.deref() {
             InnerRobt::Snapshot { dir, name, .. } => {
-                let mut snap = Snapshot::<K, V, B>::open(dir, &name.0)?;
-                let r = unsafe {
-                    let snap = &mut snap as *mut Snapshot<K, V, B>;
-                    snap.as_mut().unwrap()
+                let ranges = {
+                    let mut snap = Snapshot::<K, V, B>::open(dir, &name.0)?;
+                    snap.to_shards(n_shards)?
                 };
-                r.scans(n_shards, within)
+
+                let mut iters = vec![];
+                for range in ranges.into_iter() {
+                    let snap = Snapshot::<K, V, B>::open(dir, &name.0)?;
+                    let iter: IndexIter<K, V> = Box::new(scans::FilterScans::new(
+                        vec![snap.into_range_scan(range)?],
+                        within.clone(),
+                    ));
+                    iters.push(iter)
+                }
+
+                // If there are not enough shards push empty iterators.
+                for _ in iters.len()..n_shards {
+                    let ss = vec![];
+                    iters.push(Box::new(ss.into_iter()));
+                }
+
+                assert_eq!(iters.len(), n_shards);
+
+                Ok(iters)
             }
             InnerRobt::Build { .. } => {
                 let err = "Robt.scans(), in build state".to_string();
@@ -1110,12 +1128,18 @@ where
         let inner = self.as_inner()?;
         match inner.deref() {
             InnerRobt::Snapshot { dir, name, .. } => {
-                let mut snap = Snapshot::<K, V, B>::open(dir, &name.0)?;
-                let r = unsafe {
-                    let snap = &mut snap as *mut Snapshot<K, V, B>;
-                    snap.as_mut().unwrap()
-                };
-                r.range_scans(ranges, within)
+                let mut iters = vec![];
+                for range in ranges.into_iter() {
+                    let snap = Snapshot::<K, V, B>::open(dir, &name.0)?;
+                    let iter: IndexIter<K, V> = Box::new(scans::FilterScans::new(
+                        vec![snap.into_range_scan(util::to_start_end(range))?],
+                        within.clone(),
+                    ));
+
+                    iters.push(iter)
+                }
+
+                Ok(iters)
             }
             InnerRobt::Build { .. } => {
                 let err = "Robt.range_scans() in build state".to_string();

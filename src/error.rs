@@ -81,7 +81,7 @@ pub enum Error {
     /// String conversion error from std::String, str::str
     Utf8Error(std::str::Utf8Error),
     /// Error converting from one type to another.
-    ConversionError(String),
+    ConversionFail(String),
     /// Return list of files that needs to be purged.
     PurgeFiles(Vec<ffi::OsString>),
     #[doc(hidden)]
@@ -114,38 +114,57 @@ macro_rules! io_err_at {
     };
 }
 
-impl From<std::num::ParseIntError> for Error {
-    fn from(err: std::num::ParseIntError) -> Error {
-        let msg = format!("ParseIntError: {:?}", err);
-        Error::ConversionError(msg)
-    }
+#[macro_export]
+macro_rules! parse_at {
+    ($e:expr) => {
+        match $e {
+            Ok(val) => Ok(val),
+            Err(err) => {
+                let msg = format!("{}:{} {}", file!(), line!(), err);
+                Err(Error::ConversionFail(msg))
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! convert_at {
+    ($e:expr) => {
+        match $e.try_into() {
+            Ok(val) => Ok(val),
+            Err(err) => {
+                let msg = format!("{}:{} {}", file!(), line!(), err);
+                Err(Error::ConversionFail(msg))
+            }
+        }
+    };
 }
 
 impl From<std::num::TryFromIntError> for Error {
     fn from(err: std::num::TryFromIntError) -> Error {
         let msg = format!("TryFromIntError: {:?}", err);
-        Error::ConversionError(msg)
+        Error::ConversionFail(msg)
     }
 }
 
 impl From<std::array::TryFromSliceError> for Error {
     fn from(err: std::array::TryFromSliceError) -> Error {
         let msg = format!("TryFromSliceError: {:?}", err);
-        Error::ConversionError(msg)
+        Error::ConversionFail(msg)
     }
 }
 
 impl From<std::time::SystemTimeError> for Error {
     fn from(err: std::time::SystemTimeError) -> Error {
         let msg = format!("SystemTimeError: {:?}", err);
-        Error::ConversionError(msg)
+        Error::ConversionFail(msg)
     }
 }
 
 impl From<std::convert::Infallible> for Error {
     fn from(err: std::convert::Infallible) -> Error {
         let msg = format!("Infallible: {:?}", err);
-        Error::ConversionError(msg)
+        Error::ConversionFail(msg)
     }
 }
 

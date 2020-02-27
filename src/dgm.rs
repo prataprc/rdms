@@ -19,7 +19,6 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use crate::io_err_at;
 use crate::{
     core::{self, Cutoff, Writer},
     core::{CommitIter, CommitIterator, Result, Serialize, WriteIndexFactory},
@@ -27,6 +26,7 @@ use crate::{
     error::Error,
     lsm, scans, thread as rt, util,
 };
+use crate::{io_err_at, parse_at};
 
 /// Configuration type for Dgm indexes.
 #[derive(Clone, Debug, PartialEq)]
@@ -239,7 +239,7 @@ impl TryFrom<Vec<u8>> for Root {
             let bound = arr[0].as_str().ok_or(InvalidFile(err2.clone()))?;
             let cutoff: u64 = {
                 let cutoff = &arr[1].as_str().ok_or(InvalidFile(err2.clone()))?;
-                cutoff.parse()?
+                parse_at!(cutoff.parse())?
             };
             match bound {
                 "excluded" => Ok(Some(Bound::Excluded(cutoff))),
@@ -260,7 +260,7 @@ impl TryFrom<Vec<u8>> for Root {
             let bound = arr[0].as_str().ok_or(InvalidFile(err2.clone()))?;
             let cutoff: u64 = {
                 let cutoff = &arr[1].as_str().ok_or(InvalidFile(err2.clone()))?;
-                cutoff.parse()?
+                parse_at!(cutoff.parse())?
             };
             match bound {
                 "excluded" => Ok(Some(Bound::Excluded(cutoff))),
@@ -1304,7 +1304,7 @@ where
                 (ds, d)
             };
             let scanner = {
-                let scanner = CommitScanner::<K, V, D>::new(src_disks)?;
+                let scanner = CommitScanner::<K, V, D::I>::new(src_disks)?;
                 let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
                 core::CommitIter::new(scanner, within)
             };
@@ -2055,25 +2055,23 @@ where
     }
 }
 
-struct CommitScanner<K, V, D>
+struct CommitScanner<K, V, I>
 where
     K: Clone + Ord + Serialize + Footprint,
     V: Clone + Diff + Serialize + Footprint,
-    D: DiskIndexFactory<K, V>,
-    D::I: Footprint + Clone,
+    I: Index<K, V> + Footprint + Clone,
 {
-    src_disks: Vec<<D as DiskIndexFactory<K, V>>::I>,
-    rs: Vec<<<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::R>,
+    src_disks: Vec<I>,
+    rs: Vec<I::R>,
 }
 
-impl<K, V, D> CommitScanner<K, V, D>
+impl<K, V, I> CommitScanner<K, V, I>
 where
     K: Clone + Ord + Serialize + Footprint,
     V: Clone + Diff + Serialize + Footprint,
-    D: DiskIndexFactory<K, V>,
-    D::I: Footprint + Clone,
+    I: Index<K, V> + Footprint + Clone,
 {
-    fn new(mut src_disks: Vec<<D as DiskIndexFactory<K, V>>::I>) -> Result<CommitScanner<K, V, D>> {
+    fn new(mut src_disks: Vec<I>) -> Result<CommitScanner<K, V, I>> {
         let mut rs = vec![];
         for disk in src_disks.iter_mut() {
             rs.push(disk.to_reader()?);
@@ -2083,12 +2081,11 @@ where
     }
 }
 
-impl<K, V, D> CommitIterator<K, V> for CommitScanner<K, V, D>
+impl<K, V, I> CommitIterator<K, V> for CommitScanner<K, V, I>
 where
     K: Clone + Ord + Serialize + Footprint,
     V: Clone + Diff + Serialize + Footprint,
-    D: DiskIndexFactory<K, V>,
-    D::I: CommitIterator<K, V> + Footprint + Clone,
+    I: CommitIterator<K, V> + Index<K, V> + Footprint + Clone,
 {
     fn scan<G>(&mut self, within: G) -> Result<IndexIter<K, V>>
     where
@@ -2100,16 +2097,16 @@ where
             _n => {
                 let mut y_iter = unsafe {
                     let r = &self.rs[0];
-                    let r = r as *const <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::R;
-                    let r = r as *mut <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::R;
+                    let r = r as *const <I as Index<K, V>>::R;
+                    let r = r as *mut <I as Index<K, V>>::R;
                     let r = r.as_mut().unwrap();
                     r.iter_with_versions()?
                 };
                 let no_reverse = false;
                 for r in self.rs[1..].iter() {
                     let r = unsafe {
-                        let r = r as *const <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::R;
-                        let r = r as *mut <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::R;
+                        let r = r as *const <I as Index<K, V>>::R;
+                        let r = r as *mut <I as Index<K, V>>::R;
                         r.as_mut().unwrap()
                     };
                     let iter = r.iter_with_versions()?;

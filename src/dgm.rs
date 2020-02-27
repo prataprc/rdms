@@ -1,7 +1,7 @@
 //! Module `dgm` implement data-indexing optimized for
 //! disk-greater-than-memory.
 
-use log::{error, info};
+use log::{debug, error, info};
 use toml;
 
 use std::{
@@ -27,6 +27,7 @@ use crate::{
     lsm, scans, thread as rt, util,
 };
 
+/// Configuration type for Dgm indexes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Config {
     mem_ratio: f64,
@@ -459,14 +460,13 @@ pub const DISK_RATIO: f64 = 0.5;
 /// for details.
 pub const COMPACT_INTERVAL: Duration = Duration::from_secs(1800);
 
+/// Dgm type index, optimized for holding data-set both in memory and disk.
 pub struct Dgm<K, V, M, D>
 where
     K: Clone + Ord + Serialize + Footprint,
     V: Clone + Diff + Serialize + Footprint,
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
-    M::I: Footprint,
-    D::I: CommitIterator<K, V> + Footprint + Clone,
 {
     name: String,
     auto_compact: Option<rt::Thread<(), (), ()>>,
@@ -492,7 +492,7 @@ where
     disks: Vec<Snapshot<K, V, D::I>>, // NLEVELS
 
     writers: Vec<Arc<Mutex<<M::I as Index<K, V>>::W>>>,
-    readers: Vec<Arc<Mutex<Rs<K, V, M, D>>>>,
+    readers: Vec<Arc<Mutex<Rs<K, V, <M::I as Index<K, V>>::R, <D::I as Index<K, V>>::R>>>>,
 }
 
 impl<K, V, M, D> InnerDgm<K, V, M, D>
@@ -501,8 +501,6 @@ where
     V: Clone + Diff + Serialize + Footprint,
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
-    M::I: Index<K, V> + Footprint,
-    D::I: Index<K, V> + CommitIterator<K, V> + Footprint + Clone,
 {
     fn cleanup_writers(&mut self) -> Result<()> {
         // cleanup dropped writer threads.
@@ -806,7 +804,6 @@ enum Snapshot<K, V, I>
 where
     K: Clone + Ord,
     V: Clone + Diff,
-    I: Index<K, V>,
 {
     // memory snapshot that handles all the write operation.
     Write(I),
@@ -828,7 +825,6 @@ impl<K, V, I> Default for Snapshot<K, V, I>
 where
     K: Clone + Ord,
     V: Clone + Diff,
-    I: Index<K, V>,
 {
     fn default() -> Snapshot<K, V, I> {
         Snapshot::None
@@ -860,7 +856,7 @@ impl<K, V, I> Footprint for Snapshot<K, V, I>
 where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
-    I: Index<K, V> + Footprint,
+    I: Footprint,
 {
     fn footprint(&self) -> Result<isize> {
         use Snapshot::{Active, Commit, Compact, Flush, Write};
@@ -881,7 +877,6 @@ impl<K, V, I> Snapshot<K, V, I>
 where
     K: Clone + Ord,
     V: Clone + Diff,
-    I: Index<K, V>,
 {
     #[inline]
     fn new_write(index: I) -> Snapshot<K, V, I> {
@@ -991,8 +986,6 @@ where
     V: Clone + Diff + Serialize + Footprint,
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
-    M::I: Footprint,
-    D::I: CommitIterator<K, V> + Footprint + Clone,
 {
     fn drop(&mut self) {
         loop {
@@ -1029,11 +1022,8 @@ impl<K, V, M, D> Dgm<K, V, M, D>
 where
     K: Clone + Ord + Serialize + Footprint,
     V: Clone + Diff + Serialize + Footprint,
-    <V as Diff>::D: Serialize,
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
-    M::I: Footprint,
-    D::I: CommitIterator<K, V> + Footprint + Clone,
 {
     /// Create a new Dgm instance on disk. Supplied directory `dir` will be
     /// removed, if it already exist, and new directory shall be created.
@@ -1203,8 +1193,6 @@ where
     V: Clone + Diff + Serialize + Footprint,
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
-    M::I: Footprint,
-    D::I: CommitIterator<K, V> + Footprint + Clone,
 {
     fn as_inner(&self) -> Result<MutexGuard<InnerDgm<K, V, M, D>>> {
         match self.inner.lock() {
@@ -1396,8 +1384,6 @@ where
     V: Clone + Diff + Serialize + Footprint,
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
-    M::I: Footprint,
-    D::I: CommitIterator<K, V> + Footprint + Clone,
 {
     fn footprint(&self) -> Result<isize> {
         Ok(self.disk_footprint()? + self.mem_footprint()?)
@@ -1411,12 +1397,9 @@ where
     <V as Diff>::D: Serialize,
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
-    M::I: Footprint,
-    D::I: CommitIterator<K, V> + Footprint + Clone,
-    <M::I as Index<K, V>>::R: CommitIterator<K, V>,
 {
     type W = DgmWriter<K, V, <M::I as Index<K, V>>::W>;
-    type R = DgmReader<K, V, M, D>;
+    type R = DgmReader<K, V, <M::I as Index<K, V>>::R, <D::I as Index<K, V>>::R>;
 
     fn to_name(&self) -> Result<String> {
         let inner = self.as_inner()?;
@@ -1474,6 +1457,9 @@ where
             r_m0,
             r_m1,
             r_disks,
+
+            _phantom_key: marker::PhantomData,
+            _phantom_val: marker::PhantomData,
         };
 
         let arc_rs = Arc::new(Mutex::new(rs));
@@ -1575,13 +1561,14 @@ where
     }
 }
 
+/// Writer handle into Dgm index.
 pub struct DgmWriter<K, V, W>
 where
     K: Clone + Ord,
     V: Clone + Diff,
     W: Writer<K, V>,
 {
-    _name: String,
+    name: String,
     w: Arc<Mutex<W>>,
 
     _phantom_key: marker::PhantomData<K>,
@@ -1595,13 +1582,15 @@ where
     W: Writer<K, V>,
 {
     fn new(name: &str, w: Arc<Mutex<W>>) -> DgmWriter<K, V, W> {
-        DgmWriter {
-            _name: name.to_string(),
+        let w = DgmWriter {
+            name: name.to_string(),
             w,
 
             _phantom_key: marker::PhantomData,
             _phantom_val: marker::PhantomData,
-        }
+        };
+        debug!(target: "dgm   ", "{}, new write handle ...", w.name);
+        w
     }
 
     fn as_writer(&self) -> Result<MutexGuard<W>> {
@@ -1646,43 +1635,43 @@ struct Rs<K, V, M, D>
 where
     K: Clone + Ord,
     V: Clone + Diff,
-    M: WriteIndexFactory<K, V>,
-    D: DiskIndexFactory<K, V>,
+    M: Reader<K, V>,
+    D: Reader<K, V>,
 {
-    r_m0: <M::I as Index<K, V>>::R,
-    r_m1: Option<<M::I as Index<K, V>>::R>,
-    r_disks: Vec<<D::I as Index<K, V>>::R>,
+    r_m0: M,
+    r_m1: Option<M>,
+    r_disks: Vec<D>,
+
+    _phantom_key: marker::PhantomData<K>,
+    _phantom_val: marker::PhantomData<V>,
 }
 
+/// Reader handle into Dgm index.
 pub struct DgmReader<K, V, M, D>
 where
     K: Clone + Ord,
     V: Clone + Diff,
-    M: WriteIndexFactory<K, V>,
-    D: DiskIndexFactory<K, V>,
+    M: Reader<K, V>,
+    D: Reader<K, V>,
 {
-    _name: String,
+    name: String,
     rs: Arc<Mutex<Rs<K, V, M, D>>>,
-
-    _phantom_key: marker::PhantomData<K>,
-    _phantom_val: marker::PhantomData<V>,
 }
 
 impl<K, V, M, D> DgmReader<K, V, M, D>
 where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
-    M: WriteIndexFactory<K, V>,
-    D: DiskIndexFactory<K, V>,
+    M: Reader<K, V>,
+    D: Reader<K, V>,
 {
     fn new(name: &str, rs: Arc<Mutex<Rs<K, V, M, D>>>) -> DgmReader<K, V, M, D> {
-        DgmReader {
-            _name: name.to_string(),
+        let r = DgmReader {
+            name: name.to_string(),
             rs,
-
-            _phantom_key: marker::PhantomData,
-            _phantom_val: marker::PhantomData,
-        }
+        };
+        debug!(target: "dgm   ", "{}, new read handle ...", r.name);
+        r
     }
 
     fn as_reader(&self) -> Result<MutexGuard<Rs<K, V, M, D>>> {
@@ -1705,19 +1694,19 @@ where
         V: 'a,
     {
         match iters.len() {
-            0 => unreachable!(),
             1 => iters.remove(0),
-            _ => {
-                let mut iter = iters.remove(0);
-                for iter1 in iters.into_iter() {
-                    iter = if versions {
-                        lsm::y_iter_versions(iter, iter1, reverse)
+            n if n > 1 => {
+                let mut newer_iter = iters.remove(0);
+                for older_iter in iters.into_iter() {
+                    newer_iter = if versions {
+                        lsm::y_iter_versions(newer_iter, older_iter, reverse)
                     } else {
-                        lsm::y_iter(iter, iter1, reverse)
+                        lsm::y_iter(newer_iter, older_iter, reverse)
                     };
                 }
-                iter
+                newer_iter
             }
+            _ => unreachable!(),
         }
     }
 }
@@ -1727,8 +1716,8 @@ where
     K: Clone + Ord + Serialize + Footprint,
     V: Clone + Diff + Serialize + Footprint,
     <V as Diff>::D: Serialize,
-    M: WriteIndexFactory<K, V>,
-    D: DiskIndexFactory<K, V>,
+    M: Reader<K, V>,
+    D: Reader<K, V>,
 {
     fn get<Q>(&mut self, key: &Q) -> Result<Entry<K, V>>
     where
@@ -1769,23 +1758,17 @@ where
 
         let mut iters: Vec<IndexIter<K, V>> = vec![];
 
-        unsafe {
-            let m0 = &mut rs.r_m0 as *mut <M::I as Index<K, V>>::R;
-            iters.push(m0.as_mut().unwrap().iter()?)
-        }
+        let m0 = unsafe { (&mut rs.r_m0 as *mut M).as_mut().unwrap() };
+        iters.push(m0.iter()?);
 
         if let Some(m1) = &mut rs.r_m1 {
-            unsafe {
-                let m1 = m1 as *mut <M::I as Index<K, V>>::R;
-                iters.push(m1.as_mut().unwrap().iter()?);
-            }
+            let m1 = unsafe { (m1 as *mut M).as_mut().unwrap() };
+            iters.push(m1.iter()?);
         }
 
         for disk in rs.r_disks.iter_mut() {
-            unsafe {
-                let disk = disk as *mut <D::I as Index<K, V>>::R;
-                iters.push(disk.as_mut().unwrap().iter()?);
-            }
+            let disk = unsafe { (disk as *mut D).as_mut().unwrap() };
+            iters.push(disk.iter()?);
         }
 
         let iter = Self::merge_iters(iters, false /*reverse*/, false /*ver*/);
@@ -1802,23 +1785,17 @@ where
 
         let mut iters: Vec<IndexIter<K, V>> = vec![];
 
-        unsafe {
-            let m0 = &mut rs.r_m0 as *mut <M::I as Index<K, V>>::R;
-            iters.push(m0.as_mut().unwrap().range(range.clone())?)
-        }
+        let m0 = unsafe { (&mut rs.r_m0 as *mut M).as_mut().unwrap() };
+        iters.push(m0.range(range.clone())?);
 
         if let Some(m1) = &mut rs.r_m1 {
-            unsafe {
-                let m1 = m1 as *mut <M::I as Index<K, V>>::R;
-                iters.push(m1.as_mut().unwrap().range(range.clone())?)
-            };
+            let m1 = unsafe { (m1 as *mut M).as_mut().unwrap() };
+            iters.push(m1.range(range.clone())?);
         }
 
         for disk in rs.r_disks.iter_mut().rev() {
-            unsafe {
-                let disk = disk as *mut <D::I as Index<K, V>>::R;
-                iters.push(disk.as_mut().unwrap().range(range.clone())?)
-            }
+            let disk = unsafe { (disk as *mut D).as_mut().unwrap() };
+            iters.push(disk.range(range.clone())?)
         }
 
         let iter = Self::merge_iters(iters, false /*reverse*/, false /*ver*/);
@@ -1835,23 +1812,17 @@ where
 
         let mut iters: Vec<IndexIter<K, V>> = vec![];
 
-        unsafe {
-            let m0 = &mut rs.r_m0 as *mut <M::I as Index<K, V>>::R;
-            iters.push(m0.as_mut().unwrap().reverse(range.clone())?)
-        };
+        let m0 = unsafe { (&mut rs.r_m0 as *mut M).as_mut().unwrap() };
+        iters.push(m0.reverse(range.clone())?);
 
         if let Some(m1) = &mut rs.r_m1 {
-            unsafe {
-                let m1 = m1 as *mut <M::I as Index<K, V>>::R;
-                iters.push(m1.as_mut().unwrap().reverse(range.clone())?)
-            };
+            let m1 = unsafe { (m1 as *mut M).as_mut().unwrap() };
+            iters.push(m1.reverse(range.clone())?);
         }
 
         for disk in rs.r_disks.iter_mut().rev() {
-            unsafe {
-                let disk = disk as *mut <D::I as Index<K, V>>::R;
-                iters.push(disk.as_mut().unwrap().reverse(range.clone())?)
-            };
+            let disk = unsafe { (disk as *mut D).as_mut().unwrap() };
+            iters.push(disk.reverse(range.clone())?)
         }
 
         let iter = Self::merge_iters(iters, true /*reverse*/, false /*ver*/);
@@ -1903,23 +1874,17 @@ where
 
         let mut iters: Vec<IndexIter<K, V>> = vec![];
 
-        unsafe {
-            let m0 = &mut rs.r_m0 as *mut <M::I as Index<K, V>>::R;
-            iters.push(m0.as_mut().unwrap().iter_with_versions()?)
-        }
+        let m0 = unsafe { (&mut rs.r_m0 as *mut M).as_mut().unwrap() };
+        iters.push(m0.iter_with_versions()?);
 
         if let Some(m1) = &mut rs.r_m1 {
-            unsafe {
-                let m1 = m1 as *mut <M::I as Index<K, V>>::R;
-                iters.push(m1.as_mut().unwrap().iter_with_versions()?);
-            }
+            let m1 = unsafe { (m1 as *mut M).as_mut().unwrap() };
+            iters.push(m1.iter_with_versions()?);
         }
 
         for disk in rs.r_disks.iter_mut() {
-            unsafe {
-                let disk = disk as *mut <D::I as Index<K, V>>::R;
-                iters.push(disk.as_mut().unwrap().iter_with_versions()?);
-            }
+            let disk = unsafe { (disk as *mut D).as_mut().unwrap() };
+            iters.push(disk.iter_with_versions()?);
         }
 
         let iter = Self::merge_iters(iters, false /*reverse*/, true /*ver*/);
@@ -1939,25 +1904,19 @@ where
 
         let mut iters: Vec<IndexIter<K, V>> = vec![];
 
-        unsafe {
-            let m0 = &mut rs.r_m0 as *mut <M::I as Index<K, V>>::R;
-            iters.push(m0.as_mut().unwrap().range_with_versions(range.clone())?)
-        }
+        let m0 = unsafe { (&mut rs.r_m0 as *mut M).as_mut().unwrap() };
+        iters.push(m0.range_with_versions(range.clone())?);
 
         if let Some(m1) = &mut rs.r_m1 {
-            unsafe {
-                let m1 = m1 as *mut <M::I as Index<K, V>>::R;
-                let range = range.clone();
-                iters.push(m1.as_mut().unwrap().range_with_versions(range)?)
-            };
+            let m1 = unsafe { (m1 as *mut M).as_mut().unwrap() };
+            let range = range.clone();
+            iters.push(m1.range_with_versions(range)?)
         }
 
         for disk in rs.r_disks.iter_mut().rev() {
-            unsafe {
-                let disk = disk as *mut <D::I as Index<K, V>>::R;
-                let range = range.clone();
-                iters.push(disk.as_mut().unwrap().range_with_versions(range)?)
-            }
+            let disk = unsafe { (disk as *mut D).as_mut().unwrap() };
+            let range = range.clone();
+            iters.push(disk.range_with_versions(range)?);
         }
 
         let iter = Self::merge_iters(iters, false /*reverse*/, true /*ver*/);
@@ -1977,26 +1936,19 @@ where
 
         let mut iters: Vec<IndexIter<K, V>> = vec![];
 
-        unsafe {
-            let m0 = &mut rs.r_m0 as *mut <M::I as Index<K, V>>::R;
-            let range = range.clone();
-            iters.push(m0.as_mut().unwrap().reverse_with_versions(range)?)
-        };
+        let m0 = unsafe { (&mut rs.r_m0 as *mut M).as_mut().unwrap() };
+        iters.push(m0.reverse_with_versions(range.clone())?);
 
         if let Some(m1) = &mut rs.r_m1 {
-            unsafe {
-                let m1 = m1 as *mut <M::I as Index<K, V>>::R;
-                let range = range.clone();
-                iters.push(m1.as_mut().unwrap().reverse_with_versions(range)?)
-            };
+            let m1 = unsafe { (m1 as *mut M).as_mut().unwrap() };
+            let range = range.clone();
+            iters.push(m1.reverse_with_versions(range)?);
         }
 
         for disk in rs.r_disks.iter_mut().rev() {
-            unsafe {
-                let disk = disk as *mut <D::I as Index<K, V>>::R;
-                let range = range.clone();
-                iters.push(disk.as_mut().unwrap().reverse_with_versions(range)?)
-            };
+            let disk = unsafe { (disk as *mut D).as_mut().unwrap() };
+            let range = range.clone();
+            iters.push(disk.reverse_with_versions(range)?);
         }
 
         let iter = Self::merge_iters(iters, true /*reverse*/, true /*ver*/);
@@ -2004,12 +1956,45 @@ where
     }
 }
 
+impl<K, V, M, D> CommitIterator<K, V> for DgmReader<K, V, M, D>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+    M: Reader<K, V>,
+    D: Reader<K, V>,
+{
+    fn scan<G>(&mut self, _within: G) -> Result<IndexIter<K, V>>
+    where
+        G: Clone + RangeBounds<u64>,
+    {
+        panic!("dgm-reader, scan() not supported {} !!", self.name);
+    }
+
+    fn scans<G>(&mut self, _n_shards: usize, _within: G) -> Result<Vec<IndexIter<K, V>>>
+    where
+        G: Clone + RangeBounds<u64>,
+    {
+        panic!("dgm-reader, scans() not supported by {} !!", self.name);
+    }
+
+    fn range_scans<N, G>(&mut self, _ranges: Vec<N>, _within: G) -> Result<Vec<IndexIter<K, V>>>
+    where
+        G: Clone + RangeBounds<u64>,
+        N: Clone + RangeBounds<K>,
+    {
+        panic!(
+            "dgm-reader, range_scans() not supported by {} !!",
+            self.name
+        );
+    }
+}
+
 struct DgmIter<'a, K, V, M, D>
 where
     K: Clone + Ord,
     V: Clone + Diff,
-    M: WriteIndexFactory<K, V>,
-    D: DiskIndexFactory<K, V>,
+    M: Reader<K, V>,
+    D: Reader<K, V>,
 {
     _dgmr: &'a DgmReader<K, V, M, D>,
     _rs: MutexGuard<'a, Rs<K, V, M, D>>,
@@ -2020,8 +2005,8 @@ impl<'a, K, V, M, D> DgmIter<'a, K, V, M, D>
 where
     K: Clone + Ord,
     V: Clone + Diff,
-    M: WriteIndexFactory<K, V>,
-    D: DiskIndexFactory<K, V>,
+    M: Reader<K, V>,
+    D: Reader<K, V>,
 {
     fn new(
         _dgmr: &'a DgmReader<K, V, M, D>,
@@ -2036,89 +2021,13 @@ impl<'a, K, V, M, D> Iterator for DgmIter<'a, K, V, M, D>
 where
     K: Clone + Ord,
     V: Clone + Diff,
-    M: WriteIndexFactory<K, V>,
-    D: DiskIndexFactory<K, V>,
+    M: Reader<K, V>,
+    D: Reader<K, V>,
 {
     type Item = Result<Entry<K, V>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.iter.next()
-    }
-}
-
-fn auto_compact<K, V, M, D>(
-    name: String,
-    root: Root,
-    inner: Arc<Mutex<InnerDgm<K, V, M, D>>>,
-    rx: rt::Rx<(), ()>,
-) -> Result<()>
-where
-    K: 'static + Send + Clone + Ord + Serialize + Footprint,
-    V: 'static + Send + Clone + Diff + Serialize + Footprint,
-    M: 'static + Send + WriteIndexFactory<K, V>,
-    D: 'static + Send + DiskIndexFactory<K, V>,
-    <M as WriteIndexFactory<K, V>>::I: 'static + Send + Footprint,
-    <<M as WriteIndexFactory<K, V>>::I as Index<K, V>>::R: 'static + Send,
-    <<M as WriteIndexFactory<K, V>>::I as Index<K, V>>::W: 'static + Send,
-    <D as DiskIndexFactory<K, V>>::I: 'static + Send + CommitIterator<K, V> + Footprint + Clone,
-    <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::R: 'static + Send,
-    <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::W: 'static + Send,
-{
-    info!(
-        target: "dgm   ",
-        "{}, auto-compacting thread started with interval {:?}",
-        name, root.compact_interval,
-    );
-
-    let mut elapsed = Duration::new(0, 0);
-    loop {
-        let interval = {
-            let interval = ((root.compact_interval * 2) + elapsed) / 2;
-            cmp::min(interval, elapsed)
-        };
-        match rx.recv_timeout(interval) {
-            Ok(_) => unreachable!(),
-            Err(mpsc::RecvTimeoutError::Timeout) => (),
-            Err(mpsc::RecvTimeoutError::Disconnected) => break Ok(()),
-        }
-
-        let start = SystemTime::now();
-
-        let res = Dgm::do_compact(
-            //
-            &inner,
-            Cutoff::new_lsm_empty(),
-            convert::identity,
-        );
-
-        match res {
-            Ok(_) => info!(target: "dgm   ", "{:?}, compaction done", name),
-            Err(err) => info!(
-                target: "dgm   ", "{:?}, compaction err, {:?}", name, err
-            ),
-        }
-
-        elapsed = start.elapsed().ok().unwrap();
-    }
-}
-
-fn to_inner_lock<K, V, M, D>(
-    inner: &Arc<Mutex<InnerDgm<K, V, M, D>>>,
-) -> Result<MutexGuard<InnerDgm<K, V, M, D>>>
-where
-    K: Clone + Ord + Serialize + Footprint,
-    V: Clone + Diff + Serialize + Footprint,
-    M: WriteIndexFactory<K, V>,
-    D: DiskIndexFactory<K, V>,
-    M::I: Footprint,
-    D::I: Footprint + Clone,
-{
-    match inner.lock() {
-        Ok(value) => Ok(value),
-        Err(err) => {
-            let msg = format!("Dgm.as_inner(), poisonlock {:?}", err);
-            Err(Error::ThreadFail(msg))
-        }
     }
 }
 
@@ -2243,6 +2152,82 @@ where
         }
 
         Ok(result_iters)
+    }
+}
+
+fn auto_compact<K, V, M, D>(
+    name: String,
+    root: Root,
+    inner: Arc<Mutex<InnerDgm<K, V, M, D>>>,
+    rx: rt::Rx<(), ()>,
+) -> Result<()>
+where
+    K: 'static + Send + Clone + Ord + Serialize + Footprint,
+    V: 'static + Send + Clone + Diff + Serialize + Footprint,
+    M: 'static + Send + WriteIndexFactory<K, V>,
+    D: 'static + Send + DiskIndexFactory<K, V>,
+    <M as WriteIndexFactory<K, V>>::I: 'static + Send + Footprint,
+    <<M as WriteIndexFactory<K, V>>::I as Index<K, V>>::R: 'static + Send,
+    <<M as WriteIndexFactory<K, V>>::I as Index<K, V>>::W: 'static + Send,
+    <D as DiskIndexFactory<K, V>>::I: 'static + Send + CommitIterator<K, V> + Footprint + Clone,
+    <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::R: 'static + Send,
+    <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::W: 'static + Send,
+{
+    info!(
+        target: "dgm   ",
+        "{}, auto-compacting thread started with interval {:?}",
+        name, root.compact_interval,
+    );
+
+    let mut elapsed = Duration::new(0, 0);
+    loop {
+        let interval = {
+            let interval = ((root.compact_interval * 2) + elapsed) / 2;
+            cmp::min(interval, elapsed)
+        };
+        match rx.recv_timeout(interval) {
+            Ok(_) => unreachable!(),
+            Err(mpsc::RecvTimeoutError::Timeout) => (),
+            Err(mpsc::RecvTimeoutError::Disconnected) => break Ok(()),
+        }
+
+        let start = SystemTime::now();
+
+        let res = Dgm::do_compact(
+            //
+            &inner,
+            Cutoff::new_lsm_empty(),
+            convert::identity,
+        );
+
+        match res {
+            Ok(_) => info!(target: "dgm   ", "{:?}, compaction done", name),
+            Err(err) => info!(
+                target: "dgm   ", "{:?}, compaction err, {:?}", name, err
+            ),
+        }
+
+        elapsed = start.elapsed().ok().unwrap();
+    }
+}
+
+fn to_inner_lock<K, V, M, D>(
+    inner: &Arc<Mutex<InnerDgm<K, V, M, D>>>,
+) -> Result<MutexGuard<InnerDgm<K, V, M, D>>>
+where
+    K: Clone + Ord + Serialize + Footprint,
+    V: Clone + Diff + Serialize + Footprint,
+    M: WriteIndexFactory<K, V>,
+    D: DiskIndexFactory<K, V>,
+    M::I: Footprint,
+    D::I: Footprint + Clone,
+{
+    match inner.lock() {
+        Ok(value) => Ok(value),
+        Err(err) => {
+            let msg = format!("Dgm.as_inner(), poisonlock {:?}", err);
+            Err(Error::ThreadFail(msg))
+        }
     }
 }
 

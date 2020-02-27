@@ -1491,6 +1491,86 @@ where
     }
 }
 
+impl<K, V, B> CommitIterator<K, V> for ShrobtReader<K, V, B>
+where
+    K: 'static + Send + Default + Clone + Ord + Hash + Footprint + Serialize,
+    V: 'static + Send + Default + Clone + Diff + Footprint + Serialize,
+    <V as Diff>::D: Default + Clone + Serialize + Footprint,
+    B: 'static + Send + Bloom,
+{
+    fn scan<G>(&mut self, within: G) -> Result<IndexIter<K, V>>
+    where
+        G: Clone + RangeBounds<u64>,
+    {
+        let mut iters = vec![];
+        for shard_r in self.readers.iter_mut() {
+            let snap = robt::Snapshot::<K, V, B>::open(
+                //
+                &shard_r.snapshot.dir,
+                &shard_r.snapshot.name,
+            )?;
+            iters.push(snap.into_scan()?);
+        }
+        iters.reverse();
+        Ok(Box::new(scans::FilterScans::new(iters, within)))
+    }
+
+    fn scans<G>(&mut self, n_shards: usize, within: G) -> Result<Vec<IndexIter<K, V>>>
+    where
+        G: Clone + RangeBounds<u64>,
+    {
+        let mut iters = vec![];
+        for shard_r in self.readers.iter_mut() {
+            let iter = {
+                let snap = robt::Snapshot::<K, V, B>::open(
+                    //
+                    &shard_r.snapshot.dir,
+                    &shard_r.snapshot.name,
+                )?;
+                let iter = snap.into_scan()?;
+                Box::new(scans::FilterScans::new(vec![iter], within.clone()))
+            };
+            iters.push(iter as IndexIter<K, V>)
+        }
+
+        // If there are not enough shards push empty iterators.
+        for _ in iters.len()..n_shards {
+            let ss = vec![];
+            iters.push(Box::new(ss.into_iter()));
+        }
+
+        assert_eq!(iters.len(), n_shards);
+
+        Ok(iters)
+    }
+
+    fn range_scans<N, G>(&mut self, ranges: Vec<N>, within: G) -> Result<Vec<IndexIter<K, V>>>
+    where
+        N: Clone + RangeBounds<K>,
+        G: Clone + RangeBounds<u64>,
+    {
+        let mut iters = vec![];
+        for range in ranges.into_iter() {
+            let mut scans = vec![];
+            for shard_r in self.readers.iter_mut() {
+                let snap = robt::Snapshot::<K, V, B>::open(
+                    //
+                    &shard_r.snapshot.dir,
+                    &shard_r.snapshot.name,
+                )?;
+                let range = util::to_start_end(range.clone());
+                scans.push(snap.into_range_scan(range)?)
+            }
+            scans.reverse();
+
+            let iter = scans::FilterScans::new(scans, within.clone());
+            iters.push(Box::new(iter) as IndexIter<K, V>);
+        }
+
+        Ok(iters)
+    }
+}
+
 enum Shard<K, V, B>
 where
     K: Clone + Ord + Hash + Footprint + Serialize,

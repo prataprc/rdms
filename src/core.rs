@@ -193,7 +193,7 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    type I: Index<K, V>;
+    type I: Index<K, V> + Footprint;
 
     /// Create a new index instance with predefined configuration,
     /// Typically this index will be used to index new set of entries.
@@ -210,7 +210,7 @@ where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    type I: Index<K, V>;
+    type I: Clone + Index<K, V> + CommitIterator<K, V> + Footprint;
 
     /// Create a new index instance with predefined configuration.
     /// Typically this index will be used to commit newer snapshots
@@ -277,7 +277,7 @@ where
 
     /// Reader handle into this index to concurrently access with other readers
     /// and writers.
-    type R: Reader<K, V>;
+    type R: Reader<K, V> + CommitIterator<K, V>;
 
     /// Return the name of the index.
     fn to_name(&self) -> Result<String>;

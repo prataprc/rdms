@@ -1,3 +1,5 @@
+use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
+
 use super::*;
 
 #[test]
@@ -173,4 +175,205 @@ fn test_level_file_name() {
         format!("{:?}", level_name),
         format!("{:?}", "my-index-dgmlevel-001"),
     );
+}
+
+#[test]
+fn test_dgm_crud() {
+    use crate::nobitmap::NoBitmap;
+    use crate::{mvcc, robt};
+
+    let seed: u128 = random();
+    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+
+    let config = Config {
+        mem_ratio: 0.5,
+        disk_ratio: 0.5,
+        compact_interval: time::Duration::from_secs(1),
+    };
+
+    let mut ref_index = mvcc::Mvcc::new_lsm("dgm-crud");
+
+    let dir = {
+        let mut dir = std::env::temp_dir();
+        dir.push("test-dgm-crud");
+        dir.into_os_string()
+    };
+    let mem_factory = mvcc::mvcc_factory(true /*lsm*/);
+    let disk_factory = {
+        let mut config: robt::Config = Default::default();
+        config.delta_ok = true;
+        config.value_in_vlog = true;
+        robt::robt_factory::<i64, i64, NoBitmap>(config)
+    };
+    let mut index = Dgm::new(
+        //
+        &dir,
+        "dgm-crud",
+        mem_factory,
+        disk_factory,
+        config,
+    )
+    .unwrap();
+
+    let mut index_w = index.to_writer().unwrap();
+    let mut index_r = index.to_reader().unwrap();
+    for _ in 0..1_000_000 {
+        let key: i64 = rng.gen::<i64>().abs();
+        let value: i64 = rng.gen::<i64>().abs();
+        let op: i64 = (rng.gen::<u8>() % 3) as i64;
+        //println!("key {} value {} op {}", key, value, op);
+        match op {
+            0 => {
+                let entry = index_w.set(key, value).unwrap();
+                let refn = ref_index.set(key, value).unwrap();
+                match (entry, refn) {
+                    (Some(entry), Some(refn)) => {
+                        check_entry1(&entry, &refn);
+                        check_entry2(&entry, &refn);
+                    }
+                    (None, None) => break,
+                    _ => unreachable!(),
+                }
+                false
+            }
+            1 => {
+                let cas = match index_r.get(&key) {
+                    Ok(entry) => entry.to_seqno(),
+                    Err(Error::KeyNotFound) => std::u64::MIN,
+                    Err(err) => panic!(err),
+                };
+                let entry = index_w.set_cas(key, value, cas).ok().unwrap();
+                let refn = ref_index.set_cas(key, value, cas).ok().unwrap();
+                match (entry, refn) {
+                    (Some(entry), Some(refn)) => {
+                        check_entry1(&entry, &refn);
+                        check_entry2(&entry, &refn);
+                    }
+                    (None, None) => break,
+                    _ => unreachable!(),
+                }
+                false
+            }
+            2 => {
+                let entry = index_w.delete(&key).unwrap();
+                let refn = ref_index.delete(&key).unwrap();
+                match (entry, refn) {
+                    (Some(entry), Some(refn)) => {
+                        check_entry1(&entry, &refn);
+                        check_entry2(&entry, &refn);
+                    }
+                    (None, None) => break,
+                    _ => unreachable!(),
+                }
+                true
+            }
+            op => panic!("unreachable {}", op),
+        };
+    }
+
+    // assert!(index.validate().is_ok()); TODO
+
+    //println!("len {}", index.len());
+    assert_eq!(ref_index.to_seqno().unwrap(), index.to_seqno().unwrap());
+
+    {
+        // test iter
+        let mut iter = index_r.iter().unwrap();
+        let mut iter_ref = ref_index.iter().unwrap();
+        loop {
+            let entry = iter.next().transpose().unwrap();
+            let refn = iter_ref.next().transpose().unwrap();
+            match (entry, refn) {
+                (Some(entry), Some(refn)) => {
+                    check_entry1(&entry, &refn);
+                    check_entry2(&entry, &refn);
+                }
+                (None, None) => break,
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    // ranges and reverses
+    for _ in 0..10000 {
+        let (low, high) = random_low_high(&mut rng);
+        //println!("test loop {:?} {:?}", low, high);
+
+        {
+            let mut iter = index_r.range((low, high)).unwrap();
+            let mut iter_ref = ref_index.range((low, high)).unwrap();
+            loop {
+                let entry = iter.next().transpose().unwrap();
+                let refn = iter_ref.next().transpose().unwrap();
+                match (entry, refn) {
+                    (Some(entry), Some(refn)) => {
+                        check_entry1(&entry, &refn);
+                        check_entry2(&entry, &refn);
+                    }
+                    (None, None) => break,
+                    _ => unreachable!(),
+                }
+            }
+        }
+
+        {
+            let mut iter = index_r.reverse((low, high)).unwrap();
+            let mut iter_ref = ref_index.reverse((low, high)).unwrap();
+            loop {
+                let entry = iter.next().transpose().unwrap();
+                let refn = iter_ref.next().transpose().unwrap();
+                match (entry, refn) {
+                    (Some(entry), Some(refn)) => {
+                        check_entry1(&entry, &refn);
+                        check_entry2(&entry, &refn);
+                    }
+                    (None, None) => break,
+                    _ => unreachable!(),
+                }
+            }
+        }
+    }
+}
+
+fn check_entry1(e1: &Entry<i64, i64>, e2: &Entry<i64, i64>) {
+    assert_eq!(e1.to_key(), e2.to_key());
+    let key = e1.to_key();
+    assert_eq!(e1.to_seqno(), e2.to_seqno(), "key:{}", key);
+    assert_eq!(e1.to_native_value(), e2.to_native_value(), "key:{}", key);
+    assert_eq!(e1.is_deleted(), e2.is_deleted(), "key:{}", key);
+    assert_eq!(e1.as_deltas().len(), e2.as_deltas().len(), "key:{}", key);
+}
+
+fn check_entry2(e1: &Entry<i64, i64>, e2: &Entry<i64, i64>) {
+    let key = e1.to_key();
+    let xs: Vec<core::Delta<i64>> = e1.to_deltas();
+    let ys: Vec<core::Delta<i64>> = e2.to_deltas();
+
+    assert_eq!(xs.len(), ys.len(), "for key {}", key);
+    for (m, n) in xs.iter().zip(ys.iter()) {
+        assert_eq!(m.to_seqno(), n.to_seqno(), "for key {}", key);
+        assert_eq!(m.is_deleted(), n.is_deleted(), "for key {}", key);
+        // println!("d {} {}", m.is_deleted(), n.is_deleted());
+        assert_eq!(m.to_diff(), n.to_diff(), "for key {}", key);
+        // println!("key:{} diff {:?} {:?}", key, m.to_diff(), n.to_diff());
+    }
+}
+
+fn random_low_high(rng: &mut SmallRng) -> (Bound<i64>, Bound<i64>) {
+    let low: i64 = rng.gen();
+    let high: i64 = rng.gen();
+    let low = match rng.gen::<u8>() % 3 {
+        0 => Bound::Included(low),
+        1 => Bound::Excluded(low),
+        2 => Bound::Unbounded,
+        _ => unreachable!(),
+    };
+    let high = match rng.gen::<u8>() % 3 {
+        0 => Bound::Included(high),
+        1 => Bound::Excluded(high),
+        2 => Bound::Unbounded,
+        _ => unreachable!(),
+    };
+    //println!("low_high {:?} {:?}", low, high);
+    (low, high)
 }

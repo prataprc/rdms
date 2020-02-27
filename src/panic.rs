@@ -2,7 +2,7 @@
 
 use std::{borrow::Borrow, ops::RangeBounds};
 
-use crate::core::{Diff, Entry, IndexIter, Reader, Result, Writer};
+use crate::core::{CommitIterator, Diff, Entry, IndexIter, Reader, Result, Writer};
 
 /// Placeholder type, to handle unimplemented features.
 pub struct Panic(String);
@@ -49,14 +49,10 @@ where
         panic!("get operation not supported by {} !!", self.0);
     }
 
-    /// Iterate over all entries in this index. Returned entry may not
-    /// have all its previous versions, if it is costly to fetch from disk.
     fn iter(&mut self) -> Result<IndexIter<K, V>> {
         panic!("iter operation not supported by {} !!", self.0);
     }
 
-    /// Iterate from lower bound to upper bound. Returned entry may not
-    /// have all its previous versions, if it is costly to fetch from disk.
     fn range<'a, R, Q>(&'a mut self, _: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
@@ -66,8 +62,6 @@ where
         panic!("range operation not supported by {} !!", self.0);
     }
 
-    /// Iterate from upper bound to lower bound. Returned entry may not
-    /// have all its previous versions, if it is costly to fetch from disk.
     fn reverse<'a, R, Q>(&'a mut self, _: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
@@ -77,8 +71,6 @@ where
         panic!("reverse operation not supported by {} !!", self.0);
     }
 
-    /// Get ``key`` from index. Returned entry shall have all its
-    /// previous versions, can be a costly call.
     fn get_with_versions<Q>(&mut self, _: &Q) -> Result<Entry<K, V>>
     where
         K: Borrow<Q>,
@@ -87,8 +79,6 @@ where
         panic!("get_with_versions operation not supported by {} !!", self.0);
     }
 
-    /// Iterate over all entries in this index. Returned entry shall
-    /// have all its previous versions, can be a costly call.
     fn iter_with_versions(&mut self) -> Result<IndexIter<K, V>> {
         panic!(
             "iter_with_versions operation not supported by {} !!",
@@ -96,8 +86,6 @@ where
         );
     }
 
-    /// Iterate from lower bound to upper bound. Returned entry shall
-    /// have all its previous versions, can be a costly call.
     fn range_with_versions<'a, R, Q>(&'a mut self, _: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
@@ -110,8 +98,6 @@ where
         );
     }
 
-    /// Iterate from upper bound to lower bound. Returned entry shall
-    /// have all its previous versions, can be a costly call.
     fn reverse_with_versions<'a, R, Q>(&'a mut self, _: R) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
@@ -122,5 +108,33 @@ where
             "reverse_with_versions operation not supported by {} !!",
             self.0
         );
+    }
+}
+
+impl<K, V> CommitIterator<K, V> for Panic
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    fn scan<G>(&mut self, _within: G) -> Result<IndexIter<K, V>>
+    where
+        G: Clone + RangeBounds<u64>,
+    {
+        panic!("scan operation not supported by {} !!", self.0);
+    }
+
+    fn scans<G>(&mut self, _n_shards: usize, _within: G) -> Result<Vec<IndexIter<K, V>>>
+    where
+        G: Clone + RangeBounds<u64>,
+    {
+        panic!("scans operation not supported by {} !!", self.0);
+    }
+
+    fn range_scans<N, G>(&mut self, _ranges: Vec<N>, _within: G) -> Result<Vec<IndexIter<K, V>>>
+    where
+        G: Clone + RangeBounds<u64>,
+        N: Clone + RangeBounds<K>,
+    {
+        panic!("range_scans operation not supported by {} !!", self.0);
     }
 }

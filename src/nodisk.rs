@@ -228,3 +228,31 @@ where
         Ok(Box::new(empty.into_iter()))
     }
 }
+
+impl<K, V> CommitIterator<K, V> for NoDisk<K, V>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    fn scan<G>(&mut self, _within: G) -> Result<IndexIter<K, V>>
+    where
+        G: Clone + RangeBounds<u64>,
+    {
+        panic!("scan operation not supported by nodisk !!")
+    }
+
+    fn scans<G>(&mut self, _n_shards: usize, _within: G) -> Result<Vec<IndexIter<K, V>>>
+    where
+        G: Clone + RangeBounds<u64>,
+    {
+        panic!("scans operation not supported by nodisk !!")
+    }
+
+    fn range_scans<N, G>(&mut self, _ranges: Vec<N>, _within: G) -> Result<Vec<IndexIter<K, V>>>
+    where
+        G: Clone + RangeBounds<u64>,
+        N: Clone + RangeBounds<K>,
+    {
+        panic!("range_scans operation not supported by nodisk !!")
+    }
+}

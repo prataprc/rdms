@@ -218,7 +218,7 @@ where
                 let mut fd = {
                     let file_path = journal.to_file_path();
                     let mut opts = fs::OpenOptions::new();
-                    opts.read(true).write(false).open(file_path)?
+                    io_err_at!(opts.read(true).write(false).open(file_path))?
                 };
 
                 for batch in journal.into_batches()? {

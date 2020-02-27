@@ -15,6 +15,7 @@ use std::{
     vec,
 };
 
+use crate::io_err_at;
 use crate::{
     core::{Result, Serialize},
     dlog::{DlogState, OpRequest, OpResponse},
@@ -137,8 +138,8 @@ where
         S: DlogState<T>,
     {
         // purge existing journals for this shard.
-        for item in fs::read_dir(&dir)? {
-            let file_name = item?.file_name();
+        for item in io_err_at!(fs::read_dir(&dir))? {
+            let file_name = io_err_at!(item)?.file_name();
             let (n, id) = (name.clone(), shard_id);
             match Journal::<S, T>::new_cold(n, id, dir.clone(), file_name) {
                 Some(journal) => journal.purge()?,
@@ -177,8 +178,8 @@ where
     {
         let mut journals = vec![];
 
-        for item in fs::read_dir(&dir)? {
-            let file_name = item?.file_name();
+        for item in io_err_at!(fs::read_dir(&dir))? {
+            let file_name = io_err_at!(item)?.file_name();
             let (n, id) = (name.clone(), shard_id);
             match Journal::<S, T>::new_archive(n, id, dir.clone(), file_name) {
                 Some(journal) => journals.push(journal),
@@ -477,7 +478,7 @@ where
         let file_path = file_path.to_os_string();
         let fd = {
             let mut opts = fs::OpenOptions::new();
-            opts.append(true).create_new(true).open(&file_path)?
+            io_err_at!(opts.append(true).create_new(true).open(&file_path))?
         };
 
         Ok(Journal {
@@ -586,7 +587,7 @@ where
 
     fn purge(self) -> Result<()> {
         let file_path = self.to_file_path();
-        fs::remove_file(&file_path)?;
+        io_err_at!(fs::remove_file(&file_path))?;
 
         Ok(())
     }
@@ -711,7 +712,7 @@ where
                 active,
             } => {
                 let limit: u64 = journal_limit.try_into()?;
-                let exceeded = fd.metadata()?.len() > limit;
+                let exceeded = io_err_at!(fd.metadata())?.len() > limit;
                 (file_path, fd, batches, active, exceeded)
             }
             _ => unreachable!(),
@@ -729,15 +730,15 @@ where
                 Ok(Some((buffer, batch)))
             }
             false if active.len() > 0 => {
-                let fpos = fd.metadata()?.len();
-                let n = fd.write(&buffer)?;
+                let fpos = io_err_at!(fd.metadata())?.len();
+                let n = io_err_at!(fd.write(&buffer))?;
                 if length != n {
                     let f = file_path.clone();
                     let msg = format!("wal-flush: {:?}, {}/{}", f, length, n);
                     Err(Error::PartialWrite(msg))
                 } else {
                     if !nosync {
-                        fd.sync_all()?;
+                        io_err_at!(fd.sync_all())?;
                     }
 
                     let a = active.to_first_index().unwrap();
@@ -764,11 +765,11 @@ where
         };
 
         let length = buffer.len();
-        let fpos = fd.metadata()?.len();
-        let n = fd.write(&buffer)?;
+        let fpos = io_err_at!(fd.metadata())?.len();
+        let n = io_err_at!(fd.write(&buffer))?;
         if length == n {
             if !nosync {
-                fd.sync_all()?;
+                io_err_at!(fd.sync_all())?;
             }
 
             let a = batch.to_first_index().unwrap();

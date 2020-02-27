@@ -19,6 +19,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+use crate::io_err_at;
 use crate::{
     core::{self, Cutoff, Writer},
     core::{CommitIter, CommitIterator, Result, Serialize, WriteIndexFactory},
@@ -136,12 +137,15 @@ impl TryFrom<Root> for Vec<u8> {
 
             let (arg1, arg2) = match root.lsm_cutoff {
                 Some(cutoff) => match cutoff {
-                    Bound::Excluded(cutoff) => ("excluded", cutoff),
-                    Bound::Included(cutoff) => ("included", cutoff),
-                    Bound::Unbounded => unreachable!(),
+                    Bound::Excluded(cutoff) => Ok(("excluded", cutoff)),
+                    Bound::Included(cutoff) => Ok(("included", cutoff)),
+                    Bound::Unbounded => {
+                        let msg = format!("Dgm root has Unbounded lsm-cutoff");
+                        Err(Error::UnReachable(msg))
+                    }
                 },
-                None => ("none", 0),
-            };
+                None => Ok(("none", 0)),
+            }?;
             dict.insert(
                 "lsm_cutoff".to_string(),
                 Array(vec![TomlStr(arg1.to_string()), TomlStr(arg2.to_string())]),
@@ -149,12 +153,15 @@ impl TryFrom<Root> for Vec<u8> {
 
             let (arg1, arg2) = match root.tombstone_cutoff {
                 Some(cutoff) => match cutoff {
-                    Bound::Excluded(cutoff) => ("excluded", cutoff),
-                    Bound::Included(cutoff) => ("included", cutoff),
-                    Bound::Unbounded => unreachable!(),
+                    Bound::Excluded(cutoff) => Ok(("excluded", cutoff)),
+                    Bound::Included(cutoff) => Ok(("included", cutoff)),
+                    Bound::Unbounded => {
+                        let msg = format!("Dgm root has Unbounded lsm-cutoff");
+                        Err(Error::UnReachable(msg))
+                    }
                 },
-                None => ("none", 0),
-            };
+                None => Ok(("none", 0)),
+            }?;
             dict.insert(
                 "tombstone_cutoff".to_string(),
                 Array(vec![TomlStr(arg1.to_string()), TomlStr(arg2.to_string())]),
@@ -235,13 +242,16 @@ impl TryFrom<Vec<u8>> for Root {
                 cutoff.parse()?
             };
             match bound {
-                "excluded" => Some(Bound::Excluded(cutoff)),
-                "included" => Some(Bound::Included(cutoff)),
-                "unbounded" => Some(Bound::Unbounded),
-                "none" => None,
-                _ => unreachable!(),
+                "excluded" => Ok(Some(Bound::Excluded(cutoff))),
+                "included" => Ok(Some(Bound::Included(cutoff))),
+                "unbounded" => Ok(Some(Bound::Unbounded)),
+                "none" => Ok(None),
+                _ => {
+                    let msg = format!("Dgm root deser invalid lsm-cutoff");
+                    Err(Error::UnReachable(msg))
+                }
             }
-        };
+        }?;
         root.tombstone_cutoff = {
             let field = dict
                 .get("tombstone_cutoff")
@@ -253,13 +263,16 @@ impl TryFrom<Vec<u8>> for Root {
                 cutoff.parse()?
             };
             match bound {
-                "excluded" => Some(Bound::Excluded(cutoff)),
-                "included" => Some(Bound::Included(cutoff)),
-                "unbounded" => Some(Bound::Unbounded),
-                "none" => None,
-                _ => unreachable!(),
+                "excluded" => Ok(Some(Bound::Excluded(cutoff))),
+                "included" => Ok(Some(Bound::Included(cutoff))),
+                "unbounded" => Ok(Some(Bound::Unbounded)),
+                "none" => Ok(None),
+                _ => {
+                    let msg = format!("Dgm root deser invalid tombstone-cutoff");
+                    Err(Error::UnReachable(msg))
+                }
             }
-        };
+        }?;
 
         Ok(root)
     }
@@ -558,9 +571,12 @@ where
         let m0 = Snapshot::new_write(m0);
 
         self.m1 = match mem::replace(&mut self.m0, m0) {
-            Snapshot::Write(m1) => Some(Snapshot::new_flush(m1)),
-            _ => unreachable!(),
-        };
+            Snapshot::Write(m1) => Ok(Some(Snapshot::new_flush(m1))),
+            _ => {
+                let msg = format!("Dgm.shift_in_m0() not write snapshot");
+                Err(Error::UnReachable(msg))
+            }
+        }?;
 
         // update readers and unblock them one by one.
         for r in rs.iter_mut() {
@@ -600,11 +616,11 @@ where
     }
 
     fn commit_level(&mut self) -> Result<usize> {
-        use Snapshot::{Active, Commit, Compact, Flush, Write};
+        use Snapshot::{Active, Compact};
 
         let msg = format!("dgm: exhausted all levels !!");
 
-        if self.is_commit_exhausted() {
+        if self.is_commit_exhausted()? {
             return Err(Error::DiskIndexFail(msg));
         }
 
@@ -626,36 +642,44 @@ where
                             }
                         }
                         Active(_) => break Ok(lvl),
-                        Write(_) | Flush(_) | Commit(_) => unreachable!(),
-                        _ => unreachable!(),
+                        _ => {
+                            let msg = format!("Dgm.commit_level() not disk");
+                            break Err(Error::UnReachable(msg));
+                        }
                     }
                 }
             }
         }
     }
 
-    fn is_commit_exhausted(&self) -> bool {
+    fn is_commit_exhausted(&self) -> Result<bool> {
         use Snapshot::{Active, Commit, Compact};
 
         match self.disks[0] {
-            Snapshot::None => false,
-            Active(_) => false,
-            Commit(_) | Compact(_) => true,
-            _ => unreachable!(),
+            Snapshot::None => Ok(false),
+            Active(_) => Ok(false),
+            Commit(_) | Compact(_) => Ok(true),
+            _ => {
+                let msg = format!("Dgm.is_commit_exhausted()");
+                Err(Error::UnReachable(msg))
+            }
         }
     }
 
     fn move_to_commit(&mut self, level: usize) -> Result<()> {
         let d = mem::replace(&mut self.disks[level], Default::default());
         let d = match d {
-            Snapshot::Active(d) => d,
+            Snapshot::Active(d) => Ok(d),
             Snapshot::None => {
                 let name: LevelName = (self.name.clone(), level).into();
                 let name = name.to_string();
-                self.disk_factory.new(&self.dir, &name)?
+                Ok(self.disk_factory.new(&self.dir, &name)?)
             }
-            _ => unreachable!(),
-        };
+            _ => {
+                let msg = format!("Dgm.move_to_commit() invalid state");
+                Err(Error::UnReachable(msg))
+            }
+        }?;
 
         self.disks[level] = Snapshot::new_commit(d);
         Ok(())
@@ -927,7 +951,7 @@ where
             Snapshot::None => Ok(None),
             Write(_) | Flush(_) => {
                 let msg = format!("dgm disk not commit/compact/active snapshot");
-                Err(Error::UnexpectedFail(msg))
+                Err(Error::UnExpectedFail(msg))
             }
             _ => unreachable!(),
         }
@@ -943,7 +967,7 @@ where
             Snapshot::None => Ok(None),
             Write(_) | Flush(_) => {
                 let msg = format!("dgm disk not commit/compact/active snapshot");
-                Err(Error::UnexpectedFail(msg))
+                Err(Error::UnExpectedFail(msg))
             }
             _ => unreachable!(),
         }
@@ -954,7 +978,7 @@ where
             Snapshot::Write(m) => Ok(m),
             _ => {
                 let msg = format!("dgm m0 not a write snapshot");
-                Err(Error::UnexpectedFail(msg))
+                Err(Error::UnExpectedFail(msg))
             }
         }
     }
@@ -964,7 +988,7 @@ where
             Snapshot::Write(m) => Ok(m),
             _ => {
                 let msg = format!("dgm m0 not a write snapshot");
-                Err(Error::UnexpectedFail(msg))
+                Err(Error::UnExpectedFail(msg))
             }
         }
     }
@@ -974,7 +998,7 @@ where
             Snapshot::Flush(m) => Ok(m),
             _ => {
                 let msg = format!("dgm m0 not a flush snapshot");
-                Err(Error::UnexpectedFail(msg))
+                Err(Error::UnExpectedFail(msg))
             }
         }
     }
@@ -1046,8 +1070,8 @@ where
         <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::R: 'static + Send,
         <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::W: 'static + Send,
     {
-        fs::remove_dir_all(dir)?;
-        fs::create_dir_all(dir)?;
+        fs::remove_dir_all(dir).ok();
+        io_err_at!(fs::create_dir_all(dir))?;
 
         let root: Root = config.clone().into();
         let root_file = Self::new_root_file(dir, name, root.clone())?;
@@ -1337,7 +1361,7 @@ where
         let data: Vec<u8> = root.try_into()?;
 
         let mut fd = util::create_file_a(root_file.clone())?;
-        fd.write(&data)?;
+        io_err_at!(fd.write(&data))?;
         Ok(root_file.into())
     }
 
@@ -1345,7 +1369,7 @@ where
         use crate::error::Error::InvalidFile;
 
         let mut versions = vec![];
-        for item in fs::read_dir(dir)? {
+        for item in io_err_at!(fs::read_dir(dir))? {
             match item {
                 Ok(item) => {
                     let root_file = RootFileName(item.file_name());
@@ -1372,7 +1396,7 @@ where
 
         let mut fd = util::open_file_r(&root_file)?;
         let mut bytes = vec![];
-        fd.read_to_end(&mut bytes)?;
+        io_err_at!(fd.read_to_end(&mut bytes))?;
 
         Ok(bytes.try_into()?)
     }

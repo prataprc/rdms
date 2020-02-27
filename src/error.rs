@@ -5,7 +5,7 @@
 
 use jsondata;
 
-use std::{any, ffi, io, sync::mpsc};
+use std::{any, ffi, sync::mpsc};
 
 // TODO: check unused error variants and double check error arguments.
 // TODO: Generic but meaningful error messages.
@@ -16,9 +16,13 @@ use std::{any, ffi, io, sync::mpsc};
 #[derive(Debug)]
 pub enum Error {
     /// API / function not supported
-    NotSupported(String),
+    NotImplemented(String),
     /// Error because the value was not initialized as expected.
     UnInitialized(String),
+    /// Error because the value was not initialized as expected.
+    UnReachable(String),
+    /// Execution flow entered into an un-expected situation.
+    UnExpectedFail(String),
     /// Supplied key is not found in the index.
     KeyNotFound,
     /// Index is empty
@@ -64,8 +68,6 @@ pub enum Error {
     ThreadFail(String),
     /// On disk snapshot is invalid.
     InvalidSnapshot(String),
-    /// Execution flow entered into an un-expected situation.
-    UnexpectedFail(String),
     /// Inter-Process-Communication error from std::mpsc
     IPCFail(String),
     /// Invalid Dlog
@@ -73,7 +75,7 @@ pub enum Error {
     /// Invalid Wal
     InvalidWAL(String),
     /// IO error from std::io
-    IoError(io::Error),
+    IoError(String),
     /// Json processing error from jsondata package
     JsonError(jsondata::Error),
     /// String conversion error from std::String, str::str
@@ -99,10 +101,17 @@ pub enum Error {
     __ZBlockExhausted(usize),
 }
 
-impl From<io::Error> for Error {
-    fn from(err: io::Error) -> Error {
-        Error::IoError(err)
-    }
+#[macro_export]
+macro_rules! io_err_at {
+    ($e:expr) => {
+        match $e {
+            Ok(val) => Ok(val),
+            Err(err) => {
+                let msg = format!("{}:{} {}", file!(), line!(), err);
+                Err(Error::IoError(msg))
+            }
+        }
+    };
 }
 
 impl From<std::num::ParseIntError> for Error {

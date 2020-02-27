@@ -627,7 +627,10 @@ where
     pub fn balance(&mut self) -> Result<usize> {
         match &self.auto_shard {
             Some(auto_shard) => Ok(auto_shard.request("balance".to_string())?),
-            None => Err(Error::UnInitialized(format!("shllrb, auto-sharding"))),
+            None => {
+                let msg = format!("shllrb.balance(), auto-sharding none");
+                Err(Error::UnInitialized(msg))
+            }
         }
     }
 

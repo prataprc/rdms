@@ -5,6 +5,8 @@
 //! is expected hold onto its own state, FnOnce in rust parlance, and handle
 //! all inter-thread communication via channels and message queues.
 
+use log::error;
+
 #[allow(unused_imports)]
 use std::{
     mem,
@@ -78,7 +80,7 @@ impl<Q, R, T> Drop for Thread<Q, R, T> {
                     Some(inner) => break inner.close_wait().ok(),
                     None => break None,
                 },
-                None => (), // TODO: Log the situation.
+                None => error!(target: "thread", "Thread.drop() unreachable"),
             }
         };
     }
@@ -144,7 +146,7 @@ impl<Q, R, T> Thread<Q, R, T> {
                 };
                 Ok(())
             }
-            None => Err(Error::UnInitialized(format!("Thread not initialized"))),
+            None => Err(Error::UnReachable(format!("Thread.pos()"))),
         }
     }
 
@@ -159,7 +161,7 @@ impl<Q, R, T> Thread<Q, R, T> {
                 }
                 Ok(rx.recv()?)
             }
-            None => Err(Error::UnInitialized(format!("Thread not initialized"))),
+            None => Err(Error::UnReachable(format!("Thread.request()"))),
         }
     }
 
@@ -177,7 +179,7 @@ impl<Q, R, T> Thread<Q, R, T> {
     pub fn close_wait(mut self) -> Result<T> {
         match self.inner.take() {
             Some(inner) => inner.close_wait(),
-            None => Err(Error::UnInitialized(format!("Thread not initialized"))),
+            None => Err(Error::UnReachable(format!("Thread.close_wait()"))),
         }
     }
 }

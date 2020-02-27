@@ -75,7 +75,7 @@ where
     pub(crate) fn as_first_key(&self) -> Result<&K> {
         match self {
             MBlock::Encode { first_key, .. } => {
-                let err = Error::UnexpectedFail(format!("mblock no first key"));
+                let err = Error::UnExpectedFail(format!("mblock no first key"));
                 Ok(first_key.as_ref().ok_or(err)?)
             }
             MBlock::Decode { .. } => unreachable!(),
@@ -462,7 +462,7 @@ where
     pub(crate) fn as_first_key(&self) -> Result<&K> {
         match self {
             ZBlock::Encode { first_key, .. } => {
-                let err = Error::UnexpectedFail(format!("mblock no first key"));
+                let err = Error::UnExpectedFail(format!("mblock no first key"));
                 Ok(first_key.as_ref().ok_or(err)?)
             }
             ZBlock::Decode { .. } => unreachable!(),

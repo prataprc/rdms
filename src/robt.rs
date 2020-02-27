@@ -59,6 +59,7 @@ use std::{
     thread, time,
 };
 
+use crate::io_err_at;
 #[allow(unused_imports)] // for documentation
 use crate::rdms::Rdms;
 use crate::{
@@ -541,7 +542,7 @@ where
         use crate::error::Error::InvalidFile;
 
         let mut versions = vec![];
-        for item in fs::read_dir(dir)? {
+        for item in io_err_at!(fs::read_dir(dir))? {
             match item {
                 Ok(item) => {
                     let index_file = IndexFileName(item.file_name());
@@ -655,7 +656,7 @@ where
         match self.as_inner()?.deref() {
             InnerRobt::Snapshot { stats, .. } => Ok(stats.n_count.try_into()?),
             InnerRobt::Build { .. } => {
-                let msg = format!("robt.len(), in build state");
+                let msg = format!("Robt.len(), in build state");
                 Err(Error::UnInitialized(msg))
             }
         }
@@ -705,7 +706,7 @@ where
                 }
             }
             InnerRobt::Build { .. } => {
-                let msg = format!("robt.to_metadata(), in build state");
+                let msg = format!("Robt.to_metadata(), in build state");
                 Err(Error::UnInitialized(msg))
             }
         }
@@ -716,7 +717,7 @@ where
         match self.as_inner()?.deref() {
             InnerRobt::Snapshot { stats, .. } => Ok(stats.seqno),
             InnerRobt::Build { .. } => {
-                let msg = format!("robt.to_seqno(), in build state");
+                let msg = format!("Robt.to_seqno(), in build state");
                 Err(Error::UnInitialized(msg))
             }
         }
@@ -741,7 +742,7 @@ where
                 Ok(snapshot)
             }
             InnerRobt::Build { .. } => {
-                let msg = format!("robt.to_reader(), in build state");
+                let msg = format!("Robt.to_reader(), in build state");
                 Err(Error::UnInitialized(msg))
             }
         }
@@ -1046,7 +1047,7 @@ where
                 snapshot.purge()
             }
             InnerRobt::Build { .. } => {
-                let msg = format!("robt.purge(), in build state");
+                let msg = format!("Robt.purge(), in build state");
                 Err(Error::UnInitialized(msg))
             }
         }
@@ -1074,7 +1075,7 @@ where
                 r.scan(within)
             }
             InnerRobt::Build { .. } => {
-                let err = "robt.scan(), in build state".to_string();
+                let err = "Robt.scan(), in build state".to_string();
                 Err(Error::UnInitialized(err))
             }
         }
@@ -1095,8 +1096,8 @@ where
                 r.scans(n_shards, within)
             }
             InnerRobt::Build { .. } => {
-                let err = "robt.scans(), in build state".to_string();
-                Err(Error::InvalidSnapshot(err))
+                let err = "Robt.scans(), in build state".to_string();
+                Err(Error::UnInitialized(err))
             }
         }
     }
@@ -1117,8 +1118,8 @@ where
                 r.range_scans(ranges, within)
             }
             InnerRobt::Build { .. } => {
-                let err = "cannot scan robt in build state".to_string();
-                Err(Error::InvalidSnapshot(err))
+                let err = "Robt.range_scans() in build state".to_string();
+                Err(Error::UnInitialized(err))
             }
         }
     }
@@ -1367,9 +1368,11 @@ pub(crate) fn write_meta_items(
     file: ffi::OsString,
     items: Vec<MetaItem>, // list of meta items, starting from Marker
 ) -> Result<u64> {
-    let p = path::Path::new(&file);
-    let mut opts = fs::OpenOptions::new();
-    let mut fd = opts.append(true).open(p)?;
+    let mut fd = {
+        let p = path::Path::new(&file);
+        let mut opts = fs::OpenOptions::new();
+        io_err_at!(opts.append(true).open(p))?
+    };
 
     let (mut hdr, mut block) = (vec![], vec![]);
     hdr.resize(40, 0);
@@ -1426,8 +1429,8 @@ pub(crate) fn write_meta_items(
     block.resize(n, 0);
     block.copy_within(0..m, shift);
     let ln = block.len();
-    let n = fd.write(&block)?;
-    fd.sync_all()?;
+    let n = io_err_at!(fd.write(&block))?;
+    io_err_at!(fd.sync_all())?;
     if n == ln {
         Ok(n.try_into()?)
     } else {
@@ -1447,7 +1450,7 @@ pub fn read_meta_items(
     name: &str,
 ) -> Result<(Vec<MetaItem>, usize)> {
     let index_file = Config::stitch_index_file(dir, name);
-    let m = fs::metadata(&index_file)?.len();
+    let m = io_err_at!(fs::metadata(&index_file))?.len();
     let mut fd = util::open_file_r(index_file.as_ref())?;
 
     // read header
@@ -1737,7 +1740,7 @@ impl FromStr for Stats {
             let n: usize = js
                 .get(key)?
                 .integer()
-                .ok_or(Error::UnexpectedFail(err1.clone()))?
+                .ok_or(Error::UnExpectedFail(err1.clone()))?
                 .try_into()?;
             Ok(n)
         };
@@ -1745,7 +1748,7 @@ impl FromStr for Stats {
             let n: u64 = js
                 .get(key)?
                 .integer()
-                .ok_or(Error::UnexpectedFail(err1.clone()))?
+                .ok_or(Error::UnExpectedFail(err1.clone()))?
                 .try_into()?;
             Ok(n)
         };
@@ -1762,7 +1765,7 @@ impl FromStr for Stats {
             name: js
                 .get("/name")?
                 .string()
-                .ok_or(Error::UnexpectedFail(err2))?,
+                .ok_or(Error::UnExpectedFail(err2))?,
             // config fields.
             z_blocksize: to_usize("/z_blocksize")?,
             m_blocksize: to_usize("/m_blocksize")?,
@@ -1770,12 +1773,12 @@ impl FromStr for Stats {
             delta_ok: js
                 .get("/delta_ok")?
                 .boolean()
-                .ok_or(Error::UnexpectedFail(err3.clone()))?,
+                .ok_or(Error::UnExpectedFail(err3.clone()))?,
             vlog_file: vlog_file,
             value_in_vlog: js
                 .get("/value_in_vlog")?
                 .boolean()
-                .ok_or(Error::UnexpectedFail(err3))?,
+                .ok_or(Error::UnExpectedFail(err3))?,
             // statitics fields.
             n_count: to_u64("/n_count")?,
             n_deleted: to_usize("/n_deleted")?,
@@ -1795,7 +1798,7 @@ impl FromStr for Stats {
             epoch: js
                 .get("/epoch")?
                 .integer()
-                .ok_or(Error::UnexpectedFail(err1))?,
+                .ok_or(Error::UnExpectedFail(err1))?,
         })
     }
 }
@@ -1902,7 +1905,7 @@ where
         let (vflusher, vf_fpos): (_, usize) = match &config.vlog_file {
             Some(vfile) => {
                 let vfile = vfile.clone();
-                let vf_fpos = fs::metadata(&vfile)?.len();
+                let vf_fpos = io_err_at!(fs::metadata(&vfile))?.len();
 
                 let t = rt::Thread::new_sync(
                     move |rx| move || thread_flush(vfile, create, rx),
@@ -2328,27 +2331,30 @@ fn thread_flush(
     let (mut fd, fpos) = if create {
         (util::create_file_a(file.clone())?, Default::default())
     } else {
-        (util::open_file_w(&file)?, fs::metadata(&file)?.len())
+        (
+            util::open_file_w(&file)?,
+            io_err_at!(fs::metadata(&file))?.len(),
+        )
     };
 
-    fd.lock_shared()?; // <---- read lock
+    io_err_at!(fd.lock_shared())?; // <---- read lock
 
     for (data, _) in rx {
         // println!("flusher {:?} {} {}", file, fpos, data.len());
         // fpos += data.len();
-        let n = fd.write(&data)?;
+        let n = io_err_at!(fd.write(&data))?;
         let m = data.len();
         if n != m {
             let msg = format!("robt flusher: {:?} {}/{}...", &file, m, n);
-            fd.unlock()?; // <----- read un-lock
+            io_err_at!(fd.unlock())?; // <----- read un-lock
             return Err(Error::PartialWrite(msg));
         }
     }
 
-    fd.sync_all()?;
+    io_err_at!(fd.sync_all())?;
 
     // file descriptor and receiver channel shall be dropped.
-    fd.unlock()?; // <----- read un-lock
+    io_err_at!(fd.unlock())?; // <----- read un-lock
     Ok((file, fpos))
 }
 
@@ -2435,7 +2441,7 @@ impl IndexFile {
             IndexFile::Block { file, .. } => file,
             IndexFile::Mmap { file, .. } => file,
         };
-        Ok(fs::metadata(file)?.len().try_into()?)
+        Ok(io_err_at!(fs::metadata(file))?.len().try_into()?)
     }
 }
 
@@ -2519,7 +2525,7 @@ where
 
         // open index file.
         let index_fd = IndexFile::new_block(Config::stitch_index_file(dir, name))?;
-        index_fd.as_fd().lock_shared()?;
+        io_err_at!(index_fd.as_fd().lock_shared())?;
         // open optional value log file.
         let valog_fd = match config.vlog_file {
             Some(vfile) => {
@@ -2533,7 +2539,7 @@ where
                 vpath.push(path::Path::new(&vfile).file_name().ok_or(err)?);
                 let vlog_file = vpath.as_os_str().to_os_string();
                 let fd = util::open_file_r(&vlog_file)?;
-                fd.lock_shared()?;
+                io_err_at!(fd.lock_shared())?;
                 Some((vlog_file, fd))
             }
             None => None,
@@ -2866,7 +2872,10 @@ where
     fn footprint(&self) -> Result<isize> {
         let i_footprint: isize = self.index_fd.footprint()?.try_into()?;
         let v_footprint: isize = match &self.valog_fd {
-            Some((vlog_file, _)) => fs::metadata(vlog_file)?.len().try_into()?,
+            Some((vlog_file, _)) => {
+                let md = io_err_at!(fs::metadata(vlog_file))?;
+                md.len().try_into()?
+            }
             None => 0,
         };
         Ok(i_footprint + v_footprint)

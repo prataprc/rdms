@@ -81,9 +81,11 @@
 #![feature(drain_filter)]
 #![feature(maybe_uninit_ref)]
 
+#[macro_use]
+pub mod error;
+
 // core modules
 pub mod core;
-pub mod error;
 pub mod panic;
 pub mod spinlock;
 pub mod sync;

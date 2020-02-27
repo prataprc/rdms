@@ -7,6 +7,7 @@ use std::{
     path,
 };
 
+use crate::io_err_at;
 use crate::{
     core::{Footprint, Result},
     error::Error,
@@ -21,32 +22,34 @@ pub(crate) fn create_file_a(file: ffi::OsString) -> Result<fs::File> {
     };
 
     {
-        let parent = {
-            let err = Error::InvalidFile(file.clone().into_string()?);
-            os_file.parent().ok_or(err)?
-        };
-        fs::create_dir_all(parent)?;
+        let parent = os_file
+            .parent()
+            .ok_or(Error::InvalidFile(format!("{:?}", file)))?;
+        io_err_at!(fs::create_dir_all(parent))?;
     };
 
     let mut opts = fs::OpenOptions::new();
-    Ok(opts.append(true).create_new(true).open(os_file)?)
+    Ok(io_err_at!(opts
+        .append(true)
+        .create_new(true)
+        .open(os_file))?)
 }
 
 // open existing file in append mode for writing.
 pub(crate) fn open_file_w(file: &ffi::OsString) -> Result<fs::File> {
     let os_file = path::Path::new(file);
     let mut opts = fs::OpenOptions::new();
-    Ok(opts.append(true).open(os_file)?)
+    Ok(io_err_at!(opts.append(true).open(os_file))?)
 }
 
 // open file for reading.
 pub(crate) fn open_file_r(file: &ffi::OsStr) -> Result<fs::File> {
     let os_file = path::Path::new(file);
-    Ok(fs::OpenOptions::new().read(true).open(os_file)?)
+    Ok(io_err_at!(fs::OpenOptions::new().read(true).open(os_file))?)
 }
 
 pub(crate) fn read_buffer(fd: &mut fs::File, fpos: u64, n: u64, msg: &str) -> Result<Vec<u8>> {
-    fd.seek(io::SeekFrom::Start(fpos))?;
+    io_err_at!(fd.seek(io::SeekFrom::Start(fpos)))?;
 
     let mut buf = {
         let mut buf = Vec::with_capacity(n.try_into()?);
@@ -54,7 +57,7 @@ pub(crate) fn read_buffer(fd: &mut fs::File, fpos: u64, n: u64, msg: &str) -> Re
         buf
     };
 
-    let n = fd.read(&mut buf)?;
+    let n = io_err_at!(fd.read(&mut buf))?;
     if buf.len() == n {
         Ok(buf)
     } else {

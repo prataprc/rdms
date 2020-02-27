@@ -896,25 +896,37 @@ where
     // `nentry` is new_entry to be CREATE/UPDATE into index.
     fn prepend_version_lsm(&mut self, nentry: Self) -> Result<isize> {
         let delta = match &self.value {
-            Value::D { seqno } => Delta::new_delete(*seqno),
+            Value::D { seqno } => Ok(Delta::new_delete(*seqno)),
             Value::U { value, seqno, .. } if !value.is_reference() => {
                 // compute delta
                 match &nentry.value {
                     Value::D { .. } => {
-                        let diff: <V as Diff>::D = From::from(value.to_native_value().unwrap());
-                        Delta::new_upsert(vlog::Delta::new_native(diff), *seqno)
+                        let diff: <V as Diff>::D = {
+                            let v = value.to_native_value().unwrap();
+                            From::from(v)
+                        };
+                        {
+                            let v = vlog::Delta::new_native(diff);
+                            Ok(Delta::new_upsert(v, *seqno))
+                        }
                     }
                     Value::U { value: nvalue, .. } => {
                         let dff = nvalue
                             .to_native_value()
                             .unwrap()
                             .diff(&value.to_native_value().unwrap());
-                        Delta::new_upsert(vlog::Delta::new_native(dff), *seqno)
+                        {
+                            let v = vlog::Delta::new_native(dff);
+                            Ok(Delta::new_upsert(v, *seqno))
+                        }
                     }
                 }
             }
-            Value::U { .. } => unreachable!(),
-        };
+            Value::U { .. } => {
+                let msg = format!("Entry.prepend_version_lsm()");
+                Err(Error::UnReachable(msg))
+            }
+        }?;
 
         let size = {
             let size = nentry.value.footprint()? + delta.footprint()?;
@@ -930,10 +942,12 @@ where
     // DELETE operation, only in lsm-mode or sticky mode.
     pub(crate) fn delete(&mut self, seqno: u64) -> Result<isize> {
         let size = self.footprint()?;
+
         match &self.value {
             Value::D { seqno } => {
                 // insert a delete delta
                 self.deltas.insert(0, Delta::new_delete(*seqno));
+                Ok(())
             }
             Value::U { value, seqno, .. } if !value.is_reference() => {
                 let delta = {
@@ -941,9 +955,14 @@ where
                     vlog::Delta::new_native(d)
                 };
                 self.deltas.insert(0, Delta::new_upsert(delta, *seqno));
+                Ok(())
             }
-            Value::U { .. } => unreachable!(),
-        };
+            Value::U { .. } => {
+                let msg = format!("Entry.delete()");
+                Err(Error::UnReachable(msg))
+            }
+        }?;
+
         self.value = Value::new_delete(seqno);
         Ok((self.footprint()? - size).try_into()?)
     }
@@ -1064,6 +1083,7 @@ where
                 return Some(entry);
             }
         }
+
         unreachable!()
     }
 
@@ -1103,7 +1123,7 @@ where
         };
 
         if cfg!(debug_assertions) {
-            a.validate_xmerge(&b);
+            a.validate_xmerge(&b)?;
         }
 
         for ne in a.versions().collect::<Vec<Entry<K, V>>>().into_iter().rev() {
@@ -1114,7 +1134,7 @@ where
     }
 
     // `self` is newer than `entry`
-    fn validate_xmerge(&self, entr: &Entry<K, V>) {
+    fn validate_xmerge(&self, entr: &Entry<K, V>) -> Result<()> {
         // validate ordering
         let mut seqnos = vec![self.to_seqno()];
         self.deltas.iter().for_each(|d| seqnos.push(d.to_seqno()));
@@ -1125,12 +1145,10 @@ where
             .zip(seqnos[1..].into_iter())
             .any(|(a, b)| a <= b);
         // println!("validate_xmerge {} {:?}", fail, seqnos);
-        // validate self contains all native value and deltas.
-        // fail = fail || self.value.is_reference();
-        // fail = fail || self.deltas.iter().any(|d| d.is_reference());
-
         if fail {
-            unreachable!()
+            Err(Error::UnExpectedFail(format!("Entry.validate_xmerge()")))
+        } else {
+            Ok(())
         }
     }
 }

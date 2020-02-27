@@ -17,6 +17,7 @@ use std::{
     thread,
 };
 
+use crate::io_err_at;
 use crate::{
     core::{self, Bloom, CommitIter, CommitIterator, Diff, DiskIndexFactory},
     core::{Cutoff, Validate},
@@ -406,7 +407,7 @@ where
         } else if is_snapshot {
             Ok(("snapshot".to_string(), num_shards))
         } else {
-            Err(Error::UnexpectedFail(format!("shrobt, mixed shard state")))
+            Err(Error::UnExpectedFail(format!("shrobt, mixed shard state")))
         }
     }
 
@@ -448,7 +449,7 @@ where
         let data: Vec<u8> = root.try_into()?;
 
         let mut fd = util::create_file_a(root_file.clone())?;
-        fd.write(&data)?;
+        io_err_at!(fd.write(&data))?;
         Ok(root_file.into())
     }
 
@@ -462,7 +463,7 @@ where
 
         let mut fd = util::open_file_r(&root_file)?;
         let mut bytes = vec![];
-        fd.read_to_end(&mut bytes)?;
+        io_err_at!(fd.read_to_end(&mut bytes))?;
 
         Ok(bytes.try_into()?)
     }
@@ -470,7 +471,7 @@ where
     fn find_root_file(dir: &ffi::OsStr, name: &str) -> Result<ffi::OsString> {
         use crate::error::Error::InvalidFile;
 
-        for item in fs::read_dir(dir)? {
+        for item in io_err_at!(fs::read_dir(dir))? {
             match item {
                 Ok(item) => {
                     let root_file = RootFileName(item.file_name());
@@ -889,7 +890,7 @@ where
         }?;
 
         if shards.len() != iters.len() {
-            return Err(Error::UnexpectedFail(format!(
+            return Err(Error::UnExpectedFail(format!(
                 "shrobt.commit(), {}/{} iters/shards",
                 iters.len(),
                 shards.len(),

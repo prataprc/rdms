@@ -1008,10 +1008,16 @@ where
     fn drop(&mut self) {
         loop {
             match self.as_inner() {
-                Ok(nnr) => {
+                Ok(mut nnr) => {
                     let w = nnr.writers.iter().any(|w| Arc::strong_count(w) > 1);
                     let r = nnr.readers.iter().any(|r| Arc::strong_count(r) > 1);
                     if w == false && r == false {
+                        for w in nnr.writers.drain(..) {
+                            mem::drop(w)
+                        }
+                        for r in nnr.readers.drain(..) {
+                            mem::drop(r)
+                        }
                         break;
                     }
                 }

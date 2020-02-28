@@ -295,7 +295,7 @@ fn test_dgm_crud() {
     }
 
     // ranges and reverses
-    for _ in 0..10000 {
+    for _ in 0..1000 {
         let (low, high) = random_low_high(&mut rng);
         //println!("test loop {:?} {:?}", low, high);
 
@@ -333,6 +333,9 @@ fn test_dgm_crud() {
             }
         }
     }
+
+    mem::drop(index_w);
+    mem::drop(index_r);
 }
 
 fn check_entry1(e1: &Entry<i64, i64>, e2: &Entry<i64, i64>) {

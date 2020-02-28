@@ -250,7 +250,7 @@ where
         mvcc_index
             .snapshot
             .n_nodes
-            .store(llrb_index.len().try_into()?, SeqCst);
+            .store(convert_at!(llrb_index.len())?, SeqCst);
 
         let debris = llrb_index.squash();
         mvcc_index.key_footprint = debris.key_footprint;
@@ -1012,7 +1012,7 @@ where
         if node.is_none() {
             let node: Box<Node<K, V>> = self.node_from_entry(new_entry);
             let n = node.duplicate();
-            let size: isize = node.footprint()?.try_into()?;
+            let size: isize = node.footprint()?;
             return Ok(UpsertResult {
                 node: Some(node),
                 new_node: Some(n),
@@ -1097,7 +1097,7 @@ where
         } else if node.is_none() {
             let node: Box<Node<K, V>> = self.node_from_entry(nentry);
             let n = node.duplicate();
-            let size: isize = node.footprint()?.try_into()?;
+            let size: isize = node.footprint()?;
             return Ok(UpsertCasResult {
                 node: Some(node),
                 new_node: Some(n),
@@ -1175,7 +1175,7 @@ where
             let mut node = self.node_new_deleted(key.to_owned(), seqno);
             node.dirty = false;
             let n = node.duplicate();
-            let size: isize = node.footprint()?.try_into()?;
+            let size: isize = node.footprint()?;
             return Ok(DeleteResult {
                 node: Some(node),
                 new_node: Some(n),
@@ -1234,7 +1234,7 @@ where
             let mut node = self.node_new_deleted(key.to_owned(), seqno);
             node.dirty = false;
             let n = node.duplicate();
-            let size: isize = node.footprint()?.try_into()?;
+            let size: isize = node.footprint()?;
             return Ok(DeleteResult {
                 node: Some(node),
                 new_node: Some(n),
@@ -1333,7 +1333,7 @@ where
             // if key equals node and no right children
             if !newnd.as_key().borrow().lt(key) && newnd.right.is_none() {
                 self.node_mvcc_detach(&mut newnd);
-                let size: isize = newnd.footprint()?.try_into()?;
+                let size: isize = newnd.footprint()?;
                 return Ok(DeleteResult {
                     node: None,
                     new_node: None,
@@ -1361,7 +1361,7 @@ where
                 newnode.right = newnd.right.take();
                 newnode.black = newnd.black;
                 let entry = newnd.entry.clone();
-                let size: isize = newnd.footprint()?.try_into()?;
+                let size: isize = newnd.footprint()?;
                 Ok(DeleteResult {
                     node: Some(self.fixup(newnode, reclaim)),
                     new_node: None,

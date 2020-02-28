@@ -2369,10 +2369,10 @@ where
             ShLlrb::<K, V>::do_balance(name, s, config.clone())?
         };
 
-        elapsed = start.elapsed()?;
+        elapsed = systime_at!(start.elapsed())?;
 
         match resp_tx {
-            Some(tx) => tx.send(n)?,
+            Some(tx) => ipc_at!(tx.send(n))?,
             None => (),
         }
     }

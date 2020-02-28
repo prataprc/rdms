@@ -162,7 +162,7 @@ impl<S, T> Batch<S, T> {
     {
         match self {
             Batch::Refer { fpos, length, .. } => {
-                let n: u64 = length.try_into()?;
+                let n: u64 = convert_at!(length)?;
                 let buf = util::read_buffer(fd, fpos, n, "fetching batch")?;
                 self.decode_active(&buf)?;
 
@@ -217,7 +217,7 @@ where
 
                 n += state.encode(buf)?;
 
-                let nentries: u64 = entries.len().try_into()?;
+                let nentries: u64 = convert_at!(entries.len())?;
                 buf.extend_from_slice(&nentries.to_be_bytes());
                 n += 8;
                 for entry in entries.iter() {
@@ -229,7 +229,7 @@ where
 
                 n += 8; // suffix length
 
-                let length: u64 = n.try_into()?;
+                let length: u64 = convert_at!(n)?;
                 buf[..8].copy_from_slice(&length.to_be_bytes());
                 buf.extend_from_slice(&length.to_be_bytes());
 
@@ -243,8 +243,8 @@ where
         util::check_remaining(buf, 24, "dlog batch-refer-hdr")?;
 
         let length = Self::validate(buf)?;
-        let start_index = u64::from_be_bytes(buf[8..16].try_into()?);
-        let last_index = u64::from_be_bytes(buf[16..24].try_into()?);
+        let start_index = u64::from_be_bytes(array_at!(buf[8..16])?);
+        let last_index = u64::from_be_bytes(array_at!(buf[16..24])?);
 
         *self = Batch::Refer {
             fpos,
@@ -269,11 +269,11 @@ where
         let mut state: S = Default::default();
         n += state.decode(buf)?;
 
-        let nentries = u64::from_be_bytes(buf[n..n + 8].try_into()?);
+        let nentries = u64::from_be_bytes(array_at!(buf[n..n + 8])?);
         n += 8;
 
         let entries = {
-            let mut entries = Vec::with_capacity(nentries.try_into()?);
+            let mut entries = Vec::with_capacity(convert_at!(nentries)?);
             for _i in 0..entries.capacity() {
                 let mut entry: DEntry<T> = Default::default();
                 n += entry.decode(&buf[n..])?;
@@ -290,8 +290,11 @@ where
 
     fn validate(buf: &[u8]) -> Result<usize> {
         let (a, z): (usize, usize) = {
-            let n = u64::from_be_bytes(buf[..8].try_into()?).try_into()?;
-            (n, u64::from_be_bytes(buf[n - 8..n].try_into()?).try_into()?)
+            let n = convert_at!(u64::from_be_bytes(array_at!(buf[..8])?))?;
+            (
+                n,
+                convert_at!(u64::from_be_bytes(array_at!(buf[n - 8..n])?))?,
+            )
         };
         if a != z {
             let msg = format!("batch length mismatch, {} {}", a, z);
@@ -369,7 +372,7 @@ where
 
     fn decode(&mut self, buf: &[u8]) -> Result<usize> {
         util::check_remaining(buf, 8, "dlog entry-index")?;
-        self.index = u64::from_be_bytes(buf[0..8].try_into()?);
+        self.index = u64::from_be_bytes(array_at!(buf[0..8])?);
 
         let n = 8;
         Ok(n + self.op.decode(&buf[n..])?)

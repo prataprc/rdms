@@ -54,18 +54,18 @@ where
         // encode key
         let (hdr1, klen, fpos) = match self {
             MEntry::EncM { fpos, key, .. } => {
-                let klen: u64 = key.encode(buf)?.try_into()?;
+                let klen: u64 = convert_at!(key.encode(buf)?)?;
                 let hdr1 = klen.to_be_bytes();
                 (hdr1, klen, fpos)
             }
             MEntry::EncZ { fpos, key, .. } => {
-                let klen: u64 = key.encode(buf)?.try_into()?;
+                let klen: u64 = convert_at!(key.encode(buf)?)?;
                 let hdr1 = (klen | Self::ZBLOCK_FLAG).to_be_bytes();
                 (hdr1, klen, fpos)
             }
             _ => unreachable!(),
         };
-        let klen: usize = klen.try_into()?;
+        let klen: usize = convert_at!(klen)?;
         if klen < core::Entry::<i32, i32>::KEY_SIZE_LIMIT {
             buf[m..m + 8].copy_from_slice(&hdr1);
             buf[m + 8..m + 16].copy_from_slice(&fpos.to_be_bytes());
@@ -81,8 +81,8 @@ where
     K: 'a + Serialize,
 {
     pub(crate) fn decode_entry(entry: &[u8], index: usize) -> Result<MEntry<K>> {
-        let hdr1 = u64::from_be_bytes(entry[0..8].try_into()?);
-        let fpos = u64::from_be_bytes(entry[8..16].try_into()?);
+        let hdr1 = u64::from_be_bytes(array_at!(entry[0..8])?);
+        let fpos = u64::from_be_bytes(array_at!(entry[8..16])?);
         match (hdr1 & Self::ZBLOCK_FLAG) == Self::ZBLOCK_FLAG {
             false => Ok(MEntry::DecM { fpos, index }),
             true => Ok(MEntry::DecZ { fpos, index }),
@@ -94,8 +94,8 @@ where
         K: 'a + Default + Serialize,
     {
         let klen: usize = {
-            let hdr1 = u64::from_be_bytes(entry[0..8].try_into()?);
-            (hdr1 & Self::KLEN_MASK).try_into()?
+            let hdr1 = u64::from_be_bytes(array_at!(entry[0..8])?);
+            convert_at!((hdr1 & Self::KLEN_MASK))?
         };
         let mut key: K = Default::default();
         key.decode(&entry[16..16 + klen])?;
@@ -183,15 +183,15 @@ where
                 leaf.extend_from_slice(&hdr1.to_be_bytes()); // diff-len
                 leaf.extend_from_slice(&seqno.to_be_bytes());
                 leaf.extend_from_slice(&fpos.to_be_bytes()); // fpos
-                Ok(length.try_into()?)
+                Ok(convert_at!(length)?)
             }
             core::InnerDelta::U { delta, seqno } => {
                 // native delta
-                let mpos: u64 = blob.len().try_into()?;
+                let mpos: u64 = convert_at!(blob.len())?;
 
                 let (hdr1, n) = {
                     let n = delta.encode(blob)?;
-                    let hdr1: u64 = n.try_into()?;
+                    let hdr1: u64 = convert_at!(n)?;
                     let hdr1 = hdr1 | Self::UPSERT_FLAG;
                     (hdr1, n)
                 };
@@ -212,11 +212,11 @@ where
 
     fn re_encode_fpos(buf: &mut [u8], vpos: u64) -> Result<()> {
         let is_deleted = {
-            let scratch: [u8; 8] = buf[..8].try_into()?;
+            let scratch: [u8; 8] = array_at!(buf[..8])?;
             (u64::from_be_bytes(scratch) & Self::UPSERT_FLAG) == 0
         };
         if !is_deleted {
-            let scratch: [u8; 8] = buf[16..24].try_into()?;
+            let scratch: [u8; 8] = array_at!(buf[16..24])?;
             let enc_fpos = u64::from_be_bytes(scratch);
             let fpos = if (enc_fpos & Self::REFERENCE_FLAG) == 0 {
                 vpos + enc_fpos
@@ -237,12 +237,12 @@ where
 {
     fn decode_delta(buf: &[u8]) -> Result<core::Delta<V>> {
         let (dlen, is_deleted) = {
-            let hdr1 = u64::from_be_bytes(buf[0..8].try_into()?);
+            let hdr1 = u64::from_be_bytes(array_at!(buf[0..8])?);
             (hdr1 & Self::DLEN_MASK, (hdr1 & Self::UPSERT_FLAG) == 0)
         };
 
-        let seqno = u64::from_be_bytes(buf[8..16].try_into()?);
-        let fpos = u64::from_be_bytes(buf[16..24].try_into()?);
+        let seqno = u64::from_be_bytes(array_at!(buf[8..16])?);
+        let fpos = u64::from_be_bytes(array_at!(buf[16..24])?);
 
         if is_deleted {
             Ok(core::Delta::new_delete(seqno))
@@ -424,7 +424,7 @@ where
         if !is_del {
             let fpos: u64 = match fpos {
                 Some(fpos) => fpos | Self::REFERENCE_FLAG,
-                None => pos.try_into()?,
+                None => convert_at!(pos)?,
             };
             leaf.extend_from_slice(&fpos.to_be_bytes());
         }
@@ -445,12 +445,12 @@ where
         hdr: &mut [u8],
     ) -> Result<()> {
         let hdr1 = {
-            let klen: u64 = klen.try_into()?;
-            let n_deltas: u64 = n_deltas.try_into()?;
+            let klen: u64 = convert_at!(klen)?;
+            let n_deltas: u64 = convert_at!(n_deltas)?;
             ((klen << Self::KLEN_SHIFT) | n_deltas).to_be_bytes()
         };
         let hdr2 = {
-            let mut vlen: u64 = vlen.try_into()?;
+            let mut vlen: u64 = convert_at!(vlen)?;
             if !is_deleted {
                 vlen |= Self::UPSERT_FLAG;
             }
@@ -543,11 +543,11 @@ where
 
     fn re_encode_v(leaf: &mut [u8], vpos: u64, voff: usize) -> Result<()> {
         let is_deleted = {
-            let scratch: [u8; 8] = leaf[8..16].try_into()?;
+            let scratch: [u8; 8] = array_at!(leaf[8..16])?;
             (u64::from_be_bytes(scratch) & Self::UPSERT_FLAG) == 0
         };
         if !is_deleted {
-            let scratch: [u8; 8] = leaf[voff..voff + 8].try_into()?;
+            let scratch: [u8; 8] = array_at!(leaf[voff..voff + 8])?;
             let enc_fpos = u64::from_be_bytes(scratch);
             let fpos = if (enc_fpos & Self::REFERENCE_FLAG) == 0 {
                 vpos + enc_fpos
@@ -583,20 +583,20 @@ where
         V: Default,
     {
         let (klen, n_deltas) = {
-            let hdr1 = u64::from_be_bytes(e[0..8].try_into()?);
-            let n_deltas: usize = (hdr1 & Self::NDELTA_MASK).try_into()?;
-            let klen: usize = (hdr1 >> Self::KLEN_SHIFT).try_into()?;
+            let hdr1 = u64::from_be_bytes(array_at!(e[0..8])?);
+            let n_deltas: usize = convert_at!((hdr1 & Self::NDELTA_MASK))?;
+            let klen: usize = convert_at!((hdr1 >> Self::KLEN_SHIFT))?;
             (klen, n_deltas)
         };
         let (is_deleted, is_vlog, vlen) = {
-            let hdr2 = u64::from_be_bytes(e[8..16].try_into()?);
+            let hdr2 = u64::from_be_bytes(array_at!(e[8..16])?);
             (
                 (hdr2 & Self::UPSERT_FLAG) == 0,
                 (hdr2 & Self::VLOG_FLAG) != 0,
                 hdr2 & Self::VLEN_MASK,
             )
         };
-        let seqno = u64::from_be_bytes(e[16..24].try_into()?);
+        let seqno = u64::from_be_bytes(array_at!(e[16..24])?);
 
         let mut key: K = Default::default();
         key.decode(&e[24..24 + klen])?;
@@ -605,13 +605,13 @@ where
         let (mut n, value) = match (is_deleted, is_vlog) {
             (true, _) => (n, core::Value::new_delete(seqno)),
             (false, true) => {
-                let fpos = u64::from_be_bytes(e[n..n + 8].try_into()?);
+                let fpos = u64::from_be_bytes(array_at!(e[n..n + 8])?);
                 let v = Box::new(vlog::Value::new_reference(fpos, vlen, seqno));
                 (n + 8, core::Value::new_upsert(v, seqno))
             }
             (false, false) => {
                 let mut value: V = Default::default();
-                let vlen: usize = vlen.try_into()?;
+                let vlen: usize = convert_at!(vlen)?;
                 value.decode(&e[n..n + vlen])?;
                 let value = Box::new(vlog::Value::Native { value });
                 (n + vlen, core::Value::new_upsert(value, seqno))
@@ -637,8 +637,8 @@ where
         let mut key: K = Default::default();
 
         let klen: usize = {
-            let hdr1 = u64::from_be_bytes(entry[0..8].try_into()?);
-            (hdr1 >> Self::KLEN_SHIFT).try_into()?
+            let hdr1 = u64::from_be_bytes(array_at!(entry[0..8])?);
+            convert_at!((hdr1 >> Self::KLEN_SHIFT))?
         };
 
         key.decode(&entry[24..24 + klen])?;

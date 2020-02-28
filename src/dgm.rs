@@ -26,7 +26,6 @@ use crate::{
     error::Error,
     lsm, scans, thread as rt, util,
 };
-use crate::{io_err_at, parse_at};
 
 /// Configuration type for Dgm indexes.
 #[derive(Clone, Debug, PartialEq)]
@@ -123,11 +122,11 @@ impl TryFrom<Root> for Vec<u8> {
         let text = {
             let mut dict = toml::map::Map::new();
 
-            let version: i64 = root.version.try_into()?;
-            let levels: i64 = root.levels.try_into()?;
+            let version: i64 = convert_at!(root.version)?;
+            let levels: i64 = convert_at!(root.levels)?;
             let mem_ratio: f64 = root.mem_ratio.into();
             let disk_ratio: f64 = root.disk_ratio.into();
-            let c_interval: i64 = root.compact_interval.as_secs().try_into()?;
+            let c_interval: i64 = convert_at!(root.compact_interval.as_secs())?;
 
             dict.insert("version".to_string(), Integer(version));
             dict.insert("levels".to_string(), Integer(levels));
@@ -183,7 +182,7 @@ impl TryFrom<Vec<u8>> for Root {
         let err1 = InvalidFile(format!("dgm, not a table"));
         let err2 = format!("dgm, fault in config field");
 
-        let text = std::str::from_utf8(&bytes)?.to_string();
+        let text = err_at!(std::str::from_utf8(&bytes))?.to_string();
 
         let value: toml::Value = text
             .parse()
@@ -194,19 +193,17 @@ impl TryFrom<Vec<u8>> for Root {
 
         root.version = {
             let field = dict.get("version");
-            field
+            convert_at!(field
                 .ok_or(InvalidFile(err2.clone()))?
                 .as_integer()
-                .ok_or(InvalidFile(err2.clone()))?
-                .try_into()?
+                .ok_or(InvalidFile(err2.clone()))?)?
         };
         root.levels = {
             let field = dict.get("levels");
-            field
+            convert_at!(field
                 .ok_or(InvalidFile(err2.clone()))?
                 .as_integer()
-                .ok_or(InvalidFile(err2.clone()))?
-                .try_into()?
+                .ok_or(InvalidFile(err2.clone()))?)?
         };
         root.mem_ratio = {
             let field = dict.get("mem_ratio");
@@ -214,7 +211,6 @@ impl TryFrom<Vec<u8>> for Root {
                 .ok_or(InvalidFile(err2.clone()))?
                 .as_float()
                 .ok_or(InvalidFile(err2.clone()))?
-                .try_into()?
         };
         root.disk_ratio = {
             let field = dict.get("disk_ratio");
@@ -222,15 +218,13 @@ impl TryFrom<Vec<u8>> for Root {
                 .ok_or(InvalidFile(err2.clone()))?
                 .as_float()
                 .ok_or(InvalidFile(err2.clone()))?
-                .try_into()?
         };
         root.compact_interval = {
             let field = dict.get("compact_interval");
-            let duration: u64 = field
+            let duration: u64 = convert_at!(field
                 .ok_or(InvalidFile(err2.clone()))?
                 .as_integer()
-                .ok_or(InvalidFile(err2.clone()))?
-                .try_into()?;
+                .ok_or(InvalidFile(err2.clone()))?)?;
             time::Duration::from_secs(duration)
         };
         root.lsm_cutoff = {

@@ -6,6 +6,7 @@ use crate::{
     core::{Result, Serialize},
     dlog,
     dlog_entry::DEntry,
+    error::Error,
     util,
 };
 
@@ -72,13 +73,13 @@ impl Serialize for State {
         buf.extend_from_slice(&self.persisted.to_be_bytes());
         let mut n = 24;
 
-        let count: u16 = self.config.len().try_into()?;
+        let count: u16 = convert_at!(self.config.len())?;
         buf.extend_from_slice(&count.to_be_bytes());
         n += 2;
         for cnf in self.config.iter() {
             let b = cnf.as_bytes();
             {
-                let len: u16 = b.len().try_into()?;
+                let len: u16 = convert_at!(b.len())?;
                 buf.extend_from_slice(&len.to_be_bytes());
             }
             buf.extend_from_slice(b);
@@ -86,7 +87,7 @@ impl Serialize for State {
         }
 
         let b = self.votedfor.as_bytes();
-        let len: u16 = b.len().try_into()?;
+        let len: u16 = convert_at!(b.len())?;
         buf.extend_from_slice(&len.to_be_bytes());
         buf.extend_from_slice(b);
         n += 2 + b.len();
@@ -96,35 +97,35 @@ impl Serialize for State {
 
     fn decode(&mut self, buf: &[u8]) -> Result<usize> {
         util::check_remaining(buf, 24, "dlog batch-config")?;
-        self.term = u64::from_be_bytes(buf[0..8].try_into()?);
-        self.committed = u64::from_be_bytes(buf[8..16].try_into()?);
-        self.persisted = u64::from_be_bytes(buf[16..24].try_into()?);
+        self.term = u64::from_be_bytes(array_at!(buf[0..8])?);
+        self.committed = u64::from_be_bytes(array_at!(buf[8..16])?);
+        self.persisted = u64::from_be_bytes(array_at!(buf[16..24])?);
         let mut n = 24;
 
-        let count = u16::from_be_bytes(buf[n..n + 2].try_into()?);
-        self.config = Vec::with_capacity(count.try_into()?);
+        let count = u16::from_be_bytes(array_at!(buf[n..n + 2])?);
+        self.config = Vec::with_capacity(convert_at!(count)?);
         n += 2;
 
         for _i in 0..count {
             util::check_remaining(buf, n + 2, "dlog batch-config")?;
 
-            let m: usize = u16::from_be_bytes(buf[n..n + 2].try_into()?).try_into()?;
+            let m: usize = convert_at!(u16::from_be_bytes(array_at!(buf[n..n + 2])?))?;
             n += 2;
 
             util::check_remaining(buf, n + m, "dlog batch-config")?;
 
-            let s = std::str::from_utf8(&buf[n..n + m])?;
+            let s = err_at!(std::str::from_utf8(&buf[n..n + m]))?;
             self.config.push(s.to_string());
             n += m;
         }
 
         util::check_remaining(buf, n + 2, "dlog batch-votedfor")?;
 
-        let m: usize = u16::from_be_bytes(buf[n..n + 2].try_into()?).try_into()?;
+        let m: usize = convert_at!(u16::from_be_bytes(array_at!(buf[n..n + 2])?))?;
         n += 2;
 
         util::check_remaining(buf, n + m, "dlog batch-votedfor")?;
-        self.votedfor = std::str::from_utf8(&buf[n..n + m])?.to_string();
+        self.votedfor = err_at!(std::str::from_utf8(&buf[n..n + m]))?.to_string();
         n += m;
 
         Ok(n)
@@ -251,7 +252,7 @@ where
 
     fn op_type(buf: &[u8]) -> Result<OpType> {
         util::check_remaining(buf, 8, "raft op-type")?;
-        let hdr1 = u64::from_be_bytes(buf[..8].try_into()?);
+        let hdr1 = u64::from_be_bytes(array_at!(buf[..8])?);
         Ok(((hdr1 >> 32) & 0x00FFFFFF).into())
     }
 }
@@ -318,24 +319,24 @@ where
         let n = buf.len();
         buf.resize(n + 16, 0);
 
-        let klen: u64 = key.encode(buf)?.try_into()?;
+        let klen: u64 = convert_at!(key.encode(buf)?)?;
         let hdr1: u64 = ((OpType::Set as u64) << 32) | klen;
-        let vlen: u64 = value.encode(buf)?.try_into()?;
+        let vlen: u64 = convert_at!(value.encode(buf)?)?;
 
         buf[n..n + 8].copy_from_slice(&hdr1.to_be_bytes());
         buf[n + 8..n + 16].copy_from_slice(&vlen.to_be_bytes());
 
-        Ok((klen + vlen + 16).try_into()?)
+        Ok(convert_at!((klen + vlen + 16))?)
     }
 
     fn decode_set(buf: &[u8], k: &mut K, v: &mut V) -> Result<usize> {
         let mut n = 16;
         let (klen, vlen) = {
             util::check_remaining(buf, 16, "raft op-set-hdr")?;
-            let hdr1 = u64::from_be_bytes(buf[..8].try_into()?);
-            let klen: usize = (hdr1 & 0xFFFFFFFF).try_into()?;
-            let vlen = u64::from_be_bytes(buf[8..16].try_into()?);
-            let vlen: usize = vlen.try_into()?;
+            let hdr1 = u64::from_be_bytes(array_at!(buf[..8])?);
+            let klen: usize = convert_at!((hdr1 & 0xFFFFFFFF))?;
+            let vlen = u64::from_be_bytes(array_at!(buf[8..16])?);
+            let vlen: usize = convert_at!(vlen)?;
             (klen, vlen)
         };
 
@@ -386,15 +387,15 @@ where
         let n = buf.len();
         buf.resize(n + 24, 0);
 
-        let klen: u64 = key.encode(buf)?.try_into()?;
+        let klen: u64 = convert_at!(key.encode(buf)?)?;
         let hdr1: u64 = ((OpType::SetCAS as u64) << 32) | klen;
-        let vlen: u64 = value.encode(buf)?.try_into()?;
+        let vlen: u64 = convert_at!(value.encode(buf)?)?;
 
         buf[n..n + 8].copy_from_slice(&hdr1.to_be_bytes());
         buf[n + 8..n + 16].copy_from_slice(&vlen.to_be_bytes());
         buf[n + 16..n + 24].copy_from_slice(&cas.to_be_bytes());
 
-        Ok((klen + vlen + 24).try_into()?)
+        Ok(convert_at!((klen + vlen + 24))?)
     }
 
     fn decode_set_cas(
@@ -406,11 +407,11 @@ where
         let mut n = 24;
         let (klen, vlen, cas_seqno) = {
             util::check_remaining(buf, n, "raft op-setcas-hdr")?;
-            let hdr1 = u64::from_be_bytes(buf[..8].try_into()?);
-            let klen: usize = (hdr1 & 0xFFFFFFFF).try_into()?;
-            let vlen = u64::from_be_bytes(buf[8..16].try_into()?);
-            let vlen: usize = vlen.try_into()?;
-            let cas = u64::from_be_bytes(buf[16..24].try_into()?);
+            let hdr1 = u64::from_be_bytes(array_at!(buf[..8])?);
+            let klen: usize = convert_at!((hdr1 & 0xFFFFFFFF))?;
+            let vlen = u64::from_be_bytes(array_at!(buf[8..16])?);
+            let vlen: usize = convert_at!(vlen)?;
+            let cas = u64::from_be_bytes(array_at!(buf[16..24])?);
             (klen, vlen, cas)
         };
         *cas = cas_seqno;
@@ -451,21 +452,21 @@ where
         buf.resize(n + 8, 0);
 
         let klen = {
-            let klen: u64 = key.encode(buf)?.try_into()?;
+            let klen: u64 = convert_at!(key.encode(buf)?)?;
             let hdr1: u64 = ((OpType::Delete as u64) << 32) | klen;
             buf[n..n + 8].copy_from_slice(&hdr1.to_be_bytes());
             klen
         };
 
-        Ok((klen + 8).try_into()?)
+        Ok(convert_at!((klen + 8))?)
     }
 
     fn decode_delete(buf: &[u8], key: &mut K) -> Result<usize> {
         let mut n = 8;
         let klen: usize = {
             util::check_remaining(buf, n, "raft op-delete-hdr1")?;
-            let hdr1 = u64::from_be_bytes(buf[..n].try_into()?);
-            (hdr1 & 0xFFFFFFFF).try_into()?
+            let hdr1 = u64::from_be_bytes(array_at!(buf[..n])?);
+            convert_at!((hdr1 & 0xFFFFFFFF))?
         };
 
         n += {

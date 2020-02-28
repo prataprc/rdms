@@ -35,7 +35,6 @@ use log::{debug, error, info, warn};
 use std::{
     borrow::Borrow,
     cmp::{self, Ord, Ordering},
-    convert::TryInto,
     ffi, fmt,
     hash::Hash,
     marker, mem,
@@ -989,7 +988,7 @@ where
             None => {
                 let mut node: Box<Node<K, V>> = Box::new(From::from(nentry));
                 node.dirty = false;
-                let size: isize = node.footprint()?.try_into()?;
+                let size: isize = node.footprint()?;
                 return Ok(UpsertResult {
                     node: Some(node),
                     old_entry: None,
@@ -1057,7 +1056,7 @@ where
             None => {
                 let mut node: Box<Node<K, V>> = Box::new(From::from(nentry));
                 node.dirty = false;
-                let size: isize = node.footprint()?.try_into()?;
+                let size: isize = node.footprint()?;
                 return Ok(UpsertCasResult {
                     node: Some(node),
                     old_entry: None,
@@ -1121,7 +1120,7 @@ where
                 // insert and mark as delete
                 let mut node = Node::new_deleted(key.to_owned(), seqno);
                 node.dirty = false;
-                let size: isize = node.footprint()?.try_into()?;
+                let size: isize = node.footprint()?;
                 Ok(DeleteResult {
                     node: Some(node),
                     old_entry: None,
@@ -1171,7 +1170,7 @@ where
                 // insert and mark as delete
                 let mut node = Node::new_deleted(key.to_owned(), seqno);
                 node.dirty = false;
-                let size: isize = node.footprint()?.try_into()?;
+                let size: isize = node.footprint()?;
                 Ok(DeleteResult {
                     node: Some(node),
                     old_entry: None,
@@ -1276,7 +1275,7 @@ where
                 newnode.right = node.right.take();
                 newnode.black = node.black;
                 newnode.dirty = false;
-                let size: isize = node.footprint()?.try_into()?;
+                let size: isize = node.footprint()?;
                 Ok(DeleteResult {
                     node: Some(Llrb::fixup(newnode)),
                     old_entry: Some(node.entry.clone()),

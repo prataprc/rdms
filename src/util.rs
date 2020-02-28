@@ -7,7 +7,6 @@ use std::{
     path,
 };
 
-use crate::io_err_at;
 use crate::{
     core::{Footprint, Result},
     error::Error,
@@ -52,7 +51,7 @@ pub(crate) fn read_buffer(fd: &mut fs::File, fpos: u64, n: u64, msg: &str) -> Re
     io_err_at!(fd.seek(io::SeekFrom::Start(fpos)))?;
 
     let mut buf = {
-        let mut buf = Vec::with_capacity(n.try_into()?);
+        let mut buf = Vec::with_capacity(convert_at!(n)?);
         buf.resize(buf.capacity(), 0);
         buf
     };
@@ -99,7 +98,7 @@ where
     K: Footprint,
 {
     use std::mem::size_of;
-    let footprint: isize = size_of::<K>().try_into()?;
+    let footprint: isize = convert_at!(size_of::<K>())?;
     Ok(footprint + key.footprint()?)
 }
 

@@ -105,9 +105,9 @@ where
                 MEntry::new_m(fpos, key).encode(mblock)?;
                 let n = 4 + (offsets.len() + 1) * 4 + mblock.len();
                 if n < *m_blocksize {
-                    offsets.push(offset.try_into()?);
+                    offsets.push(convert_at!(offset)?);
                     first_key.get_or_insert_with(|| key.clone());
-                    Ok(offsets.len().try_into()?)
+                    Ok(convert_at!(offsets.len())?)
                 } else {
                     mblock.truncate(offset);
                     Err(Error::__MBlockOverflow(n))
@@ -130,9 +130,9 @@ where
                 MEntry::new_z(fpos, key).encode(mblock)?;
                 let n = 4 + (offsets.len() + 1) * 4 + mblock.len();
                 if n < *m_blocksize {
-                    offsets.push(offset.try_into()?);
+                    offsets.push(convert_at!(offset)?);
                     first_key.get_or_insert_with(|| key.clone());
-                    Ok(offsets.len().try_into()?)
+                    Ok(convert_at!(offsets.len())?)
                 } else {
                     mblock.truncate(offset);
                     Err(Error::__MBlockOverflow(n))
@@ -156,10 +156,10 @@ where
                     mblock.resize(m + adjust, 0);
                     mblock.copy_within(0..m, adjust);
 
-                    adjust.try_into()?
+                    convert_at!(adjust)?
                 };
                 // encode offset header
-                let num: u32 = offsets.len().try_into()?;
+                let num: u32 = convert_at!(offsets.len())?;
                 &mblock[..4].copy_from_slice(&num.to_be_bytes());
                 for (i, offset) in offsets.iter().enumerate() {
                     let x = (i + 1) * 4;
@@ -172,7 +172,7 @@ where
                 // align blocks
                 mblock.resize(*m_blocksize, 0);
 
-                Ok((*m_blocksize).try_into()?)
+                Ok(convert_at!((*m_blocksize))?)
             }
             MBlock::Decode { .. } => unreachable!(),
         }
@@ -207,13 +207,13 @@ where
     K: Ord + Serialize,
 {
     pub(crate) fn new_decode(block: Vec<u8>) -> Result<MBlock<K, V>> {
-        let count = u32::from_be_bytes(block[..4].try_into()?);
-        let adjust: usize = (4 + (count * 4)).try_into()?;
+        let count = u32::from_be_bytes(array_at!(block[..4])?);
+        let adjust: usize = convert_at!((4 + (count * 4)))?;
         let offsets = &block[4..adjust] as *const [u8];
 
         Ok(MBlock::Decode {
             block,
-            count: count.try_into()?,
+            count: convert_at!(count)?,
             offsets: unsafe { offsets.as_ref().unwrap() },
             phantom_val: marker::PhantomData,
         })
@@ -317,7 +317,7 @@ where
         };
         if index < count {
             let idx = index * 4;
-            let offset: usize = u32::from_be_bytes(offsets[idx..idx + 4].try_into()?).try_into()?;
+            let offset: usize = convert_at!(u32::from_be_bytes(array_at!(offsets[idx..idx + 4])?))?;
             Ok(MEntry::decode_entry(&block[offset..], index)?)
         } else {
             Err(Error::__MBlockExhausted(index))
@@ -337,7 +337,7 @@ where
         if count > 0 {
             let index = count - 1;
             let idx = index * 4;
-            let offset: usize = u32::from_be_bytes(offsets[idx..idx + 4].try_into()?).try_into()?;
+            let offset: usize = convert_at!(u32::from_be_bytes(array_at!(offsets[idx..idx + 4])?))?;
             Ok(MEntry::decode_entry(&block[offset..], index)?)
         } else {
             Err(Error::__MBlockExhausted(count))
@@ -359,7 +359,7 @@ where
         };
         if index < count {
             let idx = index * 4;
-            let offset: usize = u32::from_be_bytes(offsets[idx..idx + 4].try_into()?).try_into()?;
+            let offset: usize = convert_at!(u32::from_be_bytes(array_at!(offsets[idx..idx + 4])?))?;
             MEntry::decode_key(&block[offset..])
         } else {
             Err(Error::__MBlockExhausted(index))
@@ -510,9 +510,9 @@ where
                     stats.key_mem += k;
                     stats.val_mem += v;
                     stats.diff_mem += d;
-                    offsets.push(leaf_i.try_into()?);
+                    offsets.push(convert_at!(leaf_i)?);
                     first_key.get_or_insert_with(|| entry.as_key().clone());
-                    Ok(offsets.len().try_into()?)
+                    Ok(convert_at!(offsets.len())?)
                 } else {
                     leaf.truncate(leaf_i);
                     blob.truncate(blob_i);
@@ -541,17 +541,17 @@ where
                     leaf.resize(m + adjust, 0);
                     leaf.copy_within(0..m, adjust);
 
-                    adjust.try_into()?
+                    convert_at!(adjust)?
                 };
                 // encode offset header
-                let num: u32 = offsets.len().try_into()?;
+                let num: u32 = convert_at!(offsets.len())?;
                 &leaf[..4].copy_from_slice(&num.to_be_bytes());
                 for (i, offset) in offsets.iter().enumerate() {
                     let x = (i + 1) * 4;
                     let offset_bytes = (adjust + offset).to_be_bytes();
                     leaf[x..x + 4].copy_from_slice(&offset_bytes);
                     // adjust file position offsets for value and delta in vlog.
-                    let j: usize = (adjust + offset).try_into()?;
+                    let j: usize = convert_at!((adjust + offset))?;
                     zentries[i].re_encode_fpos(&mut leaf[j..], *vpos)?;
                 }
                 // update statistics
@@ -562,8 +562,8 @@ where
                 leaf.resize(*z_blocksize, 0);
 
                 Ok((
-                    (*z_blocksize).try_into()?, // full block
-                    blob.len().try_into()?,
+                    convert_at!(*z_blocksize)?, // full block
+                    convert_at!(blob.len())?,
                 ))
             }
             ZBlock::Decode { .. } => unreachable!(),
@@ -607,13 +607,13 @@ where
     <V as Diff>::D: Serialize,
 {
     pub(crate) fn new_decode(block: Vec<u8>) -> Result<ZBlock<K, V>> {
-        let count = u32::from_be_bytes(block[..4].try_into()?);
-        let adjust: usize = (4 + (count * 4)).try_into()?;
+        let count = u32::from_be_bytes(array_at!(block[..4])?);
+        let adjust: usize = convert_at!((4 + (count * 4)))?;
         let offsets = &block[4..adjust] as *const [u8];
 
         Ok(ZBlock::Decode {
             block,
-            count: count.try_into()?,
+            count: convert_at!(count)?,
             offsets: unsafe { offsets.as_ref().unwrap() },
             phantom_val: marker::PhantomData,
         })
@@ -697,7 +697,7 @@ where
 
         if index < count {
             let idx = index * 4;
-            let offset: usize = u32::from_be_bytes(offsets[idx..idx + 4].try_into()?).try_into()?;
+            let offset: usize = convert_at!(u32::from_be_bytes(array_at!(offsets[idx..idx + 4])?))?;
             let entry = &block[offset..];
             Ok((index, ZEntry::decode_entry(entry)?))
         } else {
@@ -722,7 +722,7 @@ where
         if count > 0 {
             let index = count - 1;
             let idx = index * 4;
-            let offset: usize = u32::from_be_bytes(offsets[idx..idx + 4].try_into()?).try_into()?;
+            let offset: usize = convert_at!(u32::from_be_bytes(array_at!(offsets[idx..idx + 4])?))?;
             let entry = &block[offset..];
             Ok((index, ZEntry::decode_entry(entry)?))
         } else {
@@ -739,7 +739,7 @@ where
             ZBlock::Encode { .. } => unreachable!(),
         };
         let idx = index * 4;
-        let offset: usize = u32::from_be_bytes(offsets[idx..idx + 4].try_into()?).try_into()?;
+        let offset: usize = convert_at!(u32::from_be_bytes(array_at!(offsets[idx..idx + 4])?))?;
         let entry = &block[offset..];
         ZEntry::<K, V>::decode_key(entry)
     }

@@ -22,7 +22,6 @@ use crate::{
     error::Error,
     thread as rt, util,
 };
-use crate::{io_err_at, parse_at};
 
 // default size for flush buffer.
 const FLUSH_SIZE: usize = 1 * 1024 * 1024;
@@ -356,11 +355,11 @@ where
                 (OpRequest::Op { op }, Some(caller)) => {
                     let index = self.dlog_index.fetch_add(1, AcqRel);
                     self.active.add_entry(DEntry::new(index, op));
-                    caller.send(OpResponse::new_index(index))?;
+                    ipc_at!(caller.send(OpResponse::new_index(index)))?;
                 }
                 (OpRequest::PurgeTill { before }, Some(caller)) => {
                     let before = self.do_purge_till(before)?;
-                    caller.send(OpResponse::new_purged(before))?;
+                    ipc_at!(caller.send(OpResponse::new_purged(before)))?;
                 }
                 _ => unreachable!(),
             }
@@ -711,7 +710,7 @@ where
                 batches,
                 active,
             } => {
-                let limit: u64 = journal_limit.try_into()?;
+                let limit: u64 = convert_at!(journal_limit)?;
                 let exceeded = io_err_at!(fd.metadata())?.len() > limit;
                 (file_path, fd, batches, active, exceeded)
             }

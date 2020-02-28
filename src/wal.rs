@@ -330,8 +330,8 @@ where
             hasher.finish()
         };
 
-        let n: u64 = self.shards.len().try_into()?;
-        let n: usize = (hash % n).try_into()?;
+        let n: u64 = convert_at!(self.shards.len())?;
+        let n: usize = convert_at!((hash % n))?;
         Ok(&mut self.shards[n])
     }
 }
@@ -479,7 +479,7 @@ impl<K, V> Op<K, V> {
 
     fn op_type(buf: &[u8]) -> Result<OpType> {
         util::check_remaining(buf, 8, "wal op-type")?;
-        let hdr1 = u64::from_be_bytes(buf[..8].try_into()?);
+        let hdr1 = u64::from_be_bytes(array_at!(buf[..8])?);
         Ok(((hdr1 >> 32) & 0x00FFFFFF).into())
     }
 }
@@ -546,24 +546,24 @@ where
         let n = buf.len();
         buf.resize(n + 16, 0);
 
-        let klen: u64 = key.encode(buf)?.try_into()?;
+        let klen: u64 = convert_at!(key.encode(buf)?)?;
         let hdr1: u64 = ((OpType::Set as u64) << 32) | klen;
-        let vlen: u64 = value.encode(buf)?.try_into()?;
+        let vlen: u64 = convert_at!(value.encode(buf)?)?;
 
         buf[n..n + 8].copy_from_slice(&hdr1.to_be_bytes());
         buf[n + 8..n + 16].copy_from_slice(&vlen.to_be_bytes());
 
-        Ok((klen + vlen + 16).try_into()?)
+        Ok(convert_at!((klen + vlen + 16))?)
     }
 
     fn decode_set(buf: &[u8], k: &mut K, v: &mut V) -> Result<usize> {
         let mut n = 16;
         let (klen, vlen) = {
             util::check_remaining(buf, 16, "wal op-set-hdr")?;
-            let hdr1 = u64::from_be_bytes(buf[..8].try_into()?);
-            let klen: usize = (hdr1 & 0xFFFFFFFF).try_into()?;
-            let vlen = u64::from_be_bytes(buf[8..16].try_into()?);
-            let vlen: usize = vlen.try_into()?;
+            let hdr1 = u64::from_be_bytes(array_at!(buf[..8])?);
+            let klen: usize = convert_at!((hdr1 & 0xFFFFFFFF))?;
+            let vlen = u64::from_be_bytes(array_at!(buf[8..16])?);
+            let vlen: usize = convert_at!(vlen)?;
             (klen, vlen)
         };
 
@@ -614,15 +614,15 @@ where
         let n = buf.len();
         buf.resize(n + 24, 0);
 
-        let klen: u64 = key.encode(buf)?.try_into()?;
+        let klen: u64 = convert_at!(key.encode(buf)?)?;
         let hdr1: u64 = ((OpType::SetCAS as u64) << 32) | klen;
-        let vlen: u64 = value.encode(buf)?.try_into()?;
+        let vlen: u64 = convert_at!(value.encode(buf)?)?;
 
         buf[n..n + 8].copy_from_slice(&hdr1.to_be_bytes());
         buf[n + 8..n + 16].copy_from_slice(&vlen.to_be_bytes());
         buf[n + 16..n + 24].copy_from_slice(&cas.to_be_bytes());
 
-        Ok((klen + vlen + 24).try_into()?)
+        Ok(convert_at!((klen + vlen + 24))?)
     }
 
     fn decode_set_cas(
@@ -634,11 +634,11 @@ where
         let mut n = 24;
         let (klen, vlen, cas_seqno) = {
             util::check_remaining(buf, n, "wal op-setcas-hdr")?;
-            let hdr1 = u64::from_be_bytes(buf[..8].try_into()?);
-            let klen: usize = (hdr1 & 0xFFFFFFFF).try_into()?;
-            let vlen = u64::from_be_bytes(buf[8..16].try_into()?);
-            let vlen: usize = vlen.try_into()?;
-            let cas = u64::from_be_bytes(buf[16..24].try_into()?);
+            let hdr1 = u64::from_be_bytes(array_at!(buf[..8])?);
+            let klen: usize = convert_at!((hdr1 & 0xFFFFFFFF))?;
+            let vlen = u64::from_be_bytes(array_at!(buf[8..16])?);
+            let vlen: usize = convert_at!(vlen)?;
+            let cas = u64::from_be_bytes(array_at!(buf[16..24])?);
             (klen, vlen, cas)
         };
         *cas = cas_seqno;
@@ -679,21 +679,21 @@ where
         buf.resize(n + 8, 0);
 
         let klen = {
-            let klen: u64 = key.encode(buf)?.try_into()?;
+            let klen: u64 = convert_at!(key.encode(buf)?)?;
             let hdr1: u64 = ((OpType::Delete as u64) << 32) | klen;
             buf[n..n + 8].copy_from_slice(&hdr1.to_be_bytes());
             klen
         };
 
-        Ok((klen + 8).try_into()?)
+        Ok(convert_at!((klen + 8))?)
     }
 
     fn decode_delete(buf: &[u8], key: &mut K) -> Result<usize> {
         let mut n = 8;
         let klen: usize = {
             util::check_remaining(buf, n, "wal op-delete-hdr1")?;
-            let hdr1 = u64::from_be_bytes(buf[..n].try_into()?);
-            (hdr1 & 0xFFFFFFFF).try_into()?
+            let hdr1 = u64::from_be_bytes(array_at!(buf[..n])?);
+            convert_at!((hdr1 & 0xFFFFFFFF))?
         };
 
         n += {

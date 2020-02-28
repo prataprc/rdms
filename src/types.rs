@@ -111,7 +111,7 @@ impl Diff for Vec<u8> {
 // the actual payload.
 impl Serialize for Vec<u8> {
     fn encode(&self, buf: &mut Vec<u8>) -> Result<usize> {
-        let hdr1: u32 = self.len().try_into()?;
+        let hdr1: u32 = convert_at!(self.len())?;
         let scratch = hdr1.to_be_bytes();
 
         let mut m = buf.len();
@@ -127,7 +127,7 @@ impl Serialize for Vec<u8> {
             let msg = format!("type-bytes decode header {} < 4", buf.len());
             return Err(Error::DecodeFail(msg));
         }
-        let len: usize = u32::from_be_bytes(buf[..4].try_into()?).try_into()?;
+        let len: usize = convert_at!(u32::from_be_bytes(array_at!(buf[..4])?))?;
         if buf.len() < (len + 4) {
             let msg = format!("type-bytes decode payload {} < {}", buf.len(), len);
             return Err(Error::DecodeFail(msg));
@@ -140,7 +140,7 @@ impl Serialize for Vec<u8> {
 
 impl Footprint for Vec<u8> {
     fn footprint(&self) -> Result<isize> {
-        Ok(self.capacity().try_into()?)
+        Ok(convert_at!(self.capacity())?)
     }
 }
 

@@ -59,7 +59,6 @@ use std::{
     thread, time,
 };
 
-use crate::io_err_at;
 #[allow(unused_imports)] // for documentation
 use crate::rdms::Rdms;
 use crate::{
@@ -654,7 +653,7 @@ where
 
     pub fn len(&self) -> Result<usize> {
         match self.as_inner()?.deref() {
-            InnerRobt::Snapshot { stats, .. } => Ok(stats.n_count.try_into()?),
+            InnerRobt::Snapshot { stats, .. } => Ok(convert_at!(stats.n_count)?),
             InnerRobt::Build { .. } => {
                 let msg = format!("Robt.len(), in build state");
                 Err(Error::UnInitialized(msg))
@@ -1031,7 +1030,7 @@ where
             }
         };
         *inner = new_inner;
-        Ok(count.try_into()?)
+        Ok(convert_at!(count)?)
     }
 
     fn close(mut self) -> Result<()> {
@@ -1411,7 +1410,7 @@ pub(crate) fn write_meta_items(
                 hdr[0..8].copy_from_slice(&fpos.to_be_bytes());
             }
             (1, MetaItem::Bitmap(bitmap)) => {
-                let ln: u64 = bitmap.len().try_into()?;
+                let ln: u64 = convert_at!(bitmap.len())?;
                 debug!(
                     target: "robt  ", "{:?}, writing bitmap {} bytes ...",
                     file, ln
@@ -1420,7 +1419,7 @@ pub(crate) fn write_meta_items(
                 block.extend_from_slice(&bitmap);
             }
             (2, MetaItem::AppMetadata(md)) => {
-                let ln: u64 = md.len().try_into()?;
+                let ln: u64 = convert_at!(md.len())?;
                 debug!(
                     target: "robt  ", "{:?}, writing app-meta {} bytes ...",
                     file, ln
@@ -1429,7 +1428,7 @@ pub(crate) fn write_meta_items(
                 block.extend_from_slice(&md);
             }
             (3, MetaItem::Stats(s)) => {
-                let ln: u64 = s.len().try_into()?;
+                let ln: u64 = convert_at!(s.len())?;
                 debug!(
                     target: "robt  ", "{:?}, writing stats {} bytes ...",
                     file, ln
@@ -1438,7 +1437,7 @@ pub(crate) fn write_meta_items(
                 block.extend_from_slice(s.as_bytes());
             }
             (4, MetaItem::Marker(data)) => {
-                let ln: u64 = data.len().try_into()?;
+                let ln: u64 = convert_at!(data.len())?;
                 hdr[32..40].copy_from_slice(&ln.to_be_bytes());
                 block.extend_from_slice(&data);
             }
@@ -1456,7 +1455,7 @@ pub(crate) fn write_meta_items(
     let n = io_err_at!(fd.write(&block))?;
     io_err_at!(fd.sync_all())?;
     if n == ln {
-        Ok(n.try_into()?)
+        Ok(convert_at!(n)?)
     } else {
         let msg = format!("robt write_meta_items: {:?} {}/{}...", &file, ln, n);
         Err(Error::PartialWrite(msg))
@@ -1479,15 +1478,15 @@ pub fn read_meta_items(
 
     // read header
     let hdr = util::read_buffer(&mut fd, m - 40, 40, "read root-block header")?;
-    let root = u64::from_be_bytes(hdr[..8].try_into()?);
-    let n_bmap: usize = u64::from_be_bytes(hdr[8..16].try_into()?).try_into()?;
-    let n_md: usize = u64::from_be_bytes(hdr[16..24].try_into()?).try_into()?;
-    let n_stats: usize = u64::from_be_bytes(hdr[24..32].try_into()?).try_into()?;
-    let n_marker: usize = u64::from_be_bytes(hdr[32..40].try_into()?).try_into()?;
+    let root = u64::from_be_bytes(array_at!(hdr[..8])?);
+    let n_bmap: usize = convert_at!(u64::from_be_bytes(array_at!(hdr[8..16])?))?;
+    let n_md: usize = convert_at!(u64::from_be_bytes(array_at!(hdr[16..24])?))?;
+    let n_stats: usize = convert_at!(u64::from_be_bytes(array_at!(hdr[24..32])?))?;
+    let n_marker: usize = convert_at!(u64::from_be_bytes(array_at!(hdr[32..40])?))?;
     // read block
     let meta_block_bytes = {
         let n_total = n_bmap + n_md + n_stats + n_marker + 40;
-        Config::compute_root_block(n_total).try_into()?
+        convert_at!(Config::compute_root_block(n_total))?
     };
     let block: Vec<u8> = util::read_buffer(
         &mut fd,
@@ -1500,7 +1499,7 @@ pub fn read_meta_items(
 
     let mut meta_items: Vec<MetaItem> = vec![];
     let z = {
-        let z: usize = meta_block_bytes.try_into()?;
+        let z: usize = convert_at!(meta_block_bytes)?;
         z - 40
     };
 
@@ -1512,7 +1511,7 @@ pub fn read_meta_items(
     }
 
     let (x, y) = (z - n_marker - n_stats, z - n_marker);
-    let stats = std::str::from_utf8(&block[x..y])?.to_string();
+    let stats = err_at!(std::str::from_utf8(&block[x..y]))?.to_string();
 
     let (x, y) = (z - n_marker - n_stats - n_md, z - n_marker - n_stats);
     let app_data = block[x..y].to_vec();
@@ -1532,15 +1531,15 @@ pub fn read_meta_items(
     // validate and return
     let stats: Stats = stats.parse()?;
     if root == std::u64::MAX {
-        Ok((meta_items, meta_block_bytes.try_into()?))
+        Ok((meta_items, convert_at!(meta_block_bytes)?))
     } else {
-        let at: u64 = stats.m_blocksize.try_into()?;
+        let at: u64 = convert_at!(stats.m_blocksize)?;
         let at = m - meta_block_bytes - at;
         if at != root {
             let msg = format!("robt expected root at {}, found {}", at, root);
             Err(Error::InvalidSnapshot(msg))
         } else {
-            Ok((meta_items, meta_block_bytes.try_into()?))
+            Ok((meta_items, convert_at!(meta_block_bytes)?))
         }
     }
 }
@@ -1755,28 +1754,24 @@ impl FromStr for Stats {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Stats> {
-        let js: Json = s.parse()?;
+        let js: Json = err_at!(s.parse())?;
         let err1 = format!("string-to-robt-stats, not an integer");
         let err2 = format!("string-to-robt-stats, not string");
         let err3 = format!("string-to-robt-stats, not boolean");
 
         let to_usize = |key: &str| -> Result<usize> {
-            let n: usize = js
-                .get(key)?
+            let n: usize = convert_at!(err_at!(js.get(key))?
                 .integer()
-                .ok_or(Error::UnExpectedFail(err1.clone()))?
-                .try_into()?;
+                .ok_or(Error::UnExpectedFail(err1.clone()))?)?;
             Ok(n)
         };
         let to_u64 = |key: &str| -> Result<u64> {
-            let n: u64 = js
-                .get(key)?
+            let n: u64 = convert_at!(err_at!(js.get(key))?
                 .integer()
-                .ok_or(Error::UnExpectedFail(err1.clone()))?
-                .try_into()?;
+                .ok_or(Error::UnExpectedFail(err1.clone()))?)?;
             Ok(n)
         };
-        let vlog_file = match js.get("/vlog_file")?.string() {
+        let vlog_file = match err_at!(js.get("/vlog_file"))?.string() {
             Some(s) if s.len() == 0 => None,
             None => None,
             Some(s) => {
@@ -1786,21 +1781,18 @@ impl FromStr for Stats {
         };
 
         Ok(Stats {
-            name: js
-                .get("/name")?
+            name: err_at!(js.get("/name"))?
                 .string()
                 .ok_or(Error::UnExpectedFail(err2))?,
             // config fields.
             z_blocksize: to_usize("/z_blocksize")?,
             m_blocksize: to_usize("/m_blocksize")?,
             v_blocksize: to_usize("/v_blocksize")?,
-            delta_ok: js
-                .get("/delta_ok")?
+            delta_ok: err_at!(js.get("/delta_ok"))?
                 .boolean()
                 .ok_or(Error::UnExpectedFail(err3.clone()))?,
             vlog_file: vlog_file,
-            value_in_vlog: js
-                .get("/value_in_vlog")?
+            value_in_vlog: err_at!(js.get("/value_in_vlog"))?
                 .boolean()
                 .ok_or(Error::UnExpectedFail(err3))?,
             // statitics fields.
@@ -1819,8 +1811,7 @@ impl FromStr for Stats {
             n_abytes: to_usize("/n_abytes")?,
 
             build_time: to_u64("/build_time")?,
-            epoch: js
-                .get("/epoch")?
+            epoch: err_at!(js.get("/epoch"))?
                 .integer()
                 .ok_or(Error::UnExpectedFail(err1))?,
         })
@@ -1936,7 +1927,7 @@ where
                     config.flush_queue_size,
                 );
 
-                (Some(t), vf_fpos.try_into()?)
+                (Some(t), convert_at!(vf_fpos)?)
             }
             None => (None, Default::default()),
         };
@@ -2026,7 +2017,7 @@ where
         };
         // flush meta items to disk and close
         let meta_block_bytes = write_meta_items(index_file, meta_items)?;
-        Ok(meta_block_bytes.try_into()?)
+        Ok(convert_at!(meta_block_bytes)?)
     }
 
     // return root, iter
@@ -2044,7 +2035,7 @@ where
             ms: Vec<MBlock<K, V>>,
         };
         let mut c = {
-            let vfpos: u64 = self.stats.n_abytes.try_into()?;
+            let vfpos: u64 = convert_at!(self.stats.n_abytes)?;
             Context {
                 fpos: 0,
                 zfpos: 0,
@@ -2148,7 +2139,7 @@ where
                 c.fpos = res.1
             }
         }
-        let n: u64 = self.config.m_blocksize.try_into()?;
+        let n: u64 = convert_at!(self.config.m_blocksize)?;
         Ok(c.fpos - n)
     }
 
@@ -2226,11 +2217,17 @@ where
     }
 
     fn update_stats(self, stats: &mut Stats) -> Result<I> {
-        stats.build_time = self.start.elapsed()?.as_nanos().try_into()?;
+        stats.build_time = {
+            let elapsed = systime_at!(self.start.elapsed())?;
+            convert_at!(elapsed.as_nanos())?
+        };
         stats.seqno = self.seqno;
         stats.n_count = self.n_count;
         stats.n_deleted = self.n_deleted;
-        stats.epoch = time::UNIX_EPOCH.elapsed()?.as_nanos().try_into()?;
+        stats.epoch = {
+            let elapsed = systime_at!(time::UNIX_EPOCH.elapsed())?;
+            convert_at!(elapsed.as_nanos())?
+        };
         Ok(self.iter)
     }
 }
@@ -2436,11 +2433,11 @@ impl IndexFile {
     fn read_buffer(&mut self, fpos: u64, n: usize, msg: &str) -> Result<Vec<u8>> {
         Ok(match self {
             IndexFile::Block { fd, .. } => {
-                let n: u64 = n.try_into()?;
+                let n: u64 = convert_at!(n)?;
                 util::read_buffer(fd, fpos, n, msg)?
             }
             IndexFile::Mmap { mmap, .. } => {
-                let start: usize = fpos.try_into()?;
+                let start: usize = convert_at!(fpos)?;
                 mmap[start..(start + n)].to_vec()
             }
         })
@@ -2465,7 +2462,7 @@ impl IndexFile {
             IndexFile::Block { file, .. } => file,
             IndexFile::Mmap { file, .. } => file,
         };
-        Ok(io_err_at!(fs::metadata(file))?.len().try_into()?)
+        Ok(convert_at!(io_err_at!(fs::metadata(file))?.len())?)
     }
 }
 
@@ -2685,7 +2682,7 @@ where
 {
     /// Return number of entries in the snapshot.
     pub fn len(&self) -> Result<usize> {
-        Ok(self.to_stats()?.n_count.try_into()?)
+        Ok(convert_at!(self.to_stats()?.n_count)?)
     }
 
     /// Return the last seqno found in this snapshot.
@@ -2894,11 +2891,11 @@ where
     V: Clone + Diff + Serialize,
 {
     fn footprint(&self) -> Result<isize> {
-        let i_footprint: isize = self.index_fd.footprint()?.try_into()?;
+        let i_footprint: isize = self.index_fd.footprint()?;
         let v_footprint: isize = match &self.valog_fd {
             Some((vlog_file, _)) => {
                 let md = io_err_at!(fs::metadata(vlog_file))?;
-                md.len().try_into()?
+                convert_at!(md.len())?
             }
             None => 0,
         };
@@ -2945,11 +2942,11 @@ where
 
         let mut footprint: isize = {
             let total = s.m_bytes + s.z_bytes + s.v_bytes + s.n_abytes;
-            total.try_into()?
+            convert_at!(total)?
         };
         let (_, meta_block_bytes) = read_meta_items(&self.dir, &self.name)?;
         footprint += {
-            let n: isize = meta_block_bytes.try_into()?;
+            let n: isize = convert_at!(meta_block_bytes)?;
             n
         };
         assert_eq!(footprint, self.footprint()?);
@@ -3501,7 +3498,7 @@ where
             config.z_blocksize,
             "build_rev(), reading zblock",
         )?)?;
-        let index: isize = (zblock.len() - 1).try_into()?;
+        let index: isize = convert_at!((zblock.len() - 1))?;
         mzs.push(MZ::Z { zblock, index });
         Ok(())
     }
@@ -3528,7 +3525,7 @@ where
                             config.z_blocksize,
                             "rebuild_rev(), reading zblock",
                         )?)?;
-                        let idx: isize = (zblock.len() - 1).try_into()?;
+                        let idx: isize = convert_at!((zblock.len() - 1))?;
                         mzs.push(MZ::Z { zblock, index: idx });
                         Ok(())
                     }
@@ -3592,7 +3589,7 @@ where
         }?;
         mzs.push(MZ::Z {
             zblock,
-            index: index.try_into()?,
+            index: convert_at!(index)?,
         });
         Ok(entry)
     }

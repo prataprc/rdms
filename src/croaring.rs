@@ -9,7 +9,6 @@ use croaring::bitmap::Bitmap;
 
 use std::{convert::TryInto, hash::Hash};
 
-use crate::convert_at;
 use crate::core::{Bloom, Result};
 use crate::error::Error;
 

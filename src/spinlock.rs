@@ -45,7 +45,10 @@ use std::{
     thread,
 };
 
-use crate::core::{Result, ToJson};
+use crate::{
+    core::{Result, ToJson},
+    error::Error,
+};
 
 // TODO: Experiment with different atomic::Ordering to improve performance.
 
@@ -141,9 +144,9 @@ impl RWSpinlock {
     pub fn to_stats(&self) -> Result<Stats> {
         Ok(Stats {
             value: self.value.load(SeqCst),
-            read_locks: self.read_locks.load(SeqCst).try_into()?,
-            write_locks: self.write_locks.load(SeqCst).try_into()?,
-            conflicts: self.conflicts.load(SeqCst).try_into()?,
+            read_locks: convert_at!(self.read_locks.load(SeqCst))?,
+            write_locks: convert_at!(self.write_locks.load(SeqCst))?,
+            conflicts: convert_at!(self.conflicts.load(SeqCst))?,
         })
     }
 }

@@ -17,6 +17,7 @@ use crate::core;
 use crate::{
     core::{CommitIter, CommitIterator, Diff, Entry, Footprint, Index},
     core::{Cutoff, Result, Validate},
+    error::Error,
     thread as rt,
 };
 
@@ -277,13 +278,15 @@ where
             }
 
             let compute_elapsed = || -> Result<Duration> {
-                Ok(match start.elapsed() {
+                let elapsed = systime_at!(match start.elapsed() {
                     Ok(elapsed) => Ok(elapsed),
                     Err(err) => {
                         error!(target: "rdms  ", "elapsed failed {:?}", err);
                         Err(err)
                     }
-                }?)
+                })?;
+
+                Ok(elapsed)
             };
 
             compute_elapsed()?

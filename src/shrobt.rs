@@ -17,7 +17,6 @@ use std::{
     thread,
 };
 
-use crate::io_err_at;
 use crate::{
     core::{self, Bloom, CommitIter, CommitIterator, Diff, DiskIndexFactory},
     core::{Cutoff, Validate},
@@ -45,7 +44,7 @@ impl TryFrom<Root> for Vec<u8> {
 
             dict.insert(
                 "num_shards".to_string(),
-                Value::Integer(root.num_shards.try_into()?),
+                Value::Integer(convert_at!(root.num_shards)?),
             );
 
             Value::Table(dict).to_string()
@@ -65,20 +64,19 @@ impl TryFrom<Vec<u8>> for Root {
         let err2 = InvalidFile(format!("shrobt, missing num_shards"));
         let err3 = InvalidFile(format!("shrobt, num_shards not int"));
 
-        let text = std::str::from_utf8(&bytes)?.to_string();
+        let text = err_at!(std::str::from_utf8(&bytes))?.to_string();
 
         let value: toml::Value = text
             .parse()
             .map_err(|_| InvalidFile(format!("shrobt, invalid root file")))?;
 
-        let num_shards = value
+        let num_shards = convert_at!(value
             .as_table()
             .ok_or(err1)?
             .get("num_shards")
             .ok_or(err2)?
             .as_integer()
-            .ok_or(err3)?
-            .try_into()?;
+            .ok_or(err3)?)?;
 
         Ok(Root { num_shards })
     }
@@ -652,7 +650,7 @@ where
         let footprints = self.to_footprints()?;
         let num_shards = footprints.len();
 
-        let footprint: usize = self.footprint()?.try_into()?;
+        let footprint: usize = convert_at!(self.footprint()?)?;
         let avg = footprint / num_shards;
 
         let do_rebalance = footprints

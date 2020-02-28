@@ -548,7 +548,7 @@ where
     fn footprint(&self) -> Result<isize> {
         use std::mem::size_of;
 
-        let fp: isize = size_of::<Delta<V>>().try_into()?;
+        let fp: isize = convert_at!(size_of::<Delta<V>>())?;
         Ok(fp
             + match &self.data {
                 InnerDelta::U { delta, .. } => delta.footprint()?,
@@ -779,7 +779,7 @@ where
 
         Ok(match self {
             Value::U { value, .. } => {
-                let size: isize = size_of::<V>().try_into()?;
+                let size: isize = convert_at!(size_of::<V>())?;
                 size + value.footprint()?
             }
             Value::D { .. } => 0,
@@ -890,7 +890,7 @@ where
     fn prepend_version_nolsm(&mut self, nentry: Self) -> Result<isize> {
         let size = self.value.footprint()?;
         self.value = nentry.value.clone();
-        Ok((self.value.footprint()? - size).try_into()?)
+        Ok(self.value.footprint()? - size)
     }
 
     // `nentry` is new_entry to be CREATE/UPDATE into index.
@@ -936,7 +936,7 @@ where
         self.deltas.insert(0, delta);
         self.prepend_version_nolsm(nentry)?;
 
-        Ok(size.try_into()?)
+        Ok(size)
     }
 
     // DELETE operation, only in lsm-mode or sticky mode.
@@ -964,7 +964,7 @@ where
         }?;
 
         self.value = Value::new_delete(seqno);
-        Ok((self.footprint()? - size).try_into()?)
+        Ok(self.footprint()? - size)
     }
 }
 

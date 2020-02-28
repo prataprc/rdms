@@ -6,7 +6,10 @@ use std::{
     result,
 };
 
-use crate::core::{Diff, Entry, Footprint, Result, ToJson, Value};
+use crate::{
+    core::{Diff, Entry, Footprint, Result, ToJson, Value},
+    error::Error,
+};
 
 #[allow(unused_imports)] // for documentation
 use crate::llrb::Llrb;
@@ -34,7 +37,7 @@ where
         use std::mem::size_of;
 
         let size = size_of::<Node<K, V>>();
-        let overhead: isize = size.try_into()?;
+        let overhead: isize = convert_at!(size)?;
         Ok(overhead + self.entry.footprint()?)
     }
 }

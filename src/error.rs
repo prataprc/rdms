@@ -5,7 +5,7 @@
 
 use jsondata;
 
-use std::{any, ffi, sync::mpsc};
+use std::ffi;
 
 // TODO: check unused error variants and double check error arguments.
 // TODO: Generic but meaningful error messages.
@@ -102,6 +102,19 @@ pub enum Error {
 }
 
 #[macro_export]
+macro_rules! err_at {
+    ($e:expr) => {
+        match $e {
+            Ok(val) => Ok(val),
+            Err(err) => {
+                let msg = format!("{}:{} {:?}", file!(), line!(), err);
+                Err(Error::UnExpectedFail(msg))
+            }
+        }
+    };
+}
+
+#[macro_export]
 macro_rules! io_err_at {
     ($e:expr) => {
         match $e {
@@ -140,71 +153,43 @@ macro_rules! convert_at {
     };
 }
 
-impl From<std::num::TryFromIntError> for Error {
-    fn from(err: std::num::TryFromIntError) -> Error {
-        let msg = format!("TryFromIntError: {:?}", err);
-        Error::ConversionFail(msg)
-    }
+#[macro_export]
+macro_rules! array_at {
+    ($e:expr) => {
+        match $e.try_into() {
+            Ok(val) => Ok(val),
+            Err(err) => {
+                let msg = format!("{}:{} {}", file!(), line!(), err);
+                Err(Error::ConversionFail(msg))
+            }
+        }
+    };
 }
 
-impl From<std::array::TryFromSliceError> for Error {
-    fn from(err: std::array::TryFromSliceError) -> Error {
-        let msg = format!("TryFromSliceError: {:?}", err);
-        Error::ConversionFail(msg)
-    }
+#[macro_export]
+macro_rules! systime_at {
+    ($e:expr) => {
+        match $e {
+            Ok(val) => Ok(val),
+            Err(err) => {
+                let msg = format!("{}:{} {}", file!(), line!(), err);
+                Err(Error::UnExpectedFail(msg))
+            }
+        }
+    };
 }
 
-impl From<std::time::SystemTimeError> for Error {
-    fn from(err: std::time::SystemTimeError) -> Error {
-        let msg = format!("SystemTimeError: {:?}", err);
-        Error::ConversionFail(msg)
-    }
-}
-
-impl From<std::convert::Infallible> for Error {
-    fn from(err: std::convert::Infallible) -> Error {
-        let msg = format!("Infallible: {:?}", err);
-        Error::ConversionFail(msg)
-    }
-}
-
-impl From<ffi::OsString> for Error {
-    fn from(err: ffi::OsString) -> Error {
-        Error::InvalidFile(format!("{:?}", err))
-    }
-}
-
-impl<T> From<mpsc::SendError<T>> for Error {
-    fn from(err: mpsc::SendError<T>) -> Error {
-        let msg = format!("SendError: {:?}", err);
-        Error::IPCFail(msg)
-    }
-}
-
-impl From<mpsc::RecvError> for Error {
-    fn from(err: mpsc::RecvError) -> Error {
-        let msg = format!("RecvError: {:?}", err);
-        Error::IPCFail(msg)
-    }
-}
-
-impl From<Box<dyn any::Any + Send>> for Error {
-    fn from(err: Box<dyn any::Any + Send>) -> Error {
-        let msg = format!("dynamic error: {:?}", err);
-        Error::InvalidDlog(msg)
-    }
-}
-
-impl From<jsondata::Error> for Error {
-    fn from(err: jsondata::Error) -> Error {
-        Error::JsonError(err)
-    }
-}
-
-impl From<std::str::Utf8Error> for Error {
-    fn from(err: std::str::Utf8Error) -> Error {
-        Error::Utf8Error(err)
-    }
+#[macro_export]
+macro_rules! ipc_at {
+    ($e:expr) => {
+        match $e {
+            Ok(val) => Ok(val),
+            Err(err) => {
+                let msg = format!("{}:{} {}", file!(), line!(), err);
+                Err(Error::IPCFail(msg))
+            }
+        }
+    };
 }
 
 impl PartialEq for Error {

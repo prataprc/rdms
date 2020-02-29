@@ -32,7 +32,8 @@ use crate::{
 pub struct Config {
     mem_ratio: f64,
     disk_ratio: f64,
-    compact_interval: Duration,
+    compact_interval: Duration, // in seconds
+    commit_interval: Duration,  // in seconds
 }
 
 impl Config {
@@ -74,6 +75,13 @@ impl Config {
     pub fn set_compact_interval(&mut self, interval: Duration) {
         self.compact_interval = interval
     }
+
+    /// Set interval in time duration, for commiting memory batch into
+    /// disk snapshot. Calling this method will spawn an auto
+    /// compaction thread.
+    pub fn set_commit_interval(&mut self, interval: Duration) {
+        self.commit_interval = interval
+    }
 }
 
 impl From<Root> for Config {
@@ -82,6 +90,7 @@ impl From<Root> for Config {
             mem_ratio: root.mem_ratio,
             disk_ratio: root.disk_ratio,
             compact_interval: root.compact_interval,
+            commit_interval: root.commit_interval,
         }
     }
 }
@@ -95,6 +104,7 @@ struct Root {
 
     mem_ratio: f64,
     disk_ratio: f64,
+    commit_interval: time::Duration,  // in seconds.
     compact_interval: time::Duration, // in seconds.
 }
 
@@ -108,6 +118,7 @@ impl From<Config> for Root {
 
             mem_ratio: config.mem_ratio,
             disk_ratio: config.disk_ratio,
+            commit_interval: config.commit_interval,
             compact_interval: config.compact_interval,
         }
     }
@@ -126,12 +137,14 @@ impl TryFrom<Root> for Vec<u8> {
             let levels: i64 = convert_at!(root.levels)?;
             let mem_ratio: f64 = root.mem_ratio.into();
             let disk_ratio: f64 = root.disk_ratio.into();
+            let m_interval: i64 = convert_at!(root.commit_interval.as_secs())?;
             let c_interval: i64 = convert_at!(root.compact_interval.as_secs())?;
 
             dict.insert("version".to_string(), Integer(version));
             dict.insert("levels".to_string(), Integer(levels));
             dict.insert("mem_ratio".to_string(), Float(mem_ratio));
             dict.insert("disk_ratio".to_string(), Float(disk_ratio));
+            dict.insert("commit_interval".to_string(), Integer(m_interval));
             dict.insert("compact_interval".to_string(), Integer(c_interval));
 
             let (arg1, arg2) = match root.lsm_cutoff {
@@ -218,6 +231,14 @@ impl TryFrom<Vec<u8>> for Root {
                 .ok_or(InvalidFile(err2.clone()))?
                 .as_float()
                 .ok_or(InvalidFile(err2.clone()))?
+        };
+        root.commit_interval = {
+            let field = dict.get("commit_interval");
+            let duration: u64 = convert_at!(field
+                .ok_or(InvalidFile(err2.clone()))?
+                .as_integer()
+                .ok_or(InvalidFile(err2.clone()))?)?;
+            time::Duration::from_secs(duration)
         };
         root.compact_interval = {
             let field = dict.get("compact_interval");
@@ -477,7 +498,8 @@ where
     D: DiskIndexFactory<K, V>,
 {
     name: String,
-    auto_compact: Option<rt::Thread<(), (), ()>>,
+    auto_commit: Option<rt::Thread<String, Result<()>, ()>>,
+    auto_compact: Option<rt::Thread<String, Result<usize>, ()>>,
     inner: Arc<Mutex<InnerDgm<K, V, M, D>>>,
 }
 
@@ -1033,6 +1055,16 @@ where
             thread::sleep(time::Duration::from_millis(10)); // TODO: no magic
         }
 
+        match self.auto_commit.take() {
+            Some(auto_commit) => match auto_commit.close_wait() {
+                Err(err) => error!(
+                    target: "dgm   ", "{:?}, auto-commit {:?}", self.name, err
+                ),
+                Ok(_) => (),
+            },
+            None => (),
+        }
+
         match self.auto_compact.take() {
             Some(auto_compact) => match auto_compact.close_wait() {
                 Err(err) => error!(
@@ -1105,10 +1137,12 @@ where
 
         let mut index = Box::new(Dgm {
             name: name.to_string(),
+            auto_commit: Default::default(),
             auto_compact: Default::default(),
             inner: Arc::new(Mutex::new(inner)),
         });
 
+        index.start_auto_commit()?;
         index.start_auto_compact()?;
 
         Ok(index)
@@ -1171,14 +1205,50 @@ where
 
             let mut index = Box::new(Dgm {
                 name: name.to_string(),
+                auto_commit: Default::default(),
                 auto_compact: Default::default(),
                 inner: Arc::new(Mutex::new(inner)),
             });
 
+            index.start_auto_commit()?;
             index.start_auto_compact()?;
 
             Ok(index)
         }
+    }
+
+    fn start_auto_commit(&mut self) -> Result<()>
+    where
+        K: 'static + Send,
+        V: 'static + Send,
+        M: 'static + Send,
+        D: 'static + Send,
+        <M as WriteIndexFactory<K, V>>::I: 'static + Send,
+        <<M as WriteIndexFactory<K, V>>::I as Index<K, V>>::R: 'static + Send,
+        <<M as WriteIndexFactory<K, V>>::I as Index<K, V>>::W: 'static + Send,
+        <D as DiskIndexFactory<K, V>>::I: 'static + Send,
+        <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::R: 'static + Send,
+        <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::W: 'static + Send,
+    {
+        let root = {
+            let inner = self.as_inner()?;
+            inner.root.clone()
+        };
+        let name = {
+            let inner = self.as_inner()?;
+            inner.name.clone()
+        };
+
+        self.auto_commit = if root.commit_interval.as_secs() > 0 {
+            let inner = Arc::clone(&self.inner);
+            Some(rt::Thread::new(move |rx| {
+                || auto_commit::<K, V, M, D>(name, root, inner, rx)
+            }))
+        } else {
+            None
+        };
+
+        Ok(())
     }
 
     fn start_auto_compact(&mut self) -> Result<()>
@@ -1202,6 +1272,7 @@ where
             let inner = self.as_inner()?;
             inner.name.clone()
         };
+
         self.auto_compact = if root.compact_interval.as_secs() > 0 {
             let inner = Arc::clone(&self.inner);
             Some(rt::Thread::new(move |rx| {
@@ -1299,7 +1370,7 @@ where
 
     fn do_commit<C, F>(
         inner: &Arc<Mutex<InnerDgm<K, V, M, D>>>,
-        _: CommitIter<K, V, C>,
+        _: CommitIter<K, V, C>, // TODO: should we handle scanner
         metacb: F,
     ) -> Result<()>
     where
@@ -2207,11 +2278,73 @@ where
     }
 }
 
+fn auto_commit<K, V, M, D>(
+    name: String,
+    root: Root,
+    inner: Arc<Mutex<InnerDgm<K, V, M, D>>>,
+    rx: rt::Rx<String, Result<()>>,
+) -> Result<()>
+where
+    K: 'static + Send + Clone + Ord + Serialize + Footprint,
+    V: 'static + Send + Clone + Diff + Serialize + Footprint,
+    <V as Diff>::D: Serialize,
+    M: 'static + Send + WriteIndexFactory<K, V>,
+    D: 'static + Send + DiskIndexFactory<K, V>,
+    <M as WriteIndexFactory<K, V>>::I: 'static + Send + Footprint,
+    <<M as WriteIndexFactory<K, V>>::I as Index<K, V>>::R: 'static + Send,
+    <<M as WriteIndexFactory<K, V>>::I as Index<K, V>>::W: 'static + Send,
+    <D as DiskIndexFactory<K, V>>::I: 'static + Send + CommitIterator<K, V> + Footprint + Clone,
+    <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::R: 'static + Send,
+    <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::W: 'static + Send,
+{
+    info!(
+        target: "dgm   ",
+        "{}, auto-commit thread started with interval {:?}",
+        name, root.commit_interval,
+    );
+
+    let mut elapsed = Duration::new(0, 0);
+    loop {
+        let resp_tx = {
+            let interval = {
+                let interval = ((root.commit_interval * 2) + elapsed) / 2;
+                cmp::min(interval, elapsed)
+            };
+            match rx.recv_timeout(interval) {
+                Ok((cmd, resp_tx)) if cmd == "do_commit" => resp_tx,
+                Ok(_) => unreachable!(),
+                Err(mpsc::RecvTimeoutError::Timeout) => None,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break Ok(()),
+            }
+        };
+
+        let start = SystemTime::now();
+
+        let res = {
+            let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
+            let iter = CommitIter::new(vec![].into_iter(), within);
+            Dgm::do_commit(&inner, iter, convert::identity)
+        };
+
+        match resp_tx {
+            Some(tx) => ipc_at!(tx.send(res))?,
+            None => match res {
+                Ok(_) => info!(target: "dgm   ", "{:?}, commit done", name),
+                Err(err) => info!(
+                    target: "dgm   ", "{:?}, commit err, {:?}", name, err
+                ),
+            },
+        }
+
+        elapsed = start.elapsed().ok().unwrap();
+    }
+}
+
 fn auto_compact<K, V, M, D>(
     name: String,
     root: Root,
     inner: Arc<Mutex<InnerDgm<K, V, M, D>>>,
-    rx: rt::Rx<(), ()>,
+    rx: rt::Rx<String, Result<usize>>,
 ) -> Result<()>
 where
     K: 'static + Send + Clone + Ord + Serialize + Footprint,
@@ -2234,15 +2367,18 @@ where
 
     let mut elapsed = Duration::new(0, 0);
     loop {
-        let interval = {
-            let interval = ((root.compact_interval * 2) + elapsed) / 2;
-            cmp::min(interval, elapsed)
+        let resp_tx = {
+            let interval = {
+                let interval = ((root.compact_interval * 2) + elapsed) / 2;
+                cmp::min(interval, elapsed)
+            };
+            match rx.recv_timeout(interval) {
+                Ok((cmd, resp_tx)) if cmd == "do_compact" => resp_tx,
+                Ok(_) => unreachable!(),
+                Err(mpsc::RecvTimeoutError::Timeout) => None,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break Ok(()),
+            }
         };
-        match rx.recv_timeout(interval) {
-            Ok(_) => unreachable!(),
-            Err(mpsc::RecvTimeoutError::Timeout) => (),
-            Err(mpsc::RecvTimeoutError::Disconnected) => break Ok(()),
-        }
 
         let start = SystemTime::now();
 
@@ -2253,11 +2389,16 @@ where
             convert::identity,
         );
 
-        match res {
-            Ok(_) => info!(target: "dgm   ", "{:?}, compaction done", name),
-            Err(err) => info!(
-                target: "dgm   ", "{:?}, compaction err, {:?}", name, err
-            ),
+        match resp_tx {
+            Some(tx) => ipc_at!(tx.send(res))?,
+            None => match res {
+                Ok(n) => info!(
+                    target: "dgm   ", "{:?}, compaction done: {}", name, n
+                ),
+                Err(err) => info!(
+                    target: "dgm   ", "{:?}, compaction err, {:?}", name, err
+                ),
+            },
         }
 
         elapsed = start.elapsed().ok().unwrap();

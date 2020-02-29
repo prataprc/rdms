@@ -262,7 +262,7 @@ where
     max_shards: usize,
     max_entries: usize,
 
-    auto_shard: Option<rt::Thread<String, usize, ()>>,
+    auto_shard: Option<rt::Thread<String, Result<usize>, ()>>,
     snapshot: Arc<Mutex<Snapshot<K, V>>>,
 }
 
@@ -629,7 +629,7 @@ where
     /// Try to balance the underlying shards using splits and merges.
     pub fn balance(&mut self) -> Result<usize> {
         match &self.auto_shard {
-            Some(auto_shard) => Ok(auto_shard.request("balance".to_string())?),
+            Some(auto_shard) => auto_shard.request("balance".to_string())?,
             None => {
                 let msg = format!("shllrb.balance(), auto-sharding none");
                 Err(Error::UnInitialized(msg))
@@ -2312,7 +2312,7 @@ fn auto_shard<K, V>(
     index_name: String,
     config: Config,
     snapshot: Arc<Mutex<Snapshot<K, V>>>,
-    rx: rt::Rx<String, usize>,
+    rx: rt::Rx<String, Result<usize>>,
 ) -> Result<()>
 where
     K: 'static + Send + Clone + Ord + Footprint,
@@ -2335,13 +2335,8 @@ where
                 cmp::min(interval, elapsed)
             };
             match rx.recv_timeout(interval) {
-                Ok((cmd, resp_tx)) => {
-                    if cmd == "balance" {
-                        resp_tx
-                    } else {
-                        unreachable!()
-                    }
-                }
+                Ok((cmd, resp_tx)) if cmd == "balance" => resp_tx,
+                Ok(_) => unreachable!(),
                 Err(mpsc::RecvTimeoutError::Timeout) => None,
                 Err(mpsc::RecvTimeoutError::Disconnected) => break Ok(()),
             }
@@ -2361,19 +2356,26 @@ where
         }
 
         let start = time::SystemTime::now();
-        let n = {
+        let res = {
             let name = index_name.clone();
             let s = snapshot
                 .lock()
                 .map_err(|e| ThreadFail(format!("shllrb: poisened, {:?}", e)))?;
-            ShLlrb::<K, V>::do_balance(name, s, config.clone())?
+            ShLlrb::<K, V>::do_balance(name, s, config.clone())
         };
 
         elapsed = systime_at!(start.elapsed())?;
 
         match resp_tx {
-            Some(tx) => ipc_at!(tx.send(n))?,
-            None => (),
+            Some(tx) => ipc_at!(tx.send(res))?,
+            None => match res {
+                Ok(n) => info!(
+                    target: "shllrb", "{:?}, balance done: {}", index_name, n
+                ),
+                Err(err) => info!(
+                    target: "dgm   ", "{:?}, balance err, {:?}", index_name, err
+                ),
+            },
         }
     }
 }

@@ -1,5 +1,11 @@
 use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
 
+use crate::nobitmap::NoBitmap;
+use crate::{
+    mvcc::{self, MvccFactory},
+    robt::{self, RobtFactory},
+};
+
 use super::*;
 
 #[test]
@@ -179,9 +185,6 @@ fn test_level_file_name() {
 
 #[test]
 fn test_dgm_crud() {
-    use crate::nobitmap::NoBitmap;
-    use crate::{mvcc, robt};
-
     let seed: u128 = random();
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
@@ -205,6 +208,7 @@ fn test_dgm_crud() {
         config.value_in_vlog = true;
         robt::robt_factory::<i64, i64, NoBitmap>(config)
     };
+
     let mut index = Dgm::new(
         //
         &dir,
@@ -217,63 +221,79 @@ fn test_dgm_crud() {
 
     let mut index_w = index.to_writer().unwrap();
     let mut index_r = index.to_reader().unwrap();
-    for _ in 0..1_000_000 {
-        let key: i64 = rng.gen::<i64>().abs();
-        let value: i64 = rng.gen::<i64>().abs();
-        let op: i64 = (rng.gen::<u8>() % 3) as i64;
-        //println!("key {} value {} op {}", key, value, op);
-        match op {
-            0 => {
-                let entry = index_w.set(key, value).unwrap();
-                let refn = ref_index.set(key, value).unwrap();
-                match (entry, refn) {
-                    (Some(entry), Some(refn)) => {
-                        check_entry1(&entry, &refn);
-                        check_entry2(&entry, &refn);
+
+    for _ in 0..1 {
+        for _ in 0..1_00_000 {
+            let key: i64 = rng.gen::<i64>().abs();
+            let value: i64 = rng.gen::<i64>().abs();
+            let op: i64 = (rng.gen::<u8>() % 3) as i64;
+            //println!("key {} value {} op {}", key, value, op);
+            match op {
+                0 => {
+                    let entry = index_w.set(key, value).unwrap();
+                    let refn = ref_index.set(key, value).unwrap();
+                    match (entry, refn) {
+                        (Some(entry), Some(refn)) => {
+                            check_entry1(&entry, &refn);
+                            check_entry2(&entry, &refn);
+                        }
+                        (None, None) => break,
+                        _ => unreachable!(),
                     }
-                    (None, None) => break,
-                    _ => unreachable!(),
+                    false
                 }
-                false
-            }
-            1 => {
-                let cas = match index_r.get(&key) {
-                    Ok(entry) => entry.to_seqno(),
-                    Err(Error::KeyNotFound) => std::u64::MIN,
-                    Err(err) => panic!(err),
-                };
-                let entry = index_w.set_cas(key, value, cas).ok().unwrap();
-                let refn = ref_index.set_cas(key, value, cas).ok().unwrap();
-                match (entry, refn) {
-                    (Some(entry), Some(refn)) => {
-                        check_entry1(&entry, &refn);
-                        check_entry2(&entry, &refn);
+                1 => {
+                    let cas = match index_r.get(&key) {
+                        Ok(entry) => entry.to_seqno(),
+                        Err(Error::KeyNotFound) => std::u64::MIN,
+                        Err(err) => panic!(err),
+                    };
+                    let entry = index_w.set_cas(key, value, cas).ok().unwrap();
+                    let refn = ref_index.set_cas(key, value, cas).ok().unwrap();
+                    match (entry, refn) {
+                        (Some(entry), Some(refn)) => {
+                            check_entry1(&entry, &refn);
+                            check_entry2(&entry, &refn);
+                        }
+                        (None, None) => break,
+                        _ => unreachable!(),
                     }
-                    (None, None) => break,
-                    _ => unreachable!(),
+                    false
                 }
-                false
-            }
-            2 => {
-                let entry = index_w.delete(&key).unwrap();
-                let refn = ref_index.delete(&key).unwrap();
-                match (entry, refn) {
-                    (Some(entry), Some(refn)) => {
-                        check_entry1(&entry, &refn);
-                        check_entry2(&entry, &refn);
+                2 => {
+                    let entry = index_w.delete(&key).unwrap();
+                    let refn = ref_index.delete(&key).unwrap();
+                    match (entry, refn) {
+                        (Some(entry), Some(refn)) => {
+                            check_entry1(&entry, &refn);
+                            check_entry2(&entry, &refn);
+                        }
+                        (None, None) => break,
+                        _ => unreachable!(),
                     }
-                    (None, None) => break,
-                    _ => unreachable!(),
+                    true
                 }
-                true
-            }
-            op => panic!("unreachable {}", op),
-        };
+                op => panic!("unreachable {}", op),
+            };
+        }
+
+        // assert!(index.validate().is_ok()); TODO
+        //println!("len {}", index.len());
+
+        verify_read(&mut ref_index, &mut index, &mut rng);
     }
 
-    // assert!(index.validate().is_ok()); TODO
+    mem::drop(index_w);
+    mem::drop(index_r);
+}
 
-    //println!("len {}", index.len());
+fn verify_read(
+    ref_index: &mut mvcc::Mvcc<i64, i64>,
+    index: &mut Dgm<i64, i64, MvccFactory, RobtFactory<i64, i64, NoBitmap>>,
+    rng: &mut SmallRng,
+) {
+    let mut index_r = index.to_reader().unwrap();
+
     assert_eq!(ref_index.to_seqno().unwrap(), index.to_seqno().unwrap());
 
     {
@@ -296,7 +316,7 @@ fn test_dgm_crud() {
 
     // ranges and reverses
     for _ in 0..1000 {
-        let (low, high) = random_low_high(&mut rng);
+        let (low, high) = random_low_high(rng);
         //println!("test loop {:?} {:?}", low, high);
 
         {
@@ -333,9 +353,6 @@ fn test_dgm_crud() {
             }
         }
     }
-
-    mem::drop(index_w);
-    mem::drop(index_r);
 }
 
 fn check_entry1(e1: &Entry<i64, i64>, e2: &Entry<i64, i64>) {

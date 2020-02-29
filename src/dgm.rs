@@ -651,6 +651,7 @@ where
                 Some((_, Snapshot::None)) => (),        // continue loop
                 Some((lvl, disk)) => {
                     let df = disk.footprint()? as f64;
+                    println!("mf:{}, df:{}", mf, df);
                     match disk {
                         Compact(_) => break Ok(lvl - 1),
                         Active(_) => {
@@ -741,14 +742,8 @@ where
 
         loop {
             match levels.len() {
-                0 | 1 => {
-                    let mut levels = Self::active_compact_levels(disks);
-                    break if levels.len() > 0 {
-                        Ok(Some((vec![], levels.remove(levels.len() - 1))))
-                    } else {
-                        Ok(None)
-                    };
-                }
+                0 => break Ok(None),
+                1 => break Ok(Some((vec![], levels[0]))),
                 _n => {
                     let target_level = levels.remove(levels.len() - 1);
                     let ratio = {
@@ -1173,11 +1168,15 @@ where
         (0..NLEVELS).for_each(|_| disks.push(Default::default()));
 
         for level in 0..root.levels {
-            let level_name: LevelName = (name.to_string(), level).into();
-            disks[level] = {
-                let d = disk_factory.open(dir, &level_name.to_string())?;
-                Snapshot::new_active(d)
+            let level_name = {
+                let level_name: LevelName = (name.to_string(), level).into();
+                level_name.to_string()
             };
+            disks[level] = match disk_factory.open(dir, &level_name) {
+                Ok(d) => Snapshot::new_active(d),
+                Err(_) => Default::default(),
+            };
+            // println!("dgm open {} {}", level, disks[level].is_active());
         }
 
         let config = root.clone().into();
@@ -1202,13 +1201,21 @@ where
                 writers: Default::default(),
                 readers: Default::default(),
             };
-
             let mut index = Box::new(Dgm {
                 name: name.to_string(),
                 auto_commit: Default::default(),
                 auto_compact: Default::default(),
                 inner: Arc::new(Mutex::new(inner)),
             });
+
+            let latest_seqno = {
+                let inner = index.as_inner()?;
+                Self::to_disk_seqno(inner)?
+            };
+            {
+                let mut inner = index.as_inner()?;
+                inner.m0.as_mut_m0()?.set_seqno(latest_seqno)?;
+            }
 
             index.start_auto_commit()?;
             index.start_auto_compact()?;
@@ -1335,39 +1342,6 @@ where
         Ok(std::u64::MIN)
     }
 
-    fn to_reader_local(
-        mut inner: MutexGuard<InnerDgm<K, V, M, D>>,
-    ) -> Result<<Self as Index<K, V>>::R> {
-        let r_m0 = inner.m0.as_mut_m0()?.to_reader()?;
-
-        let r_m1 = match inner.m1.as_mut() {
-            Some(m) => Some(m.as_mut_m1()?.to_reader()?),
-            None => None,
-        };
-
-        let mut r_disks = vec![];
-        for disk in inner.disks.iter_mut() {
-            match disk.as_mut_disk()? {
-                Some(d) => r_disks.push(d.to_reader()?),
-                None => (),
-            }
-        }
-
-        let rs = Rs {
-            r_m0,
-            r_m1,
-            r_disks,
-
-            _phantom_key: marker::PhantomData,
-            _phantom_val: marker::PhantomData,
-        };
-
-        let arc_rs = Arc::new(Mutex::new(rs));
-        inner.readers.push(Arc::clone(&arc_rs));
-
-        Ok(DgmReader::new(&inner.name, arc_rs))
-    }
-
     fn do_commit<C, F>(
         inner: &Arc<Mutex<InnerDgm<K, V, M, D>>>,
         _: CommitIter<K, V, C>, // TODO: should we handle scanner
@@ -1389,16 +1363,11 @@ where
             return Ok(());
         }
 
-        let r = {
-            let inn = to_inner_lock(inner)?;
-            Self::to_reader_local(inn)?
-        };
-
         let (mut d, r_m1, level) = {
             let mut inn = to_inner_lock(inner)?;
 
-            inn.shift_into_m0()?;
             let level = inn.commit_level()?;
+            inn.shift_into_m0()?;
 
             inn.move_to_commit(level)?;
 
@@ -1424,7 +1393,8 @@ where
             let mut inn = to_inner_lock(inner)?;
             let disk = Snapshot::new_active(d);
             mem::replace(&mut inn.disks[level], disk);
-            inn.m1 = None;
+            // don't drop _m1 before repopulate_readers().
+            let _m1 = mem::replace(&mut inn.m1, None);
             inn.repopulate_readers()?;
 
             inn.root = inn.root.to_next();
@@ -1435,12 +1405,6 @@ where
                 inn.root.clone(),
             )?;
         }
-
-        // In one scenario it is important to hold on to a reader snapshot,
-        // of older version. This is to make sure that older snapshot is
-        // purged only after disk snapshot and root-file are both persisted,
-        // so that recovery is possible.
-        mem::drop(r);
 
         Ok(())
     }
@@ -1474,17 +1438,20 @@ where
             }
         };
 
-        let r = {
-            let inn = to_inner_lock(inner)?;
-            Self::to_reader_local(inn)?
-        };
-
         let res = if src_levels.len() == 0 {
             let mut high_disk = {
                 let inn = to_inner_lock(inner)?;
                 inn.disks[dst_level].as_disk()?.unwrap().clone()
             };
-            high_disk.compact(cutoff, metacb)
+            let res = high_disk.compact(cutoff, metacb);
+            {
+                let mut inn = to_inner_lock(inner)?;
+                let disk = Snapshot::new_active(high_disk);
+                mem::replace(&mut inn.disks[dst_level], disk);
+
+                inn.repopulate_readers()?;
+            }
+            res
         } else {
             let (src_disks, mut disk) = {
                 let inn = to_inner_lock(inner)?;
@@ -1502,20 +1469,12 @@ where
 
             {
                 let mut inn = to_inner_lock(inner)?;
-
                 // update the disk-levels.
                 for level in src_levels.clone().into_iter() {
                     mem::replace(&mut inn.disks[level], Default::default());
                 }
-                let d = {
-                    //
-                    mem::replace(&mut inn.disks[dst_level], Default::default())
-                };
-                let d = match d {
-                    Snapshot::Compact(d) => d,
-                    _ => unreachable!(),
-                };
-                inn.disks[dst_level] = Snapshot::new_active(d);
+                let disk = Snapshot::new_active(disk);
+                mem::replace(&mut inn.disks[dst_level], disk);
 
                 inn.repopulate_readers()?;
             }
@@ -1534,12 +1493,6 @@ where
             )?;
         }
 
-        // In one scenario it is important to hold on to a reader snapshot,
-        // of older version. This is to make sure that older snapshot is
-        // purged only after disk snapshot and root-file are both persisted,
-        // so that recovery is possible.
-        mem::drop(r);
-
         res
     }
 
@@ -1550,9 +1503,9 @@ where
         root: Root,
     ) -> Result<ffi::OsString> {
         let root_file: ffi::OsString = {
-            let rootf: RootFileName = (name.to_string().into(), 0_usize).into();
+            let rf: RootFileName = (name.to_string().into(), root.version).into();
             let mut rootp = path::PathBuf::from(dir);
-            rootp.push(&rootf.0);
+            rootp.push(&rf.0);
             rootp.into_os_string()
         };
 
@@ -1639,7 +1592,9 @@ where
     fn to_seqno(&self) -> Result<u64> {
         let inner = self.as_inner()?;
 
-        inner.m0.as_m0()?.to_seqno()
+        let m0_seqno = inner.m0.as_m0()?.to_seqno()?;
+        let disk_seqno = Self::to_disk_seqno(inner)?;
+        Ok(cmp::max(m0_seqno, disk_seqno))
     }
 
     fn set_seqno(&mut self, seqno: u64) -> Result<()> {
@@ -1659,8 +1614,36 @@ where
     }
 
     fn to_reader(&mut self) -> Result<Self::R> {
-        let inner = self.as_inner()?;
-        Self::to_reader_local(inner)
+        let mut inner = self.as_inner()?;
+
+        let r_m0 = inner.m0.as_mut_m0()?.to_reader()?;
+
+        let r_m1 = match inner.m1.as_mut() {
+            Some(m) => Some(m.as_mut_m1()?.to_reader()?),
+            None => None,
+        };
+
+        let mut r_disks = vec![];
+        for disk in inner.disks.iter_mut() {
+            match disk.as_mut_disk()? {
+                Some(d) => r_disks.push(d.to_reader()?),
+                None => (),
+            }
+        }
+
+        let rs = Rs {
+            r_m0,
+            r_m1,
+            r_disks,
+
+            _phantom_key: marker::PhantomData,
+            _phantom_val: marker::PhantomData,
+        };
+
+        let arc_rs = Arc::new(Mutex::new(rs));
+        inner.readers.push(Arc::clone(&arc_rs));
+
+        Ok(DgmReader::new(&inner.name, arc_rs))
     }
 
     fn commit<C, F>(&mut self, scanner: CommitIter<K, V, C>, metacb: F) -> Result<()>

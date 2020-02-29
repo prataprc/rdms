@@ -192,6 +192,7 @@ fn test_level_file_name() {
 #[test]
 fn test_dgm_crud() {
     let seed: u128 = random();
+    let seed: u128 = 16504366636368304135876128421673424653;
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
     let config = Config {
@@ -200,6 +201,8 @@ fn test_dgm_crud() {
         commit_interval: time::Duration::from_secs(0),
         compact_interval: time::Duration::from_secs(0),
     };
+
+    println!("seed: {}", seed);
 
     let mut ref_index = mvcc::Mvcc::new_lsm("dgm-crud");
 
@@ -222,19 +225,19 @@ fn test_dgm_crud() {
         "dgm-crud",
         mem_factory,
         disk_factory,
-        config,
+        config.clone(),
     )
     .unwrap();
 
-    let mut index_w = index.to_writer().unwrap();
-    let mut index_r = index.to_reader().unwrap();
-
-    for _ in 0..1 {
+    for _i in 0..10 {
+        // println!("loop {}", _i);
+        let mut index_w = index.to_writer().unwrap();
+        let mut index_r = index.to_reader().unwrap();
         for _ in 0..1_00_000 {
             let key: i64 = rng.gen::<i64>().abs();
             let value: i64 = rng.gen::<i64>().abs();
             let op: i64 = (rng.gen::<u8>() % 3) as i64;
-            //println!("key {} value {} op {}", key, value, op);
+            // println!("key {} value {} op {}", key, value, op);
             match op {
                 0 => {
                     let entry = index_w.set(key, value).unwrap();
@@ -244,7 +247,7 @@ fn test_dgm_crud() {
                             check_entry1(&entry, &refn);
                             check_entry2(&entry, &refn);
                         }
-                        (None, None) => break,
+                        (None, None) => (),
                         _ => unreachable!(),
                     }
                     false
@@ -255,14 +258,20 @@ fn test_dgm_crud() {
                         Err(Error::KeyNotFound) => std::u64::MIN,
                         Err(err) => panic!(err),
                     };
-                    let entry = index_w.set_cas(key, value, cas).ok().unwrap();
-                    let refn = ref_index.set_cas(key, value, cas).ok().unwrap();
+                    let entry = {
+                        let res = index_w.set_cas(key, value, cas);
+                        res.unwrap()
+                    };
+                    let refn = {
+                        let res = ref_index.set_cas(key, value, cas);
+                        res.unwrap()
+                    };
                     match (entry, refn) {
                         (Some(entry), Some(refn)) => {
                             check_entry1(&entry, &refn);
                             check_entry2(&entry, &refn);
                         }
-                        (None, None) => break,
+                        (None, None) => (),
                         _ => unreachable!(),
                     }
                     false
@@ -275,7 +284,7 @@ fn test_dgm_crud() {
                             check_entry1(&entry, &refn);
                             check_entry2(&entry, &refn);
                         }
-                        (None, None) => break,
+                        (None, None) => (),
                         _ => unreachable!(),
                     }
                     true
@@ -283,15 +292,50 @@ fn test_dgm_crud() {
                 op => panic!("unreachable {}", op),
             };
         }
+        mem::drop(index_w);
+        mem::drop(index_r);
 
         // assert!(index.validate().is_ok()); TODO
-        //println!("len {}", index.len());
+        println!("seqno {}", ref_index.to_seqno().unwrap());
+
+        verify_read(&mut ref_index, &mut index, &mut rng);
+
+        {
+            let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
+            let scanner = CommitIter::new(vec![].into_iter(), within);
+            index.commit(scanner, convert::identity).unwrap()
+        }
+
+        verify_read(&mut ref_index, &mut index, &mut rng);
+
+        {
+            index
+                .compact(Cutoff::new_lsm_empty(), convert::identity)
+                .unwrap();
+        }
+
+        verify_read(&mut ref_index, &mut index, &mut rng);
+
+        {
+            let mem_factory = mvcc::mvcc_factory(true /*lsm*/);
+            let disk_factory = {
+                let mut config: robt::Config = Default::default();
+                config.delta_ok = true;
+                config.value_in_vlog = true;
+                robt::robt_factory::<i64, i64, NoBitmap>(config)
+            };
+            index = Dgm::open(
+                //
+                &dir,
+                "dgm-crud",
+                mem_factory,
+                disk_factory,
+            )
+            .unwrap();
+        }
 
         verify_read(&mut ref_index, &mut index, &mut rng);
     }
-
-    mem::drop(index_w);
-    mem::drop(index_r);
 }
 
 fn verify_read(
@@ -322,9 +366,11 @@ fn verify_read(
     }
 
     // ranges and reverses
-    for _ in 0..1000 {
+    for _ in 0..1
+    /*TODO make it 100 */
+    {
         let (low, high) = random_low_high(rng);
-        //println!("test loop {:?} {:?}", low, high);
+        println!("test loop {:?} {:?}", low, high);
 
         {
             let mut iter = index_r.range((low, high)).unwrap();

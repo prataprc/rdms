@@ -735,6 +735,7 @@ where
             } => {
                 info!(target: "robt  ", "{:?}, new reader ...", name);
 
+                //println!("Robt.to_reader() {:?} {}", dir, name);
                 let mut snapshot = Snapshot::open(dir, &name.0)?;
                 snapshot.set_bitmap(Arc::clone(bitmap));
                 snapshot.log()?;
@@ -2526,6 +2527,7 @@ where
         dir: &ffi::OsStr,
         name: &str, // index file name.
     ) -> Result<Snapshot<K, V, B>> {
+        // println!("Snapshot.open() {:?} {}", dir, name);
         let (mut meta_items, _) = read_meta_items(dir, name)?;
         let stats: Stats = if let MetaItem::Stats(stats) = &meta_items[3] {
             Ok(stats.parse()?)

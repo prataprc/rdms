@@ -18,12 +18,14 @@ fn test_config_root() {
 
         mem_ratio: 0.25,
         disk_ratio: 0.65,
+        commit_interval: time::Duration::from_secs(10),
         compact_interval: time::Duration::from_secs(10),
     };
 
     let ref_config = Config {
         mem_ratio: 0.25,
         disk_ratio: 0.65,
+        commit_interval: time::Duration::from_secs(10),
         compact_interval: time::Duration::from_secs(10),
     };
     let root = ref_config.clone().into();
@@ -50,6 +52,7 @@ fn test_root1() {
 
             mem_ratio: 0.25,
             disk_ratio: 0.65,
+            commit_interval: time::Duration::from_secs(10),
             compact_interval: time::Duration::from_secs(10),
         };
         let bytes: Vec<u8> = ref_root.clone().try_into().unwrap();
@@ -68,6 +71,7 @@ fn test_root2() {
 
         mem_ratio: 0.25,
         disk_ratio: 0.65,
+        commit_interval: time::Duration::from_secs(10),
         compact_interval: time::Duration::from_secs(10),
     };
     let root = root.to_next();
@@ -79,6 +83,7 @@ fn test_root2() {
 
         mem_ratio: 0.25,
         disk_ratio: 0.65,
+        commit_interval: time::Duration::from_secs(10),
         compact_interval: time::Duration::from_secs(10),
     };
     assert_eq!(root, ref_root);
@@ -94,6 +99,7 @@ fn test_root3() {
 
         mem_ratio: 0.25,
         disk_ratio: 0.65,
+        commit_interval: time::Duration::from_secs(10),
         compact_interval: time::Duration::from_secs(10),
     };
 
@@ -191,7 +197,8 @@ fn test_dgm_crud() {
     let config = Config {
         mem_ratio: 0.5,
         disk_ratio: 0.5,
-        compact_interval: time::Duration::from_secs(1),
+        commit_interval: time::Duration::from_secs(0),
+        compact_interval: time::Duration::from_secs(0),
     };
 
     let mut ref_index = mvcc::Mvcc::new_lsm("dgm-crud");

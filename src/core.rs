@@ -1144,8 +1144,22 @@ where
             .into_iter()
             .zip(seqnos[1..].into_iter())
             .any(|(a, b)| a <= b);
-        // println!("validate_xmerge {} {:?}", fail, seqnos);
+
         if fail {
+            //println!(
+            //    "validate_xmerge {:?} {} {:?} {} {:?}",
+            //    seqnos,
+            //    self.to_seqno(),
+            //    self.deltas
+            //        .iter()
+            //        .map(|d| d.to_seqno())
+            //        .collect::<Vec<u64>>(),
+            //    entr.to_seqno(),
+            //    entr.deltas
+            //        .iter()
+            //        .map(|d| d.to_seqno())
+            //        .collect::<Vec<u64>>(),
+            //);
             Err(Error::UnExpectedFail(format!("Entry.validate_xmerge()")))
         } else {
             Ok(())

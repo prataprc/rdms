@@ -1,6 +1,12 @@
 //! Module `dgm` implement data-indexing optimized for
 //! disk-greater-than-memory.
 
+// TODO: Delete/Set/SetCAS does lookup into disk snapshot for the
+// old value, which means returned value can be None, while there
+// is an older value. May be we have to provide a separate API ?
+
+// TODO: implement set_cas(), needs a proper transaction design for this.
+
 use log::{debug, error, info};
 use toml;
 
@@ -518,6 +524,7 @@ where
     root_file: ffi::OsString,
     root: Root,
 
+    n_commits: usize,
     m0: Snapshot<K, V, M::I>,         // write index
     m1: Option<Snapshot<K, V, M::I>>, // flush index
     disks: Vec<Snapshot<K, V, D::I>>, // NLEVELS
@@ -651,7 +658,7 @@ where
                 Some((_, Snapshot::None)) => (),        // continue loop
                 Some((lvl, disk)) => {
                     let df = disk.footprint()? as f64;
-                    println!("mf:{}, df:{}", mf, df);
+                    // println!("mf:{}, df:{}", mf, df);
                     match disk {
                         Compact(_) => break Ok(lvl - 1),
                         Active(_) => {
@@ -740,26 +747,26 @@ where
     ) -> Result<Option<(Vec<usize>, usize)>> {
         let mut levels = Self::active_compact_levels(disks);
 
-        loop {
-            match levels.len() {
-                0 => break Ok(None),
-                1 => break Ok(Some((vec![], levels[0]))),
-                _n => {
-                    let target_level = levels.remove(levels.len() - 1);
-                    let ratio = {
-                        let t_footprint = disks[target_level].footprint()?;
-                        let mut footprint = 0;
-                        for level in levels.clone().into_iter() {
-                            footprint += disks[level].footprint()?;
-                        }
-                        (t_footprint as f64) / (footprint as f64)
-                    };
-
-                    if ratio > disk_ratio {
-                        break Ok(Some((levels, target_level)));
+        match levels.len() {
+            0 | 1 => Ok(None),
+            _n => loop {
+                let target_level = levels.remove(levels.len() - 1);
+                let ratio = {
+                    let t_footprint = disks[target_level].footprint()?;
+                    let mut footprint = 0;
+                    for level in levels.clone().into_iter() {
+                        footprint += disks[level].footprint()?;
                     }
+                    // println!("compact_fp {} {}", footprint, t_footprint);
+                    (footprint as f64) / (t_footprint as f64)
+                };
+
+                if ratio > disk_ratio {
+                    break Ok(Some((levels, target_level)));
+                } else if levels.len() == 1 {
+                    break Ok(None);
                 }
-            }
+            },
         }
     }
 
@@ -770,7 +777,11 @@ where
         };
 
         let (levels, src_levels, dst_level) = match levels {
-            None => return Ok(None),
+            None if self.n_commits < 2 => return Ok(None),
+            None => match Self::active_compact_levels(&self.disks).pop() {
+                None => return Ok(None),
+                Some(d) => (vec![d], vec![], d),
+            },
             Some((ss, d)) if ss.len() == 0 => (vec![d], ss, d),
             Some((ss, d)) => {
                 let mut levels = ss.clone();
@@ -820,7 +831,10 @@ where
         &self,
         src_levels: Vec<usize>,
         dst_level: usize,
-    ) -> Result<Vec<<D as DiskIndexFactory<K, V>>::I>> {
+    ) -> Result<(
+        Vec<<D as DiskIndexFactory<K, V>>::I>,
+        <D as DiskIndexFactory<K, V>>::I,
+    )> {
         assert!(
             src_levels.clone().into_iter().all(|l| l < dst_level),
             "src_levels:{:?} dst_level:{}",
@@ -832,8 +846,9 @@ where
         for level in src_levels.clone().into_iter() {
             src_disks.push(self.disks[level].as_disk()?.unwrap().clone());
         }
+        let d = self.disks[dst_level].as_disk()?.unwrap().clone();
 
-        Ok(src_disks)
+        Ok((src_disks, d))
     }
 }
 
@@ -1122,6 +1137,7 @@ where
             root_file,
             root,
 
+            n_commits: Default::default(),
             m0,
             m1: None,
             disks,
@@ -1161,8 +1177,7 @@ where
         <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::R: 'static + Send,
         <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::W: 'static + Send,
     {
-        let root = Self::find_root_file(dir, name)?;
-        let root_file: RootFileName = (name.to_string(), root.version).into();
+        let (root, root_file) = Self::find_root_file(dir, name)?;
 
         let mut disks: Vec<Snapshot<K, V, D::I>> = vec![];
         (0..NLEVELS).for_each(|_| disks.push(Default::default()));
@@ -1191,9 +1206,10 @@ where
                 name: name.to_string(),
                 mem_factory,
                 disk_factory,
-                root_file: root_file.into(),
+                root_file,
                 root,
 
+                n_commits: Default::default(),
                 m0,
                 m1: None,
                 disks,
@@ -1210,7 +1226,7 @@ where
 
             let latest_seqno = {
                 let inner = index.as_inner()?;
-                Self::to_disk_seqno(inner)?
+                Self::to_disk_seqno(&inner)?
             };
             {
                 let mut inner = index.as_inner()?;
@@ -1331,7 +1347,7 @@ where
             })
     }
 
-    fn to_disk_seqno(inner: MutexGuard<InnerDgm<K, V, M, D>>) -> Result<u64> {
+    fn to_disk_seqno(inner: &MutexGuard<InnerDgm<K, V, M, D>>) -> Result<u64> {
         for d in inner.disks.iter() {
             match d.as_disk()? {
                 Some(d) => return d.to_seqno(),
@@ -1351,20 +1367,14 @@ where
         C: CommitIterator<K, V>,
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
-        let (m0_seqno, disk_seqno) = {
+        let (mut d, r_m1, level) = {
             let mut inn = to_inner_lock(inner)?;
             inn.cleanup_writers()?;
             inn.cleanup_readers()?;
 
-            (inn.m0.as_m0()?.to_seqno()?, Self::to_disk_seqno(inn)?)
-        };
-
-        if m0_seqno == disk_seqno {
-            return Ok(());
-        }
-
-        let (mut d, r_m1, level) = {
-            let mut inn = to_inner_lock(inner)?;
+            if inn.m0.as_m0()?.to_seqno()? == Self::to_disk_seqno(&inn)? {
+                return Ok(());
+            }
 
             let level = inn.commit_level()?;
             inn.shift_into_m0()?;
@@ -1397,6 +1407,7 @@ where
             let _m1 = mem::replace(&mut inn.m1, None);
             inn.repopulate_readers()?;
 
+            let root_file = inn.root_file.clone();
             inn.root = inn.root.to_next();
             inn.root_file = Self::new_root_file(
                 //
@@ -1404,6 +1415,7 @@ where
                 &inn.name,
                 inn.root.clone(),
             )?;
+            io_err_at!(fs::remove_file(&root_file))?;
         }
 
         Ok(())
@@ -1431,12 +1443,12 @@ where
 
         let (src_levels, dst_level) = {
             let mut inn = to_inner_lock(inner)?;
-
             match inn.compact_levels()? {
                 None => return Ok(0),
                 Some((src_levels, dst_level)) => (src_levels, dst_level),
             }
         };
+        // println!("Dgm.do_compact() {:?} {}", src_levels, dst_level);
 
         let res = if src_levels.len() == 0 {
             let mut high_disk = {
@@ -1450,14 +1462,14 @@ where
                 mem::replace(&mut inn.disks[dst_level], disk);
 
                 inn.repopulate_readers()?;
+                inn.n_commits = 0;
             }
+            // println!("Dgm.compact() compact");
             res
         } else {
             let (src_disks, mut disk) = {
                 let inn = to_inner_lock(inner)?;
-                let ds = inn.do_compact_commit(src_levels.clone(), dst_level)?;
-                let d = inn.disks[dst_level].as_disk()?.unwrap().clone();
-                (ds, d)
+                inn.do_compact_commit(src_levels.clone(), dst_level)?
             };
             let scanner = {
                 let scanner = CommitScanner::<K, V, D::I>::new(src_disks)?;
@@ -1471,19 +1483,26 @@ where
                 let mut inn = to_inner_lock(inner)?;
                 // update the disk-levels.
                 for level in src_levels.clone().into_iter() {
-                    mem::replace(&mut inn.disks[level], Default::default());
+                    let d = mem::replace(&mut inn.disks[level], Default::default());
+                    match d {
+                        Snapshot::Compact(d) => d.purge()?,
+                        _ => unreachable!(),
+                    }
                 }
                 let disk = Snapshot::new_active(disk);
                 mem::replace(&mut inn.disks[dst_level], disk);
 
                 inn.repopulate_readers()?;
+                inn.n_commits += 1;
             }
 
+            // println!("Dgm.compact() commit");
             Ok(0)
         };
 
         {
             let mut inn = to_inner_lock(inner)?;
+            let root_file = inn.root_file.clone();
             inn.root.reset_cutoff(cutoff);
             inn.root_file = Self::new_root_file(
                 //
@@ -1491,6 +1510,7 @@ where
                 &inn.name,
                 inn.root.clone(),
             )?;
+            io_err_at!(fs::remove_file(&root_file))?;
         }
 
         res
@@ -1516,7 +1536,7 @@ where
         Ok(root_file.into())
     }
 
-    fn find_root_file(dir: &ffi::OsStr, name: &str) -> Result<Root> {
+    fn find_root_file(dir: &ffi::OsStr, name: &str) -> Result<(Root, ffi::OsString)> {
         use crate::error::Error::InvalidFile;
 
         let mut versions = vec![];
@@ -1549,7 +1569,7 @@ where
         let mut bytes = vec![];
         io_err_at!(fd.read_to_end(&mut bytes))?;
 
-        Ok(bytes.try_into()?)
+        Ok((bytes.try_into()?, root_file))
     }
 }
 
@@ -1593,7 +1613,7 @@ where
         let inner = self.as_inner()?;
 
         let m0_seqno = inner.m0.as_m0()?.to_seqno()?;
-        let disk_seqno = Self::to_disk_seqno(inner)?;
+        let disk_seqno = Self::to_disk_seqno(&inner)?;
         Ok(cmp::max(m0_seqno, disk_seqno))
     }
 
@@ -1724,9 +1744,8 @@ where
         w.set(key, value)
     }
 
-    fn set_cas(&mut self, k: K, v: V, cas: u64) -> Result<Option<Entry<K, V>>> {
-        let mut w = self.as_writer()?;
-        w.set_cas(k, v, cas)
+    fn set_cas(&mut self, _: K, _: V, _cas: u64) -> Result<Option<Entry<K, V>>> {
+        unimplemented!()
     }
 
     fn delete<Q>(&mut self, key: &Q) -> Result<Option<Entry<K, V>>>
@@ -1802,18 +1821,20 @@ where
         K: 'a,
         V: 'a,
     {
+        iters.reverse();
+
         match iters.len() {
             1 => iters.remove(0),
             n if n > 1 => {
-                let mut newer_iter = iters.remove(0);
-                for older_iter in iters.into_iter() {
-                    newer_iter = if versions {
+                let mut older_iter = iters.remove(0);
+                for newer_iter in iters.into_iter() {
+                    older_iter = if versions {
                         lsm::y_iter_versions(newer_iter, older_iter, reverse)
                     } else {
                         lsm::y_iter(newer_iter, older_iter, reverse)
                     };
                 }
-                newer_iter
+                older_iter
             }
             _ => unreachable!(),
         }
@@ -2018,14 +2039,12 @@ where
 
         if let Some(m1) = &mut rs.r_m1 {
             let m1 = unsafe { (m1 as *mut M).as_mut().unwrap() };
-            let range = range.clone();
-            iters.push(m1.range_with_versions(range)?)
+            iters.push(m1.range_with_versions(range.clone())?)
         }
 
         for disk in rs.r_disks.iter_mut().rev() {
             let disk = unsafe { (disk as *mut D).as_mut().unwrap() };
-            let range = range.clone();
-            iters.push(disk.range_with_versions(range)?);
+            iters.push(disk.range_with_versions(range.clone())?);
         }
 
         let iter = Self::merge_iters(iters, false /*reverse*/, true /*ver*/);
@@ -2157,6 +2176,8 @@ where
     I: Index<K, V> + Footprint + Clone,
 {
     fn new(mut src_disks: Vec<I>) -> Result<CommitScanner<K, V, I>> {
+        src_disks.reverse();
+
         let mut rs = vec![];
         for disk in src_disks.iter_mut() {
             rs.push(disk.to_reader()?);
@@ -2176,26 +2197,24 @@ where
     where
         G: Clone + RangeBounds<u64>,
     {
+        let no_reverse = false;
+
         match self.rs.len() {
             0 => unreachable!(),
             1 => Ok(self.rs[0].iter_with_versions()?),
             _n => {
-                let mut y_iter = unsafe {
-                    let r = &self.rs[0];
-                    let r = r as *const <I as Index<K, V>>::R;
-                    let r = r as *mut <I as Index<K, V>>::R;
-                    let r = r.as_mut().unwrap();
-                    r.iter_with_versions()?
+                let r = unsafe {
+                    let r = &mut self.rs[0];
+                    (r as *mut <I as Index<K, V>>::R).as_mut().unwrap()
                 };
-                let no_reverse = false;
-                for r in self.rs[1..].iter() {
+                let mut y_iter = r.iter_with_versions()?;
+                for r in self.rs[1..].iter_mut() {
                     let r = unsafe {
-                        let r = r as *const <I as Index<K, V>>::R;
                         let r = r as *mut <I as Index<K, V>>::R;
                         r.as_mut().unwrap()
                     };
                     let iter = r.iter_with_versions()?;
-                    y_iter = lsm::y_iter_versions(y_iter, iter, no_reverse);
+                    y_iter = lsm::y_iter_versions(iter, y_iter, no_reverse);
                 }
                 Ok(Box::new(scans::FilterScans::new(
                     vec![y_iter],
@@ -2209,8 +2228,9 @@ where
     where
         G: Clone + RangeBounds<u64>,
     {
-        let mut result_iters = vec![];
         let no_reverse = false;
+
+        let mut result_iters = vec![];
         for disk in self.src_disks.iter_mut() {
             let iters = disk.scans(n_shards, within.clone())?;
             assert_eq!(iters.len(), n_shards);
@@ -2218,13 +2238,16 @@ where
                 result_iters = iters;
             } else {
                 let ziter = {
-                    let a = iters.into_iter();
-                    let b = result_iters.into_iter();
-                    a.zip(b)
+                    let new_iters = iters.into_iter();
+                    let old_iters = result_iters.into_iter();
+                    new_iters.zip(old_iters)
                 };
                 result_iters = vec![];
-                for (a, b) in ziter {
-                    result_iters.push(lsm::y_iter_versions(a, b, no_reverse));
+                for (new_iter, old_iter) in ziter {
+                    result_iters.push(
+                        //
+                        lsm::y_iter_versions(new_iter, old_iter, no_reverse),
+                    );
                 }
             }
         }
@@ -2237,8 +2260,9 @@ where
         N: Clone + RangeBounds<K>,
         G: Clone + RangeBounds<u64>,
     {
-        let mut result_iters = vec![];
         let no_reverse = false;
+
+        let mut result_iters = vec![];
         for disk in self.src_disks.iter_mut() {
             let iters = disk.range_scans(ranges.clone(), within.clone())?;
             assert_eq!(iters.len(), ranges.len());
@@ -2246,13 +2270,16 @@ where
                 result_iters = iters;
             } else {
                 let ziter = {
-                    let a = iters.into_iter();
-                    let b = result_iters.into_iter();
-                    a.zip(b)
+                    let new_iters = iters.into_iter();
+                    let old_iters = result_iters.into_iter();
+                    new_iters.zip(old_iters)
                 };
                 result_iters = vec![];
-                for (a, b) in ziter {
-                    result_iters.push(lsm::y_iter_versions(a, b, no_reverse));
+                for (new_iter, old_iter) in ziter {
+                    result_iters.push(
+                        //
+                        lsm::y_iter_versions(new_iter, old_iter, no_reverse),
+                    );
                 }
             }
         }

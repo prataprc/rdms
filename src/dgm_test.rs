@@ -191,8 +191,9 @@ fn test_level_file_name() {
 
 #[test]
 fn test_dgm_crud() {
+    // TODO:  test get() api
     let seed: u128 = random();
-    let seed: u128 = 16504366636368304135876128421673424653;
+    let seed: u128 = 38756782021146916649595855654745225812;
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
     let config = Config {
@@ -229,15 +230,19 @@ fn test_dgm_crud() {
     )
     .unwrap();
 
-    for _i in 0..10 {
+    let n_ops = 1000;
+    for _i in 0..9 {
         // println!("loop {}", _i);
         let mut index_w = index.to_writer().unwrap();
-        let mut index_r = index.to_reader().unwrap();
-        for _ in 0..1_00_000 {
-            let key: i64 = rng.gen::<i64>().abs();
+        for _ in 0..n_ops {
+            let key: i64 = rng.gen::<i64>().abs() % (n_ops * 3);
             let value: i64 = rng.gen::<i64>().abs();
-            let op: i64 = (rng.gen::<u8>() % 3) as i64;
-            // println!("key {} value {} op {}", key, value, op);
+            let op: i64 = (rng.gen::<u8>() % 2) as i64;
+            let seqno = ref_index.to_seqno().unwrap();
+            //println!(
+            //    "i:{} key:{} value:{} op:{} seqno:{}",
+            //    _i, key, value, op, seqno
+            //);
             match op {
                 0 => {
                     let entry = index_w.set(key, value).unwrap();
@@ -245,47 +250,45 @@ fn test_dgm_crud() {
                     match (entry, refn) {
                         (Some(entry), Some(refn)) => {
                             check_entry1(&entry, &refn);
-                            check_entry2(&entry, &refn);
                         }
                         (None, None) => (),
-                        _ => unreachable!(),
+                        _ => (),
                     }
                     false
                 }
+                //1 => { // TODO enable this case once Dgm.set_cas() implemented
+                //    let cas = match index_r.get(&key) {
+                //        Ok(entry) => entry.to_seqno(),
+                //        Err(Error::KeyNotFound) => std::u64::MIN,
+                //        Err(err) => panic!(err),
+                //    };
+                //    let entry = {
+                //        let res = index_w.set_cas(key, value, cas);
+                //        res.unwrap()
+                //    };
+                //    let refn = {
+                //        let res = ref_index.set_cas(key, value, cas);
+                //        res.unwrap()
+                //    };
+                //    match (entry, refn) {
+                //        (Some(entry), Some(refn)) => {
+                //            check_entry1(&entry, &refn);
+                //            check_entry2(&entry, &refn);
+                //        }
+                //        (None, None) => (),
+                //        _ => (),
+                //    }
+                //    false
+                //}
                 1 => {
-                    let cas = match index_r.get(&key) {
-                        Ok(entry) => entry.to_seqno(),
-                        Err(Error::KeyNotFound) => std::u64::MIN,
-                        Err(err) => panic!(err),
-                    };
-                    let entry = {
-                        let res = index_w.set_cas(key, value, cas);
-                        res.unwrap()
-                    };
-                    let refn = {
-                        let res = ref_index.set_cas(key, value, cas);
-                        res.unwrap()
-                    };
-                    match (entry, refn) {
-                        (Some(entry), Some(refn)) => {
-                            check_entry1(&entry, &refn);
-                            check_entry2(&entry, &refn);
-                        }
-                        (None, None) => (),
-                        _ => unreachable!(),
-                    }
-                    false
-                }
-                2 => {
                     let entry = index_w.delete(&key).unwrap();
                     let refn = ref_index.delete(&key).unwrap();
                     match (entry, refn) {
                         (Some(entry), Some(refn)) => {
                             check_entry1(&entry, &refn);
-                            check_entry2(&entry, &refn);
                         }
                         (None, None) => (),
-                        _ => unreachable!(),
+                        _ => (),
                     }
                     true
                 }
@@ -293,10 +296,9 @@ fn test_dgm_crud() {
             };
         }
         mem::drop(index_w);
-        mem::drop(index_r);
 
         // assert!(index.validate().is_ok()); TODO
-        println!("seqno {}", ref_index.to_seqno().unwrap());
+        // println!("seqno {}", ref_index.to_seqno().unwrap());
 
         verify_read(&mut ref_index, &mut index, &mut rng);
 
@@ -348,62 +350,78 @@ fn verify_read(
     assert_eq!(ref_index.to_seqno().unwrap(), index.to_seqno().unwrap());
 
     {
-        // test iter
-        let mut iter = index_r.iter().unwrap();
-        let mut iter_ref = ref_index.iter().unwrap();
-        loop {
-            let entry = iter.next().transpose().unwrap();
-            let refn = iter_ref.next().transpose().unwrap();
-            match (entry, refn) {
-                (Some(entry), Some(refn)) => {
-                    check_entry1(&entry, &refn);
-                    check_entry2(&entry, &refn);
-                }
-                (None, None) => break,
-                _ => unreachable!(),
-            }
-        }
+        let iter = index_r.iter().unwrap();
+        let ref_iter = ref_index.iter().unwrap();
+        verify_iter(iter, ref_iter);
+
+        let iter = index_r.iter_with_versions().unwrap();
+        let ref_iter = ref_index.iter_with_versions().unwrap();
+        verify_iter_vers(iter, ref_iter);
     }
 
     // ranges and reverses
-    for _ in 0..1
-    /*TODO make it 100 */
-    {
+    for _ in 0..100 {
         let (low, high) = random_low_high(rng);
-        println!("test loop {:?} {:?}", low, high);
+        // println!("test loop {:?} {:?}", low, high);
 
         {
-            let mut iter = index_r.range((low, high)).unwrap();
-            let mut iter_ref = ref_index.range((low, high)).unwrap();
-            loop {
-                let entry = iter.next().transpose().unwrap();
-                let refn = iter_ref.next().transpose().unwrap();
-                match (entry, refn) {
-                    (Some(entry), Some(refn)) => {
-                        check_entry1(&entry, &refn);
-                        check_entry2(&entry, &refn);
-                    }
-                    (None, None) => break,
-                    _ => unreachable!(),
-                }
-            }
+            let iter = index_r.range((low, high)).unwrap();
+            let ref_iter = ref_index.range((low, high)).unwrap();
+            verify_iter(iter, ref_iter);
+
+            let iter = index_r.range_with_versions((low, high)).unwrap();
+            let ref_iter = ref_index.range_with_versions((low, high)).unwrap();
+            verify_iter_vers(iter, ref_iter);
         }
 
         {
-            let mut iter = index_r.reverse((low, high)).unwrap();
-            let mut iter_ref = ref_index.reverse((low, high)).unwrap();
-            loop {
-                let entry = iter.next().transpose().unwrap();
-                let refn = iter_ref.next().transpose().unwrap();
-                match (entry, refn) {
-                    (Some(entry), Some(refn)) => {
-                        check_entry1(&entry, &refn);
-                        check_entry2(&entry, &refn);
-                    }
-                    (None, None) => break,
-                    _ => unreachable!(),
-                }
+            let iter = index_r.reverse((low, high)).unwrap();
+            let ref_iter = ref_index.reverse((low, high)).unwrap();
+            verify_iter(iter, ref_iter);
+
+            let iter = index_r.range_with_versions((low, high)).unwrap();
+            let ref_iter = ref_index.range_with_versions((low, high)).unwrap();
+            verify_iter_vers(iter, ref_iter);
+        }
+    }
+}
+
+fn verify_iter(mut iter: IndexIter<i64, i64>, mut ref_iter: IndexIter<i64, i64>) {
+    loop {
+        let refn = ref_iter.next();
+        let entry = iter.next();
+        match (entry, refn) {
+            (Some(Ok(entry)), Some(Ok(refn))) => {
+                check_entry1(&entry, &refn);
             }
+            (Some(Err(err)), Some(Ok(refn))) => {
+                let key = refn.to_key();
+                panic!("verify key:{} {:?}", key, err)
+            }
+            (None, None) => break,
+            _ => unreachable!(),
+        }
+    }
+}
+
+fn verify_iter_vers(
+    mut iter: IndexIter<i64, i64>,
+    mut ref_iter: IndexIter<i64, i64>, // ref
+) {
+    loop {
+        let refn = ref_iter.next();
+        let entry = iter.next();
+        match (entry, refn) {
+            (Some(Ok(entry)), Some(Ok(refn))) => {
+                check_entry1(&entry, &refn);
+                check_entry2(&entry, &refn);
+            }
+            (Some(Err(err)), Some(Ok(refn))) => {
+                let key = refn.to_key();
+                panic!("verify key:{} {:?}", key, err)
+            }
+            (None, None) => break,
+            _ => unreachable!(),
         }
     }
 }
@@ -414,10 +432,12 @@ fn check_entry1(e1: &Entry<i64, i64>, e2: &Entry<i64, i64>) {
     assert_eq!(e1.to_seqno(), e2.to_seqno(), "key:{}", key);
     assert_eq!(e1.to_native_value(), e2.to_native_value(), "key:{}", key);
     assert_eq!(e1.is_deleted(), e2.is_deleted(), "key:{}", key);
-    assert_eq!(e1.as_deltas().len(), e2.as_deltas().len(), "key:{}", key);
 }
 
 fn check_entry2(e1: &Entry<i64, i64>, e2: &Entry<i64, i64>) {
+    let key = e1.to_key();
+    assert_eq!(e1.as_deltas().len(), e2.as_deltas().len(), "key:{}", key);
+
     let key = e1.to_key();
     let xs: Vec<core::Delta<i64>> = e1.to_deltas();
     let ys: Vec<core::Delta<i64>> = e2.to_deltas();

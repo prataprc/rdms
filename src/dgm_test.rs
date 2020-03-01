@@ -13,6 +13,7 @@ fn test_config_root() {
     let ref_root = Root {
         version: 0,
         levels: NLEVELS,
+        mono_cutoff: Default::default(),
         lsm_cutoff: Default::default(),
         tombstone_cutoff: Default::default(),
 
@@ -47,6 +48,7 @@ fn test_root1() {
         let ref_root = Root {
             version: 0,
             levels: NLEVELS,
+            mono_cutoff: cutoff,
             lsm_cutoff: cutoff,
             tombstone_cutoff: cutoff,
 
@@ -66,6 +68,7 @@ fn test_root2() {
     let root = Root {
         version: 0,
         levels: NLEVELS,
+        mono_cutoff: Default::default(),
         lsm_cutoff: Default::default(),
         tombstone_cutoff: Default::default(),
 
@@ -78,6 +81,7 @@ fn test_root2() {
     let ref_root = Root {
         version: 1,
         levels: NLEVELS,
+        mono_cutoff: Default::default(),
         lsm_cutoff: Default::default(),
         tombstone_cutoff: Default::default(),
 
@@ -94,6 +98,7 @@ fn test_root3() {
     let mut root = Root {
         version: 0,
         levels: NLEVELS,
+        mono_cutoff: Default::default(),
         lsm_cutoff: Default::default(),
         tombstone_cutoff: Default::default(),
 
@@ -104,6 +109,9 @@ fn test_root3() {
     };
 
     let cutoffs = vec![
+        Cutoff::new_mono(Bound::Unbounded),
+        Cutoff::new_mono(Bound::Included(101)),
+        Cutoff::new_mono(Bound::Excluded(1001)),
         Cutoff::new_lsm(Bound::Unbounded),
         Cutoff::new_lsm(Bound::Included(101)),
         Cutoff::new_lsm(Bound::Excluded(1001)),
@@ -115,6 +123,11 @@ fn test_root3() {
     for cutoff in cutoffs.into_iter() {
         root.update_cutoff(cutoff, seqno);
         match cutoff {
+            Cutoff::Mono(Bound::Unbounded) => {
+                let cutoff = Bound::Excluded(seqno);
+                assert_eq!(root.mono_cutoff, Some(cutoff))
+            }
+            Cutoff::Mono(cutoff) => assert_eq!(root.mono_cutoff, Some(cutoff)),
             Cutoff::Lsm(Bound::Unbounded) => {
                 let cutoff = Bound::Excluded(seqno);
                 assert_eq!(root.lsm_cutoff, Some(cutoff))
@@ -129,22 +142,27 @@ fn test_root3() {
 
         root.reset_cutoff(cutoff);
         match cutoff {
+            Cutoff::Mono(_) => assert!(root.mono_cutoff.is_none()),
             Cutoff::Lsm(_) => assert!(root.lsm_cutoff.is_none()),
             Cutoff::Tombstone(_) => assert!(root.tombstone_cutoff.is_none()),
         }
     }
 
-    root.lsm_cutoff = Some(Bound::Included(101));
-    root.tombstone_cutoff = Some(Bound::Included(1001));
-    assert_eq!(root.as_cutoff(), Cutoff::new_lsm(Bound::Included(101)));
+    root.mono_cutoff = Some(Bound::Included(11));
+    root.tombstone_cutoff = Some(Bound::Included(101));
+    root.lsm_cutoff = Some(Bound::Included(1001));
+    assert_eq!(root.as_cutoff(), Cutoff::new_mono(Bound::Included(11)));
 
-    root.reset_cutoff(Cutoff::Lsm(Bound::Included(101)));
+    root.reset_cutoff(Cutoff::Mono(Bound::Included(11)));
     assert_eq!(
         root.as_cutoff(),
-        Cutoff::new_tombstone(Bound::Included(1001))
+        Cutoff::new_tombstone(Bound::Included(101))
     );
 
-    root.reset_cutoff(Cutoff::Tombstone(Bound::Included(1001)));
+    root.reset_cutoff(Cutoff::Tombstone(Bound::Included(101)));
+    assert_eq!(root.as_cutoff(), Cutoff::new_lsm(Bound::Included(1001)));
+
+    root.reset_cutoff(Cutoff::Lsm(Bound::Included(1001)));
     assert_eq!(
         root.as_cutoff(),
         Cutoff::Lsm(Bound::Excluded(std::u64::MIN))
@@ -193,7 +211,7 @@ fn test_level_file_name() {
 fn test_dgm_crud() {
     // TODO:  test get() api
     let seed: u128 = random();
-    let seed: u128 = 38756782021146916649595855654745225812;
+    // let seed: u128 = 38756782021146916649595855654745225812;
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
     let config = Config {
@@ -238,10 +256,10 @@ fn test_dgm_crud() {
             let key: i64 = rng.gen::<i64>().abs() % (n_ops * 3);
             let value: i64 = rng.gen::<i64>().abs();
             let op: i64 = (rng.gen::<u8>() % 2) as i64;
-            let seqno = ref_index.to_seqno().unwrap();
+            let _seqno = ref_index.to_seqno().unwrap();
             //println!(
             //    "i:{} key:{} value:{} op:{} seqno:{}",
-            //    _i, key, value, op, seqno
+            //    _i, key, value, op, _seqno
             //);
             match op {
                 0 => {

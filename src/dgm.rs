@@ -105,6 +105,7 @@ impl From<Root> for Config {
 struct Root {
     version: usize,
     levels: usize,
+    mono_cutoff: Option<Bound<u64>>,
     lsm_cutoff: Option<Bound<u64>>,
     tombstone_cutoff: Option<Bound<u64>>,
 
@@ -119,6 +120,7 @@ impl From<Config> for Root {
         Root {
             version: 0,
             levels: NLEVELS,
+            mono_cutoff: Default::default(),
             lsm_cutoff: Default::default(),
             tombstone_cutoff: Default::default(),
 
@@ -153,6 +155,21 @@ impl TryFrom<Root> for Vec<u8> {
             dict.insert("commit_interval".to_string(), Integer(m_interval));
             dict.insert("compact_interval".to_string(), Integer(c_interval));
 
+            let (arg1, arg2) = match root.mono_cutoff {
+                Some(cutoff) => match cutoff {
+                    Bound::Excluded(cutoff) => Ok(("excluded", cutoff)),
+                    Bound::Included(cutoff) => Ok(("included", cutoff)),
+                    Bound::Unbounded => {
+                        let msg = format!("Dgm root has Unbounded mono-cutoff");
+                        Err(Error::UnReachable(msg))
+                    }
+                },
+                None => Ok(("none", 0)),
+            }?;
+            dict.insert(
+                "mono_cutoff".to_string(),
+                Array(vec![TomlStr(arg1.to_string()), TomlStr(arg2.to_string())]),
+            );
             let (arg1, arg2) = match root.lsm_cutoff {
                 Some(cutoff) => match cutoff {
                     Bound::Excluded(cutoff) => Ok(("excluded", cutoff)),
@@ -254,6 +271,25 @@ impl TryFrom<Vec<u8>> for Root {
                 .ok_or(InvalidFile(err2.clone()))?)?;
             time::Duration::from_secs(duration)
         };
+        root.mono_cutoff = {
+            let field = dict.get("mono_cutoff").ok_or(InvalidFile(err2.clone()))?;
+            let arr = field.as_array().ok_or(InvalidFile(err2.clone()))?;
+            let bound = arr[0].as_str().ok_or(InvalidFile(err2.clone()))?;
+            let cutoff: u64 = {
+                let cutoff = &arr[1].as_str().ok_or(InvalidFile(err2.clone()))?;
+                parse_at!(cutoff.parse())?
+            };
+            match bound {
+                "excluded" => Ok(Some(Bound::Excluded(cutoff))),
+                "included" => Ok(Some(Bound::Included(cutoff))),
+                "unbounded" => Ok(Some(Bound::Unbounded)),
+                "none" => Ok(None),
+                _ => {
+                    let msg = format!("Dgm root deser invalid mono-cutoff");
+                    Err(Error::UnReachable(msg))
+                }
+            }
+        }?;
         root.lsm_cutoff = {
             let field = dict.get("lsm_cutoff").ok_or(InvalidFile(err2.clone()))?;
             let arr = field.as_array().ok_or(InvalidFile(err2.clone()))?;
@@ -307,11 +343,14 @@ impl Root {
     }
 
     fn as_cutoff(&self) -> Cutoff {
-        if self.lsm_cutoff.is_some() {
-            Cutoff::new_lsm(self.lsm_cutoff.as_ref().unwrap().clone())
+        if self.mono_cutoff.is_some() {
+            let c = self.mono_cutoff.as_ref().unwrap().clone();
+            Cutoff::new_mono(c)
         } else if self.tombstone_cutoff.is_some() {
             let c = self.tombstone_cutoff.as_ref().unwrap().clone();
             Cutoff::new_tombstone(c)
+        } else if self.lsm_cutoff.is_some() {
+            Cutoff::new_lsm(self.lsm_cutoff.as_ref().unwrap().clone())
         } else {
             Cutoff::new_lsm_empty()
         }
@@ -321,6 +360,7 @@ impl Root {
         match cutoff {
             Cutoff::Lsm(_) => self.lsm_cutoff.take(),
             Cutoff::Tombstone(_) => self.tombstone_cutoff.take(),
+            Cutoff::Mono(_) => self.mono_cutoff.take(),
         };
     }
 
@@ -328,6 +368,10 @@ impl Root {
         use std::ops::Bound::{Excluded, Included, Unbounded};
 
         let cutoff = match cutoff {
+            Cutoff::Mono(Bound::Unbounded) => {
+                let cutoff = Bound::Excluded(tip_seqno);
+                Cutoff::new_mono(cutoff)
+            }
             Cutoff::Lsm(Bound::Unbounded) => {
                 let cutoff = Bound::Excluded(tip_seqno);
                 Cutoff::new_lsm(cutoff)
@@ -340,6 +384,19 @@ impl Root {
         };
 
         match cutoff {
+            Cutoff::Mono(n_cutoff) => match self.mono_cutoff.clone() {
+                None => self.mono_cutoff = Some(n_cutoff),
+                Some(o) => {
+                    let range = (Unbounded, o.clone());
+                    self.mono_cutoff = Some(match n_cutoff {
+                        Excluded(n) if range.contains(&n) => o,
+                        Excluded(n) => Excluded(n),
+                        Included(n) if range.contains(&n) => o,
+                        Included(n) => Included(n),
+                        Unbounded => Included(tip_seqno),
+                    });
+                }
+            },
             Cutoff::Lsm(n_cutoff) => match self.lsm_cutoff.clone() {
                 None => self.lsm_cutoff = Some(n_cutoff),
                 Some(o) => {

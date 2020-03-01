@@ -295,6 +295,67 @@ fn test_entry_tombstone_purge2() {
 }
 
 #[test]
+fn test_entry_mono_purge1() {
+    let value = Value::new_upsert(Box::new(vlog::Value::new_native(10)), 1000);
+    let mut entry = Entry::new(100, value);
+    {
+        let v = Box::new(vlog::Value::new_native(20));
+        let value = Value::new_upsert(v, 1001);
+        let e = Entry::new(100, value);
+        entry.prepend_version(e, true /*lsm*/).unwrap();
+    }
+
+    let cutoff = Cutoff::new_mono_empty();
+    let ent = entry.clone().purge(cutoff).unwrap();
+    assert_eq!(ent.as_deltas().len(), 0);
+    assert_eq!(ent.to_seqno(), 1001);
+    assert_eq!(ent.to_native_value().unwrap(), 20);
+
+    let cutoff = Cutoff::new_mono(Bound::Excluded(1001));
+    let ent = entry.clone().purge(cutoff).unwrap();
+    assert_eq!(ent.as_deltas().len(), 0);
+    assert_eq!(ent.to_seqno(), 1001);
+    assert_eq!(ent.to_native_value().unwrap(), 20);
+
+    let cutoff = Cutoff::new_mono(Bound::Included(1001));
+    let ent = entry.clone().purge(cutoff);
+    assert_eq!(ent.is_none(), true);
+}
+
+#[test]
+fn test_entry_mono_purge2() {
+    let value = Value::new_upsert(Box::new(vlog::Value::new_native(10)), 1000);
+    let mut entry = Entry::new(100, value);
+    {
+        let v = Box::new(vlog::Value::new_native(20));
+        let value = Value::new_upsert(v, 1001);
+        let e = Entry::new(100, value);
+        entry.prepend_version(e, true /*lsm*/).unwrap();
+    }
+
+    let cutoff = Cutoff::new_mono(Bound::Unbounded);
+    let ent = entry.clone().purge(cutoff);
+    assert_eq!(ent.is_none(), true);
+}
+
+#[test]
+fn test_entry_mono_purge3() {
+    let value = Value::new_upsert(Box::new(vlog::Value::new_native(10)), 1000);
+    let mut entry = Entry::new(100, value);
+    {
+        let v = Box::new(vlog::Value::new_native(20));
+        let value = Value::new_upsert(v, 1001);
+        let e = Entry::new(100, value);
+        entry.prepend_version(e, true /*lsm*/).unwrap();
+    }
+    entry.delete(1002).unwrap();
+
+    let cutoff = Cutoff::new_mono_empty();
+    let ent = entry.clone().purge(cutoff);
+    assert_eq!(ent.is_none(), true);
+}
+
+#[test]
 fn test_entry_filter_within() {
     // version1 - upsert
     let value = Value::new_upsert_value(1000_i32, 10);

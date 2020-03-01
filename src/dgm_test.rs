@@ -248,8 +248,8 @@ fn test_dgm_crud() {
     )
     .unwrap();
 
-    let n_ops = 1000;
-    for _i in 0..9 {
+    let n_ops = 1_000;
+    for _i in 0..20 {
         // println!("loop {}", _i);
         let mut index_w = index.to_writer().unwrap();
         for _ in 0..n_ops {

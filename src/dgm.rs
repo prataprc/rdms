@@ -1486,7 +1486,7 @@ where
     where
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
-        let cutoff = {
+        let (inn, cutoff, src_levels, dst_level) = {
             let mut inn = to_inner_lock(inner)?;
             inn.cleanup_writers()?;
             inn.cleanup_readers()?;
@@ -1495,48 +1495,49 @@ where
             let tip_seqno = inn.m0.as_m0()?.to_seqno()?;
             inn.root.update_cutoff(cutoff, tip_seqno);
 
-            inn.root.as_cutoff()
-        };
-
-        let (src_levels, dst_level) = {
-            let mut inn = to_inner_lock(inner)?;
+            let cutoff = inn.root.as_cutoff();
             match inn.compact_levels()? {
                 None => return Ok(0),
-                Some((src_levels, dst_level)) => (src_levels, dst_level),
+                Some((src_levels, dst_level)) => (inn, cutoff, src_levels, dst_level),
             }
         };
         // println!("Dgm.do_compact() {:?} {}", src_levels, dst_level);
 
-        let res = if src_levels.len() == 0 {
+        let (res, mut inn) = if src_levels.len() == 0 {
             let mut high_disk = {
-                let inn = to_inner_lock(inner)?;
-                inn.disks[dst_level].as_disk()?.unwrap().clone()
+                let high_disk = inn.disks[dst_level].as_disk()?.unwrap().clone();
+                mem::drop(inn);
+                high_disk
             };
+
             let res = high_disk.compact(cutoff, metacb);
-            {
+
+            let inn = {
                 let mut inn = to_inner_lock(inner)?;
                 let disk = Snapshot::new_active(high_disk);
                 mem::replace(&mut inn.disks[dst_level], disk);
 
                 inn.repopulate_readers()?;
                 inn.n_commits = 0;
-            }
+                inn
+            };
             // println!("Dgm.compact() compact");
-            res
+            (res, inn)
         } else {
             let (src_disks, mut disk) = {
-                let inn = to_inner_lock(inner)?;
-                inn.do_compact_commit(src_levels.clone(), dst_level)?
+                let (src_disks, disk) = inn.do_compact_commit(src_levels.clone(), dst_level)?;
+                mem::drop(inn);
+                (src_disks, disk)
             };
+
             let scanner = {
                 let scanner = CommitScanner::<K, V, D::I>::new(src_disks)?;
                 let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
                 core::CommitIter::new(scanner, within)
             };
-
             disk.commit(scanner, metacb)?;
 
-            {
+            let inn = {
                 let mut inn = to_inner_lock(inner)?;
                 // update the disk-levels.
                 for level in src_levels.clone().into_iter() {
@@ -1551,24 +1552,22 @@ where
 
                 inn.repopulate_readers()?;
                 inn.n_commits += 1;
-            }
+                inn
+            };
 
             // println!("Dgm.compact() commit");
-            Ok(0)
+            (Ok(0), inn)
         };
 
-        {
-            let mut inn = to_inner_lock(inner)?;
-            let root_file = inn.root_file.clone();
-            inn.root.reset_cutoff(cutoff);
-            inn.root_file = Self::new_root_file(
-                //
-                &inn.dir,
-                &inn.name,
-                inn.root.clone(),
-            )?;
-            io_err_at!(fs::remove_file(&root_file))?;
-        }
+        let root_file = inn.root_file.clone();
+        inn.root.reset_cutoff(cutoff);
+        inn.root_file = Self::new_root_file(
+            //
+            &inn.dir,
+            &inn.name,
+            inn.root.clone(),
+        )?;
+        io_err_at!(fs::remove_file(&root_file))?;
 
         res
     }

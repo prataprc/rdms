@@ -56,6 +56,12 @@
 //! when they are modified. This involves a periodic clean up of garbage
 //! entries/blocks to reduce disk foot-print.
 //!
+//! _mono-compaction_
+//!
+//! This is applicable for index instances that do not need system-level
+//! LSM. In such cases, the oldest-level's snapshot can compact away older
+//! versions of each entry and purge entries that are marked deleted.
+//!
 //! _lsm-compaction_
 //!
 //! Rdms, unlike other lsm-based-storage, can have the entire index

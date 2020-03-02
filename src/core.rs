@@ -46,6 +46,7 @@ pub type ScanIter<'a, K, V> = Box<dyn Iterator<Item = Result<ScanEntry<K, V>>> +
 /// A convenience trait to group thread-safe trait conditions.
 pub trait ThreadSafe: 'static + Send {}
 
+// TODO: should cutoff have a force variant to force compaction ?
 /// Cutoff enumerated parameter to [compact][Index::compact] method. Refer
 /// to [rdms] library documentation for more information on compaction.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -71,6 +72,10 @@ impl Cutoff {
         Cutoff::Tombstone(b)
     }
 
+    pub fn new_tombstone_empty() -> Cutoff {
+        Cutoff::Lsm(Bound::Excluded(std::u64::MIN))
+    }
+
     pub fn new_lsm(b: Bound<u64>) -> Cutoff {
         Cutoff::Lsm(b)
     }
@@ -78,18 +83,22 @@ impl Cutoff {
     pub fn new_lsm_empty() -> Cutoff {
         Cutoff::Lsm(Bound::Excluded(std::u64::MIN))
     }
-
-    pub fn new_tombstone_empty() -> Cutoff {
-        Cutoff::Lsm(Bound::Excluded(std::u64::MIN))
-    }
-
     pub fn to_bound(&self) -> Bound<u64> {
         match self {
             Cutoff::Mono(b) => b,
-            Cutoff::Tombstone(b) => b,
             Cutoff::Lsm(b) => b,
+            Cutoff::Tombstone(b) => b,
         }
         .clone()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Cutoff::Mono(Bound::Excluded(n)) => *n == std::u64::MIN,
+            Cutoff::Lsm(Bound::Excluded(n)) => *n == std::u64::MIN,
+            Cutoff::Tombstone(Bound::Excluded(n)) => *n == std::u64::MIN,
+            _ => false,
+        }
     }
 }
 

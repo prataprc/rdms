@@ -237,6 +237,7 @@ fn test_dgm_crud() {
         config.value_in_vlog = true;
         robt::robt_factory::<i64, i64, NoBitmap>(config)
     };
+    let open: bool = rng.gen();
 
     let mut index = Dgm::new(
         //
@@ -344,14 +345,16 @@ fn test_dgm_crud() {
                 config.value_in_vlog = true;
                 robt::robt_factory::<i64, i64, NoBitmap>(config)
             };
-            index = Dgm::open(
-                //
-                &dir,
-                "dgm-crud",
-                mem_factory,
-                disk_factory,
-            )
-            .unwrap();
+            if open {
+                index = Dgm::open(
+                    //
+                    &dir,
+                    "dgm-crud",
+                    mem_factory,
+                    disk_factory,
+                )
+                .unwrap();
+            }
         }
 
         verify_read(&mut ref_index, &mut index, &mut rng);
@@ -378,7 +381,8 @@ fn verify_read(
     }
 
     // ranges and reverses
-    for _ in 0..100 {
+    for _ in 0..1 {
+        /* TODO make it 100 */
         let (low, high) = random_low_high(rng);
         // println!("test loop {:?} {:?}", low, high);
 

@@ -128,6 +128,8 @@ fn test_stats() {
         delta_ok: true,
         vlog_file: Some(vlog_file.to_os_string()),
         value_in_vlog: true,
+        flush_queue_size: Config::FLUSH_QUEUE_SIZE,
+        compact_ratio: Config::COMPACT_RATIO,
 
         n_count: 1000000,
         n_deleted: 100,
@@ -161,7 +163,8 @@ fn test_stats() {
         delta_ok: true,
         vlog_file: Some(vlog_file.to_os_string()),
         value_in_vlog: true,
-        flush_queue_size: 1024,
+        flush_queue_size: Config::FLUSH_QUEUE_SIZE,
+        compact_ratio: Config::COMPACT_RATIO,
     };
     let stats1: Stats = cnf.into();
     let s = stats1.to_json();
@@ -179,6 +182,8 @@ fn test_stats_merge() {
         delta_ok: true,
         vlog_file: None,
         value_in_vlog: true,
+        flush_queue_size: Config::FLUSH_QUEUE_SIZE,
+        compact_ratio: Config::COMPACT_RATIO,
 
         n_count: 1,
         n_deleted: 1,
@@ -205,6 +210,8 @@ fn test_stats_merge() {
         delta_ok: true,
         vlog_file: None,
         value_in_vlog: true,
+        flush_queue_size: Config::FLUSH_QUEUE_SIZE,
+        compact_ratio: Config::COMPACT_RATIO,
 
         n_count: 2,
         n_deleted: 2,
@@ -231,6 +238,8 @@ fn test_stats_merge() {
     assert_eq!(stats.delta_ok, true);
     assert_eq!(stats.vlog_file, None);
     assert_eq!(stats.value_in_vlog, true);
+    assert_eq!(stats.flush_queue_size, Config::FLUSH_QUEUE_SIZE);
+    assert_eq!(stats.compact_ratio, Config::COMPACT_RATIO);
 
     assert_eq!(stats.n_count, 3);
     assert_eq!(stats.n_deleted, 3);
@@ -309,7 +318,8 @@ fn test_config() {
         delta_ok: true,
         vlog_file: Some(vlog_file.to_os_string()),
         value_in_vlog: true,
-        flush_queue_size: 1234,
+        flush_queue_size: Config::FLUSH_QUEUE_SIZE,
+        compact_ratio: Config::COMPACT_RATIO,
     };
 
     let stats: Stats = config1.clone().into();
@@ -332,6 +342,7 @@ fn test_config() {
     assert_eq!(config1.delta_ok, false);
     assert_eq!(config1.value_in_vlog, false);
     assert_eq!(config1.flush_queue_size, 1023);
+    assert_eq!(config1.compact_ratio, Config::COMPACT_RATIO);
 
     assert_eq!(Config::compute_root_block(4095), 4096);
     assert_eq!(Config::compute_root_block(4096), 4096);

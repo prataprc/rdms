@@ -940,6 +940,17 @@ where
                 meta,
                 ..
             } => {
+                {
+                    // skip compaction if cutoff is empty and older value bytes
+                    // have not exceeded a threshold.
+                    let old = Snapshot::<K, V, B>::open(dir, &name.0)?;
+                    let stats = old.to_stats()?;
+                    let ratio = (stats.n_abytes as f64) / (stats.v_bytes as f64);
+                    if cutoff.is_empty() && ratio < config.compact_ratio {
+                        return Ok(0);
+                    }
+                }
+
                 let (name, snapshot, meta_block_bytes) = {
                     let mut old = Snapshot::<K, V, B>::open(dir, &name.0)?;
                     let old_seqno: u64 = old.to_seqno()?;
@@ -1194,6 +1205,9 @@ pub struct Config {
     pub(crate) value_in_vlog: bool,
     /// Flush queue size. Default: Config::FLUSH_QUEUE_SIZE
     pub(crate) flush_queue_size: usize,
+    /// Compaction ratio between n_abytes and v_bytes, below which compaction
+    /// won't happen.
+    pub(crate) compact_ratio: f64,
 }
 
 impl Default for Config {
@@ -1216,6 +1230,7 @@ impl Default for Config {
             vlog_file: Default::default(),
             value_in_vlog: false,
             flush_queue_size: Self::FLUSH_QUEUE_SIZE,
+            compact_ratio: Self::COMPACT_RATIO,
         }
     }
 }
@@ -1229,8 +1244,10 @@ impl Config {
     pub const VBLOCKSIZE: usize = 4 * 1024; // 4KB of blobs.
     /// Marker block size, not to be tampered with.
     const MARKER_BLOCK_SIZE: usize = 1024 * 4;
-    /// Flush queue size, channel queue size, holding index blocks.
+    /// Default Flush queue size, channel queue size, holding index blocks.
     const FLUSH_QUEUE_SIZE: usize = 64;
+    /// Default compact ratio
+    const COMPACT_RATIO: f64 = 0.5;
 
     /// Configure differt set of block size for leaf-node, intermediate-node.
     pub fn set_blocksize(&mut self, z: usize, v: usize, m: usize) -> &mut Self {
@@ -1274,6 +1291,12 @@ impl Config {
         self.flush_queue_size = size;
         self
     }
+
+    /// Set compact ratio, below which compaction won't happen.
+    pub fn set_compact_ratio(&mut self, ratio: f64) -> &mut Self {
+        self.compact_ratio = ratio;
+        self
+    }
 }
 
 impl fmt::Display for Config {
@@ -1286,16 +1309,17 @@ impl fmt::Display for Config {
         let (z, m, v) = (self.z_blocksize, self.m_blocksize, self.v_blocksize);
         let dok = self.delta_ok;
         let fqs = self.flush_queue_size;
+        let cr = self.compact_ratio;
 
         write!(
             f,
             concat!(
                 "robt.name = {}\n",
                 "robt.config.blocksize = {{ z={}, m={}, v={} }}\n",
-                "robt.config = {{ delta_ok={}, value_in_vlog={} }}\n",
-                "robt.config = {{ vlog_file={}, flush_queue_size={} }}",
+                "robt.config = {{ delta_ok={}, value_in_vlog={} vlog_file={} }}\n",
+                "robt.config = {{ flush_queue_size={}, compact_ratio={} }}",
             ),
-            self.name, z, m, v, dok, self.value_in_vlog, vlog_file, fqs
+            self.name, z, m, v, dok, self.value_in_vlog, vlog_file, fqs, cr
         )
     }
 }
@@ -1313,6 +1337,7 @@ impl ToJson for Config {
                 self.vlog_file.as_ref().map_or(null, |f| f.clone()),
             ),
             format!(r#""flush_queue_size": {}"#, self.flush_queue_size,),
+            format!(r#""compact_ratio": {}"#, self.compact_ratio,),
         ];
         format!(
             r#"{{ "robt": {{ "name": "{}", "config": {{ {} }} }}"#,
@@ -1334,7 +1359,8 @@ impl From<Stats> for Config {
             delta_ok: stats.delta_ok,
             vlog_file: stats.vlog_file,
             value_in_vlog: stats.value_in_vlog,
-            flush_queue_size: Self::FLUSH_QUEUE_SIZE,
+            flush_queue_size: stats.flush_queue_size,
+            compact_ratio: stats.compact_ratio,
         }
     }
 }
@@ -1589,6 +1615,11 @@ pub struct Stats {
     /// Part of _build-configuration_, specifies whether value was
     /// persisted in value log file.
     pub value_in_vlog: bool,
+    /// Flush queue size. Default: Config::FLUSH_QUEUE_SIZE
+    pub flush_queue_size: usize,
+    /// Compaction ratio between n_abytes and v_bytes, below which compaction
+    /// won't happen.
+    pub compact_ratio: f64,
 
     /// Number of entries indexed.
     pub n_count: u64,
@@ -1633,6 +1664,8 @@ impl Stats {
             delta_ok: other.delta_ok,
             vlog_file: None,
             value_in_vlog: other.value_in_vlog,
+            flush_queue_size: other.flush_queue_size,
+            compact_ratio: other.compact_ratio,
 
             n_count: self.n_count + other.n_count,
             n_deleted: self.n_deleted + other.n_deleted,
@@ -1700,6 +1733,8 @@ impl ToJson for Stats {
             format!(r#""delta_ok": {}"#, self.delta_ok),
             format!(r#""vlog_file": {}"#, vlog_file),
             format!(r#""value_in_vlog": {}"#, self.value_in_vlog),
+            format!(r#""flush_queue_size": {}"#, self.flush_queue_size),
+            format!(r#""compact_ratio": {}"#, self.compact_ratio),
             format!(r#""seqno": {}"#, self.seqno),
             format!(r#""n_count": {}"#, self.n_count),
             format!(r#""n_deleted": {}"#, self.n_deleted),
@@ -1730,6 +1765,8 @@ impl From<Config> for Stats {
             delta_ok: config.delta_ok,
             vlog_file: config.vlog_file,
             value_in_vlog: config.value_in_vlog,
+            flush_queue_size: config.flush_queue_size,
+            compact_ratio: config.compact_ratio,
 
             n_count: Default::default(),
             n_deleted: Default::default(),
@@ -1759,6 +1796,7 @@ impl FromStr for Stats {
         let err1 = format!("string-to-robt-stats, not an integer");
         let err2 = format!("string-to-robt-stats, not string");
         let err3 = format!("string-to-robt-stats, not boolean");
+        let err4 = format!("string-to-robt-stats, not float");
 
         let to_usize = |key: &str| -> Result<usize> {
             let n: usize = convert_at!(err_at!(js.get(key))?
@@ -1780,6 +1818,16 @@ impl FromStr for Stats {
                 Some(vlog_file)
             }
         };
+        let cr: f64 = {
+            let v = err_at!(js.get("/compact_ratio"))?;
+            match v.float() {
+                Some(v) => v,
+                None => {
+                    let err = Error::UnExpectedFail(err4.clone());
+                    v.integer().ok_or(err)? as f64
+                }
+            }
+        };
 
         Ok(Stats {
             name: err_at!(js.get("/name"))?
@@ -1795,7 +1843,9 @@ impl FromStr for Stats {
             vlog_file: vlog_file,
             value_in_vlog: err_at!(js.get("/value_in_vlog"))?
                 .boolean()
-                .ok_or(Error::UnExpectedFail(err3))?,
+                .ok_or(Error::UnExpectedFail(err3.clone()))?,
+            flush_queue_size: to_usize("/flush_queue_size")?,
+            compact_ratio: cr,
             // statitics fields.
             n_count: to_u64("/n_count")?,
             n_deleted: to_usize("/n_deleted")?,

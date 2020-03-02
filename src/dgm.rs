@@ -642,24 +642,6 @@ where
         Ok(())
     }
 
-    // should be called while holding the levels lock.
-    fn shift_into_m0_writers(&self, mut m0: M::I) -> Result<M::I> {
-        // block all the writer threads.
-        let mut w_handles = vec![];
-        for writer in self.writers.iter() {
-            w_handles.push(writer.lock().unwrap())
-        }
-
-        // now replace old writer handle created from the new m0 snapshot.
-        for handle in w_handles.iter_mut() {
-            let _old_w = mem::replace(handle.deref_mut(), m0.to_writer()?);
-            // drop the old writer,
-        }
-
-        // unblock writers on exit.
-        Ok(m0)
-    }
-
     fn shift_into_m0(&mut self) -> Result<()> {
         // block all the readers.
         let mut r_handles = vec![];
@@ -667,17 +649,33 @@ where
             r_handles.push(r.lock().unwrap());
         }
 
-        // shift memory snapshot into writers
-        let m0 = self.shift_into_m0_writers(self.mem_factory.new(&self.name)?)?;
-        let m0 = Snapshot::new_write(m0);
-
-        self.m1 = match mem::replace(&mut self.m0, m0) {
-            Snapshot::Write(m1) => Ok(Some(Snapshot::new_flush(m1))),
-            _ => {
-                let msg = format!("Dgm.shift_into_m0() not write snapshot");
-                Err(Error::UnReachable(msg))
+        {
+            // block all the writer threads.
+            let mut w_handles = vec![];
+            for writer in self.writers.iter() {
+                w_handles.push(writer.lock().unwrap())
             }
-        }?;
+
+            // prepare a new memory snapshot
+            let mut m0 = self.mem_factory.new(&self.name)?;
+            self.m1 = match mem::replace(&mut self.m0, Default::default()) {
+                Snapshot::Write(m1) => {
+                    m0.set_seqno(m1.to_seqno()?)?;
+                    Ok(Some(Snapshot::new_flush(m1)))
+                }
+                _ => {
+                    let msg = format!("Dgm.shift_into_m0() not write snapshot");
+                    Err(Error::UnReachable(msg))
+                }
+            }?;
+            // now replace old writer handle created from the new m0 snapshot.
+            for handle in w_handles.iter_mut() {
+                let _old_w = mem::replace(handle.deref_mut(), m0.to_writer()?);
+                // drop the old writer,
+            }
+            // finally update the m0 writer.
+            mem::replace(&mut self.m0, Snapshot::new_write(m0));
+        }
 
         // update readers and unblock them one by one.
         for r in r_handles.iter_mut() {
@@ -827,27 +825,31 @@ where
         }
     }
 
-    fn compact_levels(&mut self) -> Result<Option<(Vec<usize>, usize)>> {
+    fn compact_levels(
+        &mut self, // return (levels, sources, target)
+    ) -> Result<Option<(Vec<usize>, Vec<usize>, usize)>> {
         let levels = {
             let disk_ratio = self.root.disk_ratio;
             Self::find_compact_levels(&self.disks, disk_ratio)?
         };
 
-        let (levels, src_levels, dst_level) = match levels {
-            None if self.n_commits < 2 => return Ok(None),
+        match levels {
+            None if self.n_commits < 2 => Ok(None), // TODO: no magic number.
             None => match Self::active_compact_levels(&self.disks).pop() {
-                None => return Ok(None),
-                Some(d) => (vec![d], vec![], d),
+                None => Ok(None),
+                Some(d) => Ok(Some((vec![d], vec![], d))),
             },
-            Some((ss, d)) if ss.len() == 0 => (vec![d], ss, d),
+            Some((ss, d)) if ss.len() == 0 => Ok(Some((vec![d], ss, d))),
             Some((ss, d)) => {
                 let mut levels = ss.clone();
                 levels.push(d);
-                (levels, ss, d)
+                Ok(Some((levels, ss, d)))
             }
-        };
+        }
+    }
 
-        for level in levels {
+    fn move_to_compact(&mut self, levels: &[usize]) {
+        for level in levels.to_vec().into_iter() {
             let d = mem::replace(&mut self.disks[level], Default::default());
             let d = match d {
                 Snapshot::Active(d) => d,
@@ -855,8 +857,6 @@ where
             };
             self.disks[level] = Snapshot::new_compact(d);
         }
-
-        Ok(Some((src_levels, dst_level)))
     }
 
     fn repopulate_readers(&mut self) -> Result<()> {
@@ -884,26 +884,26 @@ where
         Ok(())
     }
 
-    fn do_compact_commit(
+    fn do_compact_disks(
         &self,
-        src_levels: Vec<usize>,
-        dst_level: usize,
+        s_levels: &[usize],
+        d_level: usize,
     ) -> Result<(
         Vec<<D as DiskIndexFactory<K, V>>::I>,
         <D as DiskIndexFactory<K, V>>::I,
     )> {
         assert!(
-            src_levels.clone().into_iter().all(|l| l < dst_level),
-            "src_levels:{:?} dst_level:{}",
-            src_levels,
-            dst_level
+            s_levels.to_vec().into_iter().all(|l| l < d_level),
+            "s_levels:{:?} d_level:{}",
+            s_levels,
+            d_level
         );
 
         let mut src_disks = vec![];
-        for level in src_levels.clone().into_iter() {
-            src_disks.push(self.disks[level].as_disk()?.unwrap().clone());
+        for s_level in s_levels.to_vec().into_iter() {
+            src_disks.push(self.disks[s_level].as_disk()?.unwrap().clone());
         }
-        let d = self.disks[dst_level].as_disk()?.unwrap().clone();
+        let d = self.disks[d_level].as_disk()?.unwrap().clone();
 
         Ok((src_disks, d))
     }
@@ -1473,6 +1473,8 @@ where
                 inn.root.clone(),
             )?;
             io_err_at!(fs::remove_file(&root_file))?;
+
+            // println!("do_commit d_disk:{} ver:{}", level, inn.root.version);
         }
 
         Ok(())
@@ -1486,90 +1488,155 @@ where
     where
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
-        let (inn, cutoff, src_levels, dst_level) = {
+        let (levels, s_levels, d_level) = {
             let mut inn = to_inner_lock(inner)?;
-            inn.cleanup_writers()?;
-            inn.cleanup_readers()?;
+
+            match inn.compact_levels()? {
+                None => return Ok(0),
+                Some((levels, src_levels, dst_level)) => {
+                    //
+                    (levels, src_levels, dst_level)
+                }
+            }
+        };
+
+        //println!(
+        //    "do_compact levels:{:?} s_levels:{:?} d_level:{}",
+        //    levels, s_levels, d_level
+        //);
+
+        if s_levels.len() == 0 {
+            Self::do_compact1(inner, cutoff, metacb, levels, d_level)
+        } else {
+            Self::do_compact2(inner, cutoff, metacb, levels, s_levels, d_level)
+        }
+    }
+
+    fn do_compact1<F>(
+        inner: &Arc<Mutex<InnerDgm<K, V, M, D>>>,
+        cutoff: Cutoff,
+        metacb: F,
+        levels: Vec<usize>,
+        d_level: usize,
+    ) -> Result<usize>
+    where
+        F: Fn(Vec<u8>) -> Vec<u8>,
+    {
+        let (cutoff, mut high_disk) = {
+            let mut inn = to_inner_lock(inner)?;
+
+            inn.move_to_compact(&levels);
 
             inn.root = inn.root.to_next();
             let tip_seqno = inn.m0.as_m0()?.to_seqno()?;
             inn.root.update_cutoff(cutoff, tip_seqno);
 
             let cutoff = inn.root.as_cutoff();
-            match inn.compact_levels()? {
-                None => return Ok(0),
-                Some((src_levels, dst_level)) => (inn, cutoff, src_levels, dst_level),
-            }
-        };
-        // println!("Dgm.do_compact() {:?} {}", src_levels, dst_level);
+            let high_disk = inn.disks[d_level].as_disk()?.unwrap().clone();
 
-        let (res, mut inn) = if src_levels.len() == 0 {
-            let mut high_disk = {
-                let high_disk = inn.disks[dst_level].as_disk()?.unwrap().clone();
-                mem::drop(inn);
-                high_disk
-            };
-
-            let res = high_disk.compact(cutoff, metacb);
-
-            let inn = {
-                let mut inn = to_inner_lock(inner)?;
-                let disk = Snapshot::new_active(high_disk);
-                mem::replace(&mut inn.disks[dst_level], disk);
-
-                inn.repopulate_readers()?;
-                inn.n_commits = 0;
-                inn
-            };
-            // println!("Dgm.compact() compact");
-            (res, inn)
-        } else {
-            let (src_disks, mut disk) = {
-                let (src_disks, disk) = inn.do_compact_commit(src_levels.clone(), dst_level)?;
-                mem::drop(inn);
-                (src_disks, disk)
-            };
-
-            let scanner = {
-                let scanner = CommitScanner::<K, V, D::I>::new(src_disks)?;
-                let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
-                core::CommitIter::new(scanner, within)
-            };
-            disk.commit(scanner, metacb)?;
-
-            let inn = {
-                let mut inn = to_inner_lock(inner)?;
-                // update the disk-levels.
-                for level in src_levels.clone().into_iter() {
-                    let d = mem::replace(&mut inn.disks[level], Default::default());
-                    match d {
-                        Snapshot::Compact(d) => d.purge()?,
-                        _ => unreachable!(),
-                    }
-                }
-                let disk = Snapshot::new_active(disk);
-                mem::replace(&mut inn.disks[dst_level], disk);
-
-                inn.repopulate_readers()?;
-                inn.n_commits += 1;
-                inn
-            };
-
-            // println!("Dgm.compact() commit");
-            (Ok(0), inn)
+            (cutoff, high_disk)
         };
 
-        let root_file = inn.root_file.clone();
-        inn.root.reset_cutoff(cutoff);
-        inn.root_file = Self::new_root_file(
-            //
-            &inn.dir,
-            &inn.name,
-            inn.root.clone(),
-        )?;
-        io_err_at!(fs::remove_file(&root_file))?;
+        let res = high_disk.compact(cutoff, metacb);
+
+        {
+            let mut inn = to_inner_lock(inner)?;
+
+            inn.cleanup_writers()?;
+            inn.cleanup_readers()?;
+
+            let disk = Snapshot::new_active(high_disk);
+            mem::replace(&mut inn.disks[d_level], disk);
+
+            inn.repopulate_readers()?;
+            inn.n_commits = 0;
+
+            let root_file = inn.root_file.clone();
+            inn.root.reset_cutoff(cutoff);
+            inn.root_file = Self::new_root_file(
+                //
+                &inn.dir,
+                &inn.name,
+                inn.root.clone(),
+            )?;
+            io_err_at!(fs::remove_file(&root_file))?;
+
+            // println!("do_compact compact ver:{}", inn.root.version);
+        }
 
         res
+    }
+
+    fn do_compact2<F>(
+        inner: &Arc<Mutex<InnerDgm<K, V, M, D>>>,
+        cutoff: Cutoff,
+        metacb: F,
+        levels: Vec<usize>,
+        s_levels: Vec<usize>,
+        d_level: usize,
+    ) -> Result<usize>
+    where
+        F: Fn(Vec<u8>) -> Vec<u8>,
+    {
+        let (cutoff, s_disks, mut disk) = {
+            let mut inn = to_inner_lock(inner)?;
+
+            inn.move_to_compact(&levels);
+
+            inn.root = inn.root.to_next();
+            let tip_seqno = inn.m0.as_m0()?.to_seqno()?;
+            inn.root.update_cutoff(cutoff, tip_seqno);
+
+            let cutoff = inn.root.as_cutoff();
+
+            let (s_disks, disk) = inn.do_compact_disks(&s_levels, d_level)?;
+
+            (cutoff, s_disks, disk)
+        };
+
+        let scanner = {
+            let scanner = CommitScanner::<K, V, D::I>::new(s_disks)?;
+            let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
+            core::CommitIter::new(scanner, within)
+        };
+        disk.commit(scanner, metacb)?;
+
+        {
+            let mut inn = to_inner_lock(inner)?;
+
+            inn.cleanup_writers()?;
+            inn.cleanup_readers()?;
+
+            for level in s_levels.clone().into_iter() {
+                let d = mem::replace(&mut inn.disks[level], Default::default());
+                match d {
+                    Snapshot::Compact(d) => d.purge()?,
+                    _ => unreachable!(),
+                }
+            }
+            let disk = Snapshot::new_active(disk);
+            mem::replace(&mut inn.disks[d_level], disk);
+
+            inn.repopulate_readers()?;
+            inn.n_commits += 1;
+
+            let root_file = inn.root_file.clone();
+            inn.root.reset_cutoff(cutoff);
+            inn.root_file = Self::new_root_file(
+                //
+                &inn.dir,
+                &inn.name,
+                inn.root.clone(),
+            )?;
+            io_err_at!(fs::remove_file(&root_file))?;
+
+            //println!(
+            //    "do_compact commit s_levels:{:?} d_level:{} ver:{}",
+            //    s_levels, d_level, inn.root.version
+            //);
+        }
+
+        Ok(0)
     }
 
     fn new_root_file(
@@ -2396,9 +2463,10 @@ where
             Some(tx) => ipc_at!(tx.send(res))?,
             None => match res {
                 Ok(_) => info!(target: "dgm   ", "{:?}, commit done", name),
-                Err(err) => info!(
-                    target: "dgm   ", "{:?}, commit err, {:?}", name, err
-                ),
+                Err(err) => {
+                    info!(target: "dgm   ", "{:?}, commit err, {:?}", name, err);
+                    break Err(err);
+                }
             },
         }
 
@@ -2459,11 +2527,14 @@ where
             Some(tx) => ipc_at!(tx.send(res))?,
             None => match res {
                 Ok(n) => info!(
-                    target: "dgm   ", "{:?}, compaction done: {}", name, n
+                    target: "dgm   ", "{:?}, compact done: {}", name, n
                 ),
-                Err(err) => info!(
-                    target: "dgm   ", "{:?}, compaction err, {:?}", name, err
-                ),
+                Err(err) => {
+                    info!(
+                        target: "dgm   ", "{:?}, compact err, {:?}", name, err
+                    );
+                    break Err(err);
+                }
             },
         }
 

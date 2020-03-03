@@ -2141,6 +2141,7 @@ where
                     (Ok(e), Some(entry)) => Ok(Some(entry.xmerge(e)?)),
                     (Ok(e), None) => Ok(Some(e)),
                     (Err(Error::KeyNotFound), Some(entry)) => Ok(Some(entry)),
+                    (Err(Error::KeyNotFound), None) => Ok(None),
                     (Err(err), _) => Err(err),
                 },
                 None => break entry,

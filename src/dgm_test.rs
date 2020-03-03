@@ -215,9 +215,8 @@ fn test_level_file_name() {
 
 #[test]
 fn test_dgm_crud() {
-    // TODO:  test get() api
     let seed: u128 = random();
-    // let seed: u128 = 38756782021146916649595855654745225812;
+    let seed: u128 = 103567949789069280795782456171344187045;
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
     let config = Config {
@@ -257,11 +256,12 @@ fn test_dgm_crud() {
     .unwrap();
 
     let n_ops = 1_000;
+    let key_max = n_ops * 3;
     for _i in 0..20 {
         // println!("loop {}", _i);
         let mut index_w = index.to_writer().unwrap();
         for _ in 0..n_ops {
-            let key: i64 = rng.gen::<i64>().abs() % (n_ops * 3);
+            let key: i64 = rng.gen::<i64>().abs() % key_max;
             let value: i64 = rng.gen::<i64>().abs();
             let op: i64 = (rng.gen::<u8>() % 2) as i64;
             let _seqno = ref_index.to_seqno().unwrap();
@@ -326,7 +326,7 @@ fn test_dgm_crud() {
         // assert!(index.validate().is_ok()); TODO
         // println!("seqno {}", ref_index.to_seqno().unwrap());
 
-        verify_read(&mut ref_index, &mut index, &mut rng);
+        verify_read(key_max, &mut ref_index, &mut index, &mut rng);
 
         {
             let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
@@ -334,7 +334,7 @@ fn test_dgm_crud() {
             index.commit(scanner, convert::identity).unwrap()
         }
 
-        verify_read(&mut ref_index, &mut index, &mut rng);
+        verify_read(key_max, &mut ref_index, &mut index, &mut rng);
 
         {
             index
@@ -342,7 +342,7 @@ fn test_dgm_crud() {
                 .unwrap();
         }
 
-        verify_read(&mut ref_index, &mut index, &mut rng);
+        verify_read(key_max, &mut ref_index, &mut index, &mut rng);
 
         {
             let mem_factory = mvcc::mvcc_factory(true /*lsm*/);
@@ -364,11 +364,12 @@ fn test_dgm_crud() {
             }
         }
 
-        verify_read(&mut ref_index, &mut index, &mut rng);
+        verify_read(key_max, &mut ref_index, &mut index, &mut rng);
     }
 }
 
 fn verify_read(
+    key_max: i64,
     ref_index: &mut mvcc::Mvcc<i64, i64>,
     index: &mut Dgm<i64, i64, MvccFactory, RobtFactory<i64, i64, NoBitmap>>,
     rng: &mut SmallRng,
@@ -376,6 +377,41 @@ fn verify_read(
     let mut index_r = index.to_reader().unwrap();
 
     assert_eq!(ref_index.to_seqno().unwrap(), index.to_seqno().unwrap());
+
+    {
+        for key in 0..key_max {
+            let key = key as i64;
+            let res = index_r.get(&key);
+            let ref_res = ref_index.get(&key);
+            match (res, ref_res) {
+                (Ok(entry), Ok(ref_entry)) => check_entry1(&entry, &ref_entry),
+                (Err(Error::KeyNotFound), Err(Error::KeyNotFound)) => (),
+                _ => unreachable!(),
+            }
+
+            let res = index_r.get_with_versions(&key);
+            let ref_res = ref_index.get_with_versions(&key);
+            match (res, ref_res) {
+                (Ok(entry), Ok(ref_entry)) => {
+                    check_entry1(&entry, &ref_entry);
+                    check_entry2(&entry, &ref_entry);
+                }
+                (Err(Error::KeyNotFound), Err(Error::KeyNotFound)) => (),
+                (res, ref_res) => {
+                    println!("res:{} ref_res:{}", res.is_ok(), ref_res.is_ok());
+                    match res {
+                        Err(err) => panic!("{:?} {}", err, key),
+                        _ => (),
+                    };
+                    match ref_res {
+                        Err(err) => panic!("{:?} {}", err, key),
+                        _ => (),
+                    };
+                    unreachable!();
+                }
+            }
+        }
+    }
 
     {
         let iter = index_r.iter().unwrap();
@@ -388,8 +424,7 @@ fn verify_read(
     }
 
     // ranges and reverses
-    for _ in 0..1 {
-        /* TODO make it 100 */
+    for _ in 0..100 {
         let (low, high) = random_low_high(rng);
         // println!("test loop {:?} {:?}", low, high);
 

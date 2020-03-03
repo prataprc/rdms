@@ -42,7 +42,19 @@ pub struct Config {
     commit_interval: Duration,  // in seconds
 }
 
+impl Default for Config {
+    fn default() -> Config  {
+        mem_ratio: Self::MEM_RATIO,
+        disk_ratio: Self::DISK_RATIO,
+        compact_interval: Self::COMPACT_INTERVAL, // in seconds
+        commit_interval: Self::COMMIT_INTERVAL, // in seconds
+    }
+}
+
 impl Config {
+    /// Maximum number of levels to be used for disk indexes.
+    pub const NLEVELS: usize = 16;
+
     /// Default threshold between memory index footprint and
     /// the latest disk index footprint, below which a newer level
     /// shall be created, for commiting latest batch of entries.
@@ -60,6 +72,12 @@ impl Config {
     /// Refer to [set_compact_interval][Config::set_compact_interval] method
     /// for details.
     pub const COMPACT_INTERVAL: Duration = Duration::from_secs(1800);
+
+    /// Default interval in time duration, for invoking memory commit
+    /// between m0 level and disk level.
+    /// Refer to [set_commit_interval][Config::set_commit_interval] method
+    /// for details.
+    pub const COMMIT_INTERVAL: Duration = Duration::from_secs(100);
 
     /// Set threshold between memory index footprint and the latest disk
     /// index footprint, below which a newer level shall be created,
@@ -119,7 +137,7 @@ impl From<Config> for Root {
     fn from(config: Config) -> Root {
         Root {
             version: 0,
-            levels: NLEVELS,
+            levels: Config::NLEVELS,
             mono_cutoff: Default::default(),
             lsm_cutoff: Default::default(),
             tombstone_cutoff: Default::default(),
@@ -529,27 +547,6 @@ impl fmt::Debug for LevelName {
         write!(f, "{:?}", self.0)
     }
 }
-
-/// Maximum number of levels to be used for disk indexes.
-pub const NLEVELS: usize = 16;
-
-/// Default threshold between memory index footprint and
-/// the latest disk index footprint, below which a newer level
-/// shall be created, for commiting latest batch of entries.
-/// Refer to [set_mem_ratio][Config::set_mem_ratio] method for details.
-pub const MEM_RATIO: f64 = 0.5;
-
-/// Default threshold between a disk index footprint and
-/// the next-level disk index footprint, above which the two
-/// levels shall be compacted into a single disk-index.
-/// Refer to [set_disk_ratio][Config::set_disk_ratio] method for details.
-pub const DISK_RATIO: f64 = 0.5;
-
-/// Default interval in time duration, for invoking disk compaction
-/// between dgm disk-levels.
-/// Refer to [set_compact_interval][Config::set_compact_interval] method
-/// for details.
-pub const COMPACT_INTERVAL: Duration = Duration::from_secs(1800);
 
 /// Dgm type index, optimized for holding data-set both in memory and disk.
 pub struct Dgm<K, V, M, D>
@@ -1181,7 +1178,7 @@ where
 
         let disks = {
             let mut disks: Vec<Snapshot<K, V, D::I>> = vec![];
-            (0..NLEVELS).for_each(|_| disks.push(Default::default()));
+            (0..Config::NLEVELS).for_each(|_| disks.push(Default::default()));
             disks
         };
 
@@ -1237,7 +1234,7 @@ where
         let (root, root_file) = Self::find_root_file(dir, name)?;
 
         let mut disks: Vec<Snapshot<K, V, D::I>> = vec![];
-        (0..NLEVELS).for_each(|_| disks.push(Default::default()));
+        (0..Config::NLEVELS).for_each(|_| disks.push(Default::default()));
 
         for level in 0..root.levels {
             let level_name = {

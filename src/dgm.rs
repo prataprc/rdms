@@ -43,11 +43,13 @@ pub struct Config {
 }
 
 impl Default for Config {
-    fn default() -> Config  {
-        mem_ratio: Self::MEM_RATIO,
-        disk_ratio: Self::DISK_RATIO,
-        compact_interval: Self::COMPACT_INTERVAL, // in seconds
-        commit_interval: Self::COMMIT_INTERVAL, // in seconds
+    fn default() -> Config {
+        Config {
+            mem_ratio: Self::MEM_RATIO,
+            disk_ratio: Self::DISK_RATIO,
+            compact_interval: Self::COMPACT_INTERVAL, // in seconds
+            commit_interval: Self::COMMIT_INTERVAL,   // in seconds
+        }
     }
 }
 
@@ -2437,8 +2439,8 @@ where
     loop {
         let resp_tx = {
             let interval = {
-                let interval = ((root.commit_interval * 2) + elapsed) / 2;
-                cmp::min(interval, elapsed)
+                let elapsed = cmp::min(root.commit_interval, elapsed);
+                root.commit_interval - elapsed
             };
             match rx.recv_timeout(interval) {
                 Ok((cmd, resp_tx)) if cmd == "do_commit" => resp_tx,
@@ -2500,8 +2502,8 @@ where
     loop {
         let resp_tx = {
             let interval = {
-                let interval = ((root.compact_interval * 2) + elapsed) / 2;
-                cmp::min(interval, elapsed)
+                let elapsed = cmp::min(root.compact_interval, elapsed);
+                root.compact_interval - elapsed
             };
             match rx.recv_timeout(interval) {
                 Ok((cmd, resp_tx)) if cmd == "do_compact" => resp_tx,

@@ -23,6 +23,8 @@ pub enum Error {
     UnReachable(String),
     /// Execution flow entered into an un-expected situation.
     UnExpectedFail(String),
+    /// Invalid argument to the API.
+    InvalidArg(String),
     /// Supplied key is not found in the index.
     KeyNotFound,
     /// Index is empty

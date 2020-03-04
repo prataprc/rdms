@@ -12,11 +12,12 @@ use super::*;
 fn test_config_root() {
     let ref_root = Root {
         version: 0,
-        levels: NLEVELS,
+        levels: Config::NLEVELS,
         mono_cutoff: Default::default(),
         lsm_cutoff: Default::default(),
         tombstone_cutoff: Default::default(),
 
+        lsm: false,
         mem_ratio: 0.25,
         disk_ratio: 0.65,
         commit_interval: time::Duration::from_secs(10),
@@ -24,6 +25,7 @@ fn test_config_root() {
     };
 
     let ref_config = Config {
+        lsm: false,
         mem_ratio: 0.25,
         disk_ratio: 0.65,
         commit_interval: time::Duration::from_secs(10),
@@ -47,11 +49,12 @@ fn test_root1() {
     for cutoff in cutoffs.into_iter() {
         let ref_root = Root {
             version: 0,
-            levels: NLEVELS,
+            levels: Config::NLEVELS,
             mono_cutoff: cutoff,
             lsm_cutoff: cutoff,
             tombstone_cutoff: cutoff,
 
+            lsm: true,
             mem_ratio: 0.25,
             disk_ratio: 0.65,
             commit_interval: time::Duration::from_secs(10),
@@ -67,11 +70,12 @@ fn test_root1() {
 fn test_root2() {
     let root = Root {
         version: 0,
-        levels: NLEVELS,
+        levels: Config::NLEVELS,
         mono_cutoff: Default::default(),
         lsm_cutoff: Default::default(),
         tombstone_cutoff: Default::default(),
 
+        lsm: false,
         mem_ratio: 0.25,
         disk_ratio: 0.65,
         commit_interval: time::Duration::from_secs(10),
@@ -80,11 +84,12 @@ fn test_root2() {
     let root = root.to_next();
     let ref_root = Root {
         version: 1,
-        levels: NLEVELS,
+        levels: Config::NLEVELS,
         mono_cutoff: Default::default(),
         lsm_cutoff: Default::default(),
         tombstone_cutoff: Default::default(),
 
+        lsm: false,
         mem_ratio: 0.25,
         disk_ratio: 0.65,
         commit_interval: time::Duration::from_secs(10),
@@ -97,11 +102,12 @@ fn test_root2() {
 fn test_root3() {
     let mut root = Root {
         version: 0,
-        levels: NLEVELS,
+        levels: Config::NLEVELS,
         mono_cutoff: Default::default(),
         lsm_cutoff: Default::default(),
         tombstone_cutoff: Default::default(),
 
+        lsm: true,
         mem_ratio: 0.25,
         disk_ratio: 0.65,
         commit_interval: time::Duration::from_secs(10),
@@ -124,17 +130,17 @@ fn test_root3() {
         root.update_cutoff(cutoff, seqno);
         match cutoff {
             Cutoff::Mono(Bound::Unbounded) => {
-                let cutoff = Bound::Excluded(seqno);
+                let cutoff = Bound::Included(seqno);
                 assert_eq!(root.mono_cutoff, Some(cutoff))
             }
             Cutoff::Mono(cutoff) => assert_eq!(root.mono_cutoff, Some(cutoff)),
             Cutoff::Lsm(Bound::Unbounded) => {
-                let cutoff = Bound::Excluded(seqno);
+                let cutoff = Bound::Included(seqno);
                 assert_eq!(root.lsm_cutoff, Some(cutoff))
             }
             Cutoff::Lsm(cutoff) => assert_eq!(root.lsm_cutoff, Some(cutoff)),
             Cutoff::Tombstone(Bound::Unbounded) => {
-                let cutoff = Bound::Excluded(seqno);
+                let cutoff = Bound::Included(seqno);
                 assert_eq!(root.tombstone_cutoff, Some(cutoff))
             }
             Cutoff::Tombstone(c) => assert_eq!(root.tombstone_cutoff, Some(c)),
@@ -151,20 +157,20 @@ fn test_root3() {
     root.mono_cutoff = Some(Bound::Included(11));
     root.tombstone_cutoff = Some(Bound::Included(101));
     root.lsm_cutoff = Some(Bound::Included(1001));
-    assert_eq!(root.as_cutoff(), Cutoff::new_mono(Bound::Included(11)));
+    assert_eq!(root.to_cutoff(), Cutoff::new_mono(Bound::Included(11)));
 
     root.reset_cutoff(Cutoff::Mono(Bound::Included(11)));
     assert_eq!(
-        root.as_cutoff(),
+        root.to_cutoff(),
         Cutoff::new_tombstone(Bound::Included(101))
     );
 
     root.reset_cutoff(Cutoff::Tombstone(Bound::Included(101)));
-    assert_eq!(root.as_cutoff(), Cutoff::new_lsm(Bound::Included(1001)));
+    assert_eq!(root.to_cutoff(), Cutoff::new_lsm(Bound::Included(1001)));
 
     root.reset_cutoff(Cutoff::Lsm(Bound::Included(1001)));
     assert_eq!(
-        root.as_cutoff(),
+        root.to_cutoff(),
         Cutoff::Lsm(Bound::Excluded(std::u64::MIN))
     );
 }
@@ -215,6 +221,7 @@ fn test_dgm_crud() {
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
     let config = Config {
+        lsm: true,
         mem_ratio: 0.5,
         disk_ratio: 0.5,
         commit_interval: time::Duration::from_secs(0),

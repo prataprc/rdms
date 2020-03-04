@@ -36,6 +36,7 @@ use crate::{
 /// Configuration type for Dgm indexes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Config {
+    lsm: bool,
     mem_ratio: f64,
     disk_ratio: f64,
     compact_interval: Duration, // in seconds
@@ -45,6 +46,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         Config {
+            lsm: false,
             mem_ratio: Self::MEM_RATIO,
             disk_ratio: Self::DISK_RATIO,
             compact_interval: Self::COMPACT_INTERVAL, // in seconds
@@ -81,38 +83,51 @@ impl Config {
     /// for details.
     pub const COMMIT_INTERVAL: Duration = Duration::from_secs(100);
 
+    /// Set entire Dgm index for log-structured-merge. This means
+    /// the oldest level (snapshot) won't include deleted entries
+    /// and older versions of each entry.
+    pub fn set_lsm(&mut self, lsm: bool) -> &mut Self {
+        self.lsm = lsm;
+        self
+    }
+
     /// Set threshold between memory index footprint and the latest disk
     /// index footprint, below which a newer level shall be created,
     /// for commiting new entries.
-    pub fn set_mem_ratio(&mut self, ratio: f64) {
+    pub fn set_mem_ratio(&mut self, ratio: f64) -> &mut Self {
         self.mem_ratio = ratio;
+        self
     }
 
     /// Set threshold between a disk index footprint and the next-level disk
     /// index footprint, above which the two levels shall be compacted
     /// into a single index.
-    pub fn set_disk_ratio(&mut self, ratio: f64) {
+    pub fn set_disk_ratio(&mut self, ratio: f64) -> &mut Self {
         self.disk_ratio = ratio;
+        self
     }
 
     /// Set interval in time duration, for invoking disk compaction
     /// between dgm disk-levels. Calling this method will spawn an auto
     /// compaction thread.
-    pub fn set_compact_interval(&mut self, interval: Duration) {
-        self.compact_interval = interval
+    pub fn set_compact_interval(&mut self, interval: Duration) -> &mut Self {
+        self.compact_interval = interval;
+        self
     }
 
     /// Set interval in time duration, for commiting memory batch into
     /// disk snapshot. Calling this method will spawn an auto
     /// compaction thread.
-    pub fn set_commit_interval(&mut self, interval: Duration) {
-        self.commit_interval = interval
+    pub fn set_commit_interval(&mut self, interval: Duration) -> &mut Self {
+        self.commit_interval = interval;
+        self
     }
 }
 
 impl From<Root> for Config {
     fn from(root: Root) -> Config {
         Config {
+            lsm: root.lsm,
             mem_ratio: root.mem_ratio,
             disk_ratio: root.disk_ratio,
             compact_interval: root.compact_interval,
@@ -129,6 +144,7 @@ struct Root {
     lsm_cutoff: Option<Bound<u64>>,
     tombstone_cutoff: Option<Bound<u64>>,
 
+    lsm: bool,
     mem_ratio: f64,
     disk_ratio: f64,
     commit_interval: time::Duration,  // in seconds.
@@ -144,6 +160,7 @@ impl From<Config> for Root {
             lsm_cutoff: Default::default(),
             tombstone_cutoff: Default::default(),
 
+            lsm: config.lsm,
             mem_ratio: config.mem_ratio,
             disk_ratio: config.disk_ratio,
             commit_interval: config.commit_interval,
@@ -156,7 +173,7 @@ impl TryFrom<Root> for Vec<u8> {
     type Error = crate::error::Error;
 
     fn try_from(root: Root) -> Result<Vec<u8>> {
-        use toml::Value::{self, Array, Float, Integer, String as TomlStr};
+        use toml::Value::{self, Array, Boolean, Float, Integer, String as S};
 
         let text = {
             let mut dict = toml::map::Map::new();
@@ -170,6 +187,8 @@ impl TryFrom<Root> for Vec<u8> {
 
             dict.insert("version".to_string(), Integer(version));
             dict.insert("levels".to_string(), Integer(levels));
+
+            dict.insert("lsm".to_string(), Boolean(root.lsm));
             dict.insert("mem_ratio".to_string(), Float(mem_ratio));
             dict.insert("disk_ratio".to_string(), Float(disk_ratio));
             dict.insert("commit_interval".to_string(), Integer(m_interval));
@@ -188,7 +207,7 @@ impl TryFrom<Root> for Vec<u8> {
             }?;
             dict.insert(
                 "mono_cutoff".to_string(),
-                Array(vec![TomlStr(arg1.to_string()), TomlStr(arg2.to_string())]),
+                Array(vec![S(arg1.to_string()), S(arg2.to_string())]),
             );
             let (arg1, arg2) = match root.lsm_cutoff {
                 Some(cutoff) => match cutoff {
@@ -203,7 +222,7 @@ impl TryFrom<Root> for Vec<u8> {
             }?;
             dict.insert(
                 "lsm_cutoff".to_string(),
-                Array(vec![TomlStr(arg1.to_string()), TomlStr(arg2.to_string())]),
+                Array(vec![S(arg1.to_string()), S(arg2.to_string())]),
             );
 
             let (arg1, arg2) = match root.tombstone_cutoff {
@@ -219,7 +238,7 @@ impl TryFrom<Root> for Vec<u8> {
             }?;
             dict.insert(
                 "tombstone_cutoff".to_string(),
-                Array(vec![TomlStr(arg1.to_string()), TomlStr(arg2.to_string())]),
+                Array(vec![S(arg1.to_string()), S(arg2.to_string())]),
             );
 
             Value::Table(dict).to_string()
@@ -260,6 +279,13 @@ impl TryFrom<Vec<u8>> for Root {
                 .ok_or(InvalidFile(err2.clone()))?
                 .as_integer()
                 .ok_or(InvalidFile(err2.clone()))?)?
+        };
+        root.lsm = {
+            let field = dict.get("lsm");
+            field
+                .ok_or(InvalidFile(err2.clone()))?
+                .as_bool()
+                .ok_or(InvalidFile(err2.clone()))?
         };
         root.mem_ratio = {
             let field = dict.get("mem_ratio");
@@ -362,7 +388,7 @@ impl Root {
         new_root
     }
 
-    fn as_cutoff(&self) -> Cutoff {
+    fn to_cutoff(&self) -> Cutoff {
         if self.mono_cutoff.is_some() {
             let c = self.mono_cutoff.as_ref().unwrap().clone();
             Cutoff::new_mono(c)
@@ -389,15 +415,15 @@ impl Root {
 
         let cutoff = match cutoff {
             Cutoff::Mono(Bound::Unbounded) => {
-                let cutoff = Bound::Excluded(tip_seqno);
+                let cutoff = Bound::Included(tip_seqno);
                 Cutoff::new_mono(cutoff)
             }
             Cutoff::Lsm(Bound::Unbounded) => {
-                let cutoff = Bound::Excluded(tip_seqno);
+                let cutoff = Bound::Included(tip_seqno);
                 Cutoff::new_lsm(cutoff)
             }
             Cutoff::Tombstone(Bound::Unbounded) => {
-                let cutoff = Bound::Excluded(tip_seqno);
+                let cutoff = Bound::Included(tip_seqno);
                 Cutoff::new_tombstone(cutoff)
             }
             cutoff => cutoff,
@@ -1528,9 +1554,12 @@ where
 
             inn.root = inn.root.to_next();
             let tip_seqno = inn.m0.as_m0()?.to_seqno()?;
-            inn.root.update_cutoff(cutoff, tip_seqno);
-
-            let cutoff = inn.root.as_cutoff();
+            let cutoff = if cutoff.is_empty() && !inn.root.lsm {
+                Cutoff::new_mono_empty()
+            } else {
+                inn.root.update_cutoff(cutoff, tip_seqno);
+                inn.root.to_cutoff()
+            };
             let high_disk = inn.disks[d_level].as_disk()?.unwrap().clone();
 
             (cutoff, high_disk)
@@ -1586,7 +1615,7 @@ where
             let tip_seqno = inn.m0.as_m0()?.to_seqno()?;
             inn.root.update_cutoff(cutoff, tip_seqno);
 
-            let cutoff = inn.root.as_cutoff();
+            let cutoff = inn.root.to_cutoff();
 
             let (s_disks, disk) = inn.do_compact_disks(&s_levels, d_level)?;
 

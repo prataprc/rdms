@@ -656,6 +656,204 @@ fn test_build_scan() {
 }
 
 #[test]
+fn test_compact_mono_cutoff() {
+    let seed: u128 = random();
+    // let seed: u128 = 329574334243588244341656545742438834233;
+    println!("seed:{}", seed);
+    let name = "test-compact-mono-cutoff";
+    let dir = {
+        let mut dir = std::env::temp_dir();
+        dir.push(name);
+        dir.into_os_string()
+    };
+    let mut config: robt::Config = Default::default();
+    config.delta_ok = true;
+    config.value_in_vlog = true;
+
+    let mut llrb: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
+    let mut index = Robt::<i64, i64, NoBitmap>::new(&dir, name, config).unwrap();
+
+    {
+        let (n_ops, key_max) = (30_000_i64, 20_000);
+        random_llrb(n_ops, key_max, seed, &mut llrb);
+        let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
+        let scanner = core::CommitIter::new(llrb.as_mut(), within);
+        index.commit(scanner, std::convert::identity).unwrap();
+    };
+
+    let cutoff = Cutoff::new_mono_empty();
+    index.compact(cutoff, std::convert::identity).unwrap();
+
+    let ref_entries: Vec<Entry<i64, i64>> = {
+        let iter = llrb.iter().unwrap();
+        iter.map(|e| e.unwrap())
+            .filter_map(|e| if e.is_deleted() { None } else { Some(e) })
+            .collect()
+    };
+    let entries: Vec<Entry<i64, i64>> = {
+        let mut r = index.to_reader().unwrap();
+        let iter = r.iter_with_versions().unwrap();
+        iter.map(|e| e.unwrap()).collect()
+    };
+
+    assert_eq!(ref_entries.len(), entries.len());
+    for (e, re) in entries.into_iter().zip(ref_entries.into_iter()) {
+        check_entry1(&e, &re);
+        check_entry2(&e, &re);
+    }
+}
+
+#[test]
+fn test_compact_tombstone_cutoff() {
+    let seed: u128 = random();
+    // let seed: u128 = 329574334243588244341656545742438834233;
+    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+
+    for _i in 0..10 {
+        println!("seed:{}", seed);
+        let name = "test-compact-mono-cutoff";
+        let dir = {
+            let mut dir = std::env::temp_dir();
+            dir.push(name);
+            dir.into_os_string()
+        };
+        let mut config: robt::Config = Default::default();
+        config.delta_ok = true;
+        config.value_in_vlog = true;
+
+        let mut llrb: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
+        let mut index = Robt::<i64, i64, NoBitmap>::new(
+            //
+            &dir, name, config,
+        )
+        .unwrap();
+
+        let n_ops = {
+            let (n_ops, key_max) = (30_000_i64, 20_000);
+            random_llrb(n_ops, key_max, seed, &mut llrb);
+            let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
+            let scanner = core::CommitIter::new(llrb.as_mut(), within);
+            index.commit(scanner, std::convert::identity).unwrap();
+            n_ops
+        };
+
+        let cutoff = {
+            let cutoff = match rng.gen::<u8>() % 3 {
+                0 => Bound::Excluded(rng.gen::<u64>() % (n_ops as u64) / 2),
+                1 => Bound::Included(rng.gen::<u64>() % (n_ops as u64) / 2),
+                2 => Bound::Unbounded,
+                _ => unreachable!(),
+            };
+            Cutoff::new_tombstone(cutoff)
+        };
+        index.compact(cutoff, std::convert::identity).unwrap();
+
+        let entries: Vec<Entry<i64, i64>> = {
+            let mut r = index.to_reader().unwrap();
+            let iter = r.iter_with_versions().unwrap();
+            iter.map(|e| e.unwrap()).collect()
+        };
+
+        let cutoff = match cutoff {
+            Cutoff::Tombstone(cutoff) => cutoff,
+            _ => unreachable!(),
+        };
+        for e in entries.into_iter() {
+            if !e.is_deleted() {
+                continue;
+            }
+            match cutoff {
+                Bound::Excluded(cutoff) if e.to_seqno() < cutoff => {
+                    panic!("key:{} seqno:{}", e.to_key(), e.to_seqno());
+                }
+                Bound::Included(cutoff) if e.to_seqno() <= cutoff => {
+                    panic!("key:{} seqno:{}", e.to_key(), e.to_seqno());
+                }
+                Bound::Unbounded => {
+                    panic!("key:{} seqno:{}", e.to_key(), e.to_seqno());
+                }
+                _ => (),
+            }
+        }
+    }
+}
+
+#[test]
+fn test_compact_lsm_cutoff() {
+    let seed: u128 = random();
+    // let seed: u128 = 329574334243588244341656545742438834233;
+    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+
+    for _i in 0..10 {
+        println!("seed:{}", seed);
+        let name = "test-compact-mono-cutoff";
+        let dir = {
+            let mut dir = std::env::temp_dir();
+            dir.push(name);
+            dir.into_os_string()
+        };
+        let mut config: robt::Config = Default::default();
+        config.delta_ok = true;
+        config.value_in_vlog = true;
+
+        let mut llrb: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
+        let mut index = Robt::<i64, i64, NoBitmap>::new(
+            //
+            &dir, name, config,
+        )
+        .unwrap();
+
+        let n_ops = {
+            let (n_ops, key_max) = (30_000_i64, 20_000);
+            random_llrb(n_ops, key_max, seed, &mut llrb);
+            let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
+            let scanner = core::CommitIter::new(llrb.as_mut(), within);
+            index.commit(scanner, std::convert::identity).unwrap();
+            n_ops
+        };
+
+        let cutoff = {
+            let cutoff = match rng.gen::<u8>() % 3 {
+                0 => Bound::Excluded(rng.gen::<u64>() % (n_ops as u64) / 2),
+                1 => Bound::Included(rng.gen::<u64>() % (n_ops as u64) / 2),
+                2 => Bound::Unbounded,
+                _ => unreachable!(),
+            };
+            Cutoff::new_tombstone(cutoff)
+        };
+        index.compact(cutoff, std::convert::identity).unwrap();
+
+        let entries: Vec<Entry<i64, i64>> = {
+            let mut r = index.to_reader().unwrap();
+            let iter = r.iter_with_versions().unwrap();
+            iter.map(|e| e.unwrap()).collect()
+        };
+
+        let cutoff = match cutoff {
+            Cutoff::Tombstone(cutoff) => cutoff,
+            _ => unreachable!(),
+        };
+        for e in entries.into_iter() {
+            if !e.is_deleted() {
+                continue;
+            }
+            match cutoff {
+                Bound::Excluded(cutoff) if e.to_seqno() < cutoff => {
+                    panic!("key:{} seqno:{}", e.to_key(), e.to_seqno());
+                }
+                Bound::Included(cutoff) if e.to_seqno() <= cutoff => {
+                    panic!("key:{} seqno:{}", e.to_key(), e.to_seqno());
+                }
+                Bound::Unbounded => {
+                    panic!("key:{} seqno:{}", e.to_key(), e.to_seqno());
+                }
+                _ => (),
+            }
+        }
+    }
+}
+
+#[test]
 fn test_commit_scan() {
     let seed: u128 = random();
     // let seed: u128 = 329574334243588244341656545742438834233;

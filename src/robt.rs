@@ -3032,6 +3032,12 @@ where
             }
             n_count += 1;
             seqno = cmp::max(seqno, entry.to_seqno());
+            //println!(
+            //    "validate iter seqno:{} m_seqno:{} s_seqno:{}",
+            //    entry.to_seqno(),
+            //    seqno,
+            //    s.seqno
+            //);
             prev_key = match prev_key {
                 Some(prev_key) if prev_key.ge(entry.as_key()) => {
                     let msg = format!("robt sort error {:?} >= {:?}", prev_key, entry.as_key());
@@ -3047,8 +3053,8 @@ where
         } else if n_deleted != s.n_deleted {
             let msg = format!("robt n_deleted {} > {}", n_deleted, s.n_deleted);
             Err(Error::ValidationFail(msg))
-        } else if seqno > 0 && seqno != s.seqno {
-            let msg = format!("robt seqno {} != {}", seqno, s.seqno);
+        } else if seqno > 0 && seqno > s.seqno {
+            let msg = format!("robt seqno {} > {}", seqno, s.seqno);
             Err(Error::ValidationFail(msg))
         } else {
             Ok(s)

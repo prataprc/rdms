@@ -142,7 +142,6 @@ impl From<Root> for Config {
 struct Root {
     version: usize,
     levels: usize,
-    mono_cutoff: Option<Bound<u64>>,
     lsm_cutoff: Option<Bound<u64>>,
     tombstone_cutoff: Option<Bound<u64>>,
 
@@ -158,7 +157,6 @@ impl From<Config> for Root {
         Root {
             version: 0,
             levels: Config::NLEVELS,
-            mono_cutoff: Default::default(),
             lsm_cutoff: Default::default(),
             tombstone_cutoff: Default::default(),
 
@@ -196,21 +194,6 @@ impl TryFrom<Root> for Vec<u8> {
             dict.insert("commit_interval".to_string(), Integer(m_interval));
             dict.insert("compact_interval".to_string(), Integer(c_interval));
 
-            let (arg1, arg2) = match root.mono_cutoff {
-                Some(cutoff) => match cutoff {
-                    Bound::Excluded(cutoff) => Ok(("excluded", cutoff)),
-                    Bound::Included(cutoff) => Ok(("included", cutoff)),
-                    Bound::Unbounded => {
-                        let msg = format!("Dgm root has Unbounded mono-cutoff");
-                        Err(Error::UnReachable(msg))
-                    }
-                },
-                None => Ok(("none", 0)),
-            }?;
-            dict.insert(
-                "mono_cutoff".to_string(),
-                Array(vec![S(arg1.to_string()), S(arg2.to_string())]),
-            );
             let (arg1, arg2) = match root.lsm_cutoff {
                 Some(cutoff) => match cutoff {
                     Bound::Excluded(cutoff) => Ok(("excluded", cutoff)),
@@ -319,25 +302,6 @@ impl TryFrom<Vec<u8>> for Root {
                 .ok_or(InvalidFile(err2.clone()))?)?;
             time::Duration::from_secs(duration)
         };
-        root.mono_cutoff = {
-            let field = dict.get("mono_cutoff").ok_or(InvalidFile(err2.clone()))?;
-            let arr = field.as_array().ok_or(InvalidFile(err2.clone()))?;
-            let bound = arr[0].as_str().ok_or(InvalidFile(err2.clone()))?;
-            let cutoff: u64 = {
-                let cutoff = &arr[1].as_str().ok_or(InvalidFile(err2.clone()))?;
-                parse_at!(cutoff.parse())?
-            };
-            match bound {
-                "excluded" => Ok(Some(Bound::Excluded(cutoff))),
-                "included" => Ok(Some(Bound::Included(cutoff))),
-                "unbounded" => Ok(Some(Bound::Unbounded)),
-                "none" => Ok(None),
-                _ => {
-                    let msg = format!("Dgm root deser invalid mono-cutoff");
-                    Err(Error::UnReachable(msg))
-                }
-            }
-        }?;
         root.lsm_cutoff = {
             let field = dict.get("lsm_cutoff").ok_or(InvalidFile(err2.clone()))?;
             let arr = field.as_array().ok_or(InvalidFile(err2.clone()))?;
@@ -390,36 +354,28 @@ impl Root {
         new_root
     }
 
-    fn to_cutoff(&self) -> Cutoff {
-        if self.mono_cutoff.is_some() {
-            let c = self.mono_cutoff.as_ref().unwrap().clone();
-            Cutoff::new_mono(c)
-        } else if self.tombstone_cutoff.is_some() {
-            let c = self.tombstone_cutoff.as_ref().unwrap().clone();
-            Cutoff::new_tombstone(c)
-        } else if self.lsm_cutoff.is_some() {
-            Cutoff::new_lsm(self.lsm_cutoff.as_ref().unwrap().clone())
-        } else {
-            Cutoff::new_lsm_empty()
+    fn to_cutoff(&self, n_high_compacts: usize) -> Cutoff {
+        match n_high_compacts % 2 {
+            0 if self.tombstone_cutoff.is_some() => {
+                let c = self.tombstone_cutoff.as_ref().unwrap().clone();
+                Cutoff::new_tombstone(c)
+            }
+            0 if self.lsm_cutoff.is_some() => {
+                let c = self.lsm_cutoff.as_ref().unwrap().clone();
+                Cutoff::new_lsm(c)
+            }
+            1 if self.lsm_cutoff.is_some() => {
+                let c = self.lsm_cutoff.as_ref().unwrap().clone();
+                Cutoff::new_lsm(c)
+            }
+            _ => Cutoff::new_lsm_empty(),
         }
-    }
-
-    fn reset_cutoff(&mut self, cutoff: Cutoff) {
-        match cutoff {
-            Cutoff::Lsm(_) => self.lsm_cutoff.take(),
-            Cutoff::Tombstone(_) => self.tombstone_cutoff.take(),
-            Cutoff::Mono(_) => self.mono_cutoff.take(),
-        };
     }
 
     fn update_cutoff(&mut self, cutoff: Cutoff, tip_seqno: u64) {
         use std::ops::Bound::{Excluded, Included, Unbounded};
 
         let cutoff = match cutoff {
-            Cutoff::Mono(Bound::Unbounded) => {
-                let cutoff = Bound::Included(tip_seqno);
-                Cutoff::new_mono(cutoff)
-            }
             Cutoff::Lsm(Bound::Unbounded) => {
                 let cutoff = Bound::Included(tip_seqno);
                 Cutoff::new_lsm(cutoff)
@@ -432,19 +388,6 @@ impl Root {
         };
 
         match cutoff {
-            Cutoff::Mono(n_cutoff) => match self.mono_cutoff.clone() {
-                None => self.mono_cutoff = Some(n_cutoff),
-                Some(o) => {
-                    let range = (Unbounded, o.clone());
-                    self.mono_cutoff = Some(match n_cutoff {
-                        Excluded(n) if range.contains(&n) => o,
-                        Excluded(n) => Excluded(n),
-                        Included(n) if range.contains(&n) => o,
-                        Included(n) => Included(n),
-                        Unbounded => Included(tip_seqno),
-                    });
-                }
-            },
             Cutoff::Lsm(n_cutoff) => match self.lsm_cutoff.clone() {
                 None => self.lsm_cutoff = Some(n_cutoff),
                 Some(o) => {
@@ -471,6 +414,7 @@ impl Root {
                     });
                 }
             },
+            Cutoff::Mono(_) => unreachable!(),
         }
     }
 }
@@ -608,6 +552,7 @@ where
     root_file: ffi::OsString,
     root: Root,
 
+    n_high_compacts: usize,
     n_commits: usize,
     m0: Snapshot<K, V, M::I>,         // write index
     m1: Option<Snapshot<K, V, M::I>>, // flush index
@@ -1221,6 +1166,7 @@ where
             root_file,
             root,
 
+            n_high_compacts: Default::default(),
             n_commits: Default::default(),
             m0,
             m1: None,
@@ -1293,6 +1239,7 @@ where
                 root_file,
                 root,
 
+                n_high_compacts: Default::default(),
                 n_commits: Default::default(),
                 m0,
                 m1: None,
@@ -1515,16 +1462,45 @@ where
     where
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
-        let (levels, s_levels, d_level) = {
+        match cutoff {
+            Cutoff::Mono(_) => {
+                let msg = format!("can't have mono-cutoff");
+                Err(Error::InvalidArg(msg))
+            }
+            _ => Ok(()),
+        }?;
+
+        let (cutoff, levels, s_levels, d_level) = {
             let mut inn = to_inner_lock(inner)?;
 
-            match inn.compact_levels()? {
+            let (levels, s_levels, d_level) = match inn.compact_levels()? {
                 None => return Ok(0),
                 Some((levels, src_levels, dst_level)) => {
                     //
                     (levels, src_levels, dst_level)
                 }
-            }
+            };
+
+            let cutoff = if d_level == (Config::NLEVELS - 1) && !inn.root.lsm {
+                inn.n_high_compacts += 1;
+
+                Cutoff::new_mono_empty()
+            } else if d_level == (Config::NLEVELS - 1) {
+                inn.n_high_compacts += 1;
+
+                let tip_seqno = inn.m0.as_m0()?.to_seqno()?;
+                inn.root.update_cutoff(cutoff, tip_seqno);
+                inn.root.to_cutoff(inn.n_high_compacts)
+            } else {
+                // remember the cutoff, don't apply for intermediate compaction.
+                {
+                    let tip_seqno = inn.m0.as_m0()?.to_seqno()?;
+                    inn.root.update_cutoff(cutoff, tip_seqno);
+                }
+                Cutoff::new_lsm_empty()
+            };
+
+            (cutoff, levels, s_levels, d_level)
         };
 
         //println!(
@@ -1535,7 +1511,7 @@ where
         if s_levels.len() == 0 {
             Self::do_compact1(inner, cutoff, metacb, levels, d_level)
         } else {
-            Self::do_compact2(inner, cutoff, metacb, levels, s_levels, d_level)
+            Self::do_compact2(inner, metacb, levels, s_levels, d_level)
         }
     }
 
@@ -1549,22 +1525,12 @@ where
     where
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
-        let (cutoff, mut high_disk) = {
+        let mut high_disk = {
             let mut inn = to_inner_lock(inner)?;
-
             inn.move_to_compact(&levels);
 
             inn.root = inn.root.to_next();
-            let tip_seqno = inn.m0.as_m0()?.to_seqno()?;
-            let cutoff = if cutoff.is_empty() && !inn.root.lsm {
-                Cutoff::new_mono_empty()
-            } else {
-                inn.root.update_cutoff(cutoff, tip_seqno);
-                inn.root.to_cutoff()
-            };
-            let high_disk = inn.disks[d_level].as_disk()?.unwrap().clone();
-
-            (cutoff, high_disk)
+            inn.disks[d_level].as_disk()?.unwrap().clone()
         };
 
         let res = high_disk.compact(cutoff, metacb);
@@ -1582,7 +1548,6 @@ where
             inn.n_commits = Default::default();
 
             let root_file = inn.root_file.clone();
-            inn.root.reset_cutoff(cutoff);
             inn.root_file = Self::new_root_file(
                 //
                 &inn.dir,
@@ -1599,7 +1564,6 @@ where
 
     fn do_compact2<F>(
         inner: &Arc<Mutex<InnerDgm<K, V, M, D>>>,
-        cutoff: Cutoff,
         metacb: F,
         levels: Vec<usize>,
         s_levels: Vec<usize>,
@@ -1608,20 +1572,14 @@ where
     where
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
-        let (cutoff, s_disks, mut disk) = {
+        let (s_disks, mut disk) = {
             let mut inn = to_inner_lock(inner)?;
 
             inn.move_to_compact(&levels);
 
             inn.root = inn.root.to_next();
-            let tip_seqno = inn.m0.as_m0()?.to_seqno()?;
-            inn.root.update_cutoff(cutoff, tip_seqno);
-
-            let cutoff = inn.root.to_cutoff();
-
             let (s_disks, disk) = inn.do_compact_disks(&s_levels, d_level)?;
-
-            (cutoff, s_disks, disk)
+            (s_disks, disk)
         };
 
         let scanner = {
@@ -1651,7 +1609,6 @@ where
             inn.n_commits += 1;
 
             let root_file = inn.root_file.clone();
-            inn.root.reset_cutoff(cutoff);
             inn.root_file = Self::new_root_file(
                 //
                 &inn.dir,

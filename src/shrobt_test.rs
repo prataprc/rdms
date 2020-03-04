@@ -102,8 +102,8 @@ fn test_shrobt_llrb3() {
 
 #[test]
 fn test_shrobt_commit_compact() {
-    let seed: u128 = random();
-    // let seed: u128 = 75218120974958672431747468158806217602;
+    let i = random::<usize>() % 2;
+    let seed: u128 = [53026008077594988487982468431529121608, random()][i];
 
     let name = "test-shrobt-commit-compact";
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
@@ -206,12 +206,6 @@ fn test_shrobt_commit_compact() {
         within_low_seqno = Bound::Excluded(index.to_seqno().unwrap());
     }
 
-    match index.validate() {
-        Err(Error::EmptyIndex) if mindex.len() == 0 => (),
-        Err(err) => panic!("{:?}", err),
-        Ok(_) => (),
-    }
-
     //// test iter
     let refs: Vec<Entry<i64, i64>> = {
         let mut r = mindex.to_reader().unwrap();
@@ -223,11 +217,23 @@ fn test_shrobt_commit_compact() {
         let iter = r.iter_with_versions().unwrap();
         iter.map(|e| e.unwrap()).collect()
     };
-    // assert_eq!(es.len(), refs.len()); TODO uncomment this ?
+    assert_eq!(es.len(), refs.len());
     for (e, re) in es.into_iter().zip(refs.into_iter()) {
-        // println!("check key {} {}", e.to_key(), re.to_key());
+        //println!(
+        //    "check key {} {} {} {}",
+        //    e.to_key(),
+        //    re.to_key(),
+        //    e.to_seqno(),
+        //    e.to_seqno()
+        //);
         check_entry1(&e, &re);
         check_entry2(&e, &re);
+    }
+
+    match index.validate() {
+        Err(Error::EmptyIndex) if mindex.len() == 0 => (),
+        Err(err) => panic!("{:?}", err),
+        Ok(_) => (),
     }
 }
 

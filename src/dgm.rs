@@ -414,7 +414,7 @@ impl Root {
                     });
                 }
             },
-            Cutoff::Mono(_) => unreachable!(),
+            Cutoff::Mono => unreachable!(),
         }
     }
 }
@@ -1463,7 +1463,7 @@ where
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
         match cutoff {
-            Cutoff::Mono(_) => {
+            Cutoff::Mono => {
                 let msg = format!("can't have mono-cutoff");
                 Err(Error::InvalidArg(msg))
             }
@@ -1484,7 +1484,7 @@ where
             let cutoff = if d_level == (Config::NLEVELS - 1) && !inn.root.lsm {
                 inn.n_high_compacts += 1;
 
-                Cutoff::new_mono_empty()
+                Cutoff::new_mono()
             } else if d_level == (Config::NLEVELS - 1) {
                 inn.n_high_compacts += 1;
 

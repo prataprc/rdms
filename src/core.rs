@@ -52,7 +52,7 @@ pub trait ThreadSafe: 'static + Send {}
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Cutoff {
     /// Mono compaction is for non-lsm compaction.
-    Mono(Bound<u64>),
+    Mono,
     /// Tombstone-compaction, refer to [rdms] for more detail.
     Tombstone(Bound<u64>),
     /// Lsm-compaction, refer to [rdms] for more detail.
@@ -60,12 +60,8 @@ pub enum Cutoff {
 }
 
 impl Cutoff {
-    pub fn new_mono(b: Bound<u64>) -> Cutoff {
-        Cutoff::Mono(b)
-    }
-
-    pub fn new_mono_empty() -> Cutoff {
-        Cutoff::Mono(Bound::Excluded(std::u64::MIN))
+    pub fn new_mono() -> Cutoff {
+        Cutoff::Mono
     }
 
     pub fn new_tombstone(b: Bound<u64>) -> Cutoff {
@@ -85,16 +81,15 @@ impl Cutoff {
     }
     pub fn to_bound(&self) -> Bound<u64> {
         match self {
-            Cutoff::Mono(b) => b,
-            Cutoff::Lsm(b) => b,
-            Cutoff::Tombstone(b) => b,
+            Cutoff::Mono => Bound::Excluded(std::u64::MIN),
+            Cutoff::Lsm(b) => b.clone(),
+            Cutoff::Tombstone(b) => b.clone(),
         }
-        .clone()
     }
 
     pub fn is_empty(&self) -> bool {
         match self {
-            Cutoff::Mono(Bound::Excluded(n)) => *n == std::u64::MIN,
+            Cutoff::Mono => false,
             Cutoff::Lsm(Bound::Excluded(n)) => *n == std::u64::MIN,
             Cutoff::Tombstone(Bound::Excluded(n)) => *n == std::u64::MIN,
             _ => false,
@@ -998,16 +993,11 @@ where
         let n = self.to_seqno();
 
         let cutoff = match cutoff {
-            Cutoff::Mono(_) if self.is_deleted() => return None,
-            Cutoff::Mono(cutoff) => match cutoff {
-                Bound::Included(cutoff) if n <= cutoff => return None,
-                Bound::Excluded(cutoff) if n < cutoff => return None,
-                Bound::Unbounded => return None,
-                _ => {
-                    self.set_deltas(vec![]);
-                    return Some(self);
-                }
-            },
+            Cutoff::Mono if self.is_deleted() => return None,
+            Cutoff::Mono => {
+                self.set_deltas(vec![]);
+                return Some(self);
+            }
             Cutoff::Lsm(cutoff) => cutoff,
             Cutoff::Tombstone(cutoff) if self.is_deleted() => match cutoff {
                 Bound::Included(cutoff) if n <= cutoff => return None,

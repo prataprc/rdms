@@ -305,21 +305,21 @@ fn test_entry_mono_purge1() {
         entry.prepend_version(e, true /*lsm*/).unwrap();
     }
 
-    let cutoff = Cutoff::new_mono_empty();
+    let cutoff = Cutoff::new_mono();
     let ent = entry.clone().purge(cutoff).unwrap();
     assert_eq!(ent.as_deltas().len(), 0);
     assert_eq!(ent.to_seqno(), 1001);
     assert_eq!(ent.to_native_value().unwrap(), 20);
 
-    let cutoff = Cutoff::new_mono(Bound::Excluded(1001));
+    let cutoff = Cutoff::new_mono();
     let ent = entry.clone().purge(cutoff).unwrap();
     assert_eq!(ent.as_deltas().len(), 0);
     assert_eq!(ent.to_seqno(), 1001);
     assert_eq!(ent.to_native_value().unwrap(), 20);
 
-    let cutoff = Cutoff::new_mono(Bound::Included(1001));
-    let ent = entry.clone().purge(cutoff);
-    assert_eq!(ent.is_none(), true);
+    let cutoff = Cutoff::new_mono();
+    let ent = entry.clone().purge(cutoff).unwrap();
+    assert_eq!(ent.as_deltas().len(), 0);
 }
 
 #[test]
@@ -333,9 +333,9 @@ fn test_entry_mono_purge2() {
         entry.prepend_version(e, true /*lsm*/).unwrap();
     }
 
-    let cutoff = Cutoff::new_mono(Bound::Unbounded);
-    let ent = entry.clone().purge(cutoff);
-    assert_eq!(ent.is_none(), true);
+    let cutoff = Cutoff::new_mono();
+    let ent = entry.clone().purge(cutoff).unwrap();
+    assert_eq!(ent.as_deltas().len(), 0);
 }
 
 #[test]
@@ -350,7 +350,7 @@ fn test_entry_mono_purge3() {
     }
     entry.delete(1002).unwrap();
 
-    let cutoff = Cutoff::new_mono_empty();
+    let cutoff = Cutoff::new_mono();
     let ent = entry.clone().purge(cutoff);
     assert_eq!(ent.is_none(), true);
 }

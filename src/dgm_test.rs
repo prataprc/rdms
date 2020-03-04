@@ -323,7 +323,7 @@ fn test_dgm_crud() {
         }
         mem::drop(index_w);
 
-        // assert!(index.validate().is_ok()); TODO
+        assert!(index.validate().is_ok());
         // println!("seqno {}", ref_index.to_seqno().unwrap());
 
         verify_read(key_max, &mut ref_index, &mut index, &mut rng);

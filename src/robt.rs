@@ -676,6 +676,25 @@ where
     }
 }
 
+impl<K, V, B> Validate<Stats> for Robt<K, V, B>
+where
+    K: Default + Clone + Ord + Serialize + fmt::Debug,
+    V: Default + Clone + Diff + Serialize,
+    <V as Diff>::D: Default + Clone + Serialize,
+    B: Bloom,
+{
+    fn validate(&mut self) -> Result<Stats> {
+        let inner = self.as_inner()?;
+        match inner.deref() {
+            InnerRobt::Snapshot { dir, name, .. } => {
+                let mut snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
+                snapshot.validate()
+            }
+            InnerRobt::Build { .. } => unreachable!(),
+        }
+    }
+}
+
 impl<K, V, B> Index<K, V> for Robt<K, V, B>
 where
     K: Default + Clone + Ord + Hash + Footprint + Serialize,

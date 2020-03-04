@@ -26,12 +26,14 @@ use std::{
 };
 
 use crate::{
-    core::{self, Cutoff, Writer},
+    core::{self, Cutoff, Validate, Writer},
     core::{CommitIter, CommitIterator, Result, Serialize, WriteIndexFactory},
     core::{Diff, DiskIndexFactory, Entry, Footprint, Index, IndexIter, Reader},
     error::Error,
     lsm, scans, thread as rt, util,
 };
+
+const N_COMMITS: usize = 2;
 
 /// Configuration type for Dgm indexes.
 #[derive(Clone, Debug, PartialEq)]
@@ -859,7 +861,7 @@ where
         };
 
         match levels {
-            None if self.n_commits < 2 => Ok(None), // TODO: no magic number.
+            None if self.n_commits < N_COMMITS => Ok(None),
             None => match Self::active_compact_levels(&self.disks).pop() {
                 None => Ok(None),
                 Some(d) => Ok(Some((vec![d], vec![], d))),
@@ -1577,7 +1579,7 @@ where
             mem::replace(&mut inn.disks[d_level], disk);
 
             inn.repopulate_readers()?;
-            inn.n_commits = 0;
+            inn.n_commits = Default::default();
 
             let root_file = inn.root_file.clone();
             inn.root.reset_cutoff(cutoff);
@@ -1734,6 +1736,52 @@ where
 {
     fn footprint(&self) -> Result<isize> {
         Ok(self.disk_footprint()? + self.mem_footprint()?)
+    }
+}
+
+impl<K, V, M, D, A, B> Validate<Stats<A, B>> for Dgm<K, V, M, D>
+where
+    K: Clone + Ord + Serialize + Footprint + fmt::Debug,
+    V: Clone + Diff + Serialize + Footprint,
+    <V as Diff>::D: Serialize,
+    A: fmt::Display,
+    B: fmt::Display,
+    M: WriteIndexFactory<K, V>,
+    D: DiskIndexFactory<K, V>,
+    M::I: Validate<A>,
+    D::I: Validate<B>,
+{
+    fn validate(&mut self) -> Result<Stats<A, B>> {
+        let mut inner = self.as_inner()?;
+
+        if inner.n_commits > N_COMMITS {
+            let msg = format!("{} commited to highest level", inner.n_commits);
+            Err(Error::ValidationFail(msg))
+        } else {
+            Ok(())
+        }?;
+
+        let _ = inner.m0.as_mut_m0()?.validate()?; // TODO: handle validate stats.
+        match &mut inner.m1 {
+            Some(m1) => {
+                m1.as_mut_m1()?.validate()?; // TODO: handle validate stats,
+            }
+            None => (),
+        }
+
+        for disk in inner.disks.iter_mut() {
+            match disk.as_mut_disk()? {
+                Some(disk) => {
+                    disk.validate()?; // TODO: handle validate
+                }
+                None => (),
+            }
+        }
+
+        Ok(Stats {
+            _phantom_key: marker::PhantomData,
+            _phantom_val: marker::PhantomData,
+        })
     }
 }
 
@@ -2589,6 +2637,26 @@ where
             let msg = format!("Dgm.as_inner(), poisonlock {:?}", err);
             Err(Error::ThreadFail(msg))
         }
+    }
+}
+
+/// TODO: populate with meaningful stats for Dgm index.
+pub struct Stats<A, B>
+where
+    A: fmt::Display,
+    B: fmt::Display,
+{
+    _phantom_key: marker::PhantomData<A>,
+    _phantom_val: marker::PhantomData<B>,
+}
+
+impl<A, B> fmt::Display for Stats<A, B>
+where
+    A: fmt::Display,
+    B: fmt::Display,
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
+        write!(f, "Dgm::Stats<>")
     }
 }
 

@@ -76,13 +76,13 @@ impl Config {
     /// between dgm disk-levels.
     /// Refer to [set_compact_interval][Config::set_compact_interval] method
     /// for details.
-    pub const COMPACT_INTERVAL: time::Duration = time::Duration::from_secs(1800);
+    pub const COMPACT_INTERVAL: time::Duration = time::Duration::from_secs(60);
 
     /// Default interval in time duration, for invoking memory commit
     /// between m0 level and disk level.
     /// Refer to [set_commit_interval][Config::set_commit_interval] method
     /// for details.
-    pub const COMMIT_INTERVAL: time::Duration = time::Duration::from_secs(100);
+    pub const COMMIT_INTERVAL: time::Duration = time::Duration::from_secs(50);
 
     /// Set entire Dgm index for log-structured-merge. This means
     /// the oldest level (snapshot) won't include deleted entries

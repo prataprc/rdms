@@ -558,7 +558,14 @@ where
     m1: Option<Snapshot<K, V, M::I>>, // flush index
     disks: Vec<Snapshot<K, V, D::I>>, // NLEVELS
 
-    writers: Vec<Arc<Mutex<<M::I as Index<K, V>>::W>>>,
+    writers: Vec<
+        Arc<
+            Mutex<(
+                <M::I as Index<K, V>>::W,
+                Rs<K, V, <M::I as Index<K, V>>::R, <D::I as Index<K, V>>::R>,
+            )>,
+        >,
+    >,
     readers: Vec<Arc<Mutex<Rs<K, V, <M::I as Index<K, V>>::R, <D::I as Index<K, V>>::R>>>>,
 }
 
@@ -640,13 +647,28 @@ where
                     Err(Error::UnReachable(msg))
                 }
             }?;
+            // update the m0 writer.
+            mem::replace(&mut self.m0, Snapshot::new_write(m0));
+
             // now replace old writer handle created from the new m0 snapshot.
             for handle in w_handles.iter_mut() {
-                let _old_w = mem::replace(handle.deref_mut(), m0.to_writer()?);
+                let (old_w, old_rs) = handle.deref_mut();
+
+                old_rs.r_m0 = self.m0.as_mut_m0()?.to_reader()?;
+                old_rs.r_m1 = match &mut self.m1 {
+                    Some(m1) => Some(m1.as_mut_m1()?.to_reader()?),
+                    None => None,
+                };
+                old_rs.r_disks.drain(..);
+                for disk in self.disks.iter_mut() {
+                    if let Some(d) = disk.as_mut_disk()? {
+                        old_rs.r_disks.push(d.to_reader()?)
+                    }
+                }
+
+                mem::replace(old_w, self.m0.as_mut_m0()?.to_writer()?);
                 // drop the old writer,
             }
-            // finally update the m0 writer.
-            mem::replace(&mut self.m0, Snapshot::new_write(m0));
         }
 
         // update readers and unblock them one by one.
@@ -831,7 +853,32 @@ where
         }
     }
 
-    fn repopulate_readers(&mut self) -> Result<()> {
+    fn repopulate_readers(&mut self, commit: bool) -> Result<()> {
+        {
+            let mut r_diskss = vec![];
+            for _ in 0..self.writers.len() {
+                let mut r_disks = vec![];
+                for disk in self.disks.iter_mut() {
+                    match disk.as_mut_disk()? {
+                        Some(d) => r_disks.push(d.to_reader()?),
+                        None => (),
+                    }
+                }
+                r_diskss.push(r_disks);
+            }
+
+            for writer in self.writers.iter() {
+                let mut w = writer.lock().unwrap();
+                if commit {
+                    w.1.r_m1 = None; // for commit.
+                }
+                w.1.r_disks.drain(..);
+                for r_disk in r_diskss.remove(0).into_iter() {
+                    w.1.r_disks.push(r_disk)
+                }
+            }
+        }
+
         let mut r_diskss = vec![];
         for _ in 0..self.readers.len() {
             let mut r_disks = vec![];
@@ -846,7 +893,9 @@ where
 
         for readers in self.readers.iter() {
             let mut rs = readers.lock().unwrap();
-            rs.r_m1 = None;
+            if commit {
+                rs.r_m1 = None; // for commit.
+            }
             rs.r_disks.drain(..);
             for r_disk in r_diskss.remove(0).into_iter() {
                 rs.r_disks.push(r_disk)
@@ -1436,7 +1485,7 @@ where
             mem::replace(&mut inn.disks[level], disk);
             // don't drop _m1 before repopulate_readers().
             let _m1 = mem::replace(&mut inn.m1, None);
-            inn.repopulate_readers()?;
+            inn.repopulate_readers(true /*commit*/)?;
 
             let root_file = inn.root_file.clone();
             inn.root = inn.root.to_next();
@@ -1544,7 +1593,7 @@ where
             let disk = Snapshot::new_active(high_disk);
             mem::replace(&mut inn.disks[d_level], disk);
 
-            inn.repopulate_readers()?;
+            inn.repopulate_readers(false /*commit*/)?;
             inn.n_commits = Default::default();
 
             let root_file = inn.root_file.clone();
@@ -1605,7 +1654,7 @@ where
             let disk = Snapshot::new_active(disk);
             mem::replace(&mut inn.disks[d_level], disk);
 
-            inn.repopulate_readers()?;
+            inn.repopulate_readers(false /*commit*/)?;
             inn.n_commits += 1;
 
             let root_file = inn.root_file.clone();
@@ -1744,13 +1793,19 @@ where
 
 impl<K, V, M, D> Index<K, V> for Dgm<K, V, M, D>
 where
-    K: Clone + Ord + Serialize + Footprint,
+    K: Clone + Ord + Hash + Serialize + Footprint,
     V: Clone + Diff + Serialize + Footprint,
     <V as Diff>::D: Serialize,
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
 {
-    type W = DgmWriter<K, V, <M::I as Index<K, V>>::W>;
+    type W = DgmWriter<
+        K,
+        V,
+        <M::I as Index<K, V>>::W,
+        <M::I as Index<K, V>>::R,
+        <D::I as Index<K, V>>::R,
+    >;
     type R = DgmReader<K, V, <M::I as Index<K, V>>::R, <D::I as Index<K, V>>::R>;
 
     fn to_name(&self) -> Result<String> {
@@ -1784,7 +1839,31 @@ where
         let mut inner = self.as_inner()?;
 
         let w = inner.m0.as_mut_m0()?.to_writer()?;
-        let arc_w = Arc::new(Mutex::new(w));
+
+        let rs = {
+            let r_m0 = inner.m0.as_mut_m0()?.to_reader()?;
+            let r_m1 = match inner.m1.as_mut() {
+                Some(m) => Some(m.as_mut_m1()?.to_reader()?),
+                None => None,
+            };
+            let mut r_disks = vec![];
+            for disk in inner.disks.iter_mut() {
+                match disk.as_mut_disk()? {
+                    Some(d) => r_disks.push(d.to_reader()?),
+                    None => (),
+                }
+            }
+            Rs {
+                r_m0,
+                r_m1,
+                r_disks,
+
+                _phantom_key: marker::PhantomData,
+                _phantom_val: marker::PhantomData,
+            }
+        };
+
+        let arc_w = Arc::new(Mutex::new((w, rs)));
         inner.writers.push(Arc::clone(&arc_w));
         Ok(DgmWriter::new(&inner.name, arc_w))
     }
@@ -1847,26 +1926,30 @@ where
 }
 
 /// Writer handle into Dgm index.
-pub struct DgmWriter<K, V, W>
+pub struct DgmWriter<K, V, W, A, B>
 where
     K: Clone + Ord,
     V: Clone + Diff,
     W: Writer<K, V>,
+    A: Reader<K, V>,
+    B: Reader<K, V>,
 {
     name: String,
-    w: Arc<Mutex<W>>,
+    w: Arc<Mutex<(W, Rs<K, V, A, B>)>>,
 
     _phantom_key: marker::PhantomData<K>,
     _phantom_val: marker::PhantomData<V>,
 }
 
-impl<K, V, W> DgmWriter<K, V, W>
+impl<K, V, W, A, B> DgmWriter<K, V, W, A, B>
 where
     K: Clone + Ord,
     V: Clone + Diff,
     W: Writer<K, V>,
+    A: Reader<K, V>,
+    B: Reader<K, V>,
 {
-    fn new(name: &str, w: Arc<Mutex<W>>) -> DgmWriter<K, V, W> {
+    fn new(name: &str, w: Arc<Mutex<(W, Rs<K, V, A, B>)>>) -> DgmWriter<K, V, W, A, B> {
         let w = DgmWriter {
             name: name.to_string(),
             w,
@@ -1878,7 +1961,7 @@ where
         w
     }
 
-    fn as_writer(&self) -> Result<MutexGuard<W>> {
+    fn as_writer(&self) -> Result<MutexGuard<(W, Rs<K, V, A, B>)>> {
         match self.w.lock() {
             Ok(value) => Ok(value),
             Err(err) => {
@@ -1889,19 +1972,32 @@ where
     }
 }
 
-impl<K, V, W> Writer<K, V> for DgmWriter<K, V, W>
+impl<K, V, W, A, B> Writer<K, V> for DgmWriter<K, V, W, A, B>
 where
-    K: Clone + Ord,
-    V: Clone + Diff,
+    K: Clone + Ord + Hash + Serialize + Footprint,
+    V: Clone + Diff + Serialize + Footprint,
+    <V as Diff>::D: Serialize,
     W: Writer<K, V>,
+    A: Reader<K, V>,
+    B: Reader<K, V>,
 {
     fn set(&mut self, key: K, value: V) -> Result<Option<Entry<K, V>>> {
-        let mut w = self.as_writer()?;
-        w.set(key, value)
+        let mut w_rs = self.as_writer()?;
+        w_rs.0.set(key, value)
     }
 
-    fn set_cas(&mut self, _: K, _: V, _cas: u64) -> Result<Option<Entry<K, V>>> {
-        unimplemented!()
+    fn set_cas(&mut self, key: K, value: V, cas: u64) -> Result<Option<Entry<K, V>>> {
+        let mut w_rs = self.as_writer()?;
+
+        match Rs::get(&mut w_rs.1, &key) {
+            Ok(old) if cas == old.to_seqno() => Ok(()),
+            Err(Error::KeyNotFound) if cas == 0 => Ok(()),
+            Ok(old) => Err(Error::InvalidCAS(old.to_seqno())),
+            Err(Error::KeyNotFound) => Err(Error::InvalidCAS(0)),
+            Err(err) => Err(err),
+        }?;
+
+        w_rs.0.set(key, value)
     }
 
     fn delete<Q>(&mut self, key: &Q) -> Result<Option<Entry<K, V>>>
@@ -1909,8 +2005,8 @@ where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
     {
-        let mut w = self.as_writer()?;
-        w.delete(key)
+        let mut w_rs = self.as_writer()?;
+        w_rs.0.delete(key)
     }
 }
 
@@ -1938,18 +2034,18 @@ where
     M: Reader<K, V>,
     D: Reader<K, V>,
 {
-    fn get<Q>(mut rs: MutexGuard<Rs<K, V, M, D>>, key: &Q) -> Result<Entry<K, V>>
+    fn get<Q>(&mut self, key: &Q) -> Result<Entry<K, V>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized + Hash,
     {
-        match rs.r_m0.get(key) {
+        match self.r_m0.get(key) {
             Ok(entry) => return Ok(entry),
             Err(Error::KeyNotFound) => (),
             Err(err) => return Err(err),
         }
 
-        if let Some(m1) = &mut rs.r_m1 {
+        if let Some(m1) = &mut self.r_m1 {
             match m1.get(key) {
                 Ok(entry) => return Ok(entry),
                 Err(Error::KeyNotFound) => (),
@@ -1957,7 +2053,7 @@ where
             }
         }
 
-        let mut iter = rs.r_disks.iter_mut();
+        let mut iter = self.r_disks.iter_mut();
         loop {
             match iter.next() {
                 Some(disk) => match disk.get(key) {
@@ -2241,8 +2337,8 @@ where
         K: Borrow<Q>,
         Q: Ord + ?Sized + Hash,
     {
-        let rs = self.as_reader()?;
-        Rs::get(rs, key)
+        let mut rs = self.as_reader()?;
+        Rs::get(rs.deref_mut(), key)
     }
 
     fn iter(&mut self) -> Result<IndexIter<K, V>> {

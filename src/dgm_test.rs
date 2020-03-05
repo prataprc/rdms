@@ -185,7 +185,7 @@ fn test_level_file_name() {
 #[test]
 fn test_dgm_crud() {
     let seed: u128 = random();
-    // let seed: u128 = 103567949789069280795782456171344187045;
+    // let seed: u128 = 187570922830339341216633939671561224480;
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
     let config = Config {
@@ -229,10 +229,11 @@ fn test_dgm_crud() {
     for _i in 0..20 {
         // println!("loop {}", _i);
         let mut index_w = index.to_writer().unwrap();
+        let mut index_r = index.to_reader().unwrap();
         for _ in 0..n_ops {
             let key: i64 = rng.gen::<i64>().abs() % key_max;
             let value: i64 = rng.gen::<i64>().abs();
-            let op: i64 = (rng.gen::<u8>() % 2) as i64;
+            let op: i64 = (rng.gen::<u8>() % 3) as i64;
             let _seqno = ref_index.to_seqno().unwrap();
             //println!(
             //    "i:{} key:{} value:{} op:{} seqno:{}",
@@ -251,31 +252,30 @@ fn test_dgm_crud() {
                     }
                     false
                 }
-                //1 => { // TODO enable this case once Dgm.set_cas() implemented
-                //    let cas = match index_r.get(&key) {
-                //        Ok(entry) => entry.to_seqno(),
-                //        Err(Error::KeyNotFound) => std::u64::MIN,
-                //        Err(err) => panic!(err),
-                //    };
-                //    let entry = {
-                //        let res = index_w.set_cas(key, value, cas);
-                //        res.unwrap()
-                //    };
-                //    let refn = {
-                //        let res = ref_index.set_cas(key, value, cas);
-                //        res.unwrap()
-                //    };
-                //    match (entry, refn) {
-                //        (Some(entry), Some(refn)) => {
-                //            check_entry1(&entry, &refn);
-                //            check_entry2(&entry, &refn);
-                //        }
-                //        (None, None) => (),
-                //        _ => (),
-                //    }
-                //    false
-                //}
                 1 => {
+                    let cas = match index_r.get(&key) {
+                        Ok(entry) => entry.to_seqno(),
+                        Err(Error::KeyNotFound) => std::u64::MIN,
+                        Err(err) => panic!(err),
+                    };
+                    let entry = {
+                        let res = index_w.set_cas(key, value, cas);
+                        res.unwrap()
+                    };
+                    let refn = {
+                        let res = ref_index.set_cas(key, value, cas);
+                        res.unwrap()
+                    };
+                    match (entry, refn) {
+                        (Some(entry), Some(refn)) => {
+                            check_entry1(&entry, &refn);
+                        }
+                        (None, None) => (),
+                        _ => (),
+                    }
+                    false
+                }
+                2 => {
                     let entry = index_w.delete(&key).unwrap();
                     let refn = ref_index.delete(&key).unwrap();
                     match (entry, refn) {
@@ -291,6 +291,7 @@ fn test_dgm_crud() {
             };
         }
         mem::drop(index_w);
+        mem::drop(index_r);
 
         assert!(index.validate().is_ok());
         // println!("seqno {}", ref_index.to_seqno().unwrap());
@@ -334,6 +335,26 @@ fn test_dgm_crud() {
         }
 
         verify_read(key_max, &mut ref_index, &mut index, &mut rng);
+    }
+
+    // try some set_cas invalid cas.
+    let mut index_w = index.to_writer().unwrap();
+    for key in 0..(key_max * 3) {
+        let cas = match ref_index.get(&key) {
+            Ok(e) => e.to_seqno(),
+            Err(Error::KeyNotFound) => 0,
+            Err(err) => panic!("unexpected error: {:?}", err),
+        };
+        let cas_arg = {
+            let cass = vec![cas, 123456789];
+            cass[rng.gen::<usize>() % 2]
+        };
+        match (cas_arg, index_w.set_cas(key, 10000, cas_arg)) {
+            (123456789, Err(Error::InvalidCAS(val))) => assert_eq!(val, cas),
+            (123456789, Ok(_)) => panic!("expected error"),
+            (_, Ok(_)) => (),
+            (_, Err(err)) => panic!("unexpected cas:{} cas_arg:{} err:{:?}", cas, cas_arg, err),
+        }
     }
 }
 

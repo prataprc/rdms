@@ -22,7 +22,6 @@ use std::{
     path, result,
     sync::{mpsc, Arc, Mutex, MutexGuard},
     thread, time,
-    time::{Duration, SystemTime},
 };
 
 use crate::{
@@ -41,8 +40,8 @@ pub struct Config {
     lsm: bool,
     mem_ratio: f64,
     disk_ratio: f64,
-    compact_interval: Duration, // in seconds
-    commit_interval: Duration,  // in seconds
+    commit_interval: Option<time::Duration>,
+    compact_interval: Option<time::Duration>,
 }
 
 impl Default for Config {
@@ -51,8 +50,8 @@ impl Default for Config {
             lsm: false,
             mem_ratio: Self::MEM_RATIO,
             disk_ratio: Self::DISK_RATIO,
-            compact_interval: Self::COMPACT_INTERVAL, // in seconds
-            commit_interval: Self::COMMIT_INTERVAL,   // in seconds
+            commit_interval: Some(Self::COMMIT_INTERVAL),
+            compact_interval: Some(Self::COMPACT_INTERVAL),
         }
     }
 }
@@ -77,13 +76,13 @@ impl Config {
     /// between dgm disk-levels.
     /// Refer to [set_compact_interval][Config::set_compact_interval] method
     /// for details.
-    pub const COMPACT_INTERVAL: Duration = Duration::from_secs(1800);
+    pub const COMPACT_INTERVAL: time::Duration = time::Duration::from_secs(1800);
 
     /// Default interval in time duration, for invoking memory commit
     /// between m0 level and disk level.
     /// Refer to [set_commit_interval][Config::set_commit_interval] method
     /// for details.
-    pub const COMMIT_INTERVAL: Duration = Duration::from_secs(100);
+    pub const COMMIT_INTERVAL: time::Duration = time::Duration::from_secs(100);
 
     /// Set entire Dgm index for log-structured-merge. This means
     /// the oldest level (snapshot) won't include deleted entries
@@ -109,19 +108,19 @@ impl Config {
         self
     }
 
-    /// Set interval in time duration, for invoking disk compaction
-    /// between dgm disk-levels. Calling this method will spawn an auto
-    /// compaction thread.
-    pub fn set_compact_interval(&mut self, interval: Duration) -> &mut Self {
-        self.compact_interval = interval;
-        self
-    }
-
     /// Set interval in time duration, for commiting memory batch into
     /// disk snapshot. Calling this method will spawn an auto
     /// compaction thread.
-    pub fn set_commit_interval(&mut self, interval: Duration) -> &mut Self {
-        self.commit_interval = interval;
+    pub fn set_commit_interval(&mut self, interval: time::Duration) -> &mut Self {
+        self.commit_interval = Some(interval);
+        self
+    }
+
+    /// Set interval in time duration, for invoking disk compaction
+    /// between dgm disk-levels. Calling this method will spawn an auto
+    /// compaction thread.
+    pub fn set_compact_interval(&mut self, interval: time::Duration) -> &mut Self {
+        self.compact_interval = Some(interval);
         self
     }
 }
@@ -132,8 +131,8 @@ impl From<Root> for Config {
             lsm: root.lsm,
             mem_ratio: root.mem_ratio,
             disk_ratio: root.disk_ratio,
-            compact_interval: root.compact_interval,
             commit_interval: root.commit_interval,
+            compact_interval: root.compact_interval,
         }
     }
 }
@@ -148,8 +147,8 @@ struct Root {
     lsm: bool,
     mem_ratio: f64,
     disk_ratio: f64,
-    commit_interval: time::Duration,  // in seconds.
-    compact_interval: time::Duration, // in seconds.
+    commit_interval: Option<time::Duration>,  // in seconds.
+    compact_interval: Option<time::Duration>, // in seconds.
 }
 
 impl From<Config> for Root {
@@ -182,8 +181,14 @@ impl TryFrom<Root> for Vec<u8> {
             let levels: i64 = convert_at!(root.levels)?;
             let mem_ratio: f64 = root.mem_ratio.into();
             let disk_ratio: f64 = root.disk_ratio.into();
-            let m_interval: i64 = convert_at!(root.commit_interval.as_secs())?;
-            let c_interval: i64 = convert_at!(root.compact_interval.as_secs())?;
+            let m_interval: i64 = match root.commit_interval {
+                Some(interval) => convert_at!(interval.as_secs())?,
+                None => -1,
+            };
+            let c_interval: i64 = match root.compact_interval {
+                Some(interval) => convert_at!(interval.as_secs())?,
+                None => -1,
+            };
 
             dict.insert("version".to_string(), Integer(version));
             dict.insert("levels".to_string(), Integer(levels));
@@ -288,19 +293,27 @@ impl TryFrom<Vec<u8>> for Root {
         };
         root.commit_interval = {
             let field = dict.get("commit_interval");
-            let duration: u64 = convert_at!(field
+            let duration: i64 = field
                 .ok_or(InvalidFile(err2.clone()))?
                 .as_integer()
-                .ok_or(InvalidFile(err2.clone()))?)?;
-            time::Duration::from_secs(duration)
+                .ok_or(InvalidFile(err2.clone()))?;
+            if duration <= 0 {
+                None
+            } else {
+                Some(time::Duration::from_secs(convert_at!(duration)?))
+            }
         };
         root.compact_interval = {
             let field = dict.get("compact_interval");
-            let duration: u64 = convert_at!(field
+            let duration: i64 = field
                 .ok_or(InvalidFile(err2.clone()))?
                 .as_integer()
-                .ok_or(InvalidFile(err2.clone()))?)?;
-            time::Duration::from_secs(duration)
+                .ok_or(InvalidFile(err2.clone()))?;
+            if duration <= 0 {
+                None
+            } else {
+                Some(time::Duration::from_secs(convert_at!(duration)?))
+            }
         };
         root.lsm_cutoff = {
             let field = dict.get("lsm_cutoff").ok_or(InvalidFile(err2.clone()))?;
@@ -1342,13 +1355,14 @@ where
             inner.name.clone()
         };
 
-        self.auto_commit = if root.commit_interval.as_secs() > 0 {
-            let inner = Arc::clone(&self.inner);
-            Some(rt::Thread::new(move |rx| {
-                || auto_commit::<K, V, M, D>(name, root, inner, rx)
-            }))
-        } else {
-            None
+        self.auto_commit = match root.commit_interval {
+            Some(_) => {
+                let inner = Arc::clone(&self.inner);
+                Some(rt::Thread::new(move |rx| {
+                    || auto_commit::<K, V, M, D>(name, root, inner, rx)
+                }))
+            }
+            None => None,
         };
 
         Ok(())
@@ -1376,13 +1390,14 @@ where
             inner.name.clone()
         };
 
-        self.auto_compact = if root.compact_interval.as_secs() > 0 {
-            let inner = Arc::clone(&self.inner);
-            Some(rt::Thread::new(move |rx| {
-                || auto_compact::<K, V, M, D>(name, root, inner, rx)
-            }))
-        } else {
-            None
+        self.auto_compact = match root.compact_interval {
+            Some(_) => {
+                let inner = Arc::clone(&self.inner);
+                Some(rt::Thread::new(move |rx| {
+                    || auto_compact::<K, V, M, D>(name, root, inner, rx)
+                }))
+            }
+            None => None,
         };
 
         Ok(())
@@ -2628,18 +2643,20 @@ where
     <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::R: 'static + Send,
     <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::W: 'static + Send,
 {
+    let commit_interval = root.commit_interval.unwrap();
+
     info!(
         target: "dgm   ",
         "{}, auto-commit thread started with interval {:?}",
-        name, root.commit_interval,
+        name, commit_interval,
     );
 
-    let mut elapsed = Duration::new(0, 0);
+    let mut elapsed = time::Duration::new(0, 0);
     loop {
         let resp_tx = {
             let interval = {
-                let elapsed = cmp::min(root.commit_interval, elapsed);
-                root.commit_interval - elapsed
+                let elapsed = cmp::min(commit_interval, elapsed);
+                commit_interval - elapsed
             };
             match rx.recv_timeout(interval) {
                 Ok((cmd, resp_tx)) if cmd == "do_commit" => resp_tx,
@@ -2649,7 +2666,7 @@ where
             }
         };
 
-        let start = SystemTime::now();
+        let start = time::SystemTime::now();
 
         let res = {
             let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
@@ -2691,18 +2708,20 @@ where
     <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::R: 'static + Send,
     <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::W: 'static + Send,
 {
+    let compact_interval = root.compact_interval.unwrap();
+
     info!(
         target: "dgm   ",
         "{}, auto-compacting thread started with interval {:?}",
-        name, root.compact_interval,
+        name, compact_interval,
     );
 
-    let mut elapsed = Duration::new(0, 0);
+    let mut elapsed = time::Duration::new(0, 0);
     loop {
         let resp_tx = {
             let interval = {
-                let elapsed = cmp::min(root.compact_interval, elapsed);
-                root.compact_interval - elapsed
+                let elapsed = cmp::min(compact_interval, elapsed);
+                compact_interval - elapsed
             };
             match rx.recv_timeout(interval) {
                 Ok((cmd, resp_tx)) if cmd == "do_compact" => resp_tx,
@@ -2712,7 +2731,7 @@ where
             }
         };
 
-        let start = SystemTime::now();
+        let start = time::SystemTime::now();
 
         let res = Dgm::do_compact(
             //

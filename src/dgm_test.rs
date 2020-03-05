@@ -19,16 +19,16 @@ fn test_config_root() {
         lsm: false,
         mem_ratio: 0.25,
         disk_ratio: 0.65,
-        commit_interval: time::Duration::from_secs(10),
-        compact_interval: time::Duration::from_secs(10),
+        commit_interval: Some(time::Duration::from_secs(10)),
+        compact_interval: Some(time::Duration::from_secs(10)),
     };
 
     let ref_config = Config {
         lsm: false,
         mem_ratio: 0.25,
         disk_ratio: 0.65,
-        commit_interval: time::Duration::from_secs(10),
-        compact_interval: time::Duration::from_secs(10),
+        commit_interval: Some(time::Duration::from_secs(10)),
+        compact_interval: Some(time::Duration::from_secs(10)),
     };
     let root = ref_config.clone().into();
     assert_eq!(ref_root, root);
@@ -55,8 +55,8 @@ fn test_root1() {
             lsm: true,
             mem_ratio: 0.25,
             disk_ratio: 0.65,
-            commit_interval: time::Duration::from_secs(10),
-            compact_interval: time::Duration::from_secs(10),
+            commit_interval: Some(time::Duration::from_secs(10)),
+            compact_interval: Some(time::Duration::from_secs(10)),
         };
         let bytes: Vec<u8> = ref_root.clone().try_into().unwrap();
         let root: Root = bytes.try_into().unwrap();
@@ -75,8 +75,8 @@ fn test_root2() {
         lsm: false,
         mem_ratio: 0.25,
         disk_ratio: 0.65,
-        commit_interval: time::Duration::from_secs(10),
-        compact_interval: time::Duration::from_secs(10),
+        commit_interval: Some(time::Duration::from_secs(10)),
+        compact_interval: Some(time::Duration::from_secs(10)),
     };
     let root = root.to_next();
     let ref_root = Root {
@@ -88,8 +88,8 @@ fn test_root2() {
         lsm: false,
         mem_ratio: 0.25,
         disk_ratio: 0.65,
-        commit_interval: time::Duration::from_secs(10),
-        compact_interval: time::Duration::from_secs(10),
+        commit_interval: Some(time::Duration::from_secs(10)),
+        compact_interval: Some(time::Duration::from_secs(10)),
     };
     assert_eq!(root, ref_root);
 }
@@ -105,8 +105,8 @@ fn test_root3() {
         lsm: true,
         mem_ratio: 0.25,
         disk_ratio: 0.65,
-        commit_interval: time::Duration::from_secs(10),
-        compact_interval: time::Duration::from_secs(10),
+        commit_interval: Some(time::Duration::from_secs(10)),
+        compact_interval: Some(time::Duration::from_secs(10)),
     };
 
     let cutoffs = vec![
@@ -192,8 +192,8 @@ fn test_dgm_crud() {
         lsm: true,
         mem_ratio: 0.5,
         disk_ratio: 0.5,
-        commit_interval: time::Duration::from_secs(0),
-        compact_interval: time::Duration::from_secs(0),
+        commit_interval: None,
+        compact_interval: None,
     };
 
     println!("seed: {}", seed);

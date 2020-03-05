@@ -1930,6 +1930,265 @@ where
     _phantom_val: marker::PhantomData<V>,
 }
 
+impl<K, V, M, D> Rs<K, V, M, D>
+where
+    K: Clone + Ord + Serialize + Footprint,
+    V: Clone + Diff + Serialize + Footprint,
+    <V as Diff>::D: Serialize,
+    M: Reader<K, V>,
+    D: Reader<K, V>,
+{
+    fn get<Q>(mut rs: MutexGuard<Rs<K, V, M, D>>, key: &Q) -> Result<Entry<K, V>>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized + Hash,
+    {
+        match rs.r_m0.get(key) {
+            Ok(entry) => return Ok(entry),
+            Err(Error::KeyNotFound) => (),
+            Err(err) => return Err(err),
+        }
+
+        if let Some(m1) = &mut rs.r_m1 {
+            match m1.get(key) {
+                Ok(entry) => return Ok(entry),
+                Err(Error::KeyNotFound) => (),
+                Err(err) => return Err(err),
+            }
+        }
+
+        let mut iter = rs.r_disks.iter_mut();
+        loop {
+            match iter.next() {
+                Some(disk) => match disk.get(key) {
+                    Ok(entry) => break Ok(entry),
+                    Err(Error::KeyNotFound) => (),
+                    Err(err) => break Err(err),
+                },
+                None => break Err(Error::KeyNotFound),
+            }
+        }
+    }
+
+    fn iter(mut rs: MutexGuard<Rs<K, V, M, D>>) -> Result<IndexIter<K, V>> {
+        let mut iters: Vec<IndexIter<K, V>> = vec![];
+
+        let m0 = unsafe { (&mut rs.r_m0 as *mut M).as_mut().unwrap() };
+        iters.push(m0.iter()?);
+
+        if let Some(m1) = &mut rs.r_m1 {
+            let m1 = unsafe { (m1 as *mut M).as_mut().unwrap() };
+            iters.push(m1.iter()?);
+        }
+
+        for disk in rs.r_disks.iter_mut() {
+            let disk = unsafe { (disk as *mut D).as_mut().unwrap() };
+            iters.push(disk.iter()?);
+        }
+
+        let iter = Self::merge_iters(iters, false /*reverse*/, false /*ver*/);
+        Ok(Box::new(DgmIter::new(rs, iter)))
+    }
+
+    fn range<'a, R, Q>(mut rs: MutexGuard<'a, Rs<K, V, M, D>>, range: R) -> Result<IndexIter<K, V>>
+    where
+        K: Borrow<Q>,
+        R: 'a + Clone + RangeBounds<Q>,
+        Q: 'a + Ord + ?Sized,
+    {
+        let mut iters: Vec<IndexIter<K, V>> = vec![];
+
+        let m0 = unsafe { (&mut rs.r_m0 as *mut M).as_mut().unwrap() };
+        iters.push(m0.range(range.clone())?);
+
+        if let Some(m1) = &mut rs.r_m1 {
+            let m1 = unsafe { (m1 as *mut M).as_mut().unwrap() };
+            iters.push(m1.range(range.clone())?);
+        }
+
+        for disk in rs.r_disks.iter_mut().rev() {
+            let disk = unsafe { (disk as *mut D).as_mut().unwrap() };
+            iters.push(disk.range(range.clone())?)
+        }
+
+        let iter = Self::merge_iters(iters, false /*reverse*/, false /*ver*/);
+        Ok(Box::new(DgmIter::new(rs, iter)))
+    }
+
+    fn reverse<'a, R, Q>(
+        mut rs: MutexGuard<'a, Rs<K, V, M, D>>,
+        range: R,
+    ) -> Result<IndexIter<K, V>>
+    where
+        K: Borrow<Q>,
+        R: 'a + Clone + RangeBounds<Q>,
+        Q: 'a + Ord + ?Sized,
+    {
+        let mut iters: Vec<IndexIter<K, V>> = vec![];
+
+        let m0 = unsafe { (&mut rs.r_m0 as *mut M).as_mut().unwrap() };
+        iters.push(m0.reverse(range.clone())?);
+
+        if let Some(m1) = &mut rs.r_m1 {
+            let m1 = unsafe { (m1 as *mut M).as_mut().unwrap() };
+            iters.push(m1.reverse(range.clone())?);
+        }
+
+        for disk in rs.r_disks.iter_mut().rev() {
+            let disk = unsafe { (disk as *mut D).as_mut().unwrap() };
+            iters.push(disk.reverse(range.clone())?)
+        }
+
+        let iter = Self::merge_iters(iters, true /*reverse*/, false /*ver*/);
+        Ok(Box::new(DgmIter::new(rs, iter)))
+    }
+
+    fn get_with_versions<Q>(mut rs: MutexGuard<Rs<K, V, M, D>>, key: &Q) -> Result<Entry<K, V>>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized + Hash,
+    {
+        let m0_entry = match rs.r_m0.get_with_versions(key) {
+            Ok(entry) => Ok(Some(entry)),
+            Err(Error::KeyNotFound) => Ok(None),
+            Err(err) => Err(err),
+        }?;
+
+        let mut entry = match &mut rs.r_m1 {
+            Some(m1) => match (m1.get_with_versions(key), m0_entry) {
+                (Ok(m1_e), Some(m0_e)) => Ok(Some(m0_e.xmerge(m1_e)?)),
+                (Ok(m1_e), None) => Ok(Some(m1_e)),
+                (Err(Error::KeyNotFound), Some(m0_e)) => Ok(Some(m0_e)),
+                (Err(Error::KeyNotFound), None) => Ok(None),
+                (Err(err), _) => Err(err),
+            },
+            None => Ok(m0_entry),
+        }?;
+
+        let mut iter = rs.r_disks.iter_mut();
+        let entry = loop {
+            entry = match iter.next() {
+                Some(disk) => match (disk.get_with_versions(key), entry) {
+                    (Ok(e), Some(entry)) => Ok(Some(entry.xmerge(e)?)),
+                    (Ok(e), None) => Ok(Some(e)),
+                    (Err(Error::KeyNotFound), Some(entry)) => Ok(Some(entry)),
+                    (Err(Error::KeyNotFound), None) => Ok(None),
+                    (Err(err), _) => Err(err),
+                },
+                None => break entry,
+            }?;
+        };
+
+        entry.ok_or(Error::KeyNotFound)
+    }
+
+    fn iter_with_versions(mut rs: MutexGuard<Rs<K, V, M, D>>) -> Result<IndexIter<K, V>> {
+        let mut iters: Vec<IndexIter<K, V>> = vec![];
+
+        let m0 = unsafe { (&mut rs.r_m0 as *mut M).as_mut().unwrap() };
+        iters.push(m0.iter_with_versions()?);
+
+        if let Some(m1) = &mut rs.r_m1 {
+            let m1 = unsafe { (m1 as *mut M).as_mut().unwrap() };
+            iters.push(m1.iter_with_versions()?);
+        }
+
+        for disk in rs.r_disks.iter_mut() {
+            let disk = unsafe { (disk as *mut D).as_mut().unwrap() };
+            iters.push(disk.iter_with_versions()?);
+        }
+
+        let iter = Self::merge_iters(iters, false /*reverse*/, true /*ver*/);
+        Ok(Box::new(DgmIter::new(rs, iter)))
+    }
+
+    fn range_with_versions<'a, R, Q>(
+        mut rs: MutexGuard<'a, Rs<K, V, M, D>>,
+        range: R, // between lower and upper bound
+    ) -> Result<IndexIter<K, V>>
+    where
+        K: Borrow<Q>,
+        R: 'a + Clone + RangeBounds<Q>,
+        Q: 'a + Ord + ?Sized,
+    {
+        let mut iters: Vec<IndexIter<K, V>> = vec![];
+
+        let m0 = unsafe { (&mut rs.r_m0 as *mut M).as_mut().unwrap() };
+        iters.push(m0.range_with_versions(range.clone())?);
+
+        if let Some(m1) = &mut rs.r_m1 {
+            let m1 = unsafe { (m1 as *mut M).as_mut().unwrap() };
+            iters.push(m1.range_with_versions(range.clone())?)
+        }
+
+        for disk in rs.r_disks.iter_mut().rev() {
+            let disk = unsafe { (disk as *mut D).as_mut().unwrap() };
+            iters.push(disk.range_with_versions(range.clone())?);
+        }
+
+        let iter = Self::merge_iters(iters, false /*reverse*/, true /*ver*/);
+        Ok(Box::new(DgmIter::new(rs, iter)))
+    }
+
+    fn reverse_with_versions<'a, R, Q>(
+        mut rs: MutexGuard<'a, Rs<K, V, M, D>>,
+        range: R, // between upper and lower bound
+    ) -> Result<IndexIter<K, V>>
+    where
+        K: Borrow<Q>,
+        R: 'a + Clone + RangeBounds<Q>,
+        Q: 'a + Ord + ?Sized,
+    {
+        let mut iters: Vec<IndexIter<K, V>> = vec![];
+
+        let m0 = unsafe { (&mut rs.r_m0 as *mut M).as_mut().unwrap() };
+        iters.push(m0.reverse_with_versions(range.clone())?);
+
+        if let Some(m1) = &mut rs.r_m1 {
+            let m1 = unsafe { (m1 as *mut M).as_mut().unwrap() };
+            let range = range.clone();
+            iters.push(m1.reverse_with_versions(range)?);
+        }
+
+        for disk in rs.r_disks.iter_mut().rev() {
+            let disk = unsafe { (disk as *mut D).as_mut().unwrap() };
+            let range = range.clone();
+            iters.push(disk.reverse_with_versions(range)?);
+        }
+
+        let iter = Self::merge_iters(iters, true /*reverse*/, true /*ver*/);
+        Ok(Box::new(DgmIter::new(rs, iter)))
+    }
+
+    fn merge_iters<'a>(
+        mut iters: Vec<IndexIter<'a, K, V>>,
+        reverse: bool,
+        versions: bool,
+    ) -> IndexIter<'a, K, V>
+    where
+        K: 'a,
+        V: 'a,
+    {
+        iters.reverse();
+
+        match iters.len() {
+            1 => iters.remove(0),
+            n if n > 1 => {
+                let mut older_iter = iters.remove(0);
+                for newer_iter in iters.into_iter() {
+                    older_iter = if versions {
+                        lsm::y_iter_versions(newer_iter, older_iter, reverse)
+                    } else {
+                        lsm::y_iter(newer_iter, older_iter, reverse)
+                    };
+                }
+                older_iter
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
 /// Reader handle into Dgm index.
 pub struct DgmReader<K, V, M, D>
 where
@@ -1967,34 +2226,6 @@ where
             }
         }
     }
-
-    fn merge_iters<'a>(
-        mut iters: Vec<IndexIter<'a, K, V>>,
-        reverse: bool,
-        versions: bool,
-    ) -> IndexIter<'a, K, V>
-    where
-        K: 'a,
-        V: 'a,
-    {
-        iters.reverse();
-
-        match iters.len() {
-            1 => iters.remove(0),
-            n if n > 1 => {
-                let mut older_iter = iters.remove(0);
-                for newer_iter in iters.into_iter() {
-                    older_iter = if versions {
-                        lsm::y_iter_versions(newer_iter, older_iter, reverse)
-                    } else {
-                        lsm::y_iter(newer_iter, older_iter, reverse)
-                    };
-                }
-                older_iter
-            }
-            _ => unreachable!(),
-        }
-    }
 }
 
 impl<K, V, M, D> Reader<K, V> for DgmReader<K, V, M, D>
@@ -2010,55 +2241,13 @@ where
         K: Borrow<Q>,
         Q: Ord + ?Sized + Hash,
     {
-        let mut rs = self.as_reader()?;
-
-        match rs.r_m0.get(key) {
-            Ok(entry) => return Ok(entry),
-            Err(Error::KeyNotFound) => (),
-            Err(err) => return Err(err),
-        }
-
-        if let Some(m1) = &mut rs.r_m1 {
-            match m1.get(key) {
-                Ok(entry) => return Ok(entry),
-                Err(Error::KeyNotFound) => (),
-                Err(err) => return Err(err),
-            }
-        }
-
-        let mut iter = rs.r_disks.iter_mut();
-        loop {
-            match iter.next() {
-                Some(disk) => match disk.get(key) {
-                    Ok(entry) => break Ok(entry),
-                    Err(Error::KeyNotFound) => (),
-                    Err(err) => break Err(err),
-                },
-                None => break Err(Error::KeyNotFound),
-            }
-        }
+        let rs = self.as_reader()?;
+        Rs::get(rs, key)
     }
 
     fn iter(&mut self) -> Result<IndexIter<K, V>> {
-        let mut rs = self.as_reader()?;
-
-        let mut iters: Vec<IndexIter<K, V>> = vec![];
-
-        let m0 = unsafe { (&mut rs.r_m0 as *mut M).as_mut().unwrap() };
-        iters.push(m0.iter()?);
-
-        if let Some(m1) = &mut rs.r_m1 {
-            let m1 = unsafe { (m1 as *mut M).as_mut().unwrap() };
-            iters.push(m1.iter()?);
-        }
-
-        for disk in rs.r_disks.iter_mut() {
-            let disk = unsafe { (disk as *mut D).as_mut().unwrap() };
-            iters.push(disk.iter()?);
-        }
-
-        let iter = Self::merge_iters(iters, false /*reverse*/, false /*ver*/);
-        Ok(Box::new(DgmIter::new(self, rs, iter)))
+        let rs = self.as_reader()?;
+        Rs::iter(rs)
     }
 
     fn range<'a, R, Q>(&'a mut self, range: R) -> Result<IndexIter<K, V>>
@@ -2067,25 +2256,8 @@ where
         R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        let mut rs = self.as_reader()?;
-
-        let mut iters: Vec<IndexIter<K, V>> = vec![];
-
-        let m0 = unsafe { (&mut rs.r_m0 as *mut M).as_mut().unwrap() };
-        iters.push(m0.range(range.clone())?);
-
-        if let Some(m1) = &mut rs.r_m1 {
-            let m1 = unsafe { (m1 as *mut M).as_mut().unwrap() };
-            iters.push(m1.range(range.clone())?);
-        }
-
-        for disk in rs.r_disks.iter_mut().rev() {
-            let disk = unsafe { (disk as *mut D).as_mut().unwrap() };
-            iters.push(disk.range(range.clone())?)
-        }
-
-        let iter = Self::merge_iters(iters, false /*reverse*/, false /*ver*/);
-        Ok(Box::new(DgmIter::new(self, rs, iter)))
+        let rs = self.as_reader()?;
+        Rs::range(rs, range)
     }
 
     fn reverse<'a, R, Q>(&'a mut self, range: R) -> Result<IndexIter<K, V>>
@@ -2094,25 +2266,8 @@ where
         R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        let mut rs = self.as_reader()?;
-
-        let mut iters: Vec<IndexIter<K, V>> = vec![];
-
-        let m0 = unsafe { (&mut rs.r_m0 as *mut M).as_mut().unwrap() };
-        iters.push(m0.reverse(range.clone())?);
-
-        if let Some(m1) = &mut rs.r_m1 {
-            let m1 = unsafe { (m1 as *mut M).as_mut().unwrap() };
-            iters.push(m1.reverse(range.clone())?);
-        }
-
-        for disk in rs.r_disks.iter_mut().rev() {
-            let disk = unsafe { (disk as *mut D).as_mut().unwrap() };
-            iters.push(disk.reverse(range.clone())?)
-        }
-
-        let iter = Self::merge_iters(iters, true /*reverse*/, false /*ver*/);
-        Ok(Box::new(DgmIter::new(self, rs, iter)))
+        let rs = self.as_reader()?;
+        Rs::reverse(rs, range)
     }
 
     fn get_with_versions<Q>(&mut self, key: &Q) -> Result<Entry<K, V>>
@@ -2120,62 +2275,13 @@ where
         K: Borrow<Q>,
         Q: Ord + ?Sized + Hash,
     {
-        let mut rs = self.as_reader()?;
-
-        let m0_entry = match rs.r_m0.get_with_versions(key) {
-            Ok(entry) => Ok(Some(entry)),
-            Err(Error::KeyNotFound) => Ok(None),
-            Err(err) => Err(err),
-        }?;
-
-        let mut entry = match &mut rs.r_m1 {
-            Some(m1) => match (m1.get_with_versions(key), m0_entry) {
-                (Ok(m1_e), Some(m0_e)) => Ok(Some(m0_e.xmerge(m1_e)?)),
-                (Ok(m1_e), None) => Ok(Some(m1_e)),
-                (Err(Error::KeyNotFound), Some(m0_e)) => Ok(Some(m0_e)),
-                (Err(Error::KeyNotFound), None) => Ok(None),
-                (Err(err), _) => Err(err),
-            },
-            None => Ok(m0_entry),
-        }?;
-
-        let mut iter = rs.r_disks.iter_mut();
-        let entry = loop {
-            entry = match iter.next() {
-                Some(disk) => match (disk.get_with_versions(key), entry) {
-                    (Ok(e), Some(entry)) => Ok(Some(entry.xmerge(e)?)),
-                    (Ok(e), None) => Ok(Some(e)),
-                    (Err(Error::KeyNotFound), Some(entry)) => Ok(Some(entry)),
-                    (Err(Error::KeyNotFound), None) => Ok(None),
-                    (Err(err), _) => Err(err),
-                },
-                None => break entry,
-            }?;
-        };
-
-        entry.ok_or(Error::KeyNotFound)
+        let rs = self.as_reader()?;
+        Rs::get_with_versions(rs, key)
     }
 
     fn iter_with_versions(&mut self) -> Result<IndexIter<K, V>> {
-        let mut rs = self.as_reader()?;
-
-        let mut iters: Vec<IndexIter<K, V>> = vec![];
-
-        let m0 = unsafe { (&mut rs.r_m0 as *mut M).as_mut().unwrap() };
-        iters.push(m0.iter_with_versions()?);
-
-        if let Some(m1) = &mut rs.r_m1 {
-            let m1 = unsafe { (m1 as *mut M).as_mut().unwrap() };
-            iters.push(m1.iter_with_versions()?);
-        }
-
-        for disk in rs.r_disks.iter_mut() {
-            let disk = unsafe { (disk as *mut D).as_mut().unwrap() };
-            iters.push(disk.iter_with_versions()?);
-        }
-
-        let iter = Self::merge_iters(iters, false /*reverse*/, true /*ver*/);
-        Ok(Box::new(DgmIter::new(self, rs, iter)))
+        let rs = self.as_reader()?;
+        Rs::iter_with_versions(rs)
     }
 
     fn range_with_versions<'a, R, Q>(
@@ -2187,25 +2293,8 @@ where
         R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        let mut rs = self.as_reader()?;
-
-        let mut iters: Vec<IndexIter<K, V>> = vec![];
-
-        let m0 = unsafe { (&mut rs.r_m0 as *mut M).as_mut().unwrap() };
-        iters.push(m0.range_with_versions(range.clone())?);
-
-        if let Some(m1) = &mut rs.r_m1 {
-            let m1 = unsafe { (m1 as *mut M).as_mut().unwrap() };
-            iters.push(m1.range_with_versions(range.clone())?)
-        }
-
-        for disk in rs.r_disks.iter_mut().rev() {
-            let disk = unsafe { (disk as *mut D).as_mut().unwrap() };
-            iters.push(disk.range_with_versions(range.clone())?);
-        }
-
-        let iter = Self::merge_iters(iters, false /*reverse*/, true /*ver*/);
-        Ok(Box::new(DgmIter::new(self, rs, iter)))
+        let rs = self.as_reader()?;
+        Rs::range_with_versions(rs, range)
     }
 
     fn reverse_with_versions<'a, R, Q>(
@@ -2217,27 +2306,8 @@ where
         R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        let mut rs = self.as_reader()?;
-
-        let mut iters: Vec<IndexIter<K, V>> = vec![];
-
-        let m0 = unsafe { (&mut rs.r_m0 as *mut M).as_mut().unwrap() };
-        iters.push(m0.reverse_with_versions(range.clone())?);
-
-        if let Some(m1) = &mut rs.r_m1 {
-            let m1 = unsafe { (m1 as *mut M).as_mut().unwrap() };
-            let range = range.clone();
-            iters.push(m1.reverse_with_versions(range)?);
-        }
-
-        for disk in rs.r_disks.iter_mut().rev() {
-            let disk = unsafe { (disk as *mut D).as_mut().unwrap() };
-            let range = range.clone();
-            iters.push(disk.reverse_with_versions(range)?);
-        }
-
-        let iter = Self::merge_iters(iters, true /*reverse*/, true /*ver*/);
-        Ok(Box::new(DgmIter::new(self, rs, iter)))
+        let rs = self.as_reader()?;
+        Rs::reverse_with_versions(rs, range)
     }
 }
 
@@ -2281,7 +2351,6 @@ where
     M: Reader<K, V>,
     D: Reader<K, V>,
 {
-    _dgmr: &'a DgmReader<K, V, M, D>,
     _rs: MutexGuard<'a, Rs<K, V, M, D>>,
     iter: IndexIter<'a, K, V>,
 }
@@ -2294,11 +2363,10 @@ where
     D: Reader<K, V>,
 {
     fn new(
-        _dgmr: &'a DgmReader<K, V, M, D>,
         _rs: MutexGuard<'a, Rs<K, V, M, D>>,
         iter: IndexIter<'a, K, V>,
     ) -> DgmIter<'a, K, V, M, D> {
-        DgmIter { _dgmr, _rs, iter }
+        DgmIter { _rs, iter }
     }
 }
 

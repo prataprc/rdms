@@ -818,7 +818,7 @@ fn test_compact_lsm_cutoff() {
                 2 => Bound::Unbounded,
                 _ => unreachable!(),
             };
-            Cutoff::new_tombstone(cutoff)
+            Cutoff::new_lsm(cutoff)
         };
         index.compact(cutoff, std::convert::identity).unwrap();
 

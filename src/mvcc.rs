@@ -792,15 +792,15 @@ where
                 self.tree_footprint += size;
 
                 root.set_black();
-                (seqno, root, new_node, Ok(old_entry))
+                (seqno, Some(root), new_node, Ok(old_entry))
             }
             UpsertCasResult {
-                node: Some(mut root),
+                node: mut root,
                 new_node,
                 err: Some(err),
                 ..
             } => {
-                root.set_black();
+                root.as_mut().map(|root| root.set_black());
                 (seqno, root, new_node, Err(err))
             }
             _ => panic!("set_cas: impossible case, call programmer"),
@@ -814,13 +814,7 @@ where
 
         // TODO: can we optimize this for no-op cases (err cases) ?
         self.n_reclaimed += rclm.len();
-        self.snapshot.shift_snapshot(
-            // new snapshot
-            Some(root),
-            seqno,
-            n_count,
-            rclm,
-        );
+        self.snapshot.shift_snapshot(root, seqno, n_count, rclm);
         Ok((seqno, entry))
     }
 

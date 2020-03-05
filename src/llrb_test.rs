@@ -358,6 +358,30 @@ fn test_n_deleted() {
 }
 
 #[test]
+fn test_empty_set_cas() {
+    let seed: u128 = random();
+    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+
+    let lsm: bool = rng.gen();
+    let mut index: Box<Llrb<i64, i64>> = if lsm {
+        Llrb::new_lsm("test-llrb")
+    } else {
+        Llrb::new("test-llrb")
+    };
+
+    match index.set_cas(10, 102, 10) {
+        Err(Error::InvalidCAS(0)) => (),
+        _ => panic!("expected error"),
+    }
+
+    match index.set_cas(10, 102, 0) {
+        Ok(None) => (),
+        Ok(Some(e)) => panic!("unexpected entry key:{}", e.to_key()),
+        Err(err) => panic!("unexpected err:{:?}", err),
+    }
+}
+
+#[test]
 fn test_set() {
     let mut llrb: Box<Llrb<i64, i64>> = Llrb::new("test-llrb");
     let mut refns = RefNodes::new(false /*lsm*/, 10);

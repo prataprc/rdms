@@ -785,7 +785,7 @@ fn test_compact_lsm_cutoff() {
 
     for _i in 0..10 {
         println!("seed:{}", seed);
-        let name = "test-compact-tombstone-cutoff";
+        let name = "test-compact-lsm-cutoff";
         let dir = {
             let mut dir = std::env::temp_dir();
             dir.push(name);

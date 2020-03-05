@@ -13,14 +13,14 @@ if [ $? -ne 0 ] ; then
 fi
 
 echo "cargo test --release ....................."
-cargo test --release
+RUSTFLAGS=-g cargo test --release
 
 if [ $? -ne 0 ] ; then
     exit 1
 fi
 
 echo "cargo test --release -- --ignored .................."
-cargo test --release -- --ignored
+RUSTFLAGS=-g cargo test --release -- --ignored
 
 if [ $? -ne 0 ] ; then
     exit 1
@@ -28,7 +28,7 @@ fi
 
 echo "cargo test --release shrobt_commit_compact .................."
 for i in 0 0 0 0 0 0 0 0 0; do
-    cargo test --release shrobt_commit_compact;
+    RUSTFLAGS=-g cargo test --release shrobt_commit_compact;
     if [ $? -ne 0 ] ; then
         exit 1
     fi

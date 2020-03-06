@@ -3,27 +3,17 @@
 //! [Rdms] can be composed using underlying components and mechanisms defined
 //! in [core] module.
 
-use log::{error, info};
-
 use std::{
-    convert, fmt, marker,
-    ops::Bound,
-    sync::{self, mpsc, Arc, MutexGuard},
-    time::{Duration, SystemTime},
+    fmt, marker,
+    sync::{self, Arc, MutexGuard},
 };
 
 #[allow(unused_imports)]
 use crate::core;
 use crate::{
-    core::{CommitIter, CommitIterator, Diff, Entry, Footprint, Index},
+    core::{CommitIter, CommitIterator, Diff, Footprint, Index},
     core::{Cutoff, Result, Validate},
-    error::Error,
-    thread as rt,
 };
-
-/// Default commit interval, _30 minutes_. Refer to set_commit_interval()
-/// method for more detail.
-pub const COMMIT_INTERVAL: usize = 30 * 60; // 30 minutes
 
 /// Index type, composable index type. Check module documentation for
 /// full set of features.
@@ -36,30 +26,9 @@ where
     name: String,
 
     index: Option<Arc<sync::Mutex<I>>>,
-    auto_commit: Option<rt::Thread<(), (), ()>>,
 
     _key: marker::PhantomData<K>,
     _value: marker::PhantomData<V>,
-}
-
-impl<K, V, I> Drop for Rdms<K, V, I>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-    I: Index<K, V>,
-{
-    fn drop(&mut self) {
-        match self.auto_commit.take() {
-            Some(auto_commit) => match auto_commit.close_wait() {
-                Err(err) => error!(
-                    target: "rdms  ",
-                    "{:?}, auto-commit {:?}", self.name, err
-                ),
-                Ok(_) => (),
-            },
-            None => (),
-        }
-    }
 }
 
 impl<K, V, I> Rdms<K, V, I>
@@ -77,7 +46,6 @@ where
         let value = Box::new(Rdms {
             name: name.as_ref().to_string(),
 
-            auto_commit: None,
             index: Some(Arc::new(sync::Mutex::new(index))),
 
             _key: marker::PhantomData,
@@ -109,35 +77,7 @@ where
     }
 
     fn do_close(&mut self) -> Result<()> {
-        match self.auto_commit.take() {
-            Some(auto_commit) => auto_commit.close_wait()?,
-            None => (),
-        }
-        Ok(())
-    }
-}
-
-impl<K, V, I> Rdms<K, V, I>
-where
-    K: Send + Clone + Ord + Footprint,
-    V: Send + Clone + Diff + Footprint,
-    I: 'static + Send + Index<K, V>,
-{
-    /// Set interval in time duration, for invoking auto commit.
-    /// Calling this method will spawn an auto compaction thread.
-    pub fn set_commit_interval(&mut self, interval: Duration) -> &mut Rdms<K, V, I> {
-        let name = self.name.clone();
-        self.auto_commit = match self.auto_commit.take() {
-            Some(auto_commit) => Some(auto_commit),
-            None if interval.as_secs() > 0 => {
-                let index = Arc::clone(self.index.as_ref().unwrap());
-                Some(rt::Thread::new(move |rx| {
-                    move || auto_commit::<K, V, I>(name, index, interval, rx)
-                }))
-            }
-            None => None,
-        };
-        self
+        Ok(()) // TODO cleanup this function
     }
 }
 
@@ -221,75 +161,5 @@ where
     fn validate(&mut self) -> Result<T> {
         let mut index = self.as_index()?;
         index.validate()
-    }
-}
-
-// TODO: return some valid stats.
-fn auto_commit<K, V, I>(
-    name: String,
-    index: Arc<sync::Mutex<I>>,
-    commit_interval: Duration,
-    rx: rt::Rx<(), ()>,
-) -> Result<()>
-where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
-    I: Index<K, V>,
-{
-    use crate::error::Error::ThreadFail;
-
-    info!(
-        target: "rdms  ",
-        "{}, auto-commit thread started with interval {:?}",
-        name, commit_interval,
-    );
-
-    let mut elapsed = Duration::new(0, 0);
-    loop {
-        let interval = (commit_interval + elapsed) / 2;
-        match rx.recv_timeout(interval) {
-            Err(mpsc::RecvTimeoutError::Timeout) => (),
-            Err(mpsc::RecvTimeoutError::Disconnected) => break Ok(()),
-            Ok(_) => unreachable!(),
-        };
-
-        elapsed = {
-            let start = SystemTime::now();
-
-            let mut indx = match index.lock() {
-                Ok(index) => index,
-                Err(err) => {
-                    let msg = format!("rdms lock poisened, {:?}", err);
-                    return Err(ThreadFail(msg));
-                }
-            };
-
-            let scanner = {
-                let empty: Vec<Result<Entry<K, V>>> = vec![];
-                let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
-                CommitIter::new(empty.into_iter(), within)
-            };
-            match indx.commit(scanner, convert::identity) {
-                Ok(_) => (),
-                Err(err) => {
-                    error!(target: "rdms  ", "commit failed {:?}", err);
-                    break Err(err);
-                }
-            }
-
-            let compute_elapsed = || -> Result<Duration> {
-                let elapsed = systime_at!(match start.elapsed() {
-                    Ok(elapsed) => Ok(elapsed),
-                    Err(err) => {
-                        error!(target: "rdms  ", "elapsed failed {:?}", err);
-                        Err(err)
-                    }
-                })?;
-
-                Ok(elapsed)
-            };
-
-            compute_elapsed()?
-        };
     }
 }

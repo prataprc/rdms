@@ -5,8 +5,6 @@
 // old value, which means returned value can be None, while there
 // is an older value. May be we have to provide a separate API ?
 
-// TODO: implement set_cas(), needs a proper transaction design for this.
-
 use log::{debug, error, info};
 use toml;
 
@@ -958,7 +956,7 @@ where
     Compact(I),
     // disk snapshot that is in active state, for either commit or compact.
     Active(I),
-    // empty slot, TODO: better to replace this with Option<Snapshot> ?
+    // empty slot.
     None,
     // ignore
     _Phantom(marker::PhantomData<K>, marker::PhantomData<V>),

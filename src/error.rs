@@ -25,6 +25,8 @@ pub enum Error {
     UnExpectedFail(String),
     /// Invalid argument to the API.
     InvalidArg(String),
+    /// System level failure.
+    SystemFail(String),
     /// Supplied key is not found in the index.
     KeyNotFound,
     /// Index is empty

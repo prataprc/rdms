@@ -31,6 +31,7 @@ memmap = "0.7.0"
 croaring = "0.4.4"
 crc = "^1.0.0"
 toml = "0.5.3"
+sys-info = "0.5.10"
 
 [dev-dependencies]
 rand = "0.6.4"

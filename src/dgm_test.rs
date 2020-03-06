@@ -10,6 +10,11 @@ use super::*;
 
 #[test]
 fn test_config_root() {
+    let seed: u128 = random();
+    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+
+    let m0_limit = if rng.gen::<bool>() { Some(1000) } else { None };
+
     let ref_root = Root {
         version: 0,
         levels: Config::NLEVELS,
@@ -17,6 +22,7 @@ fn test_config_root() {
         tombstone_cutoff: Default::default(),
 
         lsm: false,
+        m0_limit,
         mem_ratio: 0.25,
         disk_ratio: 0.65,
         commit_interval: Some(time::Duration::from_secs(10)),
@@ -25,6 +31,7 @@ fn test_config_root() {
 
     let ref_config = Config {
         lsm: false,
+        m0_limit,
         mem_ratio: 0.25,
         disk_ratio: 0.65,
         commit_interval: Some(time::Duration::from_secs(10)),
@@ -39,11 +46,15 @@ fn test_config_root() {
 
 #[test]
 fn test_root1() {
+    let seed: u128 = random();
+    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+
     let cutoffs = vec![
         None,
         Some(Bound::Included(101)),
         Some(Bound::Excluded(1001)),
     ];
+    let m0_limit = if rng.gen::<bool>() { Some(1000) } else { None };
 
     for cutoff in cutoffs.into_iter() {
         let ref_root = Root {
@@ -53,6 +64,7 @@ fn test_root1() {
             tombstone_cutoff: cutoff,
 
             lsm: true,
+            m0_limit,
             mem_ratio: 0.25,
             disk_ratio: 0.65,
             commit_interval: Some(time::Duration::from_secs(10)),
@@ -73,6 +85,7 @@ fn test_root2() {
         tombstone_cutoff: Default::default(),
 
         lsm: false,
+        m0_limit: None,
         mem_ratio: 0.25,
         disk_ratio: 0.65,
         commit_interval: Some(time::Duration::from_secs(10)),
@@ -86,6 +99,7 @@ fn test_root2() {
         tombstone_cutoff: Default::default(),
 
         lsm: false,
+        m0_limit: None,
         mem_ratio: 0.25,
         disk_ratio: 0.65,
         commit_interval: Some(time::Duration::from_secs(10)),
@@ -103,6 +117,7 @@ fn test_root3() {
         tombstone_cutoff: Default::default(),
 
         lsm: true,
+        m0_limit: None,
         mem_ratio: 0.25,
         disk_ratio: 0.65,
         commit_interval: Some(time::Duration::from_secs(10)),
@@ -190,6 +205,7 @@ fn test_dgm_crud() {
 
     let config = Config {
         lsm: true,
+        m0_limit: None,
         mem_ratio: 0.5,
         disk_ratio: 0.5,
         commit_interval: None,

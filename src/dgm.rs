@@ -36,6 +36,7 @@ const N_COMMITS: usize = 2;
 #[derive(Clone, Debug, PartialEq)]
 pub struct Config {
     lsm: bool,
+    m0_limit: Option<usize>,
     mem_ratio: f64,
     disk_ratio: f64,
     commit_interval: Option<time::Duration>,
@@ -46,6 +47,7 @@ impl Default for Config {
     fn default() -> Config {
         Config {
             lsm: false,
+            m0_limit: Default::default(),
             mem_ratio: Self::MEM_RATIO,
             disk_ratio: Self::DISK_RATIO,
             commit_interval: Some(Self::COMMIT_INTERVAL),
@@ -74,19 +76,26 @@ impl Config {
     /// between dgm disk-levels.
     /// Refer to [set_compact_interval][Config::set_compact_interval] method
     /// for details.
-    pub const COMPACT_INTERVAL: time::Duration = time::Duration::from_secs(60);
+    pub const COMPACT_INTERVAL: time::Duration = time::Duration::from_secs(10);
 
     /// Default interval in time duration, for invoking memory commit
     /// between m0 level and disk level.
     /// Refer to [set_commit_interval][Config::set_commit_interval] method
     /// for details.
-    pub const COMMIT_INTERVAL: time::Duration = time::Duration::from_secs(50);
+    pub const COMMIT_INTERVAL: time::Duration = time::Duration::from_secs(5);
 
     /// Set entire Dgm index for log-structured-merge. This means
     /// the oldest level (snapshot) won't include deleted entries
     /// and older versions of each entry.
     pub fn set_lsm(&mut self, lsm: bool) -> &mut Self {
         self.lsm = lsm;
+        self
+    }
+
+    /// Set maximum footprint for m0 level, beyond which a commit
+    /// shall be triggered.
+    pub fn set_m0_limit(&mut self, limit: usize) -> &mut Self {
+        self.m0_limit = Some(limit);
         self
     }
 
@@ -127,6 +136,7 @@ impl From<Root> for Config {
     fn from(root: Root) -> Config {
         Config {
             lsm: root.lsm,
+            m0_limit: root.m0_limit,
             mem_ratio: root.mem_ratio,
             disk_ratio: root.disk_ratio,
             commit_interval: root.commit_interval,
@@ -143,6 +153,7 @@ struct Root {
     tombstone_cutoff: Option<Bound<u64>>,
 
     lsm: bool,
+    m0_limit: Option<usize>,
     mem_ratio: f64,
     disk_ratio: f64,
     commit_interval: Option<time::Duration>,  // in seconds.
@@ -158,6 +169,7 @@ impl From<Config> for Root {
             tombstone_cutoff: Default::default(),
 
             lsm: config.lsm,
+            m0_limit: config.m0_limit,
             mem_ratio: config.mem_ratio,
             disk_ratio: config.disk_ratio,
             commit_interval: config.commit_interval,
@@ -177,6 +189,10 @@ impl TryFrom<Root> for Vec<u8> {
 
             let version: i64 = convert_at!(root.version)?;
             let levels: i64 = convert_at!(root.levels)?;
+            let m0_limit: i64 = match root.m0_limit {
+                Some(m0_limit) => convert_at!(m0_limit)?,
+                None => -1,
+            };
             let mem_ratio: f64 = root.mem_ratio.into();
             let disk_ratio: f64 = root.disk_ratio.into();
             let m_interval: i64 = match root.commit_interval {
@@ -192,6 +208,7 @@ impl TryFrom<Root> for Vec<u8> {
             dict.insert("levels".to_string(), Integer(levels));
 
             dict.insert("lsm".to_string(), Boolean(root.lsm));
+            dict.insert("m0_limit".to_string(), Integer(m0_limit));
             dict.insert("mem_ratio".to_string(), Float(mem_ratio));
             dict.insert("disk_ratio".to_string(), Float(disk_ratio));
             dict.insert("commit_interval".to_string(), Integer(m_interval));
@@ -275,6 +292,18 @@ impl TryFrom<Vec<u8>> for Root {
                 .as_bool()
                 .ok_or(InvalidFile(err2.clone()))?
         };
+        root.m0_limit = {
+            let field = dict.get("m0_limit");
+            let m0_limit = field
+                .ok_or(InvalidFile(err2.clone()))?
+                .as_integer()
+                .ok_or(InvalidFile(err2.clone()))?;
+            if m0_limit > 0 {
+                Some(convert_at!(m0_limit)?)
+            } else {
+                None
+            }
+        };
         root.mem_ratio = {
             let field = dict.get("mem_ratio");
             field
@@ -295,10 +324,10 @@ impl TryFrom<Vec<u8>> for Root {
                 .ok_or(InvalidFile(err2.clone()))?
                 .as_integer()
                 .ok_or(InvalidFile(err2.clone()))?;
-            if duration <= 0 {
-                None
-            } else {
+            if duration > 0 {
                 Some(time::Duration::from_secs(convert_at!(duration)?))
+            } else {
+                None
             }
         };
         root.compact_interval = {
@@ -307,10 +336,10 @@ impl TryFrom<Vec<u8>> for Root {
                 .ok_or(InvalidFile(err2.clone()))?
                 .as_integer()
                 .ok_or(InvalidFile(err2.clone()))?;
-            if duration <= 0 {
-                None
-            } else {
+            if duration > 0 {
                 Some(time::Duration::from_secs(convert_at!(duration)?))
+            } else {
+                None
             }
         };
         root.lsm_cutoff = {
@@ -571,10 +600,15 @@ where
 
     writers: Vec<
         Arc<
-            Mutex<(
-                <M::I as Index<K, V>>::W,
-                Rs<K, V, <M::I as Index<K, V>>::R, <D::I as Index<K, V>>::R>,
-            )>,
+            Mutex<
+                Ws<
+                    K,
+                    V,
+                    <M::I as Index<K, V>>::W,
+                    <M::I as Index<K, V>>::R,
+                    <D::I as Index<K, V>>::R,
+                >,
+            >,
         >,
     >,
     readers: Vec<Arc<Mutex<Rs<K, V, <M::I as Index<K, V>>::R, <D::I as Index<K, V>>::R>>>>,
@@ -663,21 +697,21 @@ where
 
             // now replace old writer handle created from the new m0 snapshot.
             for handle in w_handles.iter_mut() {
-                let (old_w, old_rs) = handle.deref_mut();
+                let old = handle.deref_mut();
 
-                old_rs.r_m0 = self.m0.as_mut_m0()?.to_reader()?;
-                old_rs.r_m1 = match &mut self.m1 {
+                old.rs.r_m0 = self.m0.as_mut_m0()?.to_reader()?;
+                old.rs.r_m1 = match &mut self.m1 {
                     Some(m1) => Some(m1.as_mut_m1()?.to_reader()?),
                     None => None,
                 };
-                old_rs.r_disks.drain(..);
+                old.rs.r_disks.drain(..);
                 for disk in self.disks.iter_mut() {
                     if let Some(d) = disk.as_mut_disk()? {
-                        old_rs.r_disks.push(d.to_reader()?)
+                        old.rs.r_disks.push(d.to_reader()?)
                     }
                 }
 
-                mem::replace(old_w, self.m0.as_mut_m0()?.to_writer()?);
+                mem::replace(&mut old.w, self.m0.as_mut_m0()?.to_writer()?);
                 // drop the old writer,
             }
         }
@@ -881,11 +915,11 @@ where
             for writer in self.writers.iter() {
                 let mut w = writer.lock().unwrap();
                 if commit {
-                    w.1.r_m1 = None; // for commit.
+                    w.rs.r_m1 = None; // for commit.
                 }
-                w.1.r_disks.drain(..);
+                w.rs.r_disks.drain(..);
                 for r_disk in r_diskss.remove(0).into_iter() {
-                    w.1.r_disks.push(r_disk)
+                    w.rs.r_disks.push(r_disk)
                 }
             }
         }
@@ -1876,7 +1910,7 @@ where
             }
         };
 
-        let arc_w = Arc::new(Mutex::new((w, rs)));
+        let arc_w = Arc::new(Mutex::new(Ws { w, rs }));
         inner.writers.push(Arc::clone(&arc_w));
         Ok(DgmWriter::new(&inner.name, arc_w))
     }
@@ -1948,7 +1982,7 @@ where
     B: Reader<K, V>,
 {
     name: String,
-    w: Arc<Mutex<(W, Rs<K, V, A, B>)>>,
+    w: Arc<Mutex<Ws<K, V, W, A, B>>>,
 
     _phantom_key: marker::PhantomData<K>,
     _phantom_val: marker::PhantomData<V>,
@@ -1962,7 +1996,7 @@ where
     A: Reader<K, V>,
     B: Reader<K, V>,
 {
-    fn new(name: &str, w: Arc<Mutex<(W, Rs<K, V, A, B>)>>) -> DgmWriter<K, V, W, A, B> {
+    fn new(name: &str, w: Arc<Mutex<Ws<K, V, W, A, B>>>) -> DgmWriter<K, V, W, A, B> {
         let w = DgmWriter {
             name: name.to_string(),
             w,
@@ -1974,7 +2008,7 @@ where
         w
     }
 
-    fn as_writer(&self) -> Result<MutexGuard<(W, Rs<K, V, A, B>)>> {
+    fn as_writer(&self) -> Result<MutexGuard<Ws<K, V, W, A, B>>> {
         match self.w.lock() {
             Ok(value) => Ok(value),
             Err(err) => {
@@ -1996,13 +2030,13 @@ where
 {
     fn set(&mut self, key: K, value: V) -> Result<Option<Entry<K, V>>> {
         let mut w_rs = self.as_writer()?;
-        w_rs.0.set(key, value)
+        w_rs.w.set(key, value)
     }
 
     fn set_cas(&mut self, key: K, value: V, cas: u64) -> Result<Option<Entry<K, V>>> {
         let mut w_rs = self.as_writer()?;
 
-        match Rs::get(&mut w_rs.1, &key) {
+        match Rs::get(&mut w_rs.rs, &key) {
             Ok(old) if cas == old.to_seqno() => Ok(()),
             Err(Error::KeyNotFound) if cas == 0 => Ok(()),
             Ok(old) => Err(Error::InvalidCAS(old.to_seqno())),
@@ -2010,7 +2044,7 @@ where
             Err(err) => Err(err),
         }?;
 
-        w_rs.0.set(key, value)
+        w_rs.w.set(key, value)
     }
 
     fn delete<Q>(&mut self, key: &Q) -> Result<Option<Entry<K, V>>>
@@ -2019,8 +2053,20 @@ where
         Q: ToOwned<Owned = K> + Ord + ?Sized,
     {
         let mut w_rs = self.as_writer()?;
-        w_rs.0.delete(key)
+        w_rs.w.delete(key)
     }
+}
+
+struct Ws<K, V, W, A, B>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+    W: Writer<K, V>,
+    A: Reader<K, V>,
+    B: Reader<K, V>,
+{
+    w: W,
+    rs: Rs<K, V, A, B>,
 }
 
 // type alias to reader associated type for each snapshot (aka disk-index)
@@ -2664,12 +2710,33 @@ where
             }
         };
 
+        let ok_to_commit = {
+            let inner = to_inner_lock(&inner)?;
+            let fp = inner.m0.footprint()?;
+            match inner.root.m0_limit {
+                Some(m0_limit) if fp < (m0_limit as isize) => false,
+                Some(_) => true,
+                None => {
+                    let m = match sys_info::mem_info() {
+                        Ok(m) => Ok(m),
+                        Err(err) => {
+                            let msg = format!("{:?}", err);
+                            Err(Error::SystemFail(msg))
+                        }
+                    }?;
+                    (fp * 3) > (m.avail as isize) // TODO: no magic formula
+                }
+            }
+        };
+
         let start = time::SystemTime::now();
 
-        let res = {
+        let res = if ok_to_commit {
             let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
             let iter = CommitIter::new(vec![].into_iter(), within);
             Dgm::do_commit(&inner, iter, convert::identity)
+        } else {
+            Ok(())
         };
 
         match resp_tx {

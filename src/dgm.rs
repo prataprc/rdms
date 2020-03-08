@@ -1807,6 +1807,8 @@ where
     fn validate(&mut self) -> Result<Stats<A, B>> {
         let mut inner = self.as_inner()?;
 
+        let root = inner.root.clone();
+
         if inner.n_commits > N_COMMITS {
             let msg = format!("{} commited to highest level", inner.n_commits);
             Err(Error::ValidationFail(msg))
@@ -1814,20 +1816,61 @@ where
             Ok(())
         }?;
 
-        let _ = inner.m0.as_mut_m0()?.validate()?; // TODO: handle validate stats.
+        let m0 = inner.m0.as_mut_m0()?;
+        let _ = m0.validate()?; // TODO: handle return.
+        let mut m0_r = m0.to_reader()?;
+        let mut seqnos = vec![validate_snapshot(m0_r.iter()?, true, None, None)?];
+
         match &mut inner.m1 {
             Some(m1) => {
-                m1.as_mut_m1()?.validate()?; // TODO: handle validate stats,
+                let m1 = m1.as_mut_m1()?;
+                let mut m1_r = m1.to_reader()?;
+                let _ = m1.validate()?; // TODO: handle return
+                seqnos.push(validate_snapshot(m1_r.iter()?, true, None, None)?);
             }
             None => (),
         }
 
+        let mut disks = vec![];
         for disk in inner.disks.iter_mut() {
             match disk.as_mut_disk()? {
-                Some(disk) => {
-                    disk.validate()?; // TODO: handle validate
-                }
+                Some(disk) => disks.push(disk),
                 None => (),
+            }
+        }
+
+        let n = disks.len();
+        if n > 0 {
+            for disk in disks.drain(..n - 1) {
+                let _ = disk.validate()?; // TODO: handle return
+                let mut disk = disk.to_reader()?;
+                seqnos.push(validate_snapshot(disk.iter()?, true, None, None)?);
+            }
+            // validate the last disk snapshot.
+            let disk = disks.remove(0);
+            let _ = disk.validate()?; // TODO: handle return
+            {
+                let mut disk = disk.to_reader()?;
+                let lc = root.lsm_cutoff.clone();
+                let tc = root.tombstone_cutoff.clone();
+                seqnos.push(validate_snapshot(disk.iter()?, root.lsm, lc, tc)?);
+            }
+        }
+
+        {
+            let n = seqnos.len();
+            let mut iter = seqnos[..n - 1]
+                .to_vec()
+                .into_iter()
+                .zip(seqnos[1..].to_vec().into_iter());
+            let bad = iter.any(|(x, y)| match y.start_bound() {
+                Bound::Included(y) if x.contains(y) => true,
+                Bound::Included(_) => false,
+                _ => unreachable!(),
+            });
+            if bad {
+                let msg = format!("overlapping snapshot {:?}", seqnos);
+                return Err(Error::UnExpectedFail(msg));
             }
         }
 
@@ -1836,6 +1879,68 @@ where
             _phantom_val: marker::PhantomData,
         })
     }
+}
+
+fn validate_snapshot<K, V>(
+    iter: IndexIter<K, V>,
+    lsm: bool,
+    lsm_cutoff: Option<Bound<u64>>,
+    tombstone_cutoff: Option<Bound<u64>>,
+) -> Result<(Bound<u64>, Bound<u64>)>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    use Bound::{Excluded, Included, Unbounded};
+
+    let mut min_seqno = std::u64::MAX;
+    let mut max_seqno = std::u64::MIN;
+    for entry in iter {
+        let entry = entry?;
+        if !lsm && entry.is_deleted() {
+            let msg = format!("deleted entry {} in non-lsm", entry.to_seqno());
+            return Err(Error::UnExpectedFail(msg));
+        } else if !lsm && entry.as_deltas().len() > 0 {
+            let msg = format!("old versions in non-lsm");
+            return Err(Error::UnExpectedFail(msg));
+        }
+
+        let mut seqnos: Vec<u64> = entry.as_deltas().iter().map(|d| d.to_seqno()).collect();
+        seqnos.insert(0, entry.to_seqno());
+        max_seqno = cmp::max(
+            max_seqno,
+            seqnos.clone().into_iter().max().unwrap_or(max_seqno),
+        );
+        min_seqno = cmp::min(
+            min_seqno,
+            seqnos.clone().into_iter().min().unwrap_or(min_seqno),
+        );
+
+        let l_ok = match lsm_cutoff {
+            Some(cutoff) => match cutoff {
+                Included(lseqno) if min_seqno <= lseqno => false,
+                Excluded(lseqno) if min_seqno < lseqno => false,
+                Unbounded => unreachable!(),
+                _ => true,
+            },
+            None => true,
+        };
+        let t_ok = match tombstone_cutoff {
+            Some(cutoff) if entry.is_deleted() => match cutoff {
+                Included(tseqno) if max_seqno <= tseqno => false,
+                Excluded(tseqno) if max_seqno < tseqno => false,
+                Unbounded => unreachable!(),
+                _ => true,
+            },
+            _ => true,
+        };
+        if !l_ok && !t_ok {
+            let msg = format!("entry < lsm/tombstone cutoff");
+            return Err(Error::UnExpectedFail(msg));
+        }
+    }
+
+    Ok((Bound::Included(min_seqno), Bound::Included(max_seqno)))
 }
 
 impl<K, V, M, D> Index<K, V> for Dgm<K, V, M, D>

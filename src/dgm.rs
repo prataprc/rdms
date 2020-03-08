@@ -593,7 +593,8 @@ where
     root: Root,
 
     n_high_compacts: usize,
-    n_commits: usize,
+    n_ccommits: usize,
+    n_compacts: usize,
     m0: Snapshot<K, V, M::I>,         // write index
     m1: Option<Snapshot<K, V, M::I>>, // flush index
     disks: Vec<Snapshot<K, V, D::I>>, // NLEVELS
@@ -873,7 +874,7 @@ where
         };
 
         match levels {
-            None if self.n_commits < N_COMMITS => Ok(None),
+            None if self.n_ccommits < N_COMMITS => Ok(None),
             None => match Self::active_compact_levels(&self.disks).pop() {
                 None => Ok(None),
                 Some(d) => Ok(Some((vec![d], vec![], d))),
@@ -1261,7 +1262,8 @@ where
             root,
 
             n_high_compacts: Default::default(),
-            n_commits: Default::default(),
+            n_ccommits: Default::default(),
+            n_compacts: Default::default(),
             m0,
             m1: None,
             disks,
@@ -1334,7 +1336,8 @@ where
                 root,
 
                 n_high_compacts: Default::default(),
-                n_commits: Default::default(),
+                n_ccommits: Default::default(),
+                n_compacts: Default::default(),
                 m0,
                 m1: None,
                 disks,
@@ -1516,6 +1519,7 @@ where
             };
             (d, r_m1, level)
         };
+        // println!("do_commit {}", level);
 
         let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
         match r_m1 {
@@ -1605,8 +1609,10 @@ where
         //);
 
         if s_levels.len() == 0 {
+            // println!("1, {:?} {}", cutoff, d_level);
             Self::do_compact1(inner, cutoff, metacb, levels, d_level)
         } else {
+            // println!("2, {:?} {:?} {}", cutoff, s_levels, d_level);
             Self::do_compact2(inner, metacb, levels, s_levels, d_level)
         }
     }
@@ -1641,7 +1647,8 @@ where
             mem::replace(&mut inn.disks[d_level], disk);
 
             inn.repopulate_readers(false /*commit*/)?;
-            inn.n_commits = Default::default();
+            inn.n_ccommits = Default::default();
+            inn.n_compacts += 1;
 
             let root_file = inn.root_file.clone();
             inn.root_file = Self::new_root_file(
@@ -1702,7 +1709,7 @@ where
             mem::replace(&mut inn.disks[d_level], disk);
 
             inn.repopulate_readers(false /*commit*/)?;
-            inn.n_commits += 1;
+            inn.n_ccommits += 1;
 
             let root_file = inn.root_file.clone();
             inn.root_file = Self::new_root_file(
@@ -1809,8 +1816,8 @@ where
 
         let root = inner.root.clone();
 
-        if inner.n_commits > N_COMMITS {
-            let msg = format!("{} commited to highest level", inner.n_commits);
+        if inner.n_ccommits > N_COMMITS {
+            let msg = format!("{} commited to highest level", inner.n_ccommits);
             Err(Error::ValidationFail(msg))
         } else {
             Ok(())
@@ -1824,8 +1831,8 @@ where
         match &mut inner.m1 {
             Some(m1) => {
                 let m1 = m1.as_mut_m1()?;
-                let mut m1_r = m1.to_reader()?;
                 let _ = m1.validate()?; // TODO: handle return
+                let mut m1_r = m1.to_reader()?;
                 seqnos.push(validate_snapshot(m1_r.iter()?, true, None, None)?);
             }
             None => (),
@@ -1853,7 +1860,11 @@ where
                 let mut disk = disk.to_reader()?;
                 let lc = root.lsm_cutoff.clone();
                 let tc = root.tombstone_cutoff.clone();
-                seqnos.push(validate_snapshot(disk.iter()?, root.lsm, lc, tc)?);
+                if inner.n_ccommits == 0 && inner.n_compacts > 0 {
+                    seqnos.push(validate_snapshot(disk.iter()?, root.lsm, lc, tc)?);
+                } else {
+                    seqnos.push(validate_snapshot(disk.iter()?, true, None, None)?);
+                }
             }
         }
 
@@ -1888,7 +1899,7 @@ fn validate_snapshot<K, V>(
     tombstone_cutoff: Option<Bound<u64>>,
 ) -> Result<(Bound<u64>, Bound<u64>)>
 where
-    K: Clone + Ord,
+    K: Clone + Ord + fmt::Debug,
     V: Clone + Diff,
 {
     use Bound::{Excluded, Included, Unbounded};
@@ -1898,7 +1909,11 @@ where
     for entry in iter {
         let entry = entry?;
         if !lsm && entry.is_deleted() {
-            let msg = format!("deleted entry {} in non-lsm", entry.to_seqno());
+            let msg = format!(
+                "deleted entry {:?}/{} in non-lsm",
+                entry.to_key(),
+                entry.to_seqno()
+            );
             return Err(Error::UnExpectedFail(msg));
         } else if !lsm && entry.as_deltas().len() > 0 {
             let msg = format!("old versions in non-lsm");

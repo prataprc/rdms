@@ -376,8 +376,16 @@ fn test_dgm_crud() {
 
 #[test]
 fn test_dgm_non_lsm() {
-    let seed: u128 = random();
-    // let seed: u128 = 187570922830339341216633939671561224480;
+    let seed: u128 = {
+        let ss: Vec<u128> = vec![
+            10975319741753784730289078611426332775,
+            random(),
+            random(),
+            random(),
+        ];
+        ss[random::<usize>() % 2]
+    };
+    // let seed: u128 = 10975319741753784730289078611426332775;
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
     let config = Config {
@@ -389,11 +397,9 @@ fn test_dgm_non_lsm() {
         compact_interval: None,
     };
 
-    println!("seed: {}", seed);
-
     let dir = {
         let mut dir = std::env::temp_dir();
-        dir.push("test-dgm-crud");
+        dir.push("test-dgm-non-lsm");
         dir.into_os_string()
     };
     let mem_factory = mvcc::mvcc_factory(true /*lsm*/);
@@ -406,7 +412,7 @@ fn test_dgm_non_lsm() {
     let mut index = Dgm::new(
         //
         &dir,
-        "dgm-crud",
+        "dgm-non-lsm",
         mem_factory,
         disk_factory,
         config.clone(),
@@ -415,7 +421,9 @@ fn test_dgm_non_lsm() {
 
     let n_ops = 1_000;
     let key_max = n_ops * 3;
-    for _i in 0..20 {
+    let cycles: usize = rng.gen::<usize>() % 20;
+    println!("seed:{} cycles:{}", seed, cycles);
+    for _i in 0..cycles {
         // println!("loop {}", _i);
         let mut index_w = index.to_writer().unwrap();
         let mut index_r = index.to_reader().unwrap();
@@ -423,6 +431,7 @@ fn test_dgm_non_lsm() {
             let key: i64 = rng.gen::<i64>().abs() % key_max;
             let value: i64 = rng.gen::<i64>().abs();
             let op: i64 = (rng.gen::<u8>() % 3) as i64;
+            let _seqno = index.to_seqno().unwrap();
             //println!(
             //    "i:{} key:{} value:{} op:{} seqno:{}",
             //    _i, key, value, op, _seqno
@@ -454,6 +463,109 @@ fn test_dgm_non_lsm() {
             index
                 .compact(Cutoff::new_lsm_empty(), convert::identity)
                 .unwrap();
+        }
+    }
+
+    index.validate().unwrap();
+}
+
+#[test]
+fn test_dgm_cutoffs() {
+    let seed: u128 = {
+        let ss: Vec<u128> = vec![
+            28033407443451930364604529838062294466,
+            random(),
+            random(),
+            random(),
+        ];
+        ss[random::<usize>() % 2]
+    };
+    // let seed: u128 = 28033407443451930364604529838062294466;
+    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+
+    let config = Config {
+        lsm: false, // non-lsm
+        m0_limit: None,
+        mem_ratio: 0.5,
+        disk_ratio: 0.5,
+        commit_interval: None,
+        compact_interval: None,
+    };
+
+    let dir = {
+        let mut dir = std::env::temp_dir();
+        dir.push("test-dgm-cutoffs");
+        dir.into_os_string()
+    };
+    let mem_factory = mvcc::mvcc_factory(true /*lsm*/);
+    let disk_factory = {
+        let mut config: robt::Config = Default::default();
+        config.delta_ok = true;
+        config.value_in_vlog = true;
+        robt::robt_factory::<i64, i64, NoBitmap>(config)
+    };
+    let mut index = Dgm::new(
+        //
+        &dir,
+        "dgm-cutoffs",
+        mem_factory,
+        disk_factory,
+        config.clone(),
+    )
+    .unwrap();
+
+    let n_ops = 1_000;
+    let key_max = n_ops * 3;
+    let cycles: usize = rng.gen::<usize>() % 20;
+    println!("seed:{} cycles:{}", seed, cycles);
+    for _i in 0..cycles {
+        // println!("loop {}", _i);
+        let mut index_w = index.to_writer().unwrap();
+        let mut index_r = index.to_reader().unwrap();
+        for _ in 0..n_ops {
+            let key: i64 = rng.gen::<i64>().abs() % key_max;
+            let value: i64 = rng.gen::<i64>().abs();
+            let op: i64 = (rng.gen::<u8>() % 3) as i64;
+            let _seqno = index.to_seqno().unwrap();
+            //println!(
+            //    "i:{} key:{} value:{} op:{} seqno:{}",
+            //    _i, key, value, op, _seqno
+            //);
+            match op {
+                0 => index_w.set(key, value).unwrap(),
+                1 => {
+                    let cas = match index_r.get(&key) {
+                        Ok(entry) => entry.to_seqno(),
+                        Err(Error::KeyNotFound) => std::u64::MIN,
+                        Err(err) => panic!(err),
+                    };
+                    index_w.set_cas(key, value, cas).unwrap()
+                }
+                2 => index_w.delete(&key).unwrap(),
+                op => panic!("unreachable {}", op),
+            };
+        }
+        mem::drop(index_w);
+        mem::drop(index_r);
+
+        {
+            let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
+            let scanner = CommitIter::new(vec![].into_iter(), within);
+            index.commit(scanner, convert::identity).unwrap()
+        }
+
+        {
+            let seqno = random::<u64>() % index.to_seqno().unwrap();
+            let cutoff = match random::<usize>() % 6 {
+                0 => Cutoff::new_lsm(Bound::Excluded(seqno)),
+                1 => Cutoff::new_lsm(Bound::Included(seqno)),
+                2 => Cutoff::new_lsm(Bound::Unbounded),
+                3 => Cutoff::new_tombstone(Bound::Excluded(seqno)),
+                4 => Cutoff::new_tombstone(Bound::Included(seqno)),
+                5 => Cutoff::new_tombstone(Bound::Unbounded),
+                _ => unreachable!(),
+            };
+            index.compact(cutoff, convert::identity).unwrap();
         }
     }
 

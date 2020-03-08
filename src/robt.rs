@@ -960,12 +960,11 @@ where
                 ..
             } => {
                 {
-                    // skip compaction if cutoff is empty and older value bytes
-                    // have not exceeded a threshold.
+                    // skip compaction if cutoff is empty and the previous
+                    // build started from a clean vlog file.
                     let old = Snapshot::<K, V, B>::open(dir, &name.0)?;
                     let stats = old.to_stats()?;
-                    let ratio = (stats.n_abytes as f64) / (stats.v_bytes as f64);
-                    if cutoff.is_empty() && ratio < config.compact_ratio {
+                    if cutoff.is_empty() && stats.n_abytes == 0 {
                         return Ok(0);
                     }
                 }

@@ -125,38 +125,93 @@ fn test_root3() {
     };
 
     let cutoffs = vec![
-        Cutoff::new_lsm(Bound::Included(101)),
-        Cutoff::new_lsm(Bound::Excluded(1001)),
-        Cutoff::new_lsm(Bound::Unbounded),
-        Cutoff::new_tombstone(Bound::Included(101)),
-        Cutoff::new_tombstone(Bound::Excluded(1001)),
-        Cutoff::new_tombstone(Bound::Unbounded),
+        (
+            Cutoff::new_lsm(Bound::Included(101)),
+            Some(Bound::Included(101)),
+            None,
+        ),
+        (
+            Cutoff::new_lsm(Bound::Included(1)),
+            Some(Bound::Included(101)),
+            None,
+        ),
+        (
+            Cutoff::new_lsm(Bound::Included(101)),
+            Some(Bound::Included(101)),
+            None,
+        ),
+        (
+            Cutoff::new_lsm(Bound::Excluded(101)),
+            Some(Bound::Included(101)),
+            None,
+        ),
+        (
+            Cutoff::new_lsm(Bound::Excluded(102)),
+            Some(Bound::Excluded(102)),
+            None,
+        ),
+        (
+            Cutoff::new_lsm(Bound::Included(101)),
+            Some(Bound::Excluded(102)),
+            None,
+        ),
+        (
+            Cutoff::new_lsm(Bound::Included(102)),
+            Some(Bound::Included(102)),
+            None,
+        ),
+        (
+            Cutoff::new_lsm(Bound::Unbounded),
+            Some(Bound::Included(200001)),
+            None,
+        ),
+        (
+            Cutoff::new_tombstone(Bound::Included(1001)),
+            Some(Bound::Included(200001)),
+            Some(Bound::Included(1001)),
+        ),
+        (
+            Cutoff::new_tombstone(Bound::Included(1)),
+            Some(Bound::Included(200001)),
+            Some(Bound::Included(1001)),
+        ),
+        (
+            Cutoff::new_tombstone(Bound::Included(1001)),
+            Some(Bound::Included(200001)),
+            Some(Bound::Included(1001)),
+        ),
+        (
+            Cutoff::new_tombstone(Bound::Excluded(1001)),
+            Some(Bound::Included(200001)),
+            Some(Bound::Included(1001)),
+        ),
+        (
+            Cutoff::new_tombstone(Bound::Excluded(1002)),
+            Some(Bound::Included(200001)),
+            Some(Bound::Excluded(1002)),
+        ),
+        (
+            Cutoff::new_tombstone(Bound::Included(1001)),
+            Some(Bound::Included(200001)),
+            Some(Bound::Excluded(1002)),
+        ),
+        (
+            Cutoff::new_tombstone(Bound::Included(1002)),
+            Some(Bound::Included(200001)),
+            Some(Bound::Included(1002)),
+        ),
+        (
+            Cutoff::new_tombstone(Bound::Unbounded),
+            Some(Bound::Included(200001)),
+            Some(Bound::Included(200001)),
+        ),
     ];
     let seqno = 200001;
-    for cutoff in cutoffs.into_iter() {
+    for (cutoff, lref, tref) in cutoffs.into_iter() {
         root.update_cutoff(cutoff, seqno);
-        match cutoff {
-            Cutoff::Lsm(Bound::Unbounded) => {
-                let cutoff = Bound::Included(seqno);
-                assert_eq!(root.lsm_cutoff, Some(cutoff))
-            }
-            Cutoff::Lsm(cutoff) => assert_eq!(root.lsm_cutoff, Some(cutoff)),
-            Cutoff::Tombstone(Bound::Unbounded) => {
-                let cutoff = Bound::Included(seqno);
-                assert_eq!(root.tombstone_cutoff, Some(cutoff))
-            }
-            Cutoff::Tombstone(c) => assert_eq!(root.tombstone_cutoff, Some(c)),
-            _ => unreachable!(),
-        }
+        assert_eq!(root.lsm_cutoff, lref);
+        assert_eq!(root.tombstone_cutoff, tref);
     }
-
-    root.tombstone_cutoff = Some(Bound::Included(101));
-    root.lsm_cutoff = Some(Bound::Included(1001));
-    assert_eq!(
-        root.to_cutoff(2),
-        Cutoff::new_tombstone(Bound::Included(101))
-    );
-    assert_eq!(root.to_cutoff(3), Cutoff::new_lsm(Bound::Included(1001)));
 }
 
 #[test]

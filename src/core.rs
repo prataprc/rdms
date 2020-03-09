@@ -1010,8 +1010,8 @@ where
 
         // If all versions of this entry are before cutoff, then purge entry
         match cutoff {
-            Bound::Included(0) => return Some(self),
-            Bound::Excluded(0) => return Some(self),
+            Bound::Included(std::u64::MIN) => return Some(self),
+            Bound::Excluded(std::u64::MIN) => return Some(self),
             Bound::Included(cutoff) if n <= cutoff => return None,
             Bound::Excluded(cutoff) if n < cutoff => return None,
             Bound::Unbounded => return None,

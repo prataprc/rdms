@@ -85,8 +85,8 @@ impl Config {
     pub const COMPACT_INTERVAL: time::Duration = time::Duration::from_secs(10);
 
     /// Set entire Dgm index for log-structured-merge. This means
-    /// the oldest level (snapshot) won't include deleted entries
-    /// and older versions of each entry.
+    /// the oldest level (snapshot) will preserve all previous mutations
+    /// to an entry, until they are compacted off with cutoff.
     pub fn set_lsm(&mut self, lsm: bool) -> &mut Self {
         self.lsm = lsm;
         self
@@ -670,8 +670,8 @@ where
     fn shift_into_m0(&mut self) -> Result<()> {
         // block all the readers.
         let mut r_handles = vec![];
-        for r in self.readers.iter() {
-            r_handles.push(r.lock().unwrap());
+        for reader in self.readers.iter() {
+            r_handles.push(reader.lock().unwrap());
         }
 
         {
@@ -736,6 +736,20 @@ where
         Ok(())
     }
 
+    fn is_commit_exhausted(&self) -> Result<bool> {
+        use Snapshot::{Active, Commit, Compact};
+
+        match self.disks[0] {
+            Snapshot::None => Ok(false),
+            Active(_) => Ok(true),
+            Commit(_) | Compact(_) => Ok(true),
+            _ => {
+                let msg = format!("Dgm.is_commit_exhausted()");
+                Err(Error::DiskIndexFail(msg))
+            }
+        }
+    }
+
     fn commit_level(&mut self) -> Result<usize> {
         use Snapshot::{Active, Compact};
 
@@ -769,20 +783,6 @@ where
                         }
                     }
                 }
-            }
-        }
-    }
-
-    fn is_commit_exhausted(&self) -> Result<bool> {
-        use Snapshot::{Active, Commit, Compact};
-
-        match self.disks[0] {
-            Snapshot::None => Ok(false),
-            Active(_) => Ok(true),
-            Commit(_) | Compact(_) => Ok(true),
-            _ => {
-                let msg = format!("Dgm.is_commit_exhausted()");
-                Err(Error::DiskIndexFail(msg))
             }
         }
     }

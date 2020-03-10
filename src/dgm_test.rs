@@ -372,9 +372,9 @@ fn test_dgm_crud() {
         verify_read(key_max, &mut ref_index, &mut index, &mut rng);
 
         {
-            let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
-            let scanner = CommitIter::new(vec![].into_iter(), within);
-            index.commit(scanner, convert::identity).unwrap()
+            index
+                .commit(CommitIter::new_empty(), convert::identity)
+                .unwrap()
         }
 
         verify_read(key_max, &mut ref_index, &mut index, &mut rng);

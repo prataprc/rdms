@@ -1461,6 +1461,23 @@ where
     }
 }
 
+impl<K, V> CommitIter<K, V, std::vec::IntoIter<Result<Entry<K, V>>>>
+where
+    K: Clone + Ord,
+    V: Clone + Diff,
+{
+    /// Construct an empty iterable.
+    pub fn new_empty() -> CommitIter<K, V, std::vec::IntoIter<Result<Entry<K, V>>>> {
+        CommitIter {
+            scanner: vec![].into_iter(),
+            start: Bound::<u64>::Unbounded,
+            end: Bound::<u64>::Unbounded,
+            _phantom_key: marker::PhantomData,
+            _phantom_val: marker::PhantomData,
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "core_test.rs"]
 mod core_test;

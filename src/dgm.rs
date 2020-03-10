@@ -711,11 +711,7 @@ where
                     m0.set_seqno(m1.to_seqno()?)?;
 
                     let metadata = m1.to_metadata()?;
-                    let iter = {
-                        let w = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
-                        core::CommitIter::new(vec![].into_iter(), w)
-                    };
-                    m0.commit(iter, move |_| metadata.clone())?;
+                    m0.commit(core::CommitIter::new_empty(), move |_| metadata.clone())?;
 
                     Ok(Some(Snapshot::new_flush(m1)))
                 }
@@ -1389,11 +1385,10 @@ where
                 inner.m0.as_mut_m0()?.set_seqno(latest_seqno)?;
 
                 let metadata = inner.to_disk_metadata()?;
-                let iter = {
-                    let w = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
-                    core::CommitIter::new(vec![].into_iter(), w)
-                };
-                inner.m0.as_mut_m0()?.commit(iter, |_| metadata.clone())?;
+                inner
+                    .m0
+                    .as_mut_m0()?
+                    .commit(core::CommitIter::new_empty(), |_| metadata.clone())?;
             }
 
             index.start_auto_commit()?;

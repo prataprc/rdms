@@ -330,9 +330,7 @@ where
     /// `cutoff` bound can be purged permenantly.
     ///
     /// Return number of items in index.
-    fn compact<F>(&mut self, cutoff: Cutoff, metacb: F) -> Result<usize>
-    where
-        F: Fn(Vec<u8>) -> Vec<u8>;
+    fn compact(&mut self, cutoff: Cutoff) -> Result<usize>;
 
     /// End of index life-cycle. Persisted data (in disk) shall not be
     /// cleared. Refer [purge][Index::purge] for that.

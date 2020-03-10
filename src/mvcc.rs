@@ -533,11 +533,8 @@ where
         self.as_mut().commit(scanner, metacb)
     }
 
-    fn compact<F>(&mut self, cutoff: Cutoff, metacb: F) -> Result<usize>
-    where
-        F: Fn(Vec<u8>) -> Vec<u8>,
-    {
-        self.as_mut().compact(cutoff, metacb)
+    fn compact(&mut self, cutoff: Cutoff) -> Result<usize> {
+        self.as_mut().compact(cutoff)
     }
 
     fn close(self) -> Result<()> {
@@ -563,7 +560,7 @@ where
     }
 
     fn to_metadata(&self) -> Result<Vec<u8>> {
-        Ok(vec![])
+        self.snapshot.to_metadata()
     }
 
     fn to_seqno(&self) -> Result<u64> {
@@ -604,13 +601,13 @@ where
         Ok(MvccWriter::<K, V>::new(index, writer))
     }
 
-    fn commit<C, F>(&mut self, mut scanner: CommitIter<K, V, C>, _metacb: F) -> Result<()>
+    // NOTE: Error returned by commit are fatal, it leaves the index in
+    // in-consistent state.
+    fn commit<C, F>(&mut self, mut scanner: CommitIter<K, V, C>, metacb: F) -> Result<()>
     where
         C: CommitIterator<K, V>,
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
-        warn!(target: "mvcc  ", "{:?}, ignores all metadata", self.name);
-
         let full_table_iter = scanner.scan()?;
         let count = {
             let _latch = self.latch.acquire_write(self.spin);
@@ -623,14 +620,14 @@ where
             count
         };
 
+        let metadata = self.snapshot.to_metadata()?;
+        self.snapshot.set_metadata(metacb(metadata))?;
+
         info!(target: "mvcc  ", "{:?}, committed {} items", self.name, count);
         Ok(())
     }
 
-    fn compact<F>(&mut self, cutoff: Cutoff, _metacb: F) -> Result<usize>
-    where
-        F: Fn(Vec<u8>) -> Vec<u8>,
-    {
+    fn compact(&mut self, cutoff: Cutoff) -> Result<usize> {
         let c_seqno = cutoff.to_bound();
 
         // before proceeding with compaction, verify the cutoff argument for
@@ -683,6 +680,7 @@ where
             }
             count += LIMIT;
         };
+
         info!(target: "mvcc  ", "{:?}, compacted {} items", self.name, count);
         Ok(count)
     }
@@ -2151,6 +2149,7 @@ where
     V: Clone + Diff,
 {
     ulatch: RWSpinlock,
+    metadata: Vec<u8>,
     inner: AtomicPtr<Arc<Snapshot<K, V>>>,
     n_nodes: Arc<AtomicIsize>,
     n_active: Arc<AtomicUsize>,
@@ -2183,10 +2182,22 @@ where
         let arc: Box<Arc<Snapshot<K, V>>> = Box::new(Arc::new(*curr_snapshot));
         OuterSnapshot {
             ulatch: RWSpinlock::new(),
+            metadata: Default::default(),
             inner: AtomicPtr::new(Box::leak(arc)),
             n_nodes,
             n_active,
         }
+    }
+
+    fn to_metadata(&self) -> Result<Vec<u8>> {
+        let _r = self.ulatch.acquire_read(true /*spin*/);
+        Ok(self.metadata.clone())
+    }
+
+    fn set_metadata(&mut self, metadata: Vec<u8>) -> Result<()> {
+        let _w = self.ulatch.acquire_write(true /*spin*/);
+        self.metadata = metadata;
+        Ok(())
     }
 
     // similar to Arc::clone for AtomicPtr<Arc<Snapshot<K,V>>>

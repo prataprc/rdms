@@ -2698,48 +2698,27 @@ where
                 backup_interval - elapsed
             };
             match rx.recv_timeout(interval) {
-                Ok((cmd, resp_tx)) if cmd == "do_commit" => resp_tx,
+                Ok((cmd, resp_tx)) if cmd == "do_backup" => resp_tx,
                 Ok(_) => unreachable!(),
                 Err(mpsc::RecvTimeoutError::Timeout) => None,
                 Err(mpsc::RecvTimeoutError::Disconnected) => break Ok(()),
             }
         };
 
-        let ok_to_commit = {
-            let inner = to_inner_lock(&inner)?;
-            let fp = inner.m0.footprint()?;
-            match inner.root.m0_limit {
-                Some(m0_limit) if fp < (m0_limit as isize) => false,
-                Some(_) => true,
-                None => {
-                    let m = match sys_info::mem_info() {
-                        Ok(m) => Ok(m),
-                        Err(err) => {
-                            let msg = format!("{:?}", err);
-                            Err(Error::SystemFail(msg))
-                        }
-                    }?;
-                    (fp * 3) > (m.avail as isize) // TODO: no magic formula
-                }
-            }
-        };
-
         let start = time::SystemTime::now();
 
-        let res = if ok_to_commit {
+        let iter = {
             let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
-            let iter = CommitIter::new(vec![].into_iter(), within);
-            Dgm::do_commit(&inner, iter, convert::identity)
-        } else {
-            Ok(())
+            CommitIter::new(vec![].into_iter(), within)
         };
+        let res = Backup::do_commit(&inner, iter, convert::identity)
 
         match resp_tx {
             Some(tx) => ipc_at!(tx.send(res))?,
             None => match res {
-                Ok(_) => info!(target: "backup", "{:?}, commit done", name),
+                Ok(_) => info!(target: "backup", "{:?}, backup done", name),
                 Err(err) => {
-                    info!(target: "backup", "{:?}, commit err, {:?}", name, err);
+                    info!(target: "backup", "{:?}, backup err, {:?}", name, err);
                     break Err(err);
                 }
             },
@@ -2793,7 +2772,7 @@ where
 
         let start = time::SystemTime::now();
 
-        let res = Dgm::do_compact(
+        let res = Backup::do_compact(
             //
             &inner,
             Cutoff::new_lsm_empty(),
@@ -2834,13 +2813,13 @@ where
     match inner.lock() {
         Ok(value) => Ok(value),
         Err(err) => {
-            let msg = format!("Dgm.as_inner(), poisonlock {:?}", err);
+            let msg = format!("Backup.as_inner(), poisonlock {:?}", err);
             Err(Error::ThreadFail(msg))
         }
     }
 }
 
-/// TODO: populate with meaningful stats for Dgm index.
+/// TODO: populate with meaningful stats for Backup index.
 pub struct Stats<A, B>
 where
     A: fmt::Display,
@@ -2856,10 +2835,10 @@ where
     B: fmt::Display,
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
-        write!(f, "Dgm::Stats<>")
+        write!(f, "Backup::Stats<>")
     }
 }
 
-#[cfg(test)]
-#[path = "dgm_test.rs"]
-mod dgm_test;
+//#[cfg(test)]
+//#[path = "backup_test.rs"]
+//mod backup_test;

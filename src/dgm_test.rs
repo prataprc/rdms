@@ -6,6 +6,8 @@ use crate::{
     robt::{self, RobtFactory},
 };
 
+use std::convert;
+
 use super::*;
 
 #[test]
@@ -378,9 +380,7 @@ fn test_dgm_crud() {
         verify_read(key_max, &mut ref_index, &mut index, &mut rng);
 
         {
-            index
-                .compact(Cutoff::new_lsm_empty(), convert::identity)
-                .unwrap();
+            index.compact(Cutoff::new_lsm_empty()).unwrap();
         }
 
         verify_read(key_max, &mut ref_index, &mut index, &mut rng);
@@ -515,9 +515,7 @@ fn test_dgm_non_lsm() {
         }
 
         {
-            index
-                .compact(Cutoff::new_lsm_empty(), convert::identity)
-                .unwrap();
+            index.compact(Cutoff::new_lsm_empty()).unwrap();
         }
     }
 
@@ -620,7 +618,7 @@ fn test_dgm_cutoffs() {
                 5 => Cutoff::new_tombstone(Bound::Unbounded),
                 _ => unreachable!(),
             };
-            index.compact(cutoff, convert::identity).unwrap();
+            index.compact(cutoff).unwrap();
         }
     }
 

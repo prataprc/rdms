@@ -682,7 +682,7 @@ fn test_compact_mono_cutoff() {
     };
 
     let cutoff = Cutoff::new_mono();
-    index.compact(cutoff, std::convert::identity).unwrap();
+    index.compact(cutoff).unwrap();
 
     let ref_entries: Vec<Entry<i64, i64>> = {
         let iter = mindex.iter().unwrap();
@@ -745,7 +745,7 @@ fn test_compact_tombstone_cutoff() {
             };
             Cutoff::new_tombstone(cutoff)
         };
-        index.compact(cutoff, std::convert::identity).unwrap();
+        index.compact(cutoff).unwrap();
 
         let entries: Vec<Entry<i64, i64>> = {
             let mut r = index.to_reader().unwrap();
@@ -820,7 +820,7 @@ fn test_compact_lsm_cutoff() {
             };
             Cutoff::new_lsm(cutoff)
         };
-        index.compact(cutoff, std::convert::identity).unwrap();
+        index.compact(cutoff).unwrap();
 
         let entries: Vec<Entry<i64, i64>> = {
             let mut r = index.to_reader().unwrap();

@@ -976,12 +976,9 @@ where
         Ok(())
     }
 
-    fn compact<F>(&mut self, cutoff: Cutoff, metacb: F) -> Result<usize>
-    where
-        F: Fn(Vec<u8>) -> Vec<u8>,
-    {
-        let (state, _num_shards) = self.to_state()?;
-        let metas = self.transform_metadatas(metacb, state.as_str())?;
+    fn compact(&mut self, cutoff: Cutoff) -> Result<usize> {
+        // let (state, _num_shards) = self.to_state()?;
+        // let metas = self.transform_metadatas(metacb, state.as_str())?;
 
         let r = {
             let (state, _) = self.to_state()?;
@@ -1000,11 +997,10 @@ where
         };
 
         // scatter
-        let iter = indexes.into_iter().zip(metas.into_iter()).enumerate();
         let mut threads = vec![];
-        for (off, (index, meta)) in iter {
+        for (off, index) in indexes.into_iter().enumerate() {
             threads.push(thread::spawn(move || {
-                thread_compact(off, index, cutoff.clone(), meta)
+                thread_compact(off, index, cutoff.clone())
             }));
         }
 
@@ -1093,7 +1089,6 @@ fn thread_compact<K, V, B>(
     off: usize,
     mut index: Robt<K, V, B>,
     cutoff: Cutoff,
-    meta: Vec<u8>,
 ) -> Result<(usize, usize, Robt<K, V, B>)>
 where
     K: 'static + Send + Default + Clone + Ord + Hash + Footprint + Serialize,
@@ -1101,7 +1096,7 @@ where
     <V as Diff>::D: Default + Clone + Serialize,
     B: 'static + Send + Bloom,
 {
-    let count = index.compact(cutoff, |_| meta.clone())?;
+    let count = index.compact(cutoff)?;
     Ok((off, count, index))
 }
 

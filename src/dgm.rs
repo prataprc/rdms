@@ -11,7 +11,7 @@ use toml;
 use std::{
     borrow::Borrow,
     cmp,
-    convert::{self, TryFrom, TryInto},
+    convert::{TryFrom, TryInto},
     ffi, fmt, fs,
     hash::Hash,
     io::{Read, Write},
@@ -623,6 +623,28 @@ where
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
 {
+    fn to_disk_seqno(&self) -> Result<u64> {
+        for d in self.disks.iter() {
+            match d.as_disk()? {
+                Some(d) => return d.to_seqno(),
+                None => (),
+            }
+        }
+
+        Ok(std::u64::MIN)
+    }
+
+    fn to_disk_metadata(&self) -> Result<Vec<u8>> {
+        for d in self.disks.iter() {
+            match d.as_disk()? {
+                Some(d) => return d.to_metadata(),
+                None => (),
+            }
+        }
+
+        Ok(vec![])
+    }
+
     fn cleanup_writers(&mut self) -> Result<()> {
         // cleanup dropped writer threads.
         let dropped: Vec<usize> = self
@@ -685,7 +707,16 @@ where
             let mut m0 = self.mem_factory.new(&self.name)?;
             self.m1 = match mem::replace(&mut self.m0, Default::default()) {
                 Snapshot::Write(m1) => {
+                    // update m0 with latest seqno and metadata
                     m0.set_seqno(m1.to_seqno()?)?;
+
+                    let metadata = m1.to_metadata()?;
+                    let iter = {
+                        let w = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
+                        core::CommitIter::new(vec![].into_iter(), w)
+                    };
+                    m0.commit(iter, move |_| metadata.clone())?;
+
                     Ok(Some(Snapshot::new_flush(m1)))
                 }
                 _ => {
@@ -1351,14 +1382,18 @@ where
                 auto_compact: Default::default(),
                 inner: Arc::new(Mutex::new(inner)),
             });
-
-            let latest_seqno = {
-                let inner = index.as_inner()?;
-                Self::to_disk_seqno(&inner)?
-            };
+            // update m0 with latest seqno and metadata
             {
                 let mut inner = index.as_inner()?;
+                let latest_seqno = inner.to_disk_seqno()?;
                 inner.m0.as_mut_m0()?.set_seqno(latest_seqno)?;
+
+                let metadata = inner.to_disk_metadata()?;
+                let iter = {
+                    let w = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
+                    core::CommitIter::new(vec![].into_iter(), w)
+                };
+                inner.m0.as_mut_m0()?.commit(iter, |_| metadata.clone())?;
             }
 
             index.start_auto_commit()?;
@@ -1477,32 +1512,13 @@ where
             })
     }
 
-    fn to_disk_seqno(inner: &MutexGuard<InnerDgm<K, V, M, D>>) -> Result<u64> {
-        for d in inner.disks.iter() {
-            match d.as_disk()? {
-                Some(d) => return d.to_seqno(),
-                None => (),
-            }
-        }
-
-        Ok(std::u64::MIN)
-    }
-
-    fn do_commit<C, F>(
-        inner: &Arc<Mutex<InnerDgm<K, V, M, D>>>,
-        _: CommitIter<K, V, C>, // TODO: should we handle scanner
-        metacb: F,
-    ) -> Result<()>
-    where
-        C: CommitIterator<K, V>,
-        F: Fn(Vec<u8>) -> Vec<u8>,
-    {
-        let (mut d, r_m1, level) = {
+    fn do_commit(inner: &Arc<Mutex<InnerDgm<K, V, M, D>>>) -> Result<()> {
+        let (metadata, mut d, r_m1, level) = {
             let mut inn = to_inner_lock(inner)?;
             inn.cleanup_writers()?;
             inn.cleanup_readers()?;
 
-            if inn.m0.as_m0()?.to_seqno()? == Self::to_disk_seqno(&inn)? {
+            if inn.m0.as_m0()?.to_seqno()? == inn.to_disk_seqno()? {
                 return Ok(());
             }
 
@@ -1517,7 +1533,7 @@ where
                 Some(m1) => Some(m1.as_mut_m1()?.to_reader()?),
                 None => None,
             };
-            (d, r_m1, level)
+            (inn.m0.as_mut_m0()?.to_metadata()?, d, r_m1, level)
         };
         // println!("do_commit {}", level);
 
@@ -1525,7 +1541,7 @@ where
         match r_m1 {
             Some(r_m1) => {
                 let iter = core::CommitIter::new(r_m1, within);
-                d.commit(iter, metacb)?;
+                d.commit(iter, |_| metadata.clone())?;
             }
             None => (),
         }
@@ -1554,14 +1570,7 @@ where
         Ok(())
     }
 
-    fn do_compact<F>(
-        inner: &Arc<Mutex<InnerDgm<K, V, M, D>>>,
-        cutoff: Cutoff,
-        metacb: F,
-    ) -> Result<usize>
-    where
-        F: Fn(Vec<u8>) -> Vec<u8>,
-    {
+    fn do_compact(inner: &Arc<Mutex<InnerDgm<K, V, M, D>>>, cutoff: Cutoff) -> Result<usize> {
         match cutoff {
             Cutoff::Mono => {
                 let msg = format!("can't have mono-cutoff");
@@ -1610,23 +1619,19 @@ where
 
         if s_levels.len() == 0 {
             // println!("1, {:?} {}", cutoff, d_level);
-            Self::do_compact1(inner, cutoff, metacb, levels, d_level)
+            Self::do_compact1(inner, cutoff, levels, d_level)
         } else {
             // println!("2, {:?} {:?} {}", cutoff, s_levels, d_level);
-            Self::do_compact2(inner, metacb, levels, s_levels, d_level)
+            Self::do_compact2(inner, levels, s_levels, d_level)
         }
     }
 
-    fn do_compact1<F>(
+    fn do_compact1(
         inner: &Arc<Mutex<InnerDgm<K, V, M, D>>>,
         cutoff: Cutoff,
-        metacb: F,
         levels: Vec<usize>,
         d_level: usize,
-    ) -> Result<usize>
-    where
-        F: Fn(Vec<u8>) -> Vec<u8>,
-    {
+    ) -> Result<usize> {
         let mut high_disk = {
             let mut inn = to_inner_lock(inner)?;
             inn.move_to_compact(&levels);
@@ -1635,7 +1640,7 @@ where
             inn.disks[d_level].as_disk()?.unwrap().clone()
         };
 
-        let res = high_disk.compact(cutoff, metacb);
+        let res = high_disk.compact(cutoff);
 
         {
             let mut inn = to_inner_lock(inner)?;
@@ -1665,16 +1670,12 @@ where
         res
     }
 
-    fn do_compact2<F>(
+    fn do_compact2(
         inner: &Arc<Mutex<InnerDgm<K, V, M, D>>>,
-        metacb: F,
         levels: Vec<usize>,
         s_levels: Vec<usize>,
         d_level: usize,
-    ) -> Result<usize>
-    where
-        F: Fn(Vec<u8>) -> Vec<u8>,
-    {
+    ) -> Result<usize> {
         let (s_disks, mut disk) = {
             let mut inn = to_inner_lock(inner)?;
 
@@ -1684,13 +1685,17 @@ where
             let (s_disks, disk) = inn.do_compact_disks(&s_levels, d_level)?;
             (s_disks, disk)
         };
+        let metadata = match s_disks.first() {
+            Some(s_disk) => s_disk.to_metadata()?,
+            _ => unreachable!(),
+        };
 
         let scanner = {
             let scanner = CommitScanner::<K, V, D::I>::new(s_disks)?;
             let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
             core::CommitIter::new(scanner, within)
         };
-        disk.commit(scanner, metacb)?;
+        disk.commit(scanner, |_| metadata.clone())?;
 
         {
             let mut inn = to_inner_lock(inner)?;
@@ -1991,7 +1996,7 @@ where
         let inner = self.as_inner()?;
 
         let m0_seqno = inner.m0.as_m0()?.to_seqno()?;
-        let disk_seqno = Self::to_disk_seqno(&inner)?;
+        let disk_seqno = inner.to_disk_seqno()?;
         Ok(cmp::max(m0_seqno, disk_seqno))
     }
 
@@ -2073,14 +2078,16 @@ where
         C: CommitIterator<K, V>,
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
-        Self::do_commit(&self.inner, scanner, metacb)
+        {
+            let mut inner = self.as_inner()?;
+            let m0 = inner.m0.as_mut_m0()?;
+            m0.commit(scanner, metacb)?;
+        }
+        Self::do_commit(&self.inner)
     }
 
-    fn compact<F>(&mut self, cutoff: Cutoff, metacb: F) -> Result<usize>
-    where
-        F: Fn(Vec<u8>) -> Vec<u8>,
-    {
-        Self::do_compact(&self.inner, cutoff, metacb)
+    fn compact(&mut self, cutoff: Cutoff) -> Result<usize> {
+        Self::do_compact(&self.inner, cutoff)
     }
 
     fn close(self) -> Result<()> {
@@ -2852,9 +2859,7 @@ where
         let start = time::SystemTime::now();
 
         let res = if ok_to_commit {
-            let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
-            let iter = CommitIter::new(vec![].into_iter(), within);
-            Dgm::do_commit(&inner, iter, convert::identity)
+            Dgm::do_commit(&inner)
         } else {
             Ok(())
         };
@@ -2918,12 +2923,7 @@ where
 
         let start = time::SystemTime::now();
 
-        let res = Dgm::do_compact(
-            //
-            &inner,
-            Cutoff::new_lsm_empty(),
-            convert::identity,
-        );
+        let res = Dgm::do_compact(&inner, Cutoff::new_lsm_empty());
 
         match resp_tx {
             Some(tx) => ipc_at!(tx.send(res))?,

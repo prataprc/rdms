@@ -160,6 +160,7 @@ where
 
     root: Option<Box<Node<K, V>>>,
     seqno: u64,
+    metadata: Vec<u8>,
     n_count: usize,   // number entries index.
     n_deleted: usize, // number of entries marked deleted.
     latch: RWSpinlock,
@@ -249,6 +250,7 @@ where
 
             root: None,
             seqno: Default::default(),
+            metadata: Default::default(),
             n_count: Default::default(),
             n_deleted: Default::default(),
             latch: RWSpinlock::new(),
@@ -275,6 +277,7 @@ where
 
             root: None,
             seqno: Default::default(),
+            metadata: Default::default(),
             n_count: Default::default(),
             n_deleted: Default::default(),
             latch: RWSpinlock::new(),
@@ -338,6 +341,7 @@ where
 
             root: self.root.clone(),
             seqno: self.seqno,
+            metadata: Default::default(),
             n_count: self.n_count,
             n_deleted: self.n_deleted,
             latch: RWSpinlock::new(),
@@ -546,11 +550,8 @@ where
         self.as_mut().commit(scanner, metacb)
     }
 
-    fn compact<F>(&mut self, cutoff: Cutoff, metacb: F) -> Result<usize>
-    where
-        F: Fn(Vec<u8>) -> Vec<u8>,
-    {
-        self.as_mut().compact(cutoff, metacb)
+    fn compact(&mut self, cutoff: Cutoff) -> Result<usize> {
+        self.as_mut().compact(cutoff)
     }
 
     fn close(self) -> Result<()> {
@@ -576,7 +577,7 @@ where
     }
 
     fn to_metadata(&self) -> Result<Vec<u8>> {
-        Ok(vec![])
+        Ok(self.metadata.clone())
     }
 
     fn to_seqno(&self) -> Result<u64> {
@@ -615,7 +616,9 @@ where
         Ok(LlrbWriter::<K, V>::new(index, writer))
     }
 
-    fn commit<C, F>(&mut self, mut scanner: CommitIter<K, V, C>, _metacb: F) -> Result<()>
+    // NOTE: Error returned by commit are fatal, it leaves the index in
+    // in-consistent state.
+    fn commit<C, F>(&mut self, mut scanner: CommitIter<K, V, C>, metacb: F) -> Result<()>
     where
         C: CommitIterator<K, V>,
         F: Fn(Vec<u8>) -> Vec<u8>,
@@ -638,14 +641,13 @@ where
             count
         };
 
+        self.metadata = metacb(self.metadata.clone());
+
         info!(target: "llrb  ", "{:?}, committed {} items", self.name, count);
         Ok(())
     }
 
-    fn compact<F>(&mut self, cutoff: Cutoff, _metacb: F) -> Result<usize>
-    where
-        F: Fn(Vec<u8>) -> Vec<u8>,
-    {
+    fn compact(&mut self, cutoff: Cutoff) -> Result<usize> {
         let c_seqno = cutoff.to_bound();
 
         // before proceeding with compaction, verify the cutoff argument for
@@ -688,6 +690,7 @@ where
             }
             count += LIMIT;
         };
+
         info!(target: "llrb  ", "{:?}, compacted {} items", self.name, count);
         Ok(count)
     }

@@ -272,6 +272,7 @@ where
     V: Clone + Diff + Footprint,
 {
     root_seqno: Arc<AtomicU64>,
+    metadata: Vec<u8>,
     shards: Vec<Shard<K, V>>,
     rdrefns: Vec<Arc<Mutex<Vec<ShardReader<K, V>>>>>,
     wtrefns: Vec<Arc<Mutex<Vec<ShardWriter<K, V>>>>>,
@@ -480,9 +481,10 @@ where
     fn default() -> Self {
         let snapshot = Arc::new(Mutex::new(Snapshot {
             root_seqno: Arc::new(AtomicU64::new(0)),
-            shards: vec![],
-            rdrefns: vec![],
-            wtrefns: vec![],
+            metadata: Default::default(),
+            shards: Default::default(),
+            rdrefns: Default::default(),
+            wtrefns: Default::default(),
         }));
         ShLlrb {
             name: Default::default(),
@@ -527,9 +529,10 @@ where
 
         let snapshot = Arc::new(Mutex::new(Snapshot {
             root_seqno: Arc::new(AtomicU64::new(0)),
+            metadata: Default::default(),
             shards: vec![shard],
-            rdrefns: vec![],
-            wtrefns: vec![],
+            rdrefns: Default::default(),
+            wtrefns: Default::default(),
         }));
 
         let mut index = Box::new(ShLlrb {
@@ -945,11 +948,8 @@ where
         self.as_mut().commit(scanner, metacb)
     }
 
-    fn compact<F>(&mut self, cutoff: Cutoff, metacb: F) -> Result<usize>
-    where
-        F: Fn(Vec<u8>) -> Vec<u8>,
-    {
-        self.as_mut().compact(cutoff, metacb)
+    fn compact(&mut self, cutoff: Cutoff) -> Result<usize> {
+        self.as_mut().compact(cutoff)
     }
 
     fn close(self) -> Result<()> {
@@ -1039,7 +1039,9 @@ where
         Ok(ShllrbWriter::new(self.name.clone(), id, seqno, writers))
     }
 
-    // holds global lock. no other operations are allowed.
+    // NOTE: Error returned by commit are fatal, it leaves the index
+    // in in-consistent state.
+    // NOTE: Holds global lock. No other operations are allowed.
     fn commit<C, F>(&mut self, mut scanner: core::CommitIter<K, V, C>, metacb: F) -> Result<()>
     where
         C: CommitIterator<K, V>,
@@ -1074,25 +1076,24 @@ where
                 let iter = scans::CommitWrapper::new(vec![iter]);
                 core::CommitIter::new(iter, within)
             };
-            index.commit(iter, |meta| metacb(meta))?;
+            index.commit(iter, |_| vec![])?;
             seqno = cmp::max(seqno, index.to_seqno()?);
             gl.snapshot.root_seqno.store(seqno, Ordering::SeqCst);
         }
+
+        gl.snapshot.metadata = metacb(gl.snapshot.metadata.clone());
+
         Ok(())
     }
 
-    fn compact<F>(&mut self, cutoff: Cutoff, metacb: F) -> Result<usize>
-    where
-        F: Fn(Vec<u8>) -> Vec<u8>,
-    {
+    fn compact(&mut self, cutoff: Cutoff) -> Result<usize> {
         let mut snapshot = self.lock_snapshot()?;
 
         let mut count = 0;
         for shard in snapshot.shards.iter_mut() {
-            count += shard
-                .as_mut_index()
-                .compact(cutoff.clone(), |meta| metacb(meta))?
+            count += shard.as_mut_index().compact(cutoff.clone())?
         }
+
         info!(target: "shllrb", "{:?}, compacted {} items", self.name, count);
         Ok(count)
     }

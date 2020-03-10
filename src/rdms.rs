@@ -142,12 +142,9 @@ where
         index.commit(scanner, metacb)
     }
 
-    pub fn compact<F>(&mut self, cutoff: Cutoff, metacb: F) -> Result<usize>
-    where
-        F: Fn(Vec<u8>) -> Vec<u8>,
-    {
+    pub fn compact(&mut self, cutoff: Cutoff) -> Result<usize> {
         let mut index = self.as_index()?;
-        index.compact(cutoff, metacb)
+        index.compact(cutoff)
     }
 }
 

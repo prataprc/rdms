@@ -927,10 +927,7 @@ where
         Ok(())
     }
 
-    fn compact<F>(&mut self, cutoff: Cutoff, _metacb: F) -> Result<usize>
-    where
-        F: Fn(Vec<u8>) -> Vec<u8>,
-    {
+    fn compact(&mut self, cutoff: Cutoff) -> Result<usize> {
         let mut inner = self.as_inner()?;
         let (new_inner, count) = match inner.deref() {
             InnerRobt::Build {

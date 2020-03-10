@@ -117,10 +117,7 @@ where
     }
 
     #[inline]
-    fn compact<F>(&mut self, _: Cutoff, _: F) -> Result<usize>
-    where
-        F: Fn(Vec<u8>) -> Vec<u8>,
-    {
+    fn compact(&mut self, _: Cutoff) -> Result<usize> {
         Ok(0)
     }
 

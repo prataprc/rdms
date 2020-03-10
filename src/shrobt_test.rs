@@ -184,8 +184,8 @@ fn test_shrobt_commit_compact() {
                 _ => unreachable!(),
             };
             println!("cutoff {:?}", cutoff);
-            mindex.compact(cutoff, std::convert::identity).unwrap();
-            index.compact(cutoff, std::convert::identity).unwrap();
+            mindex.compact(cutoff).unwrap();
+            index.compact(cutoff).unwrap();
         }
 
         index = {

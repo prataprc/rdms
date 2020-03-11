@@ -1,5 +1,9 @@
 //! Module `backup` implement data-indexing optimized for
-//! memory, with perioding non-locking backup to disk.
+//! disk-greater-than-memory.
+
+// TODO: Delete/Set/SetCAS does lookup into disk snapshot for the
+// old value, which means returned value can be None, while there
+// is an older value. May be we have to provide a separate API ?
 
 use log::{debug, error, info};
 use toml;
@@ -7,7 +11,7 @@ use toml;
 use std::{
     borrow::Borrow,
     cmp,
-    convert::{self, TryFrom, TryInto},
+    convert::{TryFrom, TryInto},
     ffi, fmt, fs,
     hash::Hash,
     io::{Read, Write},
@@ -26,13 +30,7 @@ use crate::{
     lsm, scans, thread as rt, util,
 };
 
-// TODO: search and replacce m0 to mem
-// TODO: remove m1.
-// TODO: search and replace commit with backup.
-
 const N_COMMITS: usize = 2;
-
-const N_FLUSH: usize = 2;
 
 /// Configuration type for Backup indexes.
 #[derive(Clone, Debug, PartialEq)]
@@ -57,14 +55,16 @@ impl Default for Config {
 }
 
 impl Config {
+    /// Maximum number of levels to be used for disk indexes.
+    pub const NLEVELS: usize = 16;
+
     /// Default threshold between a disk index footprint and
     /// the next-level disk index footprint, above which the two
     /// levels shall be compacted into a single disk-index.
     /// Refer to [set_disk_ratio][Config::set_disk_ratio] method for details.
     pub const DISK_RATIO: f64 = 0.5;
 
-    /// Default interval in time duration, to backup memory ingested
-    /// entries onto disk.
+    /// Default interval in time duration, for periodic backup of index.
     /// Refer to [set_backup_interval][Config::set_backup_interval] method
     /// for details.
     pub const BACKUP_INTERVAL: time::Duration = time::Duration::from_secs(5);
@@ -83,10 +83,8 @@ impl Config {
         self
     }
 
-    /// Set archive is applicable only when lsm is true, where if archive is
-    /// true, then all older versions shall be preserved on disk. By default,
-    /// that is when lsm is true, and archive is false, all older versions
-    /// shall be preserved in memory, which may lead to a bloat in memory.
+    /// Set to true to store older versions of entry on disk. Applicable
+    /// only when lsm is also true.
     pub fn set_archive(&mut self, archive: bool) -> &mut Self {
         self.archive = archive;
         self
@@ -100,8 +98,8 @@ impl Config {
         self
     }
 
-    /// Set interval in time duration, to backup memory ingested entries
-    /// onto disk. Calling this method will spawn an auto backup thread.
+    /// Set interval in time duration, to backup index. Calling this
+    /// method will spawn an auto compaction thread.
     pub fn set_backup_interval(&mut self, interval: time::Duration) -> &mut Self {
         self.backup_interval = Some(interval);
         self
@@ -182,6 +180,7 @@ impl TryFrom<Root> for Vec<u8> {
 
             dict.insert("version".to_string(), Integer(version));
             dict.insert("levels".to_string(), Integer(levels));
+
             dict.insert("lsm".to_string(), Boolean(root.lsm));
             dict.insert("archive".to_string(), Boolean(root.archive));
             dict.insert("disk_ratio".to_string(), Float(disk_ratio));
@@ -555,25 +554,12 @@ where
     root: Root,
 
     n_high_compacts: usize,
-    n_commits: usize,
     n_ccommits: usize,
     n_compacts: usize,
-    mem: Snapshot<K, V, M::I>,        // memory index
+    mem: Snapshot<K, V, M::I>,        // write index
     disks: Vec<Snapshot<K, V, D::I>>, // NLEVELS
 
-    writers: Vec<
-        Arc<
-            Mutex<
-                Ws<
-                    K,
-                    V,
-                    <M::I as Index<K, V>>::W,
-                    <M::I as Index<K, V>>::R,
-                    <D::I as Index<K, V>>::R,
-                >,
-            >,
-        >,
-    >,
+    writers: Vec<Arc<Mutex<Ws<K, V, <M::I as Index<K, V>>::W>>>>,
     readers: Vec<Arc<Mutex<Rs<K, V, <M::I as Index<K, V>>::R, <D::I as Index<K, V>>::R>>>>,
 }
 
@@ -585,6 +571,28 @@ where
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
 {
+    fn to_disk_seqno(&self) -> Result<u64> {
+        for d in self.disks.iter() {
+            match d.as_disk()? {
+                Some(d) => return d.to_seqno(),
+                None => (),
+            }
+        }
+
+        Ok(std::u64::MIN)
+    }
+
+    fn to_disk_metadata(&self) -> Result<Vec<u8>> {
+        for d in self.disks.iter() {
+            match d.as_disk()? {
+                Some(d) => return d.to_metadata(),
+                None => (),
+            }
+        }
+
+        Ok(vec![])
+    }
+
     fn cleanup_writers(&mut self) -> Result<()> {
         // cleanup dropped writer threads.
         let dropped: Vec<usize> = self
@@ -629,6 +637,80 @@ where
         Ok(())
     }
 
+    fn shift_into_m0(&mut self) -> Result<()> {
+        // block all the readers.
+        let mut r_handles = vec![];
+        for reader in self.readers.iter() {
+            r_handles.push(reader.lock().unwrap());
+        }
+
+        {
+            // block all the writer threads.
+            let mut w_handles = vec![];
+            for writer in self.writers.iter() {
+                w_handles.push(writer.lock().unwrap())
+            }
+
+            // prepare a new memory snapshot
+            let mut m0 = self.mem_factory.new(&self.name)?;
+            self.m1 = match mem::replace(&mut self.m0, Default::default()) {
+                Snapshot::Write(m1) => {
+                    // update m0 with latest seqno and metadata
+                    m0.set_seqno(m1.to_seqno()?)?;
+
+                    let metadata = m1.to_metadata()?;
+                    m0.commit(core::CommitIter::new_empty(), move |_| metadata.clone())?;
+
+                    Ok(Some(Snapshot::new_flush(m1)))
+                }
+                _ => {
+                    let msg = format!("Dgm.shift_into_m0() not write snapshot");
+                    Err(Error::UnReachable(msg))
+                }
+            }?;
+            // update the m0 writer.
+            mem::replace(&mut self.m0, Snapshot::new_write(m0));
+
+            // now replace old writer handle created from the new m0 snapshot.
+            for handle in w_handles.iter_mut() {
+                let old = handle.deref_mut();
+
+                old.rs.r_m0 = self.m0.as_mut_m0()?.to_reader()?;
+                old.rs.r_m1 = match &mut self.m1 {
+                    Some(m1) => Some(m1.as_mut_m1()?.to_reader()?),
+                    None => None,
+                };
+                old.rs.r_disks.drain(..);
+                for disk in self.disks.iter_mut() {
+                    if let Some(d) = disk.as_mut_disk()? {
+                        old.rs.r_disks.push(d.to_reader()?)
+                    }
+                }
+
+                mem::replace(&mut old.w, self.m0.as_mut_m0()?.to_writer()?);
+                // drop the old writer,
+            }
+        }
+
+        // update readers and unblock them one by one.
+        for r in r_handles.iter_mut() {
+            r.r_m0 = self.m0.as_mut_m0()?.to_reader()?;
+            r.r_m1 = match &mut self.m1 {
+                Some(m1) => Some(m1.as_mut_m1()?.to_reader()?),
+                None => None,
+            };
+
+            r.r_disks.drain(..);
+            for disk in self.disks.iter_mut() {
+                if let Some(d) = disk.as_mut_disk()? {
+                    r.r_disks.push(d.to_reader()?)
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     fn is_commit_exhausted(&self) -> Result<bool> {
         use Snapshot::{Active, Commit, Compact};
 
@@ -637,7 +719,7 @@ where
             Active(_) => Ok(true),
             Commit(_) | Compact(_) => Ok(true),
             _ => {
-                let msg = format!("Backup.is_commit_exhausted()");
+                let msg = format!("Dgm.is_commit_exhausted()");
                 Err(Error::DiskIndexFail(msg))
             }
         }
@@ -646,26 +728,36 @@ where
     fn commit_level(&mut self) -> Result<usize> {
         use Snapshot::{Active, Compact};
 
-        let msg = format!("backup: exhausted all levels !!");
+        let msg = format!("dgm: exhausted all levels !!");
 
         if self.is_commit_exhausted()? {
             return Err(Error::DiskIndexFail(msg));
         }
 
+        let mf = self.m0.footprint()? as f64;
         let mut iter = self.disks.iter_mut().enumerate();
         loop {
             match iter.next() {
                 None => break Ok(self.disks.len() - 1), // first commit
                 Some((_, Snapshot::None)) => (),        // continue loop
-                Some((lvl, disk)) => match disk {
-                    Compact(_) => break Ok(lvl - 1),
-                    Active(_) if n_commits < N_FLUSH => Ok(lvl),
-                    Active(_) => Ok(lvl - 1),
-                    _ => {
-                        let msg = format!("Backup.commit_level() not disk");
-                        break Err(Error::UnReachable(msg));
+                Some((lvl, disk)) => {
+                    let df = disk.footprint()? as f64;
+                    // println!("mf:{}, df:{}", mf, df);
+                    match disk {
+                        Compact(_) => break Ok(lvl - 1),
+                        Active(_) => {
+                            if (mf / df) < self.root.mem_ratio {
+                                break Ok(lvl - 1);
+                            } else {
+                                break Ok(lvl);
+                            }
+                        }
+                        _ => {
+                            let msg = format!("Dgm.commit_level() not disk");
+                            break Err(Error::UnReachable(msg));
+                        }
                     }
-                },
+                }
             }
         }
     }
@@ -680,7 +772,7 @@ where
                 Ok(self.disk_factory.new(&self.dir, &name)?)
             }
             _ => {
-                let msg = format!("Backup.move_to_commit() invalid state");
+                let msg = format!("Dgm.move_to_commit() invalid state");
                 Err(Error::UnReachable(msg))
             }
         }?;
@@ -866,8 +958,6 @@ where
 {
     // memory snapshot that handles all the write operation.
     Write(I),
-    // memory snapshot that is waiting to be flushed to disk.
-    Flush(I),
     // disk snapshot that is being commited with new batch of entries.
     Commit(I),
     // disk snapshot that is being compacted.
@@ -897,11 +987,10 @@ where
     I: Index<K, V>,
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
-        use Snapshot::{Active, Commit, Compact, Flush, Write};
+        use Snapshot::{Active, Commit, Compact, Write};
 
         match self {
             Write(m) => write!(f, "write/{}", m.to_name().unwrap()),
-            Flush(m) => write!(f, "flush/{}", m.to_name().unwrap()),
             Commit(d) => write!(f, "commit/{}", d.to_name().unwrap()),
             Compact(d) => write!(f, "compact/{}", d.to_name().unwrap()),
             Active(d) => write!(f, "active/{}", d.to_name().unwrap()),
@@ -918,11 +1007,10 @@ where
     I: Footprint,
 {
     fn footprint(&self) -> Result<isize> {
-        use Snapshot::{Active, Commit, Compact, Flush, Write};
+        use Snapshot::{Active, Commit, Compact, Write};
 
         match self {
             Write(m) => m.footprint(),
-            Flush(m) => m.footprint(),
             Commit(d) => d.footprint(),
             Compact(d) => d.footprint(),
             Active(d) => d.footprint(),
@@ -940,11 +1028,6 @@ where
     #[inline]
     fn new_write(index: I) -> Snapshot<K, V, I> {
         Snapshot::Write(index)
-    }
-
-    #[inline]
-    fn new_flush(index: I) -> Snapshot<K, V, I> {
-        Snapshot::Flush(index)
     }
 
     #[inline]
@@ -977,14 +1060,14 @@ where
     }
 
     fn as_disk(&self) -> Result<Option<&I>> {
-        use Snapshot::{Active, Commit, Compact, Flush, Write};
+        use Snapshot::{Active, Commit, Compact, Write};
 
         match self {
             Commit(d) => Ok(Some(d)),
             Compact(d) => Ok(Some(d)),
             Active(d) => Ok(Some(d)),
             Snapshot::None => Ok(None),
-            Write(_) | Flush(_) => {
+            Write(_) => {
                 let msg = format!("backup disk not commit/compact/active snapshot");
                 Err(Error::UnExpectedFail(msg))
             }
@@ -993,15 +1076,15 @@ where
     }
 
     fn as_mut_disk(&mut self) -> Result<Option<&mut I>> {
-        use Snapshot::{Active, Commit, Compact, Flush, Write};
+        use Snapshot::{Active, Commit, Compact, Write};
 
         match self {
             Commit(d) => Ok(Some(d)),
             Compact(d) => Ok(Some(d)),
             Active(d) => Ok(Some(d)),
             Snapshot::None => Ok(None),
-            Write(_) | Flush(_) => {
-                let msg = format!("Backup disk not commit/compact/active snapshot");
+            Write(_) => {
+                let msg = format!("backup disk not commit/compact/active snapshot");
                 Err(Error::UnExpectedFail(msg))
             }
             _ => unreachable!(),
@@ -1011,9 +1094,8 @@ where
     fn as_mem(&self) -> Result<&I> {
         match self {
             Snapshot::Write(m) => Ok(m),
-            Snapshot::Flush(m) => Ok(m),
             _ => {
-                let msg = format!("Backup mem not a write snapshot");
+                let msg = format!("backup mem not a write snapshot");
                 Err(Error::UnExpectedFail(msg))
             }
         }
@@ -1022,9 +1104,8 @@ where
     fn as_mut_mem(&mut self) -> Result<&mut I> {
         match self {
             Snapshot::Write(m) => Ok(m),
-            Snapshot::Flush(m) => Ok(m),
             _ => {
-                let msg = format!("Backup mem not a write snapshot");
+                let msg = format!("backup mem not a write snapshot");
                 Err(Error::UnExpectedFail(msg))
             }
         }
@@ -1064,10 +1145,10 @@ where
             thread::sleep(time::Duration::from_millis(10)); // TODO: no magic
         }
 
-        match self.auto_backup.take() {
-            Some(auto_backup) => match auto_backup.close_wait() {
+        match self.auto_commit.take() {
+            Some(auto_commit) => match auto_commit.close_wait() {
                 Err(err) => error!(
-                    target: "backup", "{:?}, auto-backup {:?}", self.name, err
+                    target: "backup", "{:?}, auto-commit {:?}", self.name, err
                 ),
                 Ok(_) => (),
             },
@@ -1086,7 +1167,7 @@ where
     }
 }
 
-impl<K, V, M, D> Backup<K, V, M, D>
+impl<K, V, M, D> Dgm<K, V, M, D>
 where
     K: Clone + Ord + Serialize + Footprint,
     V: Clone + Diff + Serialize + Footprint,
@@ -1094,7 +1175,7 @@ where
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
 {
-    /// Create a new Backup instance on disk. Supplied directory `dir` will be
+    /// Create a new Dgm instance on disk. Supplied directory `dir` will be
     /// removed, if it already exist, and new directory shall be created.
     pub fn new(
         dir: &ffi::OsStr, // directory path
@@ -1102,7 +1183,7 @@ where
         mem_factory: M,
         disk_factory: D,
         config: Config,
-    ) -> Result<Box<Backup<K, V, M, D>>>
+    ) -> Result<Box<Dgm<K, V, M, D>>>
     where
         K: 'static + Send,
         V: 'static + Send,
@@ -1127,8 +1208,8 @@ where
             disks
         };
 
-        let mem = Snapshot::new_write(mem_factory.new(name)?);
-        let inner = InnerBackup {
+        let m0 = Snapshot::new_write(mem_factory.new(name)?);
+        let inner = InnerDgm {
             dir: dir.to_os_string(),
             name: name.to_string(),
             mem_factory,
@@ -1137,24 +1218,24 @@ where
             root,
 
             n_high_compacts: Default::default(),
-            n_commits: Default::default(),
             n_ccommits: Default::default(),
             n_compacts: Default::default(),
-            mem,
+            m0,
+            m1: None,
             disks,
 
             writers: Default::default(),
             readers: Default::default(),
         };
 
-        let mut index = Box::new(Backup {
+        let mut index = Box::new(Dgm {
             name: name.to_string(),
-            auto_backup: Default::default(),
+            auto_commit: Default::default(),
             auto_compact: Default::default(),
             inner: Arc::new(Mutex::new(inner)),
         });
 
-        index.start_auto_backup()?;
+        index.start_auto_commit()?;
         index.start_auto_compact()?;
 
         Ok(index)
@@ -1165,7 +1246,7 @@ where
         name: &str,
         mem_factory: M,
         disk_factory: D,
-    ) -> Result<Box<Backup<K, V, M, D>>>
+    ) -> Result<Box<Dgm<K, V, M, D>>>
     where
         K: 'static + Send,
         V: 'static + Send,
@@ -1192,7 +1273,7 @@ where
                 Ok(d) => Snapshot::new_active(d),
                 Err(_) => Default::default(),
             };
-            // println!("backup open {} {}", level, disks[level].is_active());
+            // println!("dgm open {} {}", level, disks[level].is_active());
         }
 
         let config = root.clone().into();
@@ -1201,8 +1282,8 @@ where
             // no active disk snapshots found, create a new instance.
             Self::new(dir, name, mem_factory, disk_factory, config)
         } else {
-            let mem = Snapshot::new_write(mem_factory.new(name)?);
-            let inner = InnerBackup {
+            let m0 = Snapshot::new_write(mem_factory.new(name)?);
+            let inner = InnerDgm {
                 dir: dir.to_os_string(),
                 name: name.to_string(),
                 mem_factory,
@@ -1211,39 +1292,42 @@ where
                 root,
 
                 n_high_compacts: Default::default(),
-                n_commits: Default::default(),
                 n_ccommits: Default::default(),
                 n_compacts: Default::default(),
-                mem,
+                m0,
+                m1: None,
                 disks,
 
                 writers: Default::default(),
                 readers: Default::default(),
             };
-            let mut index = Box::new(Backup {
+            let mut index = Box::new(Dgm {
                 name: name.to_string(),
-                auto_backup: Default::default(),
+                auto_commit: Default::default(),
                 auto_compact: Default::default(),
                 inner: Arc::new(Mutex::new(inner)),
             });
-
-            let latest_seqno = {
-                let inner = index.as_inner()?;
-                Self::to_disk_seqno(&inner)?
-            };
+            // update m0 with latest seqno and metadata
             {
                 let mut inner = index.as_inner()?;
+                let latest_seqno = inner.to_disk_seqno()?;
                 inner.m0.as_mut_m0()?.set_seqno(latest_seqno)?;
+
+                let metadata = inner.to_disk_metadata()?;
+                inner
+                    .m0
+                    .as_mut_m0()?
+                    .commit(core::CommitIter::new_empty(), |_| metadata.clone())?;
             }
 
-            index.start_auto_backup()?;
+            index.start_auto_commit()?;
             index.start_auto_compact()?;
 
             Ok(index)
         }
     }
 
-    fn start_auto_backup(&mut self) -> Result<()>
+    fn start_auto_commit(&mut self) -> Result<()>
     where
         K: 'static + Send,
         V: 'static + Send,
@@ -1265,11 +1349,11 @@ where
             inner.name.clone()
         };
 
-        self.auto_backup = match root.backup_interval {
+        self.auto_commit = match root.commit_interval {
             Some(_) => {
                 let inner = Arc::clone(&self.inner);
                 Some(rt::Thread::new(move |rx| {
-                    || auto_backup::<K, V, M, D>(name, root, inner, rx)
+                    || auto_commit::<K, V, M, D>(name, root, inner, rx)
                 }))
             }
             None => None,
@@ -1345,39 +1429,20 @@ where
     fn mem_footprint(&self) -> Result<isize> {
         let inner = self.as_inner()?;
 
-        Ok(inner.m0.footprint()?
+        Ok(inner.mem.footprint()?
             + match &inner.m1 {
                 None => 0,
                 Some(m) => m.footprint()?,
             })
     }
 
-    fn to_disk_seqno(inner: &MutexGuard<InnerBackup<K, V, M, D>>) -> Result<u64> {
-        for d in inner.disks.iter() {
-            match d.as_disk()? {
-                Some(d) => return d.to_seqno(),
-                None => (),
-            }
-        }
-
-        Ok(std::u64::MIN)
-    }
-
-    fn do_commit<C, F>(
-        inner: &Arc<Mutex<InnerBackup<K, V, M, D>>>,
-        _: CommitIter<K, V, C>, // TODO: should we handle scanner
-        metacb: F,
-    ) -> Result<()>
-    where
-        C: CommitIterator<K, V>,
-        F: Fn(Vec<u8>) -> Vec<u8>,
-    {
-        let (mut d, r_m1, level) = {
+    fn do_commit(inner: &Arc<Mutex<InnerDgm<K, V, M, D>>>) -> Result<()> {
+        let (metadata, mut d, r_m1, level) = {
             let mut inn = to_inner_lock(inner)?;
             inn.cleanup_writers()?;
             inn.cleanup_readers()?;
 
-            if inn.m0.as_m0()?.to_seqno()? == Self::to_disk_seqno(&inn)? {
+            if inn.m0.as_m0()?.to_seqno()? == inn.to_disk_seqno()? {
                 return Ok(());
             }
 
@@ -1392,7 +1457,7 @@ where
                 Some(m1) => Some(m1.as_mut_m1()?.to_reader()?),
                 None => None,
             };
-            (d, r_m1, level)
+            (inn.m0.as_mut_m0()?.to_metadata()?, d, r_m1, level)
         };
         // println!("do_commit {}", level);
 
@@ -1400,7 +1465,7 @@ where
         match r_m1 {
             Some(r_m1) => {
                 let iter = core::CommitIter::new(r_m1, within);
-                d.commit(iter, metacb)?;
+                d.commit(iter, |_| metadata.clone())?;
             }
             None => (),
         }
@@ -1429,14 +1494,7 @@ where
         Ok(())
     }
 
-    fn do_compact<F>(
-        inner: &Arc<Mutex<InnerBackup<K, V, M, D>>>,
-        cutoff: Cutoff,
-        metacb: F,
-    ) -> Result<usize>
-    where
-        F: Fn(Vec<u8>) -> Vec<u8>,
-    {
+    fn do_compact(inner: &Arc<Mutex<InnerDgm<K, V, M, D>>>, cutoff: Cutoff) -> Result<usize> {
         match cutoff {
             Cutoff::Mono => {
                 let msg = format!("can't have mono-cutoff");
@@ -1485,23 +1543,19 @@ where
 
         if s_levels.len() == 0 {
             // println!("1, {:?} {}", cutoff, d_level);
-            Self::do_compact1(inner, cutoff, metacb, levels, d_level)
+            Self::do_compact1(inner, cutoff, levels, d_level)
         } else {
             // println!("2, {:?} {:?} {}", cutoff, s_levels, d_level);
-            Self::do_compact2(inner, metacb, levels, s_levels, d_level)
+            Self::do_compact2(inner, levels, s_levels, d_level)
         }
     }
 
-    fn do_compact1<F>(
-        inner: &Arc<Mutex<InnerBackup<K, V, M, D>>>,
+    fn do_compact1(
+        inner: &Arc<Mutex<InnerDgm<K, V, M, D>>>,
         cutoff: Cutoff,
-        metacb: F,
         levels: Vec<usize>,
         d_level: usize,
-    ) -> Result<usize>
-    where
-        F: Fn(Vec<u8>) -> Vec<u8>,
-    {
+    ) -> Result<usize> {
         let mut high_disk = {
             let mut inn = to_inner_lock(inner)?;
             inn.move_to_compact(&levels);
@@ -1510,7 +1564,7 @@ where
             inn.disks[d_level].as_disk()?.unwrap().clone()
         };
 
-        let res = high_disk.compact(cutoff, metacb);
+        let res = high_disk.compact(cutoff);
 
         {
             let mut inn = to_inner_lock(inner)?;
@@ -1540,16 +1594,12 @@ where
         res
     }
 
-    fn do_compact2<F>(
-        inner: &Arc<Mutex<InnerBackup<K, V, M, D>>>,
-        metacb: F,
+    fn do_compact2(
+        inner: &Arc<Mutex<InnerDgm<K, V, M, D>>>,
         levels: Vec<usize>,
         s_levels: Vec<usize>,
         d_level: usize,
-    ) -> Result<usize>
-    where
-        F: Fn(Vec<u8>) -> Vec<u8>,
-    {
+    ) -> Result<usize> {
         let (s_disks, mut disk) = {
             let mut inn = to_inner_lock(inner)?;
 
@@ -1559,13 +1609,17 @@ where
             let (s_disks, disk) = inn.do_compact_disks(&s_levels, d_level)?;
             (s_disks, disk)
         };
+        let metadata = match s_disks.first() {
+            Some(s_disk) => s_disk.to_metadata()?,
+            _ => unreachable!(),
+        };
 
         let scanner = {
             let scanner = CommitScanner::<K, V, D::I>::new(s_disks)?;
             let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
             core::CommitIter::new(scanner, within)
         };
-        disk.commit(scanner, metacb)?;
+        disk.commit(scanner, |_| metadata.clone())?;
 
         {
             let mut inn = to_inner_lock(inner)?;
@@ -1670,7 +1724,15 @@ where
     D: DiskIndexFactory<K, V>,
 {
     fn footprint(&self) -> Result<isize> {
-        Ok(self.disk_footprint()? + self.mem_footprint()?)
+        let mut footprint = self.mem_footprint()?;
+        let archive = {
+            let inner = self.as_inner();
+            inner.root.archive
+        };
+        if archive {
+            footprint += self.disk_footprint()?;
+        }
+        Ok(footprint)
     }
 }
 
@@ -1833,7 +1895,7 @@ where
     Ok((Bound::Included(min_seqno), Bound::Included(max_seqno)))
 }
 
-impl<K, V, M, D> Index<K, V> for Dgm<K, V, M, D>
+impl<K, V, M, D> Index<K, V> for Backup<K, V, M, D>
 where
     K: Clone + Ord + Hash + Serialize + Footprint,
     V: Clone + Diff + Serialize + Footprint,
@@ -1841,14 +1903,8 @@ where
     M: WriteIndexFactory<K, V>,
     D: DiskIndexFactory<K, V>,
 {
-    type W = DgmWriter<
-        K,
-        V,
-        <M::I as Index<K, V>>::W,
-        <M::I as Index<K, V>>::R,
-        <D::I as Index<K, V>>::R,
-    >;
-    type R = DgmReader<K, V, <M::I as Index<K, V>>::R, <D::I as Index<K, V>>::R>;
+    type W = BackupWriter<K, V, <M::I as Index<K, V>>::W>;
+    type R = BackupReader<K, V, <M::I as Index<K, V>>::R, <D::I as Index<K, V>>::R>;
 
     fn to_name(&self) -> Result<String> {
         let inner = self.as_inner()?;
@@ -1866,7 +1922,7 @@ where
         let inner = self.as_inner()?;
 
         let m0_seqno = inner.m0.as_m0()?.to_seqno()?;
-        let disk_seqno = Self::to_disk_seqno(&inner)?;
+        let disk_seqno = inner.to_disk_seqno()?;
         Ok(cmp::max(m0_seqno, disk_seqno))
     }
 
@@ -1948,14 +2004,16 @@ where
         C: CommitIterator<K, V>,
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
-        Self::do_commit(&self.inner, scanner, metacb)
+        {
+            let mut inner = self.as_inner()?;
+            let m0 = inner.m0.as_mut_m0()?;
+            m0.commit(scanner, metacb)?;
+        }
+        Self::do_commit(&self.inner)
     }
 
-    fn compact<F>(&mut self, cutoff: Cutoff, metacb: F) -> Result<usize>
-    where
-        F: Fn(Vec<u8>) -> Vec<u8>,
-    {
-        Self::do_compact(&self.inner, cutoff, metacb)
+    fn compact(&mut self, cutoff: Cutoff) -> Result<usize> {
+        Self::do_compact(&self.inner, cutoff)
     }
 
     fn close(self) -> Result<()> {
@@ -1967,32 +2025,28 @@ where
     }
 }
 
-/// Writer handle into Dgm index.
-pub struct DgmWriter<K, V, W, A, B>
+/// Writer handle into Backup index.
+pub struct BackupWriter<K, V, W>
 where
     K: Clone + Ord,
     V: Clone + Diff,
     W: Writer<K, V>,
-    A: Reader<K, V>,
-    B: Reader<K, V>,
 {
     name: String,
-    w: Arc<Mutex<Ws<K, V, W, A, B>>>,
+    w: Arc<Mutex<W>>,
 
     _phantom_key: marker::PhantomData<K>,
     _phantom_val: marker::PhantomData<V>,
 }
 
-impl<K, V, W, A, B> DgmWriter<K, V, W, A, B>
+impl<K, V, W> BackupWriter<K, V, W>
 where
     K: Clone + Ord,
     V: Clone + Diff,
     W: Writer<K, V>,
-    A: Reader<K, V>,
-    B: Reader<K, V>,
 {
-    fn new(name: &str, w: Arc<Mutex<Ws<K, V, W, A, B>>>) -> DgmWriter<K, V, W, A, B> {
-        let w = DgmWriter {
+    fn new(name: &str, w: Arc<Mutex<Ws<K, V, W>>>) -> BackupWriter<K, V, W> {
+        let w = BackupWriter {
             name: name.to_string(),
             w,
 
@@ -2007,39 +2061,28 @@ where
         match self.w.lock() {
             Ok(value) => Ok(value),
             Err(err) => {
-                let msg = format!("DgmWriter.as_writer(), poisonlock {:?}", err);
+                let msg = format!("BackupWriter.as_writer(), poisonlock {:?}", err);
                 Err(Error::ThreadFail(msg))
             }
         }
     }
 }
 
-impl<K, V, W, A, B> Writer<K, V> for DgmWriter<K, V, W, A, B>
+impl<K, V, W> Writer<K, V> for BackupWriter<K, V, W>
 where
     K: Clone + Ord + Hash + Serialize + Footprint,
     V: Clone + Diff + Serialize + Footprint,
     <V as Diff>::D: Serialize,
     W: Writer<K, V>,
-    A: Reader<K, V>,
-    B: Reader<K, V>,
 {
     fn set(&mut self, key: K, value: V) -> Result<Option<Entry<K, V>>> {
-        let mut w_rs = self.as_writer()?;
-        w_rs.w.set(key, value)
+        let mut w = self.as_writer()?;
+        w.set(key, value)
     }
 
     fn set_cas(&mut self, key: K, value: V, cas: u64) -> Result<Option<Entry<K, V>>> {
-        let mut w_rs = self.as_writer()?;
-
-        match Rs::get(&mut w_rs.rs, &key) {
-            Ok(old) if cas == old.to_seqno() => Ok(()),
-            Err(Error::KeyNotFound) if cas == 0 => Ok(()),
-            Ok(old) => Err(Error::InvalidCAS(old.to_seqno())),
-            Err(Error::KeyNotFound) => Err(Error::InvalidCAS(0)),
-            Err(err) => Err(err),
-        }?;
-
-        w_rs.w.set(key, value)
+        let mut w = self.as_writer()?;
+        w.set_cas(key, value, cas)
     }
 
     fn delete<Q>(&mut self, key: &Q) -> Result<Option<Entry<K, V>>>
@@ -2047,21 +2090,9 @@ where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
     {
-        let mut w_rs = self.as_writer()?;
-        w_rs.w.delete(key)
+        let mut w = self.as_writer()?;
+        w.delete(key)
     }
-}
-
-struct Ws<K, V, W, A, B>
-where
-    K: Clone + Ord,
-    V: Clone + Diff,
-    W: Writer<K, V>,
-    A: Reader<K, V>,
-    B: Reader<K, V>,
-{
-    w: W,
-    rs: Rs<K, V, A, B>,
 }
 
 // type alias to reader associated type for each snapshot (aka disk-index)
@@ -2072,8 +2103,8 @@ where
     M: Reader<K, V>,
     D: Reader<K, V>,
 {
-    r_m0: M,
-    r_m1: Option<M>,
+    archive: bool,
+    r_mem: M,
     r_disks: Vec<D>,
 
     _phantom_key: marker::PhantomData<K>,
@@ -2093,51 +2124,12 @@ where
         K: Borrow<Q>,
         Q: Ord + ?Sized + Hash,
     {
-        match self.r_m0.get(key) {
-            Ok(entry) => return Ok(entry),
-            Err(Error::KeyNotFound) => (),
-            Err(err) => return Err(err),
-        }
-
-        if let Some(m1) = &mut self.r_m1 {
-            match m1.get(key) {
-                Ok(entry) => return Ok(entry),
-                Err(Error::KeyNotFound) => (),
-                Err(err) => return Err(err),
-            }
-        }
-
-        let mut iter = self.r_disks.iter_mut();
-        loop {
-            match iter.next() {
-                Some(disk) => match disk.get(key) {
-                    Ok(entry) => break Ok(entry),
-                    Err(Error::KeyNotFound) => (),
-                    Err(err) => break Err(err),
-                },
-                None => break Err(Error::KeyNotFound),
-            }
-        }
+        self.r_mem.get(key)
     }
 
     fn iter(mut rs: MutexGuard<Rs<K, V, M, D>>) -> Result<IndexIter<K, V>> {
-        let mut iters: Vec<IndexIter<K, V>> = vec![];
-
-        let m0 = unsafe { (&mut rs.r_m0 as *mut M).as_mut().unwrap() };
-        iters.push(m0.iter()?);
-
-        if let Some(m1) = &mut rs.r_m1 {
-            let m1 = unsafe { (m1 as *mut M).as_mut().unwrap() };
-            iters.push(m1.iter()?);
-        }
-
-        for disk in rs.r_disks.iter_mut() {
-            let disk = unsafe { (disk as *mut D).as_mut().unwrap() };
-            iters.push(disk.iter()?);
-        }
-
-        let iter = Self::merge_iters(iters, false /*reverse*/, false /*ver*/);
-        Ok(Box::new(DgmIter::new(rs, iter)))
+        let iter = rs.r_mem.iter()?;
+        Ok(Box::new(BackupIter::new(rs, iter)))
     }
 
     fn range<'a, R, Q>(mut rs: MutexGuard<'a, Rs<K, V, M, D>>, range: R) -> Result<IndexIter<K, V>>
@@ -2146,23 +2138,8 @@ where
         R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        let mut iters: Vec<IndexIter<K, V>> = vec![];
-
-        let m0 = unsafe { (&mut rs.r_m0 as *mut M).as_mut().unwrap() };
-        iters.push(m0.range(range.clone())?);
-
-        if let Some(m1) = &mut rs.r_m1 {
-            let m1 = unsafe { (m1 as *mut M).as_mut().unwrap() };
-            iters.push(m1.range(range.clone())?);
-        }
-
-        for disk in rs.r_disks.iter_mut().rev() {
-            let disk = unsafe { (disk as *mut D).as_mut().unwrap() };
-            iters.push(disk.range(range.clone())?)
-        }
-
-        let iter = Self::merge_iters(iters, false /*reverse*/, false /*ver*/);
-        Ok(Box::new(DgmIter::new(rs, iter)))
+        let iter = rs.r_mem.range(range.clone())?;
+        Ok(Box::new(BackupIter::new(rs, iter)))
     }
 
     fn reverse<'a, R, Q>(
@@ -2174,23 +2151,8 @@ where
         R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        let mut iters: Vec<IndexIter<K, V>> = vec![];
-
-        let m0 = unsafe { (&mut rs.r_m0 as *mut M).as_mut().unwrap() };
-        iters.push(m0.reverse(range.clone())?);
-
-        if let Some(m1) = &mut rs.r_m1 {
-            let m1 = unsafe { (m1 as *mut M).as_mut().unwrap() };
-            iters.push(m1.reverse(range.clone())?);
-        }
-
-        for disk in rs.r_disks.iter_mut().rev() {
-            let disk = unsafe { (disk as *mut D).as_mut().unwrap() };
-            iters.push(disk.reverse(range.clone())?)
-        }
-
-        let iter = Self::merge_iters(iters, true /*reverse*/, false /*ver*/);
-        Ok(Box::new(DgmIter::new(rs, iter)))
+        let iter = rs.r_mem.reverse(range.clone())?;
+        Ok(Box::new(BackupIter::new(rs, iter)))
     }
 
     fn get_with_versions<Q>(mut rs: MutexGuard<Rs<K, V, M, D>>, key: &Q) -> Result<Entry<K, V>>
@@ -2198,58 +2160,49 @@ where
         K: Borrow<Q>,
         Q: Ord + ?Sized + Hash,
     {
-        let m0_entry = match rs.r_m0.get_with_versions(key) {
+        let mem_entry = match rs.r_mem.get_with_versions(key) {
             Ok(entry) => Ok(Some(entry)),
             Err(Error::KeyNotFound) => Ok(None),
             Err(err) => Err(err),
         }?;
 
-        let mut entry = match &mut rs.r_m1 {
-            Some(m1) => match (m1.get_with_versions(key), m0_entry) {
-                (Ok(m1_e), Some(m0_e)) => Ok(Some(m0_e.xmerge(m1_e)?)),
-                (Ok(m1_e), None) => Ok(Some(m1_e)),
-                (Err(Error::KeyNotFound), Some(m0_e)) => Ok(Some(m0_e)),
-                (Err(Error::KeyNotFound), None) => Ok(None),
-                (Err(err), _) => Err(err),
-            },
-            None => Ok(m0_entry),
-        }?;
-
-        let mut iter = rs.r_disks.iter_mut();
-        let entry = loop {
-            entry = match iter.next() {
-                Some(disk) => match (disk.get_with_versions(key), entry) {
-                    (Ok(e), Some(entry)) => Ok(Some(entry.xmerge(e)?)),
-                    (Ok(e), None) => Ok(Some(e)),
-                    (Err(Error::KeyNotFound), Some(entry)) => Ok(Some(entry)),
-                    (Err(Error::KeyNotFound), None) => Ok(None),
-                    (Err(err), _) => Err(err),
-                },
-                None => break entry,
-            }?;
+        let entry = if rs.archive {
+            let mut iter = rs.r_disks.iter_mut();
+            loop {
+                entry = match iter.next() {
+                    Some(disk) => match (disk.get_with_versions(key), entry) {
+                        (Ok(e), Some(entry)) => Ok(Some(entry.xmerge(e)?)),
+                        (Ok(e), None) => Ok(Some(e)),
+                        (Err(Error::KeyNotFound), Some(entry)) => Ok(Some(entry)),
+                        (Err(Error::KeyNotFound), None) => Ok(None),
+                        (Err(err), _) => Err(err),
+                    },
+                    None => break entry,
+                }?;
+            }
+        } else {
+            mem_entry
         };
 
         entry.ok_or(Error::KeyNotFound)
     }
 
     fn iter_with_versions(mut rs: MutexGuard<Rs<K, V, M, D>>) -> Result<IndexIter<K, V>> {
-        let mut iters: Vec<IndexIter<K, V>> = vec![];
+        let iter = if rs.archive {
+            let mut iters: Vec<IndexIter<K, V>> = vec![];
+            let mem = unsafe { (&mut rs.r_mem as *mut M).as_mut().unwrap() };
+            iters.push(mem.iter_with_versions()?);
+            for disk in rs.r_disks.iter_mut() {
+                let disk = unsafe { (disk as *mut D).as_mut().unwrap() };
+                iters.push(disk.iter_with_versions()?);
+            }
+            Self::merge_iters(iters, false /*reverse*/, true /*ver*/)
+        } else {
+            let mem = unsafe { (&mut rs.r_mem as *mut M).as_mut().unwrap() };
+            mem.iter_with_versions()?
+        };
 
-        let m0 = unsafe { (&mut rs.r_m0 as *mut M).as_mut().unwrap() };
-        iters.push(m0.iter_with_versions()?);
-
-        if let Some(m1) = &mut rs.r_m1 {
-            let m1 = unsafe { (m1 as *mut M).as_mut().unwrap() };
-            iters.push(m1.iter_with_versions()?);
-        }
-
-        for disk in rs.r_disks.iter_mut() {
-            let disk = unsafe { (disk as *mut D).as_mut().unwrap() };
-            iters.push(disk.iter_with_versions()?);
-        }
-
-        let iter = Self::merge_iters(iters, false /*reverse*/, true /*ver*/);
-        Ok(Box::new(DgmIter::new(rs, iter)))
+        Ok(Box::new(BackupIter::new(rs, iter)))
     }
 
     fn range_with_versions<'a, R, Q>(
@@ -2261,23 +2214,21 @@ where
         R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        let mut iters: Vec<IndexIter<K, V>> = vec![];
+        let iter = if rs.archive {
+            let mut iters: Vec<IndexIter<K, V>> = vec![];
+            let mem = unsafe { (&mut rs.r_mem as *mut M).as_mut().unwrap() };
+            iters.push(mem.range_with_versions(range.clone())?);
+            for disk in rs.r_disks.iter_mut().rev() {
+                let disk = unsafe { (disk as *mut D).as_mut().unwrap() };
+                iters.push(disk.range_with_versions(range.clone())?);
+            }
+            Self::merge_iters(iters, false /*reverse*/, true /*ver*/)
+        } else {
+            let mem = unsafe { (&mut rs.r_mem as *mut M).as_mut().unwrap() };
+            mem.range_with_versions(range.clone())?
+        };
 
-        let m0 = unsafe { (&mut rs.r_m0 as *mut M).as_mut().unwrap() };
-        iters.push(m0.range_with_versions(range.clone())?);
-
-        if let Some(m1) = &mut rs.r_m1 {
-            let m1 = unsafe { (m1 as *mut M).as_mut().unwrap() };
-            iters.push(m1.range_with_versions(range.clone())?)
-        }
-
-        for disk in rs.r_disks.iter_mut().rev() {
-            let disk = unsafe { (disk as *mut D).as_mut().unwrap() };
-            iters.push(disk.range_with_versions(range.clone())?);
-        }
-
-        let iter = Self::merge_iters(iters, false /*reverse*/, true /*ver*/);
-        Ok(Box::new(DgmIter::new(rs, iter)))
+        Ok(Box::new(BackupIter::new(rs, iter)))
     }
 
     fn reverse_with_versions<'a, R, Q>(
@@ -2289,25 +2240,22 @@ where
         R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        let mut iters: Vec<IndexIter<K, V>> = vec![];
+        let iter = if rs.archive {
+            let mut iters: Vec<IndexIter<K, V>> = vec![];
+            let mem = unsafe { (&mut rs.r_mem as *mut M).as_mut().unwrap() };
+            iters.push(mem.reverse_with_versions(range.clone())?);
+            for disk in rs.r_disks.iter_mut().rev() {
+                let disk = unsafe { (disk as *mut D).as_mut().unwrap() };
+                let range = range.clone();
+                iters.push(disk.reverse_with_versions(range)?);
+            }
+            Self::merge_iters(iters, true /*reverse*/, true /*ver*/)
+        } else {
+            let mem = unsafe { (&mut rs.r_mem as *mut M).as_mut().unwrap() };
+            mem.reverse_with_versions(range.clone())?;
+        };
 
-        let m0 = unsafe { (&mut rs.r_m0 as *mut M).as_mut().unwrap() };
-        iters.push(m0.reverse_with_versions(range.clone())?);
-
-        if let Some(m1) = &mut rs.r_m1 {
-            let m1 = unsafe { (m1 as *mut M).as_mut().unwrap() };
-            let range = range.clone();
-            iters.push(m1.reverse_with_versions(range)?);
-        }
-
-        for disk in rs.r_disks.iter_mut().rev() {
-            let disk = unsafe { (disk as *mut D).as_mut().unwrap() };
-            let range = range.clone();
-            iters.push(disk.reverse_with_versions(range)?);
-        }
-
-        let iter = Self::merge_iters(iters, true /*reverse*/, true /*ver*/);
-        Ok(Box::new(DgmIter::new(rs, iter)))
+        Ok(Box::new(BackupIter::new(rs, iter)))
     }
 
     fn merge_iters<'a>(
@@ -2339,8 +2287,8 @@ where
     }
 }
 
-/// Reader handle into Dgm index.
-pub struct DgmReader<K, V, M, D>
+/// Reader handle into Backup index.
+pub struct BackupReader<K, V, M, D>
 where
     K: Clone + Ord,
     V: Clone + Diff,
@@ -2351,15 +2299,15 @@ where
     rs: Arc<Mutex<Rs<K, V, M, D>>>,
 }
 
-impl<K, V, M, D> DgmReader<K, V, M, D>
+impl<K, V, M, D> BackupReader<K, V, M, D>
 where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
     M: Reader<K, V>,
     D: Reader<K, V>,
 {
-    fn new(name: &str, rs: Arc<Mutex<Rs<K, V, M, D>>>) -> DgmReader<K, V, M, D> {
-        let r = DgmReader {
+    fn new(name: &str, rs: Arc<Mutex<Rs<K, V, M, D>>>) -> BackupReader<K, V, M, D> {
+        let r = BackupReader {
             name: name.to_string(),
             rs,
         };
@@ -2371,14 +2319,14 @@ where
         match self.rs.lock() {
             Ok(value) => Ok(value),
             Err(err) => {
-                let msg = format!("DgmReader.as_reader(), poisonlock {:?}", err);
+                let msg = format!("BackupReader.as_reader(), poisonlock {:?}", err);
                 Err(Error::ThreadFail(msg))
             }
         }
     }
 }
 
-impl<K, V, M, D> Reader<K, V> for DgmReader<K, V, M, D>
+impl<K, V, M, D> Reader<K, V> for BackupReader<K, V, M, D>
 where
     K: Clone + Ord + Serialize + Footprint,
     V: Clone + Diff + Serialize + Footprint,
@@ -2461,7 +2409,7 @@ where
     }
 }
 
-impl<K, V, M, D> CommitIterator<K, V> for DgmReader<K, V, M, D>
+impl<K, V, M, D> CommitIterator<K, V> for BackupReader<K, V, M, D>
 where
     K: Clone + Ord,
     V: Clone + Diff,
@@ -2472,14 +2420,14 @@ where
     where
         G: Clone + RangeBounds<u64>,
     {
-        panic!("dgm-reader, scan() not supported {} !!", self.name);
+        panic!("backup-reader, scan() not supported {} !!", self.name);
     }
 
     fn scans<G>(&mut self, _n_shards: usize, _within: G) -> Result<Vec<IndexIter<K, V>>>
     where
         G: Clone + RangeBounds<u64>,
     {
-        panic!("dgm-reader, scans() not supported by {} !!", self.name);
+        panic!("backup-reader, scans() not supported by {} !!", self.name);
     }
 
     fn range_scans<N, G>(&mut self, _ranges: Vec<N>, _within: G) -> Result<Vec<IndexIter<K, V>>>
@@ -2488,13 +2436,13 @@ where
         N: Clone + RangeBounds<K>,
     {
         panic!(
-            "dgm-reader, range_scans() not supported by {} !!",
+            "backup-reader, range_scans() not supported by {} !!",
             self.name
         );
     }
 }
 
-struct DgmIter<'a, K, V, M, D>
+struct BackupIter<'a, K, V, M, D>
 where
     K: Clone + Ord,
     V: Clone + Diff,
@@ -2505,7 +2453,7 @@ where
     iter: IndexIter<'a, K, V>,
 }
 
-impl<'a, K, V, M, D> DgmIter<'a, K, V, M, D>
+impl<'a, K, V, M, D> BackupIter<'a, K, V, M, D>
 where
     K: Clone + Ord,
     V: Clone + Diff,
@@ -2515,12 +2463,12 @@ where
     fn new(
         _rs: MutexGuard<'a, Rs<K, V, M, D>>,
         iter: IndexIter<'a, K, V>,
-    ) -> DgmIter<'a, K, V, M, D> {
-        DgmIter { _rs, iter }
+    ) -> BackupIter<'a, K, V, M, D> {
+        BackupIter { _rs, iter }
     }
 }
 
-impl<'a, K, V, M, D> Iterator for DgmIter<'a, K, V, M, D>
+impl<'a, K, V, M, D> Iterator for BackupIter<'a, K, V, M, D>
 where
     K: Clone + Ord,
     V: Clone + Diff,
@@ -2663,10 +2611,10 @@ where
     }
 }
 
-fn auto_backup<K, V, M, D>(
+fn auto_commit<K, V, M, D>(
     name: String,
     root: Root,
-    inner: Arc<Mutex<InnerBackup<K, V, M, D>>>,
+    inner: Arc<Mutex<InnerDgm<K, V, M, D>>>,
     rx: rt::Rx<String, Result<()>>,
 ) -> Result<()>
 where
@@ -2682,43 +2630,62 @@ where
     <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::R: 'static + Send,
     <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::W: 'static + Send,
 {
-    let backup_interval = root.backup_interval.unwrap();
+    let commit_interval = root.commit_interval.unwrap();
 
     info!(
         target: "backup",
-        "{}, auto-backup thread started with interval {:?}",
-        name, backup_interval,
+        "{}, auto-commit thread started with interval {:?}",
+        name, commit_interval,
     );
 
     let mut elapsed = time::Duration::new(0, 0);
     loop {
         let resp_tx = {
             let interval = {
-                let elapsed = cmp::min(backup_interval, elapsed);
-                backup_interval - elapsed
+                let elapsed = cmp::min(commit_interval, elapsed);
+                commit_interval - elapsed
             };
             match rx.recv_timeout(interval) {
-                Ok((cmd, resp_tx)) if cmd == "do_backup" => resp_tx,
+                Ok((cmd, resp_tx)) if cmd == "do_commit" => resp_tx,
                 Ok(_) => unreachable!(),
                 Err(mpsc::RecvTimeoutError::Timeout) => None,
                 Err(mpsc::RecvTimeoutError::Disconnected) => break Ok(()),
             }
         };
 
+        let ok_to_commit = {
+            let inner = to_inner_lock(&inner)?;
+            let fp = inner.m0.footprint()?;
+            match inner.root.m0_limit {
+                Some(m0_limit) if fp < (m0_limit as isize) => false,
+                Some(_) => true,
+                None => {
+                    let m = match sys_info::mem_info() {
+                        Ok(m) => Ok(m),
+                        Err(err) => {
+                            let msg = format!("{:?}", err);
+                            Err(Error::SystemFail(msg))
+                        }
+                    }?;
+                    (fp * 3) > (m.avail as isize) // TODO: no magic formula
+                }
+            }
+        };
+
         let start = time::SystemTime::now();
 
-        let iter = {
-            let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
-            CommitIter::new(vec![].into_iter(), within)
+        let res = if ok_to_commit {
+            Dgm::do_commit(&inner)
+        } else {
+            Ok(())
         };
-        let res = Backup::do_commit(&inner, iter, convert::identity)
 
         match resp_tx {
             Some(tx) => ipc_at!(tx.send(res))?,
             None => match res {
-                Ok(_) => info!(target: "backup", "{:?}, backup done", name),
+                Ok(_) => info!(target: "backup", "{:?}, commit done", name),
                 Err(err) => {
-                    info!(target: "backup", "{:?}, backup err, {:?}", name, err);
+                    info!(target: "backup", "{:?}, commit err, {:?}", name, err);
                     break Err(err);
                 }
             },
@@ -2731,7 +2698,7 @@ where
 fn auto_compact<K, V, M, D>(
     name: String,
     root: Root,
-    inner: Arc<Mutex<InnerBackup<K, V, M, D>>>,
+    inner: Arc<Mutex<InnerDgm<K, V, M, D>>>,
     rx: rt::Rx<String, Result<usize>>,
 ) -> Result<()>
 where
@@ -2772,12 +2739,7 @@ where
 
         let start = time::SystemTime::now();
 
-        let res = Backup::do_compact(
-            //
-            &inner,
-            Cutoff::new_lsm_empty(),
-            convert::identity,
-        );
+        let res = Dgm::do_compact(&inner, Cutoff::new_lsm_empty());
 
         match resp_tx {
             Some(tx) => ipc_at!(tx.send(res))?,
@@ -2799,8 +2761,8 @@ where
 }
 
 fn to_inner_lock<K, V, M, D>(
-    inner: &Arc<Mutex<InnerBackup<K, V, M, D>>>,
-) -> Result<MutexGuard<InnerBackup<K, V, M, D>>>
+    inner: &Arc<Mutex<InnerDgm<K, V, M, D>>>,
+) -> Result<MutexGuard<InnerDgm<K, V, M, D>>>
 where
     K: Clone + Ord + Serialize + Footprint,
     V: Clone + Diff + Serialize + Footprint,
@@ -2813,13 +2775,13 @@ where
     match inner.lock() {
         Ok(value) => Ok(value),
         Err(err) => {
-            let msg = format!("Backup.as_inner(), poisonlock {:?}", err);
+            let msg = format!("Dgm.as_inner(), poisonlock {:?}", err);
             Err(Error::ThreadFail(msg))
         }
     }
 }
 
-/// TODO: populate with meaningful stats for Backup index.
+/// TODO: populate with meaningful stats for Dgm index.
 pub struct Stats<A, B>
 where
     A: fmt::Display,
@@ -2835,10 +2797,10 @@ where
     B: fmt::Display,
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
-        write!(f, "Backup::Stats<>")
+        write!(f, "Dgm::Stats<>")
     }
 }
 
-//#[cfg(test)]
-//#[path = "backup_test.rs"]
-//mod backup_test;
+#[cfg(test)]
+#[path = "dgm_test.rs"]
+mod dgm_test;

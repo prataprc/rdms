@@ -76,7 +76,7 @@ impl Config {
     /// between m0 level and disk level.
     /// Refer to [set_commit_interval][Config::set_commit_interval] method
     /// for details.
-    pub const COMMIT_INTERVAL: time::Duration = time::Duration::from_secs(5);
+    pub const COMMIT_INTERVAL: time::Duration = time::Duration::from_secs(2);
 
     /// Default interval in time duration, for invoking disk compaction
     /// between dgm disk-levels.
@@ -259,14 +259,14 @@ impl TryFrom<Vec<u8>> for Root {
     fn try_from(bytes: Vec<u8>) -> Result<Root> {
         use crate::error::Error::InvalidFile;
 
-        let err1 = InvalidFile(format!("dgm, not a table"));
-        let err2 = format!("dgm, fault in config field");
+        let err1 = InvalidFile(format!("dgm-root, not a table"));
+        let err2 = format!("dgm-root, fault in config field");
 
         let text = err_at!(std::str::from_utf8(&bytes))?.to_string();
 
         let value: toml::Value = text
             .parse()
-            .map_err(|_| InvalidFile(format!("dgm, invalid root file")))?;
+            .map_err(|_| InvalidFile(format!("dgm-root, invalid root file")))?;
 
         let dict = value.as_table().ok_or(err1)?;
         let mut root: Root = Default::default();
@@ -1420,14 +1420,11 @@ where
             inner.name.clone()
         };
 
-        self.auto_commit = match root.commit_interval {
-            Some(_) => {
-                let inner = Arc::clone(&self.inner);
-                Some(rt::Thread::new(move |rx| {
-                    || auto_commit::<K, V, M, D>(name, root, inner, rx)
-                }))
-            }
-            None => None,
+        self.auto_commit = {
+            let inner = Arc::clone(&self.inner);
+            Some(rt::Thread::new(move |rx| {
+                || auto_commit::<K, V, M, D>(name, root, inner, rx)
+            }))
         };
 
         Ok(())
@@ -1510,8 +1507,6 @@ where
     fn do_commit(inner: &Arc<Mutex<InnerDgm<K, V, M, D>>>) -> Result<()> {
         let (metadata, mut d, r_m1, level) = {
             let mut inn = to_inner_lock(inner)?;
-            inn.cleanup_writers()?;
-            inn.cleanup_readers()?;
 
             if inn.m0.as_m0()?.to_seqno()? == inn.to_disk_seqno()? {
                 return Ok(());
@@ -1640,9 +1635,6 @@ where
         {
             let mut inn = to_inner_lock(inner)?;
 
-            inn.cleanup_writers()?;
-            inn.cleanup_readers()?;
-
             let disk = Snapshot::new_active(high_disk);
             mem::replace(&mut inn.disks[d_level], disk);
 
@@ -1692,16 +1684,14 @@ where
         };
         disk.commit(scanner, |_| metadata.clone())?;
 
-        {
+        let compacted_disks = {
             let mut inn = to_inner_lock(inner)?;
 
-            inn.cleanup_writers()?;
-            inn.cleanup_readers()?;
-
+            let mut compacted_disks = vec![];
             for level in s_levels.clone().into_iter() {
                 let d = mem::replace(&mut inn.disks[level], Default::default());
                 match d {
-                    Snapshot::Compact(d) => d.purge()?,
+                    Snapshot::Compact(d) => compacted_disks.push(d),
                     _ => unreachable!(),
                 }
             }
@@ -1724,6 +1714,12 @@ where
             //    "do_compact commit s_levels:{:?} d_level:{} ver:{}",
             //    s_levels, d_level, inn.root.version
             //);
+
+            compacted_disks
+        };
+
+        for d in compacted_disks.into_iter() {
+            d.purge()?;
         }
 
         Ok(0)
@@ -2809,65 +2805,59 @@ where
     <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::R: 'static + Send,
     <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::W: 'static + Send,
 {
-    let commit_interval = root.commit_interval.unwrap();
+    let c_interval = root.commit_interval.unwrap_or(Config::COMMIT_INTERVAL);
 
     info!(
         target: "dgm   ",
         "{}, auto-commit thread started with interval {:?}",
-        name, commit_interval,
+        name, c_interval,
     );
 
     let mut elapsed = time::Duration::new(0, 0);
     loop {
-        let resp_tx = {
+        let (cmd, resp_tx) = {
             let interval = {
-                let elapsed = cmp::min(commit_interval, elapsed);
-                commit_interval - elapsed
+                let elapsed = cmp::min(c_interval, elapsed);
+                c_interval - elapsed
             };
             match rx.recv_timeout(interval) {
-                Ok((cmd, resp_tx)) if cmd == "do_commit" => resp_tx,
+                Ok((cmd, resp_tx)) if cmd == "do_commit" => (cmd, resp_tx),
                 Ok(_) => unreachable!(),
-                Err(mpsc::RecvTimeoutError::Timeout) => None,
+                Err(mpsc::RecvTimeoutError::Timeout) => ("".to_string(), None),
                 Err(mpsc::RecvTimeoutError::Disconnected) => break Ok(()),
             }
         };
 
         let ok_to_commit = {
-            let inner = to_inner_lock(&inner)?;
-            let fp = inner.m0.footprint()?;
-            match inner.root.m0_limit {
-                Some(m0_limit) if fp < (m0_limit as isize) => false,
-                Some(_) => true,
-                None => {
-                    let m = match sys_info::mem_info() {
-                        Ok(m) => Ok(m),
-                        Err(err) => {
-                            let msg = format!("{:?}", err);
-                            Err(Error::SystemFail(msg))
-                        }
-                    }?;
-                    (fp * 3) > (m.avail as isize) // TODO: no magic formula
-                }
-            }
+            let mut inner = to_inner_lock(&inner)?;
+            // first let us do some cleaning.
+            inner.cleanup_writers()?;
+            inner.cleanup_readers()?;
+            // and then check whether to commit.
+            ok_commit(inner.m0.footprint()?, inner.root.m0_limit)?
         };
 
         let start = time::SystemTime::now();
 
-        let res = if ok_to_commit {
-            Dgm::do_commit(&inner)
-        } else {
-            Ok(())
-        };
-
-        match resp_tx {
-            Some(tx) => ipc_at!(tx.send(res))?,
-            None => match res {
-                Ok(_) => info!(target: "dgm   ", "{:?}, commit done", name),
-                Err(err) => {
-                    info!(target: "dgm   ", "{:?}, commit err, {:?}", name, err);
-                    break Err(err);
+        match cmd.as_str() {
+            "do_commit" if ok_to_commit => {
+                let res = Dgm::do_commit(&inner);
+                match res {
+                    Ok(_) => info!(target: "dgm   ", "{:?}, commit done", name),
+                    Err(err) => {
+                        error!(
+                            target: "dgm   ", "{:?}, commit err:{:?}", name, err
+                        );
+                        break Err(err);
+                    }
+                };
+                match resp_tx {
+                    Some(tx) => ipc_at!(tx.send(res))?,
+                    None => (),
                 }
-            },
+            }
+            "" => (),
+            _ => unreachable!(),
         }
 
         elapsed = start.elapsed().ok().unwrap();
@@ -2977,6 +2967,20 @@ where
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
         write!(f, "Dgm::Stats<>")
+    }
+}
+
+fn ok_commit(m0_fp: isize, m0_limit: Option<usize>) -> Result<bool> {
+    match m0_limit {
+        Some(0) => {
+            let m = match sys_info::mem_info() {
+                Ok(m) => Ok(m),
+                Err(err) => Err(Error::SystemFail(format!("{:?}", err))),
+            }?;
+            Ok((m0_fp * 3) > (m.avail as isize)) // TODO: no magic formula
+        }
+        Some(m0_limit) if m0_fp > (m0_limit as isize) => Ok(true),
+        Some(_) | None => Ok(false),
     }
 }
 

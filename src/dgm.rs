@@ -1795,6 +1795,23 @@ where
     }
 }
 
+impl<K, V, M, D, A, B> Validate<Stats<A, B>> for Box<Dgm<K, V, M, D>>
+where
+    K: Clone + Ord + Serialize + Footprint + fmt::Debug,
+    V: Clone + Diff + Serialize + Footprint,
+    <V as Diff>::D: Serialize,
+    A: fmt::Display,
+    B: fmt::Display,
+    M: WriteIndexFactory<K, V>,
+    D: DiskIndexFactory<K, V>,
+    M::I: Validate<A>,
+    D::I: Validate<B>,
+{
+    fn validate(&mut self) -> Result<Stats<A, B>> {
+        self.as_mut().validate()
+    }
+}
+
 impl<K, V, M, D, A, B> Validate<Stats<A, B>> for Dgm<K, V, M, D>
 where
     K: Clone + Ord + Serialize + Footprint + fmt::Debug,
@@ -1952,6 +1969,68 @@ where
     }
 
     Ok((Bound::Included(min_seqno), Bound::Included(max_seqno)))
+}
+
+impl<K, V, M, D> Index<K, V> for Box<Dgm<K, V, M, D>>
+where
+    K: Clone + Ord + Hash + Serialize + Footprint,
+    V: Clone + Diff + Serialize + Footprint,
+    <V as Diff>::D: Serialize,
+    M: WriteIndexFactory<K, V>,
+    D: DiskIndexFactory<K, V>,
+{
+    type W = DgmWriter<
+        K,
+        V,
+        <M::I as Index<K, V>>::W,
+        <M::I as Index<K, V>>::R,
+        <D::I as Index<K, V>>::R,
+    >;
+    type R = DgmReader<K, V, <M::I as Index<K, V>>::R, <D::I as Index<K, V>>::R>;
+
+    fn to_name(&self) -> Result<String> {
+        self.as_ref().to_name()
+    }
+
+    fn to_metadata(&self) -> Result<Vec<u8>> {
+        self.as_ref().to_metadata()
+    }
+
+    fn to_seqno(&self) -> Result<u64> {
+        self.as_ref().to_seqno()
+    }
+
+    fn set_seqno(&mut self, seqno: u64) -> Result<()> {
+        self.as_mut().set_seqno(seqno)
+    }
+
+    fn to_writer(&mut self) -> Result<Self::W> {
+        self.as_mut().to_writer()
+    }
+
+    fn to_reader(&mut self) -> Result<Self::R> {
+        self.as_mut().to_reader()
+    }
+
+    fn commit<C, F>(&mut self, scanner: CommitIter<K, V, C>, metacb: F) -> Result<()>
+    where
+        C: CommitIterator<K, V>,
+        F: Fn(Vec<u8>) -> Vec<u8>,
+    {
+        self.as_mut().commit(scanner, metacb)
+    }
+
+    fn compact(&mut self, cutoff: Cutoff) -> Result<usize> {
+        self.as_mut().compact(cutoff)
+    }
+
+    fn close(self) -> Result<()> {
+        (*self).close()
+    }
+
+    fn purge(self) -> Result<()> {
+        (*self).purge()
+    }
 }
 
 impl<K, V, M, D> Index<K, V> for Dgm<K, V, M, D>

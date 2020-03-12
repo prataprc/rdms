@@ -1998,7 +1998,10 @@ where
         };
 
         let index: &mut Llrb<K, V> = r.as_mut();
-        debug!( target: "llrb  ", "{:?}, creating a new reader {} ...", index.name, id);
+        debug!(
+            target: "llrb  ", "{:?}, creating a new reader {} ...",
+            index.name, id
+        );
 
         r
     }

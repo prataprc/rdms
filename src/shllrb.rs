@@ -429,7 +429,7 @@ where
     V: Clone + Diff + Footprint,
 {
     fn drop(&mut self) {
-        'outer: loop {
+        loop {
             let snapshot = match self.as_snapshot() {
                 Ok(snapshot) => snapshot,
                 Err(err) => {
@@ -437,7 +437,7 @@ where
                         target: "shllrb", "{:?}, lock snapshot:{:?}",
                         self.name, err
                     );
-                    break 'outer;
+                    break;
                 }
             };
 

@@ -60,9 +60,9 @@ impl TryFrom<Vec<u8>> for Root {
     fn try_from(bytes: Vec<u8>) -> Result<Root> {
         use crate::error::Error::InvalidFile;
 
-        let err1 = InvalidFile(format!("shrobt, not a table"));
-        let err2 = InvalidFile(format!("shrobt, missing num_shards"));
-        let err3 = InvalidFile(format!("shrobt, num_shards not int"));
+        let err1 = InvalidFile(format!("shrobt-root, not a table"));
+        let err2 = InvalidFile(format!("shrobt-root, missing num_shards"));
+        let err3 = InvalidFile(format!("shrobt-root, num_shards not int"));
 
         let text = err_at!(std::str::from_utf8(&bytes))?.to_string();
 
@@ -166,15 +166,15 @@ impl TryFrom<ShardName> for (String, usize) {
         let parts: Vec<&str> = name.0.split('-').collect();
 
         if parts.len() < 4 {
-            Err(InvalidFile(format!("not shrobt index")))
+            Err(InvalidFile(format!("shard not shrobt index")))
         } else if parts[parts.len() - 2] != "shard" {
-            Err(InvalidFile(format!("not shrobt index")))
+            Err(InvalidFile(format!("shard not shrobt index")))
         } else if parts[parts.len() - 3] != "shrobt" {
-            Err(InvalidFile(format!("not shrobt index")))
+            Err(InvalidFile(format!("shard not shrobt index")))
         } else {
             let shard_i: usize = parts[parts.len() - 1]
                 .parse()
-                .map_err(|_| InvalidFile(format!("not shrobt index")))?;
+                .map_err(|_| InvalidFile(format!("shard not shrobt index")))?;
             let s = parts[..(parts.len() - 3)].join("-");
             Ok((s, shard_i))
         }
@@ -361,7 +361,7 @@ where
             if root.num_shards > 0 {
                 Ok(root.num_shards)
             } else {
-                let msg = format!("shrobt, num_shards == {}", root.num_shards);
+                let msg = format!("shrobt-root, num_shards:{}", root.num_shards);
                 Err(InvalidFile(msg))
             }
         }?;
@@ -483,7 +483,7 @@ where
             }
         }
 
-        Err(InvalidFile(format!("robt, missing index file")))
+        Err(InvalidFile(format!("shrobt, missing index file")))
     }
 }
 

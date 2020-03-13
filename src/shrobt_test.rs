@@ -574,7 +574,7 @@ fn run_shrobt_llrb(
         } else {
             Llrb::new("test-llrb")
         };
-        llrb.set_sticky(sticky);
+        llrb.set_sticky(sticky).unwrap();
 
         random_llrb(n_ops as i64, key_max, seed, &mut llrb);
 
@@ -786,7 +786,7 @@ fn llrb_to_refs1(
     config: &robt::Config,
 ) -> (Box<Llrb<i64, i64>>, Vec<Entry<i64, i64>>) {
     let mut iter = scans::SkipScan::new(llrb.to_reader().unwrap());
-    iter.set_seqno_range(within);
+    iter.set_seqno_range(within).unwrap();
     let refs = iter
         .filter_map(|e| {
             let mut e = e.unwrap();

@@ -129,7 +129,6 @@ fn test_stats() {
         vlog_file: Some(vlog_file.to_os_string()),
         value_in_vlog: true,
         flush_queue_size: Config::FLUSH_QUEUE_SIZE,
-        compact_ratio: Config::COMPACT_RATIO,
 
         n_count: 1000000,
         n_deleted: 100,
@@ -164,7 +163,6 @@ fn test_stats() {
         vlog_file: Some(vlog_file.to_os_string()),
         value_in_vlog: true,
         flush_queue_size: Config::FLUSH_QUEUE_SIZE,
-        compact_ratio: Config::COMPACT_RATIO,
     };
     let stats1: Stats = cnf.into();
     let s = stats1.to_json();
@@ -183,7 +181,6 @@ fn test_stats_merge() {
         vlog_file: None,
         value_in_vlog: true,
         flush_queue_size: Config::FLUSH_QUEUE_SIZE,
-        compact_ratio: Config::COMPACT_RATIO,
 
         n_count: 1,
         n_deleted: 1,
@@ -211,7 +208,6 @@ fn test_stats_merge() {
         vlog_file: None,
         value_in_vlog: true,
         flush_queue_size: Config::FLUSH_QUEUE_SIZE,
-        compact_ratio: Config::COMPACT_RATIO,
 
         n_count: 2,
         n_deleted: 2,
@@ -239,7 +235,6 @@ fn test_stats_merge() {
     assert_eq!(stats.vlog_file, None);
     assert_eq!(stats.value_in_vlog, true);
     assert_eq!(stats.flush_queue_size, Config::FLUSH_QUEUE_SIZE);
-    assert_eq!(stats.compact_ratio, Config::COMPACT_RATIO);
 
     assert_eq!(stats.n_count, 3);
     assert_eq!(stats.n_deleted, 3);
@@ -319,7 +314,6 @@ fn test_config() {
         vlog_file: Some(vlog_file.to_os_string()),
         value_in_vlog: true,
         flush_queue_size: Config::FLUSH_QUEUE_SIZE,
-        compact_ratio: Config::COMPACT_RATIO,
     };
 
     let stats: Stats = config1.clone().into();
@@ -332,17 +326,18 @@ fn test_config() {
     assert_eq!(config2.value_in_vlog, config1.value_in_vlog);
     assert_eq!(config2.flush_queue_size, Config::FLUSH_QUEUE_SIZE);
 
-    config1.set_blocksize(1024 * 8, 1024 * 32, 1024 * 64);
-    config1.set_delta(None, false);
-    config1.set_value_log(None, false);
-    config1.set_flush_queue_size(1023);
+    config1
+        .set_blocksize(1024 * 8, 1024 * 32, 1024 * 64)
+        .unwrap();
+    config1.set_delta(None, false).unwrap();
+    config1.set_value_log(None, false).unwrap();
+    config1.set_flush_queue_size(1023).unwrap();
     assert_eq!(config1.z_blocksize, 1024 * 8);
     assert_eq!(config1.v_blocksize, 1024 * 32);
     assert_eq!(config1.m_blocksize, 1024 * 64);
     assert_eq!(config1.delta_ok, false);
     assert_eq!(config1.value_in_vlog, false);
     assert_eq!(config1.flush_queue_size, 1023);
-    assert_eq!(config1.compact_ratio, Config::COMPACT_RATIO);
 
     assert_eq!(Config::compute_root_block(4095), 4096);
     assert_eq!(Config::compute_root_block(4096), 4096);
@@ -392,7 +387,7 @@ fn test_robt_shards() {
         } else {
             Llrb::new("test-llrb")
         };
-        llrb.set_sticky(sticky);
+        llrb.set_sticky(sticky).unwrap();
 
         random_llrb(n_ops as i64, key_max, seed, &mut llrb);
 
@@ -484,7 +479,7 @@ fn test_robt_partitions() {
         } else {
             Llrb::new("test-llrb")
         };
-        mindex.set_sticky(sticky);
+        mindex.set_sticky(sticky).unwrap();
 
         random_llrb(n_ops as i64, key_max, seed, &mut mindex);
 
@@ -1312,7 +1307,7 @@ fn run_robt_llrb(name: &str, n_ops: u64, key_max: i64, repeat: usize, seed: u128
         } else {
             Llrb::new("test-llrb")
         };
-        llrb.set_sticky(sticky);
+        llrb.set_sticky(sticky).unwrap();
 
         random_llrb(n_ops as i64, key_max, seed, &mut llrb);
 
@@ -1349,7 +1344,7 @@ fn run_robt_llrb(name: &str, n_ops: u64, key_max: i64, repeat: usize, seed: u128
             .sum();
         // println!("refs len: {}", refs.len());
         let mut iter = scans::SkipScan::new(llrb.to_reader().unwrap());
-        iter.set_seqno_range(within);
+        iter.set_seqno_range(within).unwrap();
         let dir = {
             let mut dir = std::env::temp_dir();
             dir.push("test-robt-build");
@@ -1493,7 +1488,7 @@ fn llrb_to_refs1(
     config: &Config,
 ) -> (Box<Llrb<i64, i64>>, Vec<Entry<i64, i64>>) {
     let mut iter = scans::SkipScan::new(llrb.to_reader().unwrap());
-    iter.set_seqno_range(within);
+    iter.set_seqno_range(within).unwrap();
     let refs = iter
         .filter_map(|e| {
             let mut e = e.unwrap();

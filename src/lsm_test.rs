@@ -103,7 +103,8 @@ fn test_lsm_get2() {
     let (name, delta_ok) = ("test_lsm_get2-1", false);
     let mut disk1 = {
         let mut iter = Box::new(SkipScan::new(llrb.to_reader().unwrap()));
-        iter.set_seqno_range((Bound::<u64>::Unbounded, Bound::<u64>::Unbounded));
+        iter.set_seqno_range((Bound::<u64>::Unbounded, Bound::<u64>::Unbounded))
+            .unwrap();
         random_robt(name, seed, delta_ok, iter)
     };
     println!("disk1 n_ops: {} key_max: {}", n_ops, key_max);
@@ -116,7 +117,8 @@ fn test_lsm_get2() {
         iter.set_seqno_range((
             Bound::Excluded(disk1.to_seqno().unwrap()),
             Bound::<u64>::Unbounded,
-        ));
+        ))
+        .unwrap();
         random_robt(name, seed, delta_ok, iter)
     };
     println!("disk2 n_ops: {} key_max: {}", n_ops, key_max);
@@ -264,7 +266,8 @@ fn test_lsm_get_versions2() {
     let (name, delta_ok) = ("test_lsm_get_versions2-1", true);
     let mut disk1 = {
         let mut iter = Box::new(SkipScan::new(llrb.to_reader().unwrap()));
-        iter.set_seqno_range((Bound::<u64>::Unbounded, Bound::<u64>::Unbounded));
+        iter.set_seqno_range((Bound::<u64>::Unbounded, Bound::<u64>::Unbounded))
+            .unwrap();
         random_robt(name, seed, delta_ok, iter)
     };
     let d1_seqno = disk1.to_seqno().unwrap();
@@ -278,7 +281,8 @@ fn test_lsm_get_versions2() {
     let (name, delta_ok) = ("test_lsm_get_versions2-2", true);
     let mut disk2 = {
         let mut iter = Box::new(SkipScan::new(llrb.to_reader().unwrap()));
-        iter.set_seqno_range((Bound::Excluded(d1_seqno), Bound::<u64>::Unbounded));
+        iter.set_seqno_range((Bound::Excluded(d1_seqno), Bound::<u64>::Unbounded))
+            .unwrap();
         random_robt(name, seed, delta_ok, iter)
     };
     let d2_seqno = disk2.to_seqno().unwrap();
@@ -430,7 +434,8 @@ fn test_lsm_iter2() {
     let (name, delta_ok) = ("test_lsm_iter2-1", false);
     let mut disk1 = {
         let mut iter = Box::new(SkipScan::new(llrb.to_reader().unwrap()));
-        iter.set_seqno_range((Bound::<u64>::Unbounded, Bound::<u64>::Unbounded));
+        iter.set_seqno_range((Bound::<u64>::Unbounded, Bound::<u64>::Unbounded))
+            .unwrap();
         random_robt(name, seed, delta_ok, iter)
     };
     let d1_seqno = disk1.to_seqno().unwrap();
@@ -444,7 +449,8 @@ fn test_lsm_iter2() {
     let (name, delta_ok) = ("test_lsm_iter2-2", false);
     let mut disk2 = {
         let mut iter = Box::new(SkipScan::new(llrb.to_reader().unwrap()));
-        iter.set_seqno_range((Bound::Excluded(d1_seqno), Bound::<u64>::Unbounded));
+        iter.set_seqno_range((Bound::Excluded(d1_seqno), Bound::<u64>::Unbounded))
+            .unwrap();
         random_robt(name, seed, delta_ok, iter)
     };
     println!("disk2 n_ops: {} key_max: {}", n_ops, key_max);
@@ -468,7 +474,9 @@ fn test_lsm_iter2() {
 
     println!("start verification mvcc seqno {}", seqno);
     let mut ss_iter = Box::new(SkipScan::new(mvcc.to_reader().unwrap()));
-    ss_iter.set_seqno_range((Bound::Excluded(d2_seqno), Bound::Included(seqno)));
+    ss_iter
+        .set_seqno_range((Bound::Excluded(d2_seqno), Bound::Included(seqno)))
+        .unwrap();
     let revr = false;
     let yiter = y_iter(
         ss_iter,
@@ -604,7 +612,8 @@ fn test_lsm_iter_versions2() {
     let (name, delta_ok) = ("test_lsm_iter_versions2-1", true);
     let mut disk1 = {
         let mut iter = Box::new(SkipScan::new(llrb.to_reader().unwrap()));
-        iter.set_seqno_range((Bound::<u64>::Unbounded, Bound::<u64>::Unbounded));
+        iter.set_seqno_range((Bound::<u64>::Unbounded, Bound::<u64>::Unbounded))
+            .unwrap();
         random_robt(name, seed, delta_ok, iter)
     };
     let d1_seqno = disk1.to_seqno().unwrap();
@@ -618,7 +627,8 @@ fn test_lsm_iter_versions2() {
     let (name, delta_ok) = ("test_lsm_iter_versions2-2", true);
     let mut disk2 = {
         let mut iter = Box::new(SkipScan::new(llrb.to_reader().unwrap()));
-        iter.set_seqno_range((Bound::Excluded(d1_seqno), Bound::<u64>::Unbounded));
+        iter.set_seqno_range((Bound::Excluded(d1_seqno), Bound::<u64>::Unbounded))
+            .unwrap();
         random_robt(name, seed, delta_ok, iter)
     };
     let d2_seqno = disk2.to_seqno().unwrap();
@@ -645,7 +655,9 @@ fn test_lsm_iter_versions2() {
 
     // println!("start verification mvcc seqno {}", seqno);
     let mut ss_iter = Box::new(SkipScan::new(mvcc.to_reader().unwrap()));
-    ss_iter.set_seqno_range((Bound::Excluded(d2_seqno), Bound::Included(seqno)));
+    ss_iter
+        .set_seqno_range((Bound::Excluded(d2_seqno), Bound::Included(seqno)))
+        .unwrap();
     let revr = false;
     let yiter = y_iter_versions(
         ss_iter,
@@ -795,7 +807,8 @@ fn test_lsm_range2() {
     let (name, delta_ok) = ("test_lsm_range2-1", false);
     let mut disk1 = {
         let mut iter = Box::new(SkipScan::new(llrb.to_reader().unwrap()));
-        iter.set_seqno_range((Bound::<u64>::Unbounded, Bound::<u64>::Unbounded));
+        iter.set_seqno_range((Bound::<u64>::Unbounded, Bound::<u64>::Unbounded))
+            .unwrap();
         random_robt(name, seed, delta_ok, iter)
     };
     let d1_seqno = disk1.to_seqno().unwrap();
@@ -809,7 +822,8 @@ fn test_lsm_range2() {
     let (name, delta_ok) = ("test_lsm_range2-2", false);
     let mut disk2 = {
         let mut iter = Box::new(SkipScan::new(llrb.to_reader().unwrap()));
-        iter.set_seqno_range((Bound::Excluded(d1_seqno), Bound::<u64>::Unbounded));
+        iter.set_seqno_range((Bound::Excluded(d1_seqno), Bound::<u64>::Unbounded))
+            .unwrap();
         random_robt(name, seed, delta_ok, iter)
     };
     let d2_seqno = disk2.to_seqno().unwrap();
@@ -1004,7 +1018,8 @@ fn test_lsm_range_versions2() {
     let (name, delta_ok) = ("test_lsm_range_versions2-1", true);
     let mut disk1 = {
         let mut iter = Box::new(SkipScan::new(llrb.to_reader().unwrap()));
-        iter.set_seqno_range((Bound::<u64>::Unbounded, Bound::<u64>::Unbounded));
+        iter.set_seqno_range((Bound::<u64>::Unbounded, Bound::<u64>::Unbounded))
+            .unwrap();
         random_robt(name, seed, delta_ok, iter)
     };
     let d1_seqno = disk1.to_seqno().unwrap();
@@ -1018,7 +1033,8 @@ fn test_lsm_range_versions2() {
     let (name, delta_ok) = ("test_lsm_range_versions2-2", true);
     let mut disk2 = {
         let mut iter = Box::new(SkipScan::new(llrb.to_reader().unwrap()));
-        iter.set_seqno_range((Bound::Excluded(d1_seqno), Bound::<u64>::Unbounded));
+        iter.set_seqno_range((Bound::Excluded(d1_seqno), Bound::<u64>::Unbounded))
+            .unwrap();
         random_robt(name, seed, delta_ok, iter)
     };
     let d2_seqno = disk2.to_seqno().unwrap();
@@ -1209,7 +1225,8 @@ fn test_lsm_reverse2() {
     let (name, delta_ok) = ("test_lsm_reverse2-1", false);
     let mut disk1 = {
         let mut iter = Box::new(SkipScan::new(llrb.to_reader().unwrap()));
-        iter.set_seqno_range((Bound::<u64>::Unbounded, Bound::<u64>::Unbounded));
+        iter.set_seqno_range((Bound::<u64>::Unbounded, Bound::<u64>::Unbounded))
+            .unwrap();
         random_robt(name, seed, delta_ok, iter)
     };
     let d1_seqno = disk1.to_seqno().unwrap();
@@ -1223,7 +1240,8 @@ fn test_lsm_reverse2() {
     let (name, delta_ok) = ("test_lsm_reverse2-2", false);
     let mut disk2 = {
         let mut iter = Box::new(SkipScan::new(llrb.to_reader().unwrap()));
-        iter.set_seqno_range((Bound::Excluded(d1_seqno), Bound::<u64>::Unbounded));
+        iter.set_seqno_range((Bound::Excluded(d1_seqno), Bound::<u64>::Unbounded))
+            .unwrap();
         random_robt(name, seed, delta_ok, iter)
     };
     let d2_seqno = disk2.to_seqno().unwrap();
@@ -1416,7 +1434,8 @@ fn test_lsm_reverse_versions2() {
     let (name, delta_ok) = ("test_lsm_reverse_versions2-1", true);
     let mut disk1 = {
         let mut iter = Box::new(SkipScan::new(llrb.to_reader().unwrap()));
-        iter.set_seqno_range((Bound::<u64>::Unbounded, Bound::<u64>::Unbounded));
+        iter.set_seqno_range((Bound::<u64>::Unbounded, Bound::<u64>::Unbounded))
+            .unwrap();
         random_robt(name, seed, delta_ok, iter)
     };
     let d1_seqno = disk1.to_seqno().unwrap();
@@ -1430,7 +1449,8 @@ fn test_lsm_reverse_versions2() {
     let (name, delta_ok) = ("test_lsm_reverse_versions2-2", true);
     let mut disk2 = {
         let mut iter = Box::new(SkipScan::new(llrb.to_reader().unwrap()));
-        iter.set_seqno_range((Bound::Excluded(d1_seqno), Bound::<u64>::Unbounded));
+        iter.set_seqno_range((Bound::Excluded(d1_seqno), Bound::<u64>::Unbounded))
+            .unwrap();
         random_robt(name, seed, delta_ok, iter)
     };
     let d2_seqno = disk2.to_seqno().unwrap();

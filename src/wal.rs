@@ -146,9 +146,9 @@ where
     H: Clone + BuildHasher,
 {
     /// Set a different hash-builder.
-    pub fn set_hasher(&mut self, hash_builder: H) -> &mut Self {
+    pub fn set_hasher(&mut self, hash_builder: H) -> Result<&mut Self> {
         self.hash_builder = hash_builder;
-        self
+        Ok(self)
     }
 
     /// Purge all journal files whose `last_index` is  le/lt `before`. If

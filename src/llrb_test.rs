@@ -246,7 +246,7 @@ fn test_lsm_sticky() {
 
     // without lsm, with sticky
     let mut index: Box<Llrb<i64, i64>> = Llrb::new("test-llrb");
-    index.set_sticky(true);
+    index.set_sticky(true).unwrap();
     let key = populate(&mut index);
     match index.get(&key) {
         Err(Error::KeyNotFound) => (),
@@ -277,7 +277,7 @@ fn test_lsm_sticky() {
 
     // with lsm
     let mut index: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
-    index.set_sticky(true);
+    index.set_sticky(true).unwrap();
     let key = populate(&mut index);
     match index.get(&key) {
         Err(Error::KeyNotFound) => (),
@@ -939,7 +939,7 @@ fn test_pw_scan() {
     let seqno1 = llrb.to_seqno().unwrap();
 
     let mut iter = scans::SkipScan::new(llrb.to_reader().unwrap());
-    iter.set_seqno_range(..=seqno1);
+    iter.set_seqno_range(..=seqno1).unwrap();
     for (i, entry) in iter.enumerate() {
         let entry = entry.unwrap();
         let ref_key = i as i32;
@@ -958,7 +958,7 @@ fn test_pw_scan() {
 
     // skip scan after first-inject.
     let mut iter = scans::SkipScan::new(llrb.to_reader().unwrap());
-    iter.set_seqno_range(..=seqno1);
+    iter.set_seqno_range(..=seqno1).unwrap();
     for (i, entry) in iter.enumerate() {
         let entry = entry.unwrap();
         let ref_key = i as i32;
@@ -996,7 +996,8 @@ fn test_pw_scan() {
 
     // skip scan in-between.
     let mut iter = scans::SkipScan::new(llrb.to_reader().unwrap());
-    iter.set_seqno_range((Bound::Excluded(seqno1), Bound::Included(seqno2)));
+    iter.set_seqno_range((Bound::Excluded(seqno1), Bound::Included(seqno2)))
+        .unwrap();
     for entry in iter {
         let entry = entry.unwrap();
         let key = entry.to_key();
@@ -1059,7 +1060,8 @@ fn test_pw_scan() {
 
     // skip scan final.
     let mut iter = scans::SkipScan::new(llrb.to_reader().unwrap());
-    iter.set_seqno_range((Bound::Excluded(seqno2), Bound::Unbounded));
+    iter.set_seqno_range((Bound::Excluded(seqno2), Bound::Unbounded))
+        .unwrap();
     let mut ref_key = 0;
     for entry in iter {
         let entry = entry.unwrap();
@@ -1090,7 +1092,8 @@ fn test_mvcc_conversion() {
         } else {
             Llrb::new("test-llrb")
         };
-        llrb.set_sticky(sticky).set_spinlatch(spin);
+        llrb.set_sticky(sticky).unwrap();
+        llrb.set_spinlatch(spin).unwrap();
 
         let n_ops = match rng.gen::<u8>() % 10 {
             0 => 0,
@@ -1176,7 +1179,8 @@ fn test_split() {
         } else {
             Llrb::new("test-llrb")
         };
-        llrb.set_sticky(sticky).set_spinlatch(spin);
+        llrb.set_sticky(sticky).unwrap();
+        llrb.set_spinlatch(spin).unwrap();
 
         let n_ops = match rng.gen::<u8>() % 10 {
             0 => 0,
@@ -1273,9 +1277,9 @@ fn test_commit3() {
                 Llrb::<i64, i64>::new("test-ref-index"),
             )
         };
-        index1.set_sticky(sticky);
-        index2.set_sticky(sticky);
-        rindex.set_sticky(sticky);
+        index1.set_sticky(sticky).unwrap();
+        index2.set_sticky(sticky).unwrap();
+        rindex.set_sticky(sticky).unwrap();
         //  println!("index-config: lsm:{} sticky:{}", lsm, sticky);
 
         let n_ops = rng.gen::<usize>() % 1000;
@@ -1404,8 +1408,8 @@ fn test_compact() {
                 Llrb::<i64, i64>::new("test-ref-index"),
             )
         };
-        index.set_sticky(sticky);
-        rindex.set_sticky(sticky);
+        index.set_sticky(sticky).unwrap();
+        rindex.set_sticky(sticky).unwrap();
         let n_ops = rng.gen::<usize>() % 100_000;
         for _ in 0..n_ops {
             let key: i64 = rng.gen::<i64>().abs() % (n_ops as i64 / 2);

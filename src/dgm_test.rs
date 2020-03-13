@@ -257,7 +257,7 @@ fn test_level_file_name() {
 #[test]
 fn test_dgm_crud() {
     let seed: u128 = random();
-    let seed: u128 = 21460601067280794274906125902844596779;
+    // let seed: u128 = 21460601067280794274906125902844596779;
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
     let config = Config {

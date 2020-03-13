@@ -120,41 +120,41 @@ pub fn shllrb_factory(lsm: bool, max_shards: usize) -> ShllrbFactory {
 impl ShllrbFactory {
     /// If lsm is _true_, this will preserve the entire history of all write
     /// operations applied on the index-shard. _Default: false_.
-    pub fn set_lsm(&mut self, lsm: bool) -> &mut Self {
+    pub fn set_lsm(&mut self, lsm: bool) -> Result<&mut Self> {
         self.lsm = lsm;
-        self
+        Ok(self)
     }
 
     /// If spin is _true_, calling thread will spin while waiting for the
     /// latch, otherwise, calling thead will be yielded to OS scheduler.
     /// For more detail refer Llrb::set_spinlatch() method. _Default: false_.
-    pub fn set_spinlatch(&mut self, spin: bool) -> &mut Self {
+    pub fn set_spinlatch(&mut self, spin: bool) -> Result<&mut Self> {
         self.spin = spin;
-        self
+        Ok(self)
     }
 
     /// Create all Llrb instances in sticky mode, refer to Llrb::set_sticky()
     /// for more details. For more detail refer Llrb::set_sticky().
     /// _Default: false_.
-    pub fn set_sticky(&mut self, sticky: bool) -> &mut Self {
+    pub fn set_sticky(&mut self, sticky: bool) -> Result<&mut Self> {
         self.sticky = sticky;
-        self
+        Ok(self)
     }
 
     /// Set periodic interval for auto-sharding. _Default: 200 seconds_
-    pub fn set_interval(&mut self, interval: time::Duration) -> &mut Self {
+    pub fn set_interval(&mut self, interval: time::Duration) -> Result<&mut Self> {
         self.interval = interval;
-        self
+        Ok(self)
     }
 
     /// Set shard parameters.
     /// * `max_shards`, limit the maximum number of shards. _Default: 2_
     /// * `max_entries` per shard, beyond which shard will be split.
     ///   _Default: 1_000_000_
-    pub fn set_shard_config(&mut self, max_shards: usize, max_entries: usize) -> &mut Self {
+    pub fn set_shard_config(&mut self, max_shards: usize, max_entries: usize) -> Result<&mut Self> {
         self.max_shards = max_shards;
         self.max_entries = max_entries;
-        self
+        Ok(self)
     }
 }
 
@@ -205,23 +205,23 @@ impl From<ShllrbFactory> for Config {
 
 impl Config {
     /// Configure Llrb for LSM, refer to Llrb:new_lsm() for more details.
-    pub fn set_lsm(&mut self, lsm: bool) -> &mut Self {
+    pub fn set_lsm(&mut self, lsm: bool) -> Result<&mut Self> {
         self.lsm = lsm;
-        self
+        Ok(self)
     }
 
     /// Configure Llrb in sticky mode, refer to Llrb::set_sticky() for
     /// more details.
-    pub fn set_sticky(&mut self, sticky: bool) -> &mut Self {
+    pub fn set_sticky(&mut self, sticky: bool) -> Result<&mut Self> {
         self.sticky = sticky;
-        self
+        Ok(self)
     }
 
     /// Configure spin-latch behaviour for Llrb, refer to
     /// Llrb::set_spinlatch() for more details.
-    pub fn set_spinlatch(&mut self, spin: bool) -> &mut Self {
+    pub fn set_spinlatch(&mut self, spin: bool) -> Result<&mut Self> {
         self.spin = spin;
-        self
+        Ok(self)
     }
 
     /// Configure shard parameters.
@@ -229,16 +229,16 @@ impl Config {
     /// * _max_shards_, maximum number for shards allowed.
     /// * _max_entries_, maximum number of entries allowed in a single
     ///   shard, beyond which the shard splits into two.
-    pub fn set_shard_config(&mut self, max_shards: usize, max_entries: usize) -> &mut Self {
+    pub fn set_shard_config(&mut self, max_shards: usize, max_entries: usize) -> Result<&mut Self> {
         self.max_shards = max_shards;
         self.max_entries = max_entries;
-        self
+        Ok(self)
     }
 
     /// Configure periodic interval for auto-sharding.
-    pub fn set_interval(&mut self, interval: time::Duration) -> &mut Self {
+    pub fn set_interval(&mut self, interval: time::Duration) -> Result<&mut Self> {
         self.interval = interval;
-        self
+        Ok(self)
     }
 }
 
@@ -523,7 +523,8 @@ where
             } else {
                 Llrb::new(shard_name.to_string())
             };
-            llrb.set_sticky(config.sticky).set_spinlatch(config.spin);
+            llrb.set_sticky(config.sticky).ok(); // can't be error
+            llrb.set_spinlatch(config.spin).ok(); // can't be error
             Shard::new_active(llrb, Bound::Unbounded)
         };
 

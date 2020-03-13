@@ -1133,12 +1133,13 @@ where
         // `a` is newer than `b`, and all versions in a and b are mutually
         // exclusive in seqno ordering.
         let (a, mut b) = if self.to_seqno() > entry.to_seqno() {
-            (self, entry)
+            Ok((self, entry))
         } else if entry.to_seqno() > self.to_seqno() {
-            (entry, self)
+            Ok((entry, self))
         } else {
-            panic!("xmerge {} == {}", entry.to_seqno(), self.to_seqno())
-        };
+            let msg = format!("{} == {}", entry.to_seqno(), self.to_seqno());
+            err_at!(UnExpectedFail, msg: msg)
+        }?;
 
         if cfg!(debug_assertions) {
             a.validate_xmerge(&b)?;

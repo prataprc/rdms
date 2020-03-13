@@ -180,7 +180,7 @@ fn test_skip_scan() {
             (start_seqno, end_seqno)
         };
 
-        scanner.set_seqno_range(within);
+        scanner.set_seqno_range(within).unwrap();
 
         let start_key = match rng.gen::<i64>() {
             n if (n >= 0) && (n % 2 == 0) => Bound::Included(n % key_max),
@@ -194,7 +194,7 @@ fn test_skip_scan() {
         };
         let key_range = (start_key, end_key);
 
-        scanner.set_key_range(key_range);
+        scanner.set_key_range(key_range).unwrap();
 
         let es: Vec<Entry<i64, i64>> = scanner.map(|e| e.unwrap()).collect();
         println!(
@@ -233,40 +233,54 @@ fn test_skip_scan() {
     }
 
     let mut scanner = SkipScan::new(llrb.to_reader().unwrap());
-    scanner.set_seqno_range((Bound::Included(5000), Bound::Included(5000)));
+    scanner
+        .set_seqno_range((Bound::Included(5000), Bound::Included(5000)))
+        .unwrap();
     let es: Vec<Entry<i64, i64>> = scanner.map(|e| e.unwrap()).collect();
     assert_eq!(es.len(), 1);
     assert_eq!(es[0].to_seqno(), 5000);
 
     let mut scanner = SkipScan::new(llrb.to_reader().unwrap());
-    scanner.set_seqno_range((Bound::Included(5000), Bound::Excluded(5000)));
+    scanner
+        .set_seqno_range((Bound::Included(5000), Bound::Excluded(5000)))
+        .unwrap();
     let es: Vec<Entry<i64, i64>> = scanner.map(|e| e.unwrap()).collect();
     assert_eq!(es.len(), 0);
 
     let mut scanner = SkipScan::new(llrb.to_reader().unwrap());
-    scanner.set_seqno_range((Bound::Excluded(5000), Bound::Included(5000)));
+    scanner
+        .set_seqno_range((Bound::Excluded(5000), Bound::Included(5000)))
+        .unwrap();
     let es: Vec<Entry<i64, i64>> = scanner.map(|e| e.unwrap()).collect();
     assert_eq!(es.len(), 0);
 
     let mut scanner = SkipScan::new(llrb.to_reader().unwrap());
-    scanner.set_seqno_range((Bound::Excluded(5000), Bound::Excluded(5000)));
+    scanner
+        .set_seqno_range((Bound::Excluded(5000), Bound::Excluded(5000)))
+        .unwrap();
     let es: Vec<Entry<i64, i64>> = scanner.map(|e| e.unwrap()).collect();
     assert_eq!(es.len(), 0);
 
     let mut scanner = SkipScan::new(llrb.to_reader().unwrap());
-    scanner.set_seqno_range((Bound::Included(5000), Bound::Excluded(5001)));
+    scanner
+        .set_seqno_range((Bound::Included(5000), Bound::Excluded(5001)))
+        .unwrap();
     let es: Vec<Entry<i64, i64>> = scanner.map(|e| e.unwrap()).collect();
     assert_eq!(es.len(), 1);
     assert_eq!(es[0].to_seqno(), 5000);
 
     let mut scanner = SkipScan::new(llrb.to_reader().unwrap());
-    scanner.set_seqno_range((Bound::Excluded(5000), Bound::Included(5001)));
+    scanner
+        .set_seqno_range((Bound::Excluded(5000), Bound::Included(5001)))
+        .unwrap();
     let es: Vec<Entry<i64, i64>> = scanner.map(|e| e.unwrap()).collect();
     assert_eq!(es.len(), 1);
     assert_eq!(es[0].to_seqno(), 5001);
 
     let mut scanner = SkipScan::new(llrb.to_reader().unwrap());
-    scanner.set_seqno_range((Bound::Excluded(5000), Bound::Excluded(5001)));
+    scanner
+        .set_seqno_range((Bound::Excluded(5000), Bound::Excluded(5001)))
+        .unwrap();
     let es: Vec<Entry<i64, i64>> = scanner.map(|e| e.unwrap()).collect();
     assert_eq!(es.len(), 0);
 }

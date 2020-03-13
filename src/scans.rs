@@ -166,13 +166,13 @@ where
     }
 
     /// Set the batch size for each iteration using the reader handle.
-    pub fn set_batch_size(&mut self, batch_size: usize) -> &mut Self {
+    pub fn set_batch_size(&mut self, batch_size: usize) -> Result<&mut Self> {
         self.batch_size = batch_size;
-        self
+        Ok(self)
     }
 
     /// Set seqno range to filter out all mutations outside the range.
-    pub fn set_seqno_range<G>(&mut self, within: G) -> &mut Self
+    pub fn set_seqno_range<G>(&mut self, within: G) -> Result<&mut Self>
     where
         G: RangeBounds<u64>,
     {
@@ -188,11 +188,11 @@ where
             (Excluded(s1), Excluded(s2)) if s1 >= s2 => self.batch_size = 0,
             _ => (),
         }
-        self
+        Ok(self)
     }
 
     /// Set key range to filter out all keys outside the range.
-    pub fn set_key_range<G>(&mut self, range: G) -> &mut Self
+    pub fn set_key_range<G>(&mut self, range: G) -> Result<&mut Self>
     where
         G: RangeBounds<K>,
     {
@@ -206,7 +206,7 @@ where
             Bound::Excluded(key) => Bound::Excluded(key.clone()),
             Bound::Unbounded => Bound::Unbounded,
         };
-        self
+        Ok(self)
     }
 
     fn refill(&mut self) -> Refill<K, V> {

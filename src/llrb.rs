@@ -89,25 +89,25 @@ pub fn llrb_factory(lsm: bool) -> LlrbFactory {
 impl LlrbFactory {
     /// If lsm is _true_, this will preserve the entire history of all write
     /// operations applied on the index. _Default: false_.
-    pub fn set_lsm(&mut self, lsm: bool) -> &mut Self {
+    pub fn set_lsm(&mut self, lsm: bool) -> Result<&mut Self> {
         self.lsm = lsm;
-        self
+        Ok(self)
     }
 
     /// If spin is _true_, calling thread will spin while waiting for the
     /// latch, otherwise, calling thead will be yielded to OS scheduler.
     /// _Default: false_.
-    pub fn set_spinlatch(&mut self, spin: bool) -> &mut Self {
+    pub fn set_spinlatch(&mut self, spin: bool) -> Result<&mut Self> {
         self.spin = spin;
-        self
+        Ok(self)
     }
 
     /// Create all Llrb instances in sticky mode, refer to Llrb::set_sticky()
     /// for more details.
     /// _Default: false_.
-    pub fn set_sticky(&mut self, spin: bool) -> &mut Self {
+    pub fn set_sticky(&mut self, spin: bool) -> Result<&mut Self> {
         self.spin = spin;
-        self
+        Ok(self)
     }
 
     fn to_config_string(&self) -> String {
@@ -140,7 +140,7 @@ where
         } else {
             Llrb::new(name)
         };
-        index.set_sticky(self.sticky).set_spinlatch(self.spin);
+        index.set_sticky(self.sticky)?.set_spinlatch(self.spin)?;
         Ok(index)
     }
 }
@@ -217,9 +217,8 @@ where
         } else {
             Llrb::new(mvcc_index.to_name())
         };
-        index
-            .set_sticky(mvcc_index.is_sticky())
-            .set_spinlatch(mvcc_index.is_spin());
+        index.set_sticky(mvcc_index.is_sticky()).ok(); // can't be error
+        index.set_spinlatch(mvcc_index.is_spin()).ok(); // can't be error
 
         let debris = mvcc_index.squash();
         index.root = debris.root;
@@ -292,13 +291,13 @@ where
     /// thread shall spin until a latch is acquired or released, if false
     /// calling thread will yield to scheduler. Call this api, before
     /// creating reader and/or writer handles.
-    pub fn set_spinlatch(&mut self, spin: bool) -> &mut Self {
+    pub fn set_spinlatch(&mut self, spin: bool) -> Result<&mut Self> {
         let n = self.multi_rw();
         if n > 0 {
             panic!("cannot configure Llrb with active readers/writers {}", n)
         }
         self.spin = spin;
-        self
+        Ok(self)
     }
 
     /// Run this instance in sticky mode, which is like a shallow lsm.
@@ -307,13 +306,13 @@ where
     /// practical terms this means a delete operations won't remove
     /// the entry from the index, instead the entry shall marked as
     /// deleted and but its value shall be removed.
-    pub fn set_sticky(&mut self, sticky: bool) -> &mut Self {
+    pub fn set_sticky(&mut self, sticky: bool) -> Result<&mut Self> {
         let n = self.multi_rw();
         if n > 0 {
             panic!("cannot configure Llrb with active readers/writers {}", n)
         }
         self.sticky = sticky;
-        self
+        Ok(self)
     }
 
     /// Squash this index and return the root and its book-keeping.
@@ -1678,7 +1677,7 @@ where
         G: Clone + RangeBounds<u64>,
     {
         let mut ss = Box::new(scans::SkipScan::new(self.to_reader()?));
-        ss.set_seqno_range(within);
+        ss.set_seqno_range(within)?;
         Ok(ss)
     }
 
@@ -1709,7 +1708,7 @@ where
             let range = (lkey.clone(), Bound::Excluded(hkey.clone()));
             if self.range(range.clone())?.next().is_some() {
                 let mut ss = Box::new(scans::SkipScan::new(self.to_reader()?));
-                ss.set_key_range(range).set_seqno_range(within.clone());
+                ss.set_key_range(range)?.set_seqno_range(within.clone())?;
                 lkey = Bound::Included(hkey);
                 scans.push(ss);
             }
@@ -1718,7 +1717,7 @@ where
         let range = (lkey, Bound::Unbounded);
         if self.range(range.clone())?.next().is_some() {
             let mut ss = Box::new(scans::SkipScan::new(self.to_reader()?));
-            ss.set_key_range(range).set_seqno_range(within);
+            ss.set_key_range(range)?.set_seqno_range(within)?;
             scans.push(ss);
         }
 
@@ -1741,7 +1740,7 @@ where
         let mut scans: Vec<IndexIter<K, V>> = vec![];
         for range in ranges {
             let mut ss = Box::new(scans::SkipScan::new(self.to_reader()?));
-            ss.set_key_range(range).set_seqno_range(within.clone());
+            ss.set_key_range(range)?.set_seqno_range(within.clone())?;
             scans.push(ss);
         }
         Ok(scans)

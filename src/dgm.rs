@@ -87,48 +87,48 @@ impl Config {
     /// Set entire Dgm index for log-structured-merge. This means
     /// the oldest level (snapshot) will preserve all previous mutations
     /// to an entry, until they are compacted off with cutoff.
-    pub fn set_lsm(&mut self, lsm: bool) -> &mut Self {
+    pub fn set_lsm(&mut self, lsm: bool) -> Result<&mut Self> {
         self.lsm = lsm;
-        self
+        Ok(self)
     }
 
     /// Set maximum footprint for m0 level, beyond which a commit
     /// shall be triggered.
-    pub fn set_m0_limit(&mut self, limit: usize) -> &mut Self {
+    pub fn set_m0_limit(&mut self, limit: usize) -> Result<&mut Self> {
         self.m0_limit = Some(limit);
-        self
+        Ok(self)
     }
 
     /// Set threshold between memory index footprint and the latest disk
     /// index footprint, below which a newer level shall be created,
     /// for commiting new entries.
-    pub fn set_mem_ratio(&mut self, ratio: f64) -> &mut Self {
+    pub fn set_mem_ratio(&mut self, ratio: f64) -> Result<&mut Self> {
         self.mem_ratio = ratio;
-        self
+        Ok(self)
     }
 
     /// Set threshold between a disk index footprint and the next-level disk
     /// index footprint, above which the two levels shall be compacted
     /// into a single index.
-    pub fn set_disk_ratio(&mut self, ratio: f64) -> &mut Self {
+    pub fn set_disk_ratio(&mut self, ratio: f64) -> Result<&mut Self> {
         self.disk_ratio = ratio;
-        self
+        Ok(self)
     }
 
     /// Set interval in time duration, for commiting memory batch into
     /// disk snapshot. Calling this method will spawn an auto
     /// compaction thread.
-    pub fn set_commit_interval(&mut self, interval: time::Duration) -> &mut Self {
+    pub fn set_commit_interval(&mut self, interval: time::Duration) -> Result<&mut Self> {
         self.commit_interval = Some(interval);
-        self
+        Ok(self)
     }
 
     /// Set interval in time duration, for invoking disk compaction
     /// between dgm disk-levels. Calling this method will spawn an auto
     /// compaction thread.
-    pub fn set_compact_interval(&mut self, interval: time::Duration) -> &mut Self {
+    pub fn set_compact_interval(&mut self, interval: time::Duration) -> Result<&mut Self> {
         self.compact_interval = Some(interval);
-        self
+        Ok(self)
     }
 }
 
@@ -2675,14 +2675,16 @@ where
     where
         G: Clone + RangeBounds<u64>,
     {
-        panic!("dgm-reader, scan() not supported {} !!", self.name);
+        let msg = format!("<DgmReader as CommitIterator>.scan; {}", self.name);
+        err_at!(NotImplemented, msg: msg)
     }
 
     fn scans<G>(&mut self, _n_shards: usize, _within: G) -> Result<Vec<IndexIter<K, V>>>
     where
         G: Clone + RangeBounds<u64>,
     {
-        panic!("dgm-reader, scans() not supported by {} !!", self.name);
+        let msg = format!("<DgmReader as CommitIterator>.scans; {}", self.name);
+        err_at!(NotImplemented, msg: msg)
     }
 
     fn range_scans<N, G>(&mut self, _ranges: Vec<N>, _within: G) -> Result<Vec<IndexIter<K, V>>>
@@ -2690,10 +2692,8 @@ where
         G: Clone + RangeBounds<u64>,
         N: Clone + RangeBounds<K>,
     {
-        panic!(
-            "dgm-reader, range_scans() not supported by {} !!",
-            self.name
-        );
+        let msg = format!("<DgmReader as CommitIterator>.range_scans; {}", self.name);
+        err_at!(NotImplemented, msg: msg)
     }
 }
 

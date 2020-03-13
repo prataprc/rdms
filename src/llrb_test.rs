@@ -1133,8 +1133,8 @@ fn test_mvcc_conversion() {
             }
         }
 
-        let mut refmvcc: Box<Mvcc<i64, i64>> = mvcc.clone();
-        let mut llrb: Box<Llrb<i64, i64>> = From::from(*mvcc);
+        let mut refmvcc: Box<Mvcc<i64, i64>> = mvcc.clone().unwrap();
+        let mut llrb: Box<Llrb<i64, i64>> = TryFrom::try_from(*mvcc).unwrap();
 
         assert_eq!(refmvcc.is_lsm(), llrb.is_lsm());
         assert_eq!(refmvcc.is_sticky(), llrb.is_sticky());

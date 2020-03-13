@@ -15,6 +15,8 @@ use std::ffi;
 /// Error enumerates over all possible errors cases in `rdms` package.
 #[derive(Debug)]
 pub enum Error {
+    /// Fatal failure, caller can treat this as sever as a panic!()
+    Fatal(String),
     /// API / function not supported
     NotImplemented(String),
     /// Error because the value was not initialized as expected.
@@ -33,6 +35,9 @@ pub enum Error {
     SystemFail(String),
     /// Invalid input
     InvalidInput(String),
+    /// API is being misused, as in there are not invoked in
+    /// suggested order/manner.
+    APIMisuse(String),
     /// Supplied key is not found in the index.
     KeyNotFound,
     /// Index is empty

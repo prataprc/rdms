@@ -35,6 +35,7 @@ use log::{debug, error, info, warn};
 use std::{
     borrow::Borrow,
     cmp::{self, Ord, Ordering},
+    convert::TryFrom,
     ffi, fmt,
     hash::Hash,
     marker, mem,
@@ -206,12 +207,13 @@ where
     node.right.take().map(|right| drop_tree(right));
 }
 
-impl<K, V> From<Mvcc<K, V>> for Box<Llrb<K, V>>
+impl<K, V> TryFrom<Mvcc<K, V>> for Box<Llrb<K, V>>
 where
     K: Clone + Ord,
     V: Clone + Diff,
 {
-    fn from(mvcc_index: Mvcc<K, V>) -> Box<Llrb<K, V>> {
+    type Error = Error;
+    fn try_from(mvcc_index: Mvcc<K, V>) -> Result<Box<Llrb<K, V>>> {
         let mut index = if mvcc_index.is_lsm() {
             Llrb::new_lsm(mvcc_index.to_name())
         } else {
@@ -220,7 +222,7 @@ where
         index.set_sticky(mvcc_index.is_sticky()).ok(); // can't be error
         index.set_spinlatch(mvcc_index.is_spin()).ok(); // can't be error
 
-        let debris = mvcc_index.squash();
+        let debris = mvcc_index.squash()?;
         index.root = debris.root;
         index.seqno = debris.seqno;
         index.n_count = debris.n_count;
@@ -228,7 +230,7 @@ where
         index.key_footprint = debris.key_footprint;
         index.tree_footprint = debris.tree_footprint;
 
-        index
+        Ok(index)
     }
 }
 
@@ -293,11 +295,12 @@ where
     /// creating reader and/or writer handles.
     pub fn set_spinlatch(&mut self, spin: bool) -> Result<&mut Self> {
         let n = self.multi_rw();
-        if n > 0 {
-            panic!("cannot configure Llrb with active readers/writers {}", n)
+        if n == 0 {
+            self.spin = spin;
+            Ok(self)
+        } else {
+            err_at!(APIMisuse, msg: format!("active-handles:{}", n))
         }
-        self.spin = spin;
-        Ok(self)
     }
 
     /// Run this instance in sticky mode, which is like a shallow lsm.
@@ -308,26 +311,28 @@ where
     /// deleted and but its value shall be removed.
     pub fn set_sticky(&mut self, sticky: bool) -> Result<&mut Self> {
         let n = self.multi_rw();
-        if n > 0 {
-            panic!("cannot configure Llrb with active readers/writers {}", n)
+        if n == 0 {
+            self.sticky = sticky;
+            Ok(self)
+        } else {
+            err_at!(APIMisuse, msg: format!("active-handles:{}", n))
         }
-        self.sticky = sticky;
-        Ok(self)
     }
 
     /// Squash this index and return the root and its book-keeping.
-    pub(crate) fn squash(mut self) -> SquashDebris<K, V> {
+    pub(crate) fn squash(mut self) -> Result<SquashDebris<K, V>> {
         let n = self.multi_rw();
-        if n > 0 {
-            panic!("cannot squash Llrb with active readers/writer {}", n);
-        }
-        SquashDebris {
-            root: self.root.take(),
-            seqno: self.seqno,
-            n_count: self.n_count,
-            n_deleted: self.n_deleted,
-            key_footprint: self.key_footprint,
-            tree_footprint: self.tree_footprint,
+        if n == 0 {
+            Ok(SquashDebris {
+                root: self.root.take(),
+                seqno: self.seqno,
+                n_count: self.n_count,
+                n_deleted: self.n_deleted,
+                key_footprint: self.key_footprint,
+                tree_footprint: self.tree_footprint,
+            })
+        } else {
+            err_at!(APIMisuse, msg: format!("active-handles:{}", n))
         }
     }
 
@@ -364,7 +369,7 @@ where
     ) -> Result<(Box<Llrb<K, V>>, Box<Llrb<K, V>>)> {
         let n = self.multi_rw();
         if n > 0 {
-            panic!("cannot call llrb.split() with active readers/writers");
+            return err_at!(APIMisuse, msg: format!("active-handles:{}", n));
         }
 
         let (mut one, mut two) = if self.lsm {
@@ -587,7 +592,7 @@ where
     fn set_seqno(&mut self, seqno: u64) -> Result<()> {
         let n = self.multi_rw();
         if n > 0 {
-            panic!("cannot configure Llrb with active readers/writers {}", n)
+            return err_at!(APIMisuse, msg: format!("active-handles:{}", n));
         }
         self.seqno = seqno;
         Ok(())
@@ -784,7 +789,7 @@ where
         let (seqno, old_entry) = self.set_index_entry(entry)?;
         if let Some(old_entry) = &old_entry {
             if old_entry.is_deleted() && (!self.lsm && !self.sticky) {
-                panic!("impossible case");
+                return err_at!(Fatal, msg: format!("call-the-programmer"));
             }
         }
         Ok((seqno, old_entry))
@@ -848,7 +853,7 @@ where
                 self.root = Some(root);
                 Ok((self.seqno, Ok(old_entry)))
             }
-            _ => panic!("set_cas: impossible case, call programmer"),
+            _ => err_at!(Fatal, msg: format!("call-the-programmer")),
         }
     }
 
@@ -1269,7 +1274,7 @@ where
                 let (right, mut res_node) = Llrb::delete_min(node.right.take());
                 node.right = right;
                 if res_node.is_none() {
-                    panic!("do_delete(): fatal logic, call the programmer");
+                    return err_at!(Fatal, msg: format!("call-the-programmer"));
                 }
                 let subdel = res_node.take().unwrap();
                 let mut newnode = Box::new(subdel.clone_detach());
@@ -1353,7 +1358,7 @@ where
                 mself.seqno = cmp::max(mself.seqno, seqno);
                 Ok((mself.seqno, old_entry))
             }
-            _ => panic!("set: impossible case, call programmer"),
+            _ => err_at!(Fatal, msg: format!("call-the-programmer")),
         }
     }
 }
@@ -1882,7 +1887,7 @@ where
     //
     fn rotate_left(mut node: Box<Node<K, V>>) -> Box<Node<K, V>> {
         if is_black(node.as_right_deref()) {
-            panic!("rotateleft(): rotating a black link ? call the programmer");
+            panic!("rotate_left(): rotate black link ? call-the-programmer");
         }
         let mut x = node.right.take().unwrap();
         node.right = x.left.take();
@@ -1904,7 +1909,7 @@ where
     //
     fn rotate_right(mut node: Box<Node<K, V>>) -> Box<Node<K, V>> {
         if is_black(node.as_left_deref()) {
-            panic!("rotateright(): rotating a black link ? call the programmer")
+            panic!("rotate_right(): rotate black link ? call-the-programmer");
         }
         let mut x = node.left.take().unwrap();
         node.left = x.right.take();

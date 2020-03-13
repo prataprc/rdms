@@ -252,7 +252,7 @@ where
             .n_nodes
             .store(convert_at!(llrb_index.len())?, SeqCst);
 
-        let debris = llrb_index.squash();
+        let debris = llrb_index.squash()?;
         mvcc_index.key_footprint = debris.key_footprint;
         mvcc_index.tree_footprint = debris.tree_footprint;
         mvcc_index.n_deleted = debris.n_deleted;
@@ -320,11 +320,12 @@ where
     /// creating reader and/or writer handles.
     pub fn set_spinlatch(&mut self, spin: bool) -> Result<&mut Self> {
         let n = self.multi_rw();
-        if n > 0 {
-            panic!("cannot configure Mvcc with active readers/writer {}", n);
+        if n == 0 {
+            self.spin = spin;
+            Ok(self)
+        } else {
+            err_at!(APIMisuse, msg: format!("active-handles:{}", n))
         }
-        self.spin = spin;
-        Ok(self)
     }
 
     /// Run this instance in sticky mode, which is like a shallow lsm.
@@ -335,39 +336,41 @@ where
     /// deleted and but its value shall be removed.
     pub fn set_sticky(&mut self, sticky: bool) -> Result<&mut Self> {
         let n = self.multi_rw();
-        if n > 0 {
-            panic!("cannot configure Mvcc with active readers/writers {}", n)
+        if n == 0 {
+            self.sticky = sticky;
+            Ok(self)
+        } else {
+            err_at!(APIMisuse, msg: format!("active-handles:{}", n))
         }
-        self.sticky = sticky;
-        Ok(self)
     }
 
     /// Squash this index and return the root and its book-keeping.
-    pub(crate) fn squash(mut self) -> SquashDebris<K, V> {
+    pub(crate) fn squash(mut self) -> Result<SquashDebris<K, V>> {
         let n = self.multi_rw();
-        if n > 0 {
-            panic!("cannot squash Mvcc with active readers/writer {}", n);
-        }
-
-        let snapshot =
-            Arc::get_mut(unsafe { self.snapshot.inner.load(SeqCst).as_mut().unwrap() }).unwrap();
-
-        self.n_reclaimed = 0;
-        self.snapshot.n_nodes.store(0, SeqCst);
-        SquashDebris {
-            root: snapshot.root.take(),
-            seqno: snapshot.seqno,
-            n_count: snapshot.n_count,
-            n_deleted: self.n_deleted,
-            key_footprint: self.key_footprint,
-            tree_footprint: self.tree_footprint,
+        if n == 0 {
+            let snapshot = {
+                let snap_inner = self.snapshot.inner.load(SeqCst);
+                Arc::get_mut(unsafe { snap_inner.as_mut().unwrap() }).unwrap()
+            };
+            self.n_reclaimed = 0;
+            self.snapshot.n_nodes.store(0, SeqCst);
+            Ok(SquashDebris {
+                root: snapshot.root.take(),
+                seqno: snapshot.seqno,
+                n_count: snapshot.n_count,
+                n_deleted: self.n_deleted,
+                key_footprint: self.key_footprint,
+                tree_footprint: self.tree_footprint,
+            })
+        } else {
+            err_at!(APIMisuse, msg: format!("number of active handles:{}", n))
         }
     }
 
-    pub fn clone(&self) -> Box<Mvcc<K, V>> {
+    pub fn clone(&self) -> Result<Box<Mvcc<K, V>>> {
         let n = self.multi_rw();
         if n > 0 {
-            panic!("cannot clone Mvcc with active readers/writer {}", n);
+            return err_at!(APIMisuse, msg: format!("active-handles:{}", n));
         }
 
         let cloned = Box::new(Mvcc {
@@ -400,7 +403,8 @@ where
         cloned
             .snapshot
             .shift_snapshot(root_node, seqno, n_count, vec![]);
-        cloned
+
+        Ok(cloned)
     }
 }
 
@@ -569,15 +573,14 @@ where
 
     fn set_seqno(&mut self, seqno: u64) -> Result<()> {
         let n = self.multi_rw();
-        if n > 0 {
-            panic!("cannot configure Mvcc with active readers/writer {}", n);
+        if n == 0 {
+            let s = OuterSnapshot::clone(&self.snapshot);
+            let root = s.root_duplicate();
+            self.snapshot.shift_snapshot(root, seqno, s.n_count, vec![]);
+            Ok(())
+        } else {
+            err_at!(APIMisuse, msg: format!("active-handles:{}", n))
         }
-
-        let s = OuterSnapshot::clone(&self.snapshot);
-        let root = s.root_duplicate();
-        self.snapshot.shift_snapshot(root, seqno, s.n_count, vec![]);
-
-        Ok(())
     }
 
     /// Lockless concurrent readers are supported
@@ -740,7 +743,7 @@ where
         let (seqno, old_entry) = self.set_index_entry(entry)?;
         if let Some(old_entry) = &old_entry {
             if old_entry.is_deleted() && (!self.lsm && !self.sticky) {
-                panic!("impossible case");
+                return err_at!(Fatal, msg: format!("call-the-programmer"));
             }
         }
         Ok((seqno, old_entry))
@@ -790,7 +793,7 @@ where
                 self.tree_footprint += size;
 
                 root.set_black();
-                (seqno, Some(root), new_node, Ok(old_entry))
+                Ok((seqno, Some(root), new_node, Ok(old_entry)))
             }
             UpsertCasResult {
                 node: mut root,
@@ -799,10 +802,10 @@ where
                 ..
             } => {
                 root.as_mut().map(|root| root.set_black());
-                (seqno, root, new_node, Err(err))
+                Ok((seqno, root, new_node, Err(err)))
             }
-            _ => panic!("set_cas: impossible case, call programmer"),
-        };
+            _ => err_at!(Fatal, msg: format!("call-the-programmer")),
+        }?;
         let (seqno, root, optn, entry) = s;
 
         if let Some(mut n) = optn {
@@ -1346,7 +1349,7 @@ where
                 let (right, mut res_node) = self.delete_min(right, reclaim)?;
                 newnd.right = right;
                 if res_node.is_none() {
-                    panic!("do_delete(): fatal logic, call the programmer");
+                    return err_at!(Fatal, msg: format!("call-the-programmer"));
                 }
                 let mut newnode = res_node.take().unwrap();
                 newnode.left = newnd.left.take();
@@ -1451,7 +1454,7 @@ where
                     .shift_snapshot(Some(root), seqno, n_count, rclm);
                 Ok((seqno, old_entry))
             }
-            _ => panic!("set: impossible case, call programmer"),
+            _ => err_at!(Fatal, msg: format!("call-the-programmer")),
         }
     }
 }
@@ -2014,7 +2017,7 @@ where
     ) -> Box<Node<K, V>> {
         let old_right = node.right.take().unwrap();
         if is_black(Some(old_right.as_ref())) {
-            panic!("rotateleft(): rotating a black link ? call the programmer");
+            panic!("rotateleft(): rotate black link ? call-the-programmer");
         }
 
         let mut right = if old_right.dirty {
@@ -2048,7 +2051,7 @@ where
     ) -> Box<Node<K, V>> {
         let old_left = node.left.take().unwrap();
         if is_black(Some(old_left.as_ref())) {
-            panic!("rotateright(): rotating a black link ? call the programmer")
+            panic!("rotateright(): rotate black link ? call-the-programmer")
         }
 
         let mut left = if old_left.dirty {

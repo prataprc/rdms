@@ -1197,7 +1197,7 @@ where
         <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::W: 'static + Send,
     {
         fs::remove_dir_all(dir).ok();
-        io_err_at!(fs::create_dir_all(dir))?;
+        err_at!(IoError, fs::create_dir_all(dir))?;
 
         let root: Root = config.clone().into();
         let root_file = Self::new_root_file(dir, name, root.clone())?;
@@ -1486,7 +1486,7 @@ where
                 &inn.name,
                 inn.root.clone(),
             )?;
-            io_err_at!(fs::remove_file(&root_file))?;
+            err_at!(IoError, fs::remove_file(&root_file))?;
 
             // println!("do_commit d_disk:{} ver:{}", level, inn.root.version);
         }
@@ -1586,7 +1586,7 @@ where
                 &inn.name,
                 inn.root.clone(),
             )?;
-            io_err_at!(fs::remove_file(&root_file))?;
+            err_at!(IoError, fs::remove_file(&root_file))?;
 
             // println!("do_compact compact ver:{}", inn.root.version);
         }
@@ -1647,7 +1647,7 @@ where
                 &inn.name,
                 inn.root.clone(),
             )?;
-            io_err_at!(fs::remove_file(&root_file))?;
+            err_at!(IoError, fs::remove_file(&root_file))?;
 
             //println!(
             //    "do_compact commit s_levels:{:?} d_level:{} ver:{}",
@@ -1674,7 +1674,7 @@ where
         let data: Vec<u8> = root.try_into()?;
 
         let mut fd = util::create_file_a(root_file.clone())?;
-        io_err_at!(fd.write(&data))?;
+        err_at!(IoError, fd.write(&data))?;
         Ok(root_file.into())
     }
 
@@ -1682,7 +1682,7 @@ where
         use crate::error::Error::InvalidFile;
 
         let mut versions = vec![];
-        for item in io_err_at!(fs::read_dir(dir))? {
+        for item in err_at!(IoError, fs::read_dir(dir))? {
             match item {
                 Ok(item) => {
                     let root_file = RootFileName(item.file_name());
@@ -1709,7 +1709,7 @@ where
 
         let mut fd = util::open_file_r(&root_file)?;
         let mut bytes = vec![];
-        io_err_at!(fd.read_to_end(&mut bytes))?;
+        err_at!(IoError, fd.read_to_end(&mut bytes))?;
 
         Ok((bytes.try_into()?, root_file))
     }

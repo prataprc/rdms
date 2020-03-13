@@ -59,12 +59,13 @@ impl TryFrom<Vec<u8>> for Root {
 
     fn try_from(bytes: Vec<u8>) -> Result<Root> {
         use crate::error::Error::InvalidFile;
+        use std::str::from_utf8;
 
         let err1 = InvalidFile(format!("shrobt-root, not a table"));
         let err2 = InvalidFile(format!("shrobt-root, missing num_shards"));
         let err3 = InvalidFile(format!("shrobt-root, num_shards not int"));
 
-        let text = err_at!(std::str::from_utf8(&bytes))?.to_string();
+        let text = err_at!(InvalidInput, from_utf8(&bytes))?.to_string();
 
         let value: toml::Value = text
             .parse()
@@ -447,7 +448,7 @@ where
         let data: Vec<u8> = root.try_into()?;
 
         let mut fd = util::create_file_a(root_file.clone())?;
-        io_err_at!(fd.write(&data))?;
+        err_at!(IoError, fd.write(&data))?;
         Ok(root_file.into())
     }
 
@@ -461,7 +462,7 @@ where
 
         let mut fd = util::open_file_r(&root_file)?;
         let mut bytes = vec![];
-        io_err_at!(fd.read_to_end(&mut bytes))?;
+        err_at!(IoError, fd.read_to_end(&mut bytes))?;
 
         Ok(bytes.try_into()?)
     }
@@ -469,7 +470,7 @@ where
     fn find_root_file(dir: &ffi::OsStr, name: &str) -> Result<ffi::OsString> {
         use crate::error::Error::InvalidFile;
 
-        for item in io_err_at!(fs::read_dir(dir))? {
+        for item in err_at!(IoError, fs::read_dir(dir))? {
             match item {
                 Ok(item) => {
                     let root_file = RootFileName(item.file_name());

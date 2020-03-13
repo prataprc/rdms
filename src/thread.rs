@@ -141,8 +141,8 @@ impl<Q, R, T> Thread<Q, R, T> {
         match &self.inner {
             Some(inner) => {
                 match &inner.tx {
-                    Tx::N(thread_tx) => ipc_at!(thread_tx.send((msg, None)))?,
-                    Tx::S(thread_tx) => ipc_at!(thread_tx.send((msg, None)))?,
+                    Tx::N(thread_tx) => err_at!(IPCFail, thread_tx.send((msg, None)))?,
+                    Tx::S(thread_tx) => err_at!(IPCFail, thread_tx.send((msg, None)))?,
                 };
                 Ok(())
             }
@@ -156,10 +156,16 @@ impl<Q, R, T> Thread<Q, R, T> {
             Some(inner) => {
                 let (tx, rx) = mpsc::channel();
                 match &inner.tx {
-                    Tx::N(thread_tx) => ipc_at!(thread_tx.send((request, Some(tx))))?,
-                    Tx::S(thread_tx) => ipc_at!(thread_tx.send((request, Some(tx))))?,
+                    Tx::N(thread_tx) => {
+                        //
+                        err_at!(IPCFail, thread_tx.send((request, Some(tx))))?
+                    }
+                    Tx::S(thread_tx) => {
+                        //
+                        err_at!(IPCFail, thread_tx.send((request, Some(tx))))?
+                    }
                 }
-                Ok(ipc_at!(rx.recv())?)
+                Ok(err_at!(IPCFail, rx.recv())?)
             }
             None => Err(Error::UnReachable(format!("Thread.request()"))),
         }
@@ -202,8 +208,8 @@ impl<Q, R> Writer<Q, R> {
     /// Same as [Thread::post] method.
     pub fn post(&mut self, msg: Q) -> Result<()> {
         match &self.tx {
-            Tx::N(thread_tx) => Ok(ipc_at!(thread_tx.send((msg, None)))?),
-            Tx::S(thread_tx) => Ok(ipc_at!(thread_tx.send((msg, None)))?),
+            Tx::N(thread_tx) => Ok(err_at!(IPCFail, thread_tx.send((msg, None)))?),
+            Tx::S(thread_tx) => Ok(err_at!(IPCFail, thread_tx.send((msg, None)))?),
         }
     }
 
@@ -211,9 +217,15 @@ impl<Q, R> Writer<Q, R> {
     pub fn request(&mut self, request: Q) -> Result<R> {
         let (tx, rx) = mpsc::channel();
         match &self.tx {
-            Tx::N(thread_tx) => ipc_at!(thread_tx.send((request, Some(tx))))?,
-            Tx::S(thread_tx) => ipc_at!(thread_tx.send((request, Some(tx))))?,
+            Tx::N(thread_tx) => {
+                //
+                err_at!(IPCFail, thread_tx.send((request, Some(tx))))?
+            }
+            Tx::S(thread_tx) => {
+                //
+                err_at!(IPCFail, thread_tx.send((request, Some(tx))))?
+            }
         }
-        Ok(ipc_at!(rx.recv())?)
+        Ok(err_at!(IPCFail, rx.recv())?)
     }
 }

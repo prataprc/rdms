@@ -57,8 +57,7 @@ where
 
     // TODO: add test cases for this.
     fn on_add_entry(&mut self, _entry: &DEntry<Op<K, V>>) -> () {
-        // TBD
-        unimplemented!()
+        todo!()
     }
 
     fn to_type(&self) -> String {
@@ -96,6 +95,8 @@ impl Serialize for State {
     }
 
     fn decode(&mut self, buf: &[u8]) -> Result<usize> {
+        use std::str::from_utf8;
+
         util::check_remaining(buf, 24, "dlog batch-config")?;
         self.term = u64::from_be_bytes(array_at!(buf[0..8])?);
         self.committed = u64::from_be_bytes(array_at!(buf[8..16])?);
@@ -114,7 +115,7 @@ impl Serialize for State {
 
             util::check_remaining(buf, n + m, "dlog batch-config")?;
 
-            let s = err_at!(std::str::from_utf8(&buf[n..n + m]))?;
+            let s = err_at!(InvalidInput, from_utf8(&buf[n..n + m]))?;
             self.config.push(s.to_string());
             n += m;
         }
@@ -125,7 +126,12 @@ impl Serialize for State {
         n += 2;
 
         util::check_remaining(buf, n + m, "dlog batch-votedfor")?;
-        self.votedfor = err_at!(std::str::from_utf8(&buf[n..n + m]))?.to_string();
+        self.votedfor = err_at!(
+            //
+            InvalidInput,
+            from_utf8(&buf[n..n + m])
+        )?
+        .to_string();
         n += m;
 
         Ok(n)

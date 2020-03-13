@@ -84,8 +84,8 @@ impl TryFrom<JournalFile> for (String, String, usize, usize) {
 
         match &parts[..] {
             [typ, "shard", shard_id, "journal", num] => {
-                let shard_id: usize = parse_at!(shard_id.parse())?;
-                let num: usize = parse_at!(num.parse())?;
+                let shard_id: usize = parse_at!(shard_id, usize)?;
+                let num: usize = parse_at!(num, usize)?;
                 Ok((name.to_string(), typ.to_string(), shard_id, num))
             }
             _ => Err(InvalidFile(err.clone())),
@@ -137,8 +137,8 @@ where
         S: DlogState<T>,
     {
         // purge existing journals for this shard.
-        for item in io_err_at!(fs::read_dir(&dir))? {
-            let file_name = io_err_at!(item)?.file_name();
+        for item in err_at!(IoError, fs::read_dir(&dir))? {
+            let file_name = err_at!(IoError, item)?.file_name();
             let (n, id) = (name.clone(), shard_id);
             match Journal::<S, T>::new_cold(n, id, dir.clone(), file_name) {
                 Some(journal) => journal.purge()?,
@@ -177,8 +177,8 @@ where
     {
         let mut journals = vec![];
 
-        for item in io_err_at!(fs::read_dir(&dir))? {
-            let file_name = io_err_at!(item)?.file_name();
+        for item in err_at!(IoError, fs::read_dir(&dir))? {
+            let file_name = err_at!(IoError, item)?.file_name();
             let (n, id) = (name.clone(), shard_id);
             match Journal::<S, T>::new_archive(n, id, dir.clone(), file_name) {
                 Some(journal) => journals.push(journal),
@@ -355,11 +355,11 @@ where
                 (OpRequest::Op { op }, Some(caller)) => {
                     let index = self.dlog_index.fetch_add(1, AcqRel);
                     self.active.add_entry(DEntry::new(index, op));
-                    ipc_at!(caller.send(OpResponse::new_index(index)))?;
+                    err_at!(IPCFail, caller.send(OpResponse::new_index(index)))?;
                 }
                 (OpRequest::PurgeTill { before }, Some(caller)) => {
                     let before = self.do_purge_till(before)?;
-                    ipc_at!(caller.send(OpResponse::new_purged(before)))?;
+                    err_at!(IPCFail, caller.send(OpResponse::new_purged(before)))?;
                 }
                 _ => unreachable!(),
             }
@@ -477,7 +477,7 @@ where
         let file_path = file_path.to_os_string();
         let fd = {
             let mut opts = fs::OpenOptions::new();
-            io_err_at!(opts.append(true).create_new(true).open(&file_path))?
+            err_at!(IoError, opts.append(true).create_new(true).open(&file_path))?
         };
 
         Ok(Journal {
@@ -586,7 +586,7 @@ where
 
     fn purge(self) -> Result<()> {
         let file_path = self.to_file_path();
-        io_err_at!(fs::remove_file(&file_path))?;
+        err_at!(IoError, fs::remove_file(&file_path))?;
 
         Ok(())
     }
@@ -711,7 +711,7 @@ where
                 active,
             } => {
                 let limit: u64 = convert_at!(journal_limit)?;
-                let exceeded = io_err_at!(fd.metadata())?.len() > limit;
+                let exceeded = err_at!(IoError, fd.metadata())?.len() > limit;
                 (file_path, fd, batches, active, exceeded)
             }
             _ => unreachable!(),
@@ -729,15 +729,15 @@ where
                 Ok(Some((buffer, batch)))
             }
             false if active.len() > 0 => {
-                let fpos = io_err_at!(fd.metadata())?.len();
-                let n = io_err_at!(fd.write(&buffer))?;
+                let fpos = err_at!(IoError, fd.metadata())?.len();
+                let n = err_at!(IoError, fd.write(&buffer))?;
                 if length != n {
                     let f = file_path.clone();
                     let msg = format!("wal-flush: {:?}, {}/{}", f, length, n);
                     Err(Error::PartialWrite(msg))
                 } else {
                     if !nosync {
-                        io_err_at!(fd.sync_all())?;
+                        err_at!(IoError, fd.sync_all())?;
                     }
 
                     let a = active.to_first_index().unwrap();
@@ -764,11 +764,11 @@ where
         };
 
         let length = buffer.len();
-        let fpos = io_err_at!(fd.metadata())?.len();
-        let n = io_err_at!(fd.write(&buffer))?;
+        let fpos = err_at!(IoError, fd.metadata())?.len();
+        let n = err_at!(IoError, fd.write(&buffer))?;
         if length == n {
             if !nosync {
-                io_err_at!(fd.sync_all())?;
+                err_at!(IoError, fd.sync_all())?;
             }
 
             let a = batch.to_first_index().unwrap();

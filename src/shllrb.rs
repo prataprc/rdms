@@ -60,7 +60,7 @@ impl TryFrom<ShardName> for (String, usize) {
         } else {
             let shard = {
                 let off = parts.len() - 1;
-                parse_at!(parts[off].parse::<usize>())?
+                parse_at!(parts[off], usize)?
             };
             let s = parts[..(parts.len() - 2)].join("-");
             Ok((s, shard))
@@ -2365,10 +2365,10 @@ where
             ShLlrb::<K, V>::do_balance(name, s, config.clone())
         };
 
-        elapsed = systime_at!(start.elapsed())?;
+        elapsed = err_at!(TimeFail, start.elapsed())?;
 
         match resp_tx {
-            Some(tx) => ipc_at!(tx.send(res))?,
+            Some(tx) => err_at!(IPCFail, tx.send(res))?,
             None => match res {
                 Ok(n) => info!(
                     target: "shllrb", "{:?}, balance done: {}", index_name, n

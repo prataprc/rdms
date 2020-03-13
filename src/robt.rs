@@ -541,7 +541,7 @@ where
         use crate::error::Error::InvalidFile;
 
         let mut versions = vec![];
-        for item in io_err_at!(fs::read_dir(dir))? {
+        for item in err_at!(IoError, fs::read_dir(dir))? {
             match item {
                 Ok(item) => {
                     let index_file = IndexFileName(item.file_name());
@@ -1436,7 +1436,7 @@ pub(crate) fn write_meta_items(
     let mut fd = {
         let p = path::Path::new(&file);
         let mut opts = fs::OpenOptions::new();
-        io_err_at!(opts.append(true).open(p))?
+        err_at!(IoError, opts.append(true).open(p))?
     };
 
     let (mut hdr, mut block) = (vec![], vec![]);
@@ -1494,8 +1494,8 @@ pub(crate) fn write_meta_items(
     block.resize(n, 0);
     block.copy_within(0..m, shift);
     let ln = block.len();
-    let n = io_err_at!(fd.write(&block))?;
-    io_err_at!(fd.sync_all())?;
+    let n = err_at!(IoError, fd.write(&block))?;
+    err_at!(IoError, fd.sync_all())?;
     if n == ln {
         Ok(convert_at!(n)?)
     } else {
@@ -1514,8 +1514,10 @@ pub fn read_meta_items(
     dir: &ffi::OsStr, // directory of index, can be os-native string
     name: &str,
 ) -> Result<(Vec<MetaItem>, usize)> {
+    use std::str::from_utf8;
+
     let index_file = Config::stitch_index_file(dir, name);
-    let m = io_err_at!(fs::metadata(&index_file))?.len();
+    let m = err_at!(IoError, fs::metadata(&index_file))?.len();
     let mut fd = util::open_file_r(index_file.as_ref())?;
 
     // read header
@@ -1553,7 +1555,7 @@ pub fn read_meta_items(
     }
 
     let (x, y) = (z - n_marker - n_stats, z - n_marker);
-    let stats = err_at!(std::str::from_utf8(&block[x..y]))?.to_string();
+    let stats = err_at!(InvalidInput, from_utf8(&block[x..y]))?.to_string();
 
     let (x, y) = (z - n_marker - n_stats - n_md, z - n_marker - n_stats);
     let app_data = block[x..y].to_vec();
@@ -1807,34 +1809,37 @@ impl FromStr for Stats {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Stats> {
-        let js: Json = err_at!(s.parse())?;
+        let js: Json = err_at!(InvalidInput, s.parse())?;
         let err1 = format!("string-to-robt-stats, not an integer");
         let err2 = format!("string-to-robt-stats, not string");
         let err3 = format!("string-to-robt-stats, not boolean");
         let err4 = format!("string-to-robt-stats, not float");
 
         let to_usize = |key: &str| -> Result<usize> {
-            let n: usize = convert_at!(err_at!(js.get(key))?
+            let n: usize = convert_at!(err_at!(InvalidInput, js.get(key))?
                 .integer()
                 .ok_or(Error::UnExpectedFail(err1.clone()))?)?;
             Ok(n)
         };
         let to_u64 = |key: &str| -> Result<u64> {
-            let n: u64 = convert_at!(err_at!(js.get(key))?
+            let n: u64 = convert_at!(err_at!(InvalidInput, js.get(key))?
                 .integer()
                 .ok_or(Error::UnExpectedFail(err1.clone()))?)?;
             Ok(n)
         };
-        let vlog_file = match err_at!(js.get("/vlog_file"))?.string() {
-            Some(s) if s.len() == 0 => None,
-            None => None,
-            Some(s) => {
-                let vlog_file: ffi::OsString = s.into();
-                Some(vlog_file)
+        let vlog_file = {
+            let arg = err_at!(InvalidInput, js.get("/vlog_file"))?.string();
+            match arg {
+                Some(s) if s.len() == 0 => None,
+                None => None,
+                Some(s) => {
+                    let vlog_file: ffi::OsString = s.into();
+                    Some(vlog_file)
+                }
             }
         };
         let cr: f64 = {
-            let v = err_at!(js.get("/compact_ratio"))?;
+            let v = err_at!(InvalidInput, js.get("/compact_ratio"))?;
             match v.float() {
                 Some(v) => v,
                 None => {
@@ -1845,18 +1850,18 @@ impl FromStr for Stats {
         };
 
         Ok(Stats {
-            name: err_at!(js.get("/name"))?
+            name: err_at!(InvalidInput, js.get("/name"))?
                 .string()
                 .ok_or(Error::UnExpectedFail(err2))?,
             // config fields.
             z_blocksize: to_usize("/z_blocksize")?,
             m_blocksize: to_usize("/m_blocksize")?,
             v_blocksize: to_usize("/v_blocksize")?,
-            delta_ok: err_at!(js.get("/delta_ok"))?
+            delta_ok: err_at!(InvalidInput, js.get("/delta_ok"))?
                 .boolean()
                 .ok_or(Error::UnExpectedFail(err3.clone()))?,
             vlog_file: vlog_file,
-            value_in_vlog: err_at!(js.get("/value_in_vlog"))?
+            value_in_vlog: err_at!(InvalidInput, js.get("/value_in_vlog"))?
                 .boolean()
                 .ok_or(Error::UnExpectedFail(err3.clone()))?,
             flush_queue_size: to_usize("/flush_queue_size")?,
@@ -1877,7 +1882,7 @@ impl FromStr for Stats {
             n_abytes: to_usize("/n_abytes")?,
 
             build_time: to_u64("/build_time")?,
-            epoch: err_at!(js.get("/epoch"))?
+            epoch: err_at!(InvalidInput, js.get("/epoch"))?
                 .integer()
                 .ok_or(Error::UnExpectedFail(err1))?,
         })
@@ -1986,7 +1991,7 @@ where
         let (vflusher, vf_fpos): (_, usize) = match &config.vlog_file {
             Some(vfile) => {
                 let vfile = vfile.clone();
-                let vf_fpos = io_err_at!(fs::metadata(&vfile))?.len();
+                let vf_fpos = err_at!(IoError, fs::metadata(&vfile))?.len();
 
                 let t = rt::Thread::new_sync(
                     move |rx| move || thread_flush(vfile, create, rx),
@@ -2284,14 +2289,14 @@ where
 
     fn update_stats(self, stats: &mut Stats) -> Result<I> {
         stats.build_time = {
-            let elapsed = systime_at!(self.start.elapsed())?;
+            let elapsed = err_at!(TimeFail, self.start.elapsed())?;
             convert_at!(elapsed.as_nanos())?
         };
         stats.seqno = self.seqno;
         stats.n_count = self.n_count;
         stats.n_deleted = self.n_deleted;
         stats.epoch = {
-            let elapsed = systime_at!(time::UNIX_EPOCH.elapsed())?;
+            let elapsed = err_at!(TimeFail, time::UNIX_EPOCH.elapsed())?;
             convert_at!(elapsed.as_nanos())?
         };
         Ok(self.iter)
@@ -2420,28 +2425,28 @@ fn thread_flush(
     } else {
         (
             util::open_file_w(&file)?,
-            io_err_at!(fs::metadata(&file))?.len(),
+            err_at!(IoError, fs::metadata(&file))?.len(),
         )
     };
 
-    io_err_at!(fd.lock_shared())?; // <---- read lock
+    err_at!(IoError, fd.lock_shared())?; // <---- read lock
 
     for (data, _) in rx {
         // println!("flusher {:?} {} {}", file, fpos, data.len());
         // fpos += data.len();
-        let n = io_err_at!(fd.write(&data))?;
+        let n = err_at!(IoError, fd.write(&data))?;
         let m = data.len();
         if n != m {
             let msg = format!("robt flusher: {:?} {}/{}...", &file, m, n);
-            io_err_at!(fd.unlock())?; // <----- read un-lock
+            err_at!(IoError, fd.unlock())?; // <----- read un-lock
             return Err(Error::PartialWrite(msg));
         }
     }
 
-    io_err_at!(fd.sync_all())?;
+    err_at!(IoError, fd.sync_all())?;
 
     // file descriptor and receiver channel shall be dropped.
-    io_err_at!(fd.unlock())?; // <----- read un-lock
+    err_at!(IoError, fd.unlock())?; // <----- read un-lock
     Ok((file, fpos))
 }
 
@@ -2528,7 +2533,7 @@ impl IndexFile {
             IndexFile::Block { file, .. } => file,
             IndexFile::Mmap { file, .. } => file,
         };
-        Ok(convert_at!(io_err_at!(fs::metadata(file))?.len())?)
+        Ok(convert_at!(err_at!(IoError, fs::metadata(file))?.len())?)
     }
 }
 
@@ -2613,7 +2618,7 @@ where
 
         // open index file.
         let index_fd = IndexFile::new_block(Config::stitch_index_file(dir, name))?;
-        io_err_at!(index_fd.as_fd().lock_shared())?;
+        err_at!(IoError, index_fd.as_fd().lock_shared())?;
         // open optional value log file.
         let valog_fd = match config.vlog_file {
             Some(vfile) => {
@@ -2627,7 +2632,7 @@ where
                 vpath.push(path::Path::new(&vfile).file_name().ok_or(err)?);
                 let vlog_file = vpath.as_os_str().to_os_string();
                 let fd = util::open_file_r(&vlog_file)?;
-                io_err_at!(fd.lock_shared())?;
+                err_at!(IoError, fd.lock_shared())?;
                 Some((vlog_file, fd))
             }
             None => None,
@@ -2961,7 +2966,7 @@ where
         let i_footprint: isize = self.index_fd.footprint()?;
         let v_footprint: isize = match &self.valog_fd {
             Some((vlog_file, _)) => {
-                let md = io_err_at!(fs::metadata(vlog_file))?;
+                let md = err_at!(IoError, fs::metadata(vlog_file))?;
                 convert_at!(md.len())?
             }
             None => 0,

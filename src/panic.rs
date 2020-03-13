@@ -2,7 +2,10 @@
 
 use std::{borrow::Borrow, ops::RangeBounds};
 
-use crate::core::{CommitIterator, Diff, Entry, IndexIter, Reader, Result, Writer};
+use crate::{
+    core::{CommitIterator, Diff, Entry, IndexIter, Reader, Result, Writer},
+    error::Error,
+};
 
 /// Placeholder type, to handle unimplemented features.
 pub struct Panic(String);
@@ -20,11 +23,11 @@ where
     V: Clone + Diff,
 {
     fn set(&mut self, _key: K, _value: V) -> Result<Option<Entry<K, V>>> {
-        panic!("set operation not supported by {} !!", self.0);
+        err_at!(NotImplemented, msg:self.0)
     }
 
     fn set_cas(&mut self, _: K, _: V, _: u64) -> Result<Option<Entry<K, V>>> {
-        panic!("set operation not supported by {} !!", self.0);
+        err_at!(NotImplemented, msg:self.0)
     }
 
     fn delete<Q>(&mut self, _key: &Q) -> Result<Option<Entry<K, V>>>
@@ -32,7 +35,7 @@ where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
     {
-        panic!("set operation not supported by {} !!", self.0);
+        err_at!(NotImplemented, msg:self.0)
     }
 }
 
@@ -46,11 +49,11 @@ where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        panic!("get operation not supported by {} !!", self.0);
+        err_at!(NotImplemented, msg:self.0)
     }
 
     fn iter(&mut self) -> Result<IndexIter<K, V>> {
-        panic!("iter operation not supported by {} !!", self.0);
+        err_at!(NotImplemented, msg:self.0)
     }
 
     fn range<'a, R, Q>(&'a mut self, _: R) -> Result<IndexIter<K, V>>
@@ -59,7 +62,7 @@ where
         R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        panic!("range operation not supported by {} !!", self.0);
+        err_at!(NotImplemented, msg:self.0)
     }
 
     fn reverse<'a, R, Q>(&'a mut self, _: R) -> Result<IndexIter<K, V>>
@@ -68,7 +71,7 @@ where
         R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        panic!("reverse operation not supported by {} !!", self.0);
+        err_at!(NotImplemented, msg:self.0)
     }
 
     fn get_with_versions<Q>(&mut self, _: &Q) -> Result<Entry<K, V>>
@@ -76,14 +79,11 @@ where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        panic!("get_with_versions operation not supported by {} !!", self.0);
+        err_at!(NotImplemented, msg:self.0)
     }
 
     fn iter_with_versions(&mut self) -> Result<IndexIter<K, V>> {
-        panic!(
-            "iter_with_versions operation not supported by {} !!",
-            self.0
-        );
+        err_at!(NotImplemented, msg:self.0)
     }
 
     fn range_with_versions<'a, R, Q>(&'a mut self, _: R) -> Result<IndexIter<K, V>>
@@ -92,10 +92,7 @@ where
         R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        panic!(
-            "range_with_versions operation not supported by {} !!",
-            self.0
-        );
+        err_at!(NotImplemented, msg:self.0)
     }
 
     fn reverse_with_versions<'a, R, Q>(&'a mut self, _: R) -> Result<IndexIter<K, V>>
@@ -104,10 +101,7 @@ where
         R: 'a + Clone + RangeBounds<Q>,
         Q: 'a + Ord + ?Sized,
     {
-        panic!(
-            "reverse_with_versions operation not supported by {} !!",
-            self.0
-        );
+        err_at!(NotImplemented, msg:self.0)
     }
 }
 
@@ -120,14 +114,14 @@ where
     where
         G: Clone + RangeBounds<u64>,
     {
-        panic!("scan operation not supported by {} !!", self.0);
+        err_at!(NotImplemented, msg:self.0)
     }
 
     fn scans<G>(&mut self, _n_shards: usize, _within: G) -> Result<Vec<IndexIter<K, V>>>
     where
         G: Clone + RangeBounds<u64>,
     {
-        panic!("scans operation not supported by {} !!", self.0);
+        err_at!(NotImplemented, msg:self.0)
     }
 
     fn range_scans<N, G>(&mut self, _ranges: Vec<N>, _within: G) -> Result<Vec<IndexIter<K, V>>>
@@ -135,6 +129,6 @@ where
         G: Clone + RangeBounds<u64>,
         N: Clone + RangeBounds<K>,
     {
-        panic!("range_scans operation not supported by {} !!", self.0);
+        err_at!(NotImplemented, msg:self.0)
     }
 }

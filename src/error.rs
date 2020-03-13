@@ -25,8 +25,14 @@ pub enum Error {
     UnExpectedFail(String),
     /// Invalid argument to the API.
     InvalidArg(String),
+    /// TimeFail, std time related API failed.
+    TimeFail(String),
+    /// Inter-Process-Communication error from std::mpsc
+    IPCFail(String),
     /// System level failure.
     SystemFail(String),
+    /// Invalid input
+    InvalidInput(String),
     /// Supplied key is not found in the index.
     KeyNotFound,
     /// Index is empty
@@ -72,8 +78,6 @@ pub enum Error {
     ThreadFail(String),
     /// On disk snapshot is invalid.
     InvalidSnapshot(String),
-    /// Inter-Process-Communication error from std::mpsc
-    IPCFail(String),
     /// Invalid Dlog
     InvalidDlog(String),
     /// Invalid Wal
@@ -107,25 +111,16 @@ pub enum Error {
 
 #[macro_export]
 macro_rules! err_at {
-    ($e:expr) => {
-        match $e {
-            Ok(val) => Ok(val),
-            Err(err) => {
-                let msg = format!("{}:{} {:?}", file!(), line!(), err);
-                Err(Error::UnExpectedFail(msg))
-            }
-        }
+    ($v:ident, msg:$m:expr) => {
+        //
+        Err(Error::$v(format!("{}:{} msg:{}", file!(), line!(), $m)))
     };
-}
-
-#[macro_export]
-macro_rules! io_err_at {
-    ($e:expr) => {
+    ($v:ident, $e:expr) => {
         match $e {
             Ok(val) => Ok(val),
             Err(err) => {
-                let msg = format!("{}:{} {}", file!(), line!(), err);
-                Err(Error::IoError(msg))
+                let msg = format!("{}:{} err:{}", file!(), line!(), err);
+                Err(Error::$v(msg))
             }
         }
     };
@@ -133,11 +128,11 @@ macro_rules! io_err_at {
 
 #[macro_export]
 macro_rules! parse_at {
-    ($e:expr) => {
-        match $e {
+    ($e:expr, $t:ty) => {
+        match $e.parse::<$t>() {
             Ok(val) => Ok(val),
             Err(err) => {
-                let msg = format!("{}:{} {}", file!(), line!(), err);
+                let msg = format!("{}:{} parse:{}", file!(), line!(), err);
                 Err(Error::ConversionFail(msg))
             }
         }
@@ -150,7 +145,7 @@ macro_rules! convert_at {
         match $e.try_into() {
             Ok(val) => Ok(val),
             Err(err) => {
-                let msg = format!("{}:{} {}", file!(), line!(), err);
+                let msg = format!("{}:{} convert:{}", file!(), line!(), err);
                 Err(Error::ConversionFail(msg))
             }
         }
@@ -165,32 +160,6 @@ macro_rules! array_at {
             Err(err) => {
                 let msg = format!("{}:{} {}", file!(), line!(), err);
                 Err(Error::ConversionFail(msg))
-            }
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! systime_at {
-    ($e:expr) => {
-        match $e {
-            Ok(val) => Ok(val),
-            Err(err) => {
-                let msg = format!("{}:{} {}", file!(), line!(), err);
-                Err(Error::UnExpectedFail(msg))
-            }
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! ipc_at {
-    ($e:expr) => {
-        match $e {
-            Ok(val) => Ok(val),
-            Err(err) => {
-                let msg = format!("{}:{} {}", file!(), line!(), err);
-                Err(Error::IPCFail(msg))
             }
         }
     };

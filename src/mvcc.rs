@@ -677,12 +677,12 @@ where
             };
 
             match (seen, limit) {
-                (_, limit) if limit > 0 => break count + (LIMIT - limit),
+                (_, limit) if limit > 0 => break Ok(count + (LIMIT - limit)),
                 (Some(key), _) => low = Bound::Excluded(key),
-                _ => unreachable!(),
+                _ => break err_at!(Fatal, msg: format!("unreachable")),
             }
             count += LIMIT;
-        };
+        }?;
 
         info!(target: "mvcc  ", "{:?}, compacted {} items", self.name, count);
         Ok(count)
@@ -1548,7 +1548,7 @@ where
                     }
                 }
             }
-            _ => unreachable!(),
+            _ => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
 
@@ -1597,9 +1597,10 @@ where
                 if old_entry.is_deleted() {
                     mself.n_deleted -= 1;
                 }
+                Ok(())
             }
-            None => unreachable!(),
-        }
+            None => err_at!(Fatal, msg: format!("unreachable")),
+        }?;
         mself.n_reclaimed += rclm.len();
         mself
             .snapshot

@@ -1892,11 +1892,11 @@ where
                 .zip(seqnos[1..].to_vec().into_iter());
             for (x, y) in iter {
                 match y.start_bound() {
-                    Bound::Included(y) if x.contains(y) => (),
-                    Bound::Included(_) => {
+                    Bound::Included(y) if x.contains(y) => {
                         let msg = format!("overlapping snapshot {:?}", seqnos);
                         return Err(Error::UnExpectedFail(msg));
                     }
+                    Bound::Included(_) => (),
                     _ => return err_at!(Fatal, msg: format!("unreachable")),
                 }
             }

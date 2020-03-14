@@ -142,17 +142,17 @@ impl<S, T> Batch<S, T> {
         }
     }
 
-    pub(crate) fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> Result<usize> {
         match self {
-            Batch::Active { entries, .. } => entries.len(),
-            _ => unreachable!(),
+            Batch::Active { entries, .. } => Ok(entries.len()),
+            _ => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
 
-    pub(crate) fn into_entries(self) -> Vec<DEntry<T>> {
+    pub(crate) fn into_entries(self) -> Result<Vec<DEntry<T>>> {
         match self {
-            Batch::Active { entries, .. } => entries,
-            Batch::Refer { .. } => unreachable!(),
+            Batch::Active { entries, .. } => Ok(entries),
+            Batch::Refer { .. } => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
 
@@ -236,7 +236,7 @@ where
 
                 Ok(n)
             }
-            _ => unreachable!(),
+            _ => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
 

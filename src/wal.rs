@@ -227,7 +227,7 @@ where
                         Some(index) if index <= seqno => continue,
                         _ => (),
                     }
-                    for entry in batch.into_active(&mut fd)?.into_entries() {
+                    for entry in batch.into_active(&mut fd)?.into_entries()? {
                         let (index, op) = entry.into_index_op();
                         if index <= seqno {
                             continue;

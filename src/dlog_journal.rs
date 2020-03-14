@@ -361,7 +361,7 @@ where
                     let before = self.do_purge_till(before)?;
                     err_at!(IPCFail, caller.send(OpResponse::new_purged(before)))?;
                 }
-                _ => unreachable!(),
+                _ => err_at!(Fatal, msg: format!("unreachable")),
             }
         }
 
@@ -591,7 +591,7 @@ where
         Ok(())
     }
 
-    pub(crate) fn into_archive(mut self) -> Self
+    pub(crate) fn into_archive(mut self) -> Result<Self>
     where
         S: DlogState<T>,
     {
@@ -602,7 +602,7 @@ where
                 file_path, batches, ..
             } => {
                 self.inner = Archive { file_path, batches };
-                self
+                Ok(self)
             }
             Cold { file_path } => {
                 let (dir, fname) = {
@@ -615,9 +615,9 @@ where
                 let (name, _, shard_id, _): (String, String, usize, usize) =
                     TryFrom::try_from(JournalFile(fname.clone())).unwrap();
 
-                Self::new_archive(name, shard_id, dir, fname).unwrap()
+                Ok(Self::new_archive(name, shard_id, dir, fname).unwrap())
             }
-            _ => unreachable!(),
+            _ => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
 }
@@ -721,14 +721,14 @@ where
         let length = active.encode_active(&mut buffer)?;
 
         match exceeded {
-            true if active.len() > 0 => {
+            true if active.len()? > 0 => {
                 // rotate journal files.
                 let a = active.to_first_index().unwrap();
                 let z = active.to_last_index().unwrap();
                 let batch = Batch::new_refer(0, length, a, z);
                 Ok(Some((buffer, batch)))
             }
-            false if active.len() > 0 => {
+            false if active.len()? > 0 => {
                 let fpos = err_at!(IoError, fd.metadata())?.len();
                 let n = err_at!(IoError, fd.write(&buffer))?;
                 if length != n {

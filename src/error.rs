@@ -21,8 +21,6 @@ pub enum Error {
     NotImplemented(String),
     /// Error because the value was not initialized as expected.
     UnInitialized(String),
-    /// Error because the value was not initialized as expected.
-    UnReachable(String),
     /// Execution flow entered into an un-expected situation.
     UnExpectedFail(String),
     /// Invalid argument to the API.

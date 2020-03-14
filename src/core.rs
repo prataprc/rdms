@@ -936,8 +936,8 @@ where
                 }
             }
             Value::U { .. } => {
-                let msg = format!("Entry.prepend_version_lsm()");
-                Err(Error::UnReachable(msg))
+                //
+                err_at!(Fatal, msg: format!("Entry.prepend_version_lsm()"))
             }
         }?;
 
@@ -970,10 +970,7 @@ where
                 self.deltas.insert(0, Delta::new_upsert(delta, *seqno));
                 Ok(())
             }
-            Value::U { .. } => {
-                let msg = format!("Entry.delete()");
-                Err(Error::UnReachable(msg))
-            }
+            Value::U { .. } => err_at!(Fatal, msg: format!("Entry.delete()")),
         }?;
 
         self.value = Value::new_delete(seqno);

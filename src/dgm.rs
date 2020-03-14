@@ -179,7 +179,7 @@ impl From<Config> for Root {
 }
 
 impl TryFrom<Root> for Vec<u8> {
-    type Error = crate::error::Error;
+    type Error = Error;
 
     fn try_from(root: Root) -> Result<Vec<u8>> {
         use toml::Value::{self, Array, Boolean, Float, Integer, String as S};
@@ -219,8 +219,7 @@ impl TryFrom<Root> for Vec<u8> {
                     Bound::Excluded(cutoff) => Ok(("excluded", cutoff)),
                     Bound::Included(cutoff) => Ok(("included", cutoff)),
                     Bound::Unbounded => {
-                        let msg = format!("Dgm root has Unbounded lsm-cutoff");
-                        Err(Error::UnReachable(msg))
+                        err_at!(Fatal, msg: format!("root has Unbounded lsm-cutoff"))
                     }
                 },
                 None => Ok(("none", 0)),
@@ -235,8 +234,7 @@ impl TryFrom<Root> for Vec<u8> {
                     Bound::Excluded(cutoff) => Ok(("excluded", cutoff)),
                     Bound::Included(cutoff) => Ok(("included", cutoff)),
                     Bound::Unbounded => {
-                        let msg = format!("Dgm root has Unbounded lsm-cutoff");
-                        Err(Error::UnReachable(msg))
+                        err_at!(Fatal, msg: format!("root has Unbounded lsm-cutoff"))
                     }
                 },
                 None => Ok(("none", 0)),
@@ -356,10 +354,7 @@ impl TryFrom<Vec<u8>> for Root {
                 "included" => Ok(Some(Bound::Included(cutoff))),
                 "unbounded" => Ok(Some(Bound::Unbounded)),
                 "none" => Ok(None),
-                _ => {
-                    let msg = format!("Dgm root deser invalid lsm-cutoff");
-                    Err(Error::UnReachable(msg))
-                }
+                _ => err_at!(InvalidInput, msg: format!("dgm.root.lsm-cutoff")),
             }
         }?;
         root.tombstone_cutoff = {
@@ -378,8 +373,8 @@ impl TryFrom<Vec<u8>> for Root {
                 "unbounded" => Ok(Some(Bound::Unbounded)),
                 "none" => Ok(None),
                 _ => {
-                    let msg = format!("Dgm root deser invalid tombstone-cutoff");
-                    Err(Error::UnReachable(msg))
+                    let msg = format!("dgm.root.tombstone-cutoff");
+                    err_at!(InvalidInput, msg: msg)
                 }
             }
         }?;
@@ -726,7 +721,7 @@ where
                 }
                 _ => {
                     let msg = format!("Dgm.shift_into_m0() not write snapshot");
-                    Err(Error::UnReachable(msg))
+                    err_at!(Fatal, msg: msg)
                 }
             }?;
             // update the m0 writer.
@@ -815,7 +810,7 @@ where
                         }
                         _ => {
                             let msg = format!("Dgm.commit_level() not disk");
-                            break Err(Error::UnReachable(msg));
+                            break err_at!(Fatal, msg: msg);
                         }
                     }
                 }
@@ -832,10 +827,7 @@ where
                 let name = name.to_string();
                 Ok(self.disk_factory.new(&self.dir, &name)?)
             }
-            _ => {
-                let msg = format!("Dgm.move_to_commit() invalid state");
-                Err(Error::UnReachable(msg))
-            }
+            _ => err_at!(Fatal, msg: format!("Dgm.move_to_commit() bad state")),
         }?;
 
         self.disks[level] = Snapshot::new_commit(d);

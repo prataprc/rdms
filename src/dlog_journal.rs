@@ -354,7 +354,7 @@ where
             match cmd {
                 (OpRequest::Op { op }, Some(caller)) => {
                     let index = self.dlog_index.fetch_add(1, AcqRel);
-                    self.active.add_entry(DEntry::new(index, op));
+                    self.active.add_entry(DEntry::new(index, op))?;
                     err_at!(IPCFail, caller.send(OpResponse::new_index(index)))?;
                 }
                 (OpRequest::PurgeTill { before }, Some(caller)) => {
@@ -672,7 +672,7 @@ impl<S, T> Journal<S, T> {
         Ok(batches)
     }
 
-    pub(crate) fn add_entry(&mut self, entry: DEntry<T>)
+    pub(crate) fn add_entry(&mut self, entry: DEntry<T>) -> Result<()>
     where
         S: DlogState<T>,
     {

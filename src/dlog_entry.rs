@@ -106,7 +106,7 @@ impl<S, T> Batch<S, T> {
         }
     }
 
-    pub(crate) fn add_entry(&mut self, entry: DEntry<T>)
+    pub(crate) fn add_entry(&mut self, entry: DEntry<T>) -> Result<()>
     where
         S: DlogState<T>,
     {
@@ -114,8 +114,9 @@ impl<S, T> Batch<S, T> {
             Batch::Active { state, entries } => {
                 state.on_add_entry(&entry);
                 entries.push(entry);
+                Ok(())
             }
-            _ => unreachable!(),
+            _ => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
 }

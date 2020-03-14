@@ -146,7 +146,7 @@ impl<Q, R, T> Thread<Q, R, T> {
                 };
                 Ok(())
             }
-            None => Err(Error::UnReachable(format!("Thread.pos()"))),
+            None => err_at!(Fatal, msg: format!("Thread.pos()")),
         }
     }
 
@@ -167,7 +167,7 @@ impl<Q, R, T> Thread<Q, R, T> {
                 }
                 Ok(err_at!(IPCFail, rx.recv())?)
             }
-            None => Err(Error::UnReachable(format!("Thread.request()"))),
+            None => err_at!(Fatal, msg: format!("Thread.request()")),
         }
     }
 
@@ -185,7 +185,7 @@ impl<Q, R, T> Thread<Q, R, T> {
     pub fn close_wait(mut self) -> Result<T> {
         match self.inner.take() {
             Some(inner) => inner.close_wait(),
-            None => Err(Error::UnReachable(format!("Thread.close_wait()"))),
+            None => err_at!(Fatal, msg: format!("Thread.close_wait()")),
         }
     }
 }

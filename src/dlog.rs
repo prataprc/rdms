@@ -167,12 +167,13 @@ where
         })
     }
 
-    pub fn set_deep_freeze(&mut self, before: Bound<u64>) {
-        self.shards = self
-            .shards
-            .drain(..)
-            .map(|shard| shard.into_deep_freeze(before.clone()))
-            .collect()
+    pub fn set_deep_freeze(&mut self, before: Bound<u64>) -> Result<()> {
+        let shards: Vec<Shard<S, T>> = self.shards.drain(..).collect();
+        for shard in shards.into_iter() {
+            self.shards.push(shard.into_deep_freeze(before.clone())?)
+        }
+
+        Ok(())
     }
 }
 

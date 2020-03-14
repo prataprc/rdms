@@ -46,6 +46,7 @@ fn test_batch2() {
     let validate = |abatch: Batch<wal::State, wal::Op<i64, i64>>| {
         abatch
             .into_entries()
+            .unwrap()
             .into_iter()
             .enumerate()
             .for_each(|(i, e)| {
@@ -58,17 +59,17 @@ fn test_batch2() {
     let batch = {
         let mut batch = Batch::<wal::State, wal::Op<i64, i64>>::default_active();
 
-        assert_eq!(batch.len(), 0);
+        assert_eq!(batch.len().unwrap(), 0);
 
         for i in 0..100 {
             let op = wal::Op::new_set(10, 20);
-            batch.add_entry(DEntry::new(i + 1, op));
+            batch.add_entry(DEntry::new(i + 1, op)).unwrap();
         }
         batch
     };
     assert_eq!(batch.to_first_index().unwrap(), 1);
     assert_eq!(batch.to_last_index().unwrap(), 100);
-    assert_eq!(batch.len(), 100);
+    assert_eq!(batch.len().unwrap(), 100);
 
     validate(batch.clone());
 

@@ -148,13 +148,11 @@ fn test_wal() {
                 nosync,
             )
             .unwrap();
-            let lis: Vec<u64> = dl
-                .shards
-                .into_iter()
-                .map(|shard| shard.into_journals())
-                .flatten()
-                .map(|journal| journal.to_last_index().unwrap_or(std::u64::MAX))
-                .collect();
+            let mut lis: Vec<u64> = vec![];
+            let iter = dl.shards.into_iter().map(|shard| shard.into_journals());
+            for journal in iter.flatten() {
+                lis.push(journal.to_last_index().unwrap().unwrap_or(std::u64::MAX));
+            }
             println!("before:{:?} lis:{:?}", before, lis);
             assert!(lis.into_iter().all(|x| x > befr));
         }
@@ -450,13 +448,14 @@ fn validate_dlog1(dl: Dlog<State, Op<i64, i64>>, items: Vec<(u64, Op<i64, i64>)>
             let mut opts = fs::OpenOptions::new();
             opts.read(true).open(&file_path).unwrap()
         };
-        let es: Vec<DEntry<Op<i64, i64>>> = journal
-            .into_batches()
-            .unwrap()
-            .into_iter()
-            .map(|batch| batch.into_active(&mut fd).unwrap().into_entries())
-            .flatten()
-            .collect();
+        let mut es: Vec<DEntry<Op<i64, i64>>> = vec![];
+        for batch in journal.into_batches().unwrap().into_iter() {
+            let a = {
+                let a = batch.into_active(&mut fd).unwrap();
+                a.into_entries().unwrap()
+            };
+            es.extend_from_slice(&a);
+        }
         entries.extend_from_slice(&es);
     }
 
@@ -486,13 +485,14 @@ fn validate_dlog2(
             let mut opts = fs::OpenOptions::new();
             opts.read(true).open(&file_path).unwrap()
         };
-        let es: Vec<DEntry<Op<i64, i64>>> = journal
-            .into_batches()
-            .unwrap()
-            .into_iter()
-            .map(|batch| batch.into_active(&mut fd).unwrap().into_entries())
-            .flatten()
-            .collect();
+        let mut es: Vec<DEntry<Op<i64, i64>>> = vec![];
+        for batch in journal.into_batches().unwrap().into_iter() {
+            let a = {
+                let a = batch.into_active(&mut fd).unwrap();
+                a.into_entries().unwrap()
+            };
+            es.extend_from_slice(&a);
+        }
         entries.extend_from_slice(&es);
     }
 

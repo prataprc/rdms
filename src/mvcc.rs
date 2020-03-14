@@ -1637,7 +1637,7 @@ where
             .as_ref()
             .root_duplicate()
             .map(|n| Box::leak(n) as &Node<K, V>);
-        iter.paths = Some(build_iter(IFlag::Left, root, vec![]));
+        iter.paths = Some(build_iter(IFlag::Left, root, vec![])?);
         Ok(iter)
     }
 
@@ -1660,7 +1660,7 @@ where
             .root_duplicate()
             .map(|n| Box::leak(n) as &Node<K, V>);
         r.paths = match r.range.start_bound() {
-            Bound::Unbounded => Some(build_iter(IFlag::Left, root, vec![])),
+            Bound::Unbounded => Some(build_iter(IFlag::Left, root, vec![])?),
             Bound::Included(low) => Some(find_start(root, low, true, vec![])),
             Bound::Excluded(low) => Some(find_start(root, low, false, vec![])),
         };
@@ -1686,7 +1686,7 @@ where
             .root_duplicate()
             .map(|n| Box::leak(n) as &Node<K, V>);
         r.paths = match r.range.end_bound() {
-            Bound::Unbounded => Some(build_iter(IFlag::Right, root, vec![])),
+            Bound::Unbounded => Some(build_iter(IFlag::Right, root, vec![])?),
             Bound::Included(high) => Some(find_end(root, high, true, vec![])),
             Bound::Excluded(high) => Some(find_end(root, high, false, vec![])),
         };
@@ -1895,7 +1895,7 @@ where
             .root_duplicate()
             .map(|n| Box::leak(n) as &Node<K, V>);
         iter.paths = match from {
-            Bound::Unbounded => Some(build_iter(IFlag::Left, root, vec![])),
+            Bound::Unbounded => Some(build_iter(IFlag::Left, root, vec![])?),
             Bound::Included(low) => {
                 let paths = Some(find_start(root, low.borrow(), true, vec![]));
                 paths

@@ -53,13 +53,13 @@ fn test_journal() {
         for j in 0..1000 {
             let op = wal::Op::<i64, i64>::new_set(10 * i + j, 20 + i);
             let index = (i * 1000 + j) as u64 + 1;
-            journal.add_entry(DEntry::new(index, op));
+            journal.add_entry(DEntry::new(index, op)).unwrap();
         }
         let nosync: bool = rng.gen();
         assert_eq!(journal.flush1(limit, nosync).unwrap().is_none(), true);
     }
 
-    assert_eq!(journal.to_last_index().unwrap(), 100_000);
+    assert_eq!(journal.to_last_index().unwrap(), Some(100_000));
     let rf: &ffi::OsStr = "journal-wal-shard-001-journal-001.dlog".as_ref();
     assert_eq!(
         path::Path::new(&journal.to_file_path())
@@ -76,7 +76,7 @@ fn test_journal() {
     };
     for (i, batch) in journal.into_batches().unwrap().into_iter().enumerate() {
         let batch = batch.into_active(&mut fd).unwrap();
-        for (j, entry) in batch.into_entries().into_iter().enumerate() {
+        for (j, entry) in batch.into_entries().unwrap().into_iter().enumerate() {
             let (index, op) = entry.into_index_op();
             let ref_index = (i * 1000 + j) as u64 + 1;
             assert_eq!(index, ref_index);
@@ -189,7 +189,7 @@ fn test_shard() {
             };
             for batch in journal.into_batches().unwrap().into_iter() {
                 let batch = batch.into_active(&mut fd).unwrap();
-                for entry in batch.into_entries().into_iter() {
+                for entry in batch.into_entries().unwrap().into_iter() {
                     entries.push(entry);
                 }
             }

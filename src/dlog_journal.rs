@@ -195,7 +195,7 @@ where
                 match iter.next() {
                     None if idx == 0 => break 0,
                     None => break idx - 1,
-                    Some(journal) => match journal.to_last_index() {
+                    Some(journal) => match journal.to_last_index()? {
                         Some(last_index) => break last_index,
                         None => (),
                     },
@@ -240,11 +240,11 @@ where
         Ok(())
     }
 
-    pub(crate) fn into_deep_freeze(self, before: Bound<u64>) -> Self {
+    pub(crate) fn into_deep_freeze(self, before: Bound<u64>) -> Result<Self> {
         let mut last_index = 0;
         let mut journals = vec![];
         for journal in self.journals.into_iter() {
-            let index = match journal.to_last_index() {
+            let index = match journal.to_last_index()? {
                 Some(index) => index,
                 None => break,
             };
@@ -263,7 +263,7 @@ where
             last_index = index
         }
 
-        Shard {
+        Ok(Shard {
             dir: self.dir,
             name: self.name,
             shard_id: self.shard_id,
@@ -274,7 +274,7 @@ where
             dlog_index: self.dlog_index,
             journals,
             active: self.active,
-        }
+        })
     }
 
     pub(crate) fn close(self) -> Result<()> {
@@ -361,7 +361,7 @@ where
                     let before = self.do_purge_till(before)?;
                     err_at!(IPCFail, caller.send(OpResponse::new_purged(before)))?;
                 }
-                _ => err_at!(Fatal, msg: format!("unreachable")),
+                _ => err_at!(Fatal, msg: format!("unreachable"))?,
             }
         }
 
@@ -379,7 +379,7 @@ where
     // return index or io::Error.
     fn do_purge_till(&mut self, before: Bound<u64>) -> Result<Bound<u64>> {
         for _ in 0..self.journals.len() {
-            match (self.journals[0].to_last_index(), before) {
+            match (self.journals[0].to_last_index()?, before) {
                 (Some(li), Bound::Included(before)) if li <= before => {
                     self.journals.remove(0).purge()?;
                 }
@@ -409,7 +409,7 @@ where
         let new_active = Journal::<S, T>::new_active(d, n, i, num)?;
 
         let active = mem::replace(&mut self.active, new_active);
-        self.journals.push(active.into_archive());
+        self.journals.push(active.into_archive()?);
 
         Ok(())
     }
@@ -623,18 +623,24 @@ where
 }
 
 impl<S, T> Journal<S, T> {
-    pub(crate) fn to_last_index(&self) -> Option<u64> {
+    pub(crate) fn to_last_index(&self) -> Result<Option<u64>> {
         use InnerJournal::{Active, Archive};
 
         match &self.inner {
             Active {
                 batches, active, ..
             } => match active.to_last_index() {
-                index @ Some(_) => index,
-                None => batches.last()?.to_last_index(),
+                index @ Some(_) => Ok(index),
+                None => match batches.last() {
+                    Some(last) => Ok(last.to_last_index()),
+                    None => Ok(None),
+                },
             },
-            Archive { batches, .. } => batches.last()?.to_last_index(),
-            _ => unreachable!(),
+            Archive { batches, .. } => match batches.last() {
+                Some(last) => Ok(last.to_last_index()),
+                None => Ok(None),
+            },
+            _ => err_at!(Fatal, msg: format!("unreachable"))?,
         }
     }
 
@@ -666,7 +672,7 @@ impl<S, T> Journal<S, T> {
                 batches
             }
             InnerJournal::Archive { batches, .. } => batches,
-            _ => unreachable!(),
+            _ => err_at!(Fatal, msg: format!("unreachable"))?,
         };
 
         Ok(batches)
@@ -678,7 +684,7 @@ impl<S, T> Journal<S, T> {
     {
         match &mut self.inner {
             InnerJournal::Active { active, .. } => active.add_entry(entry),
-            _ => unreachable!(),
+            _ => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
 
@@ -712,10 +718,10 @@ where
             } => {
                 let limit: u64 = convert_at!(journal_limit)?;
                 let exceeded = err_at!(IoError, fd.metadata())?.len() > limit;
-                (file_path, fd, batches, active, exceeded)
+                Ok((file_path, fd, batches, active, exceeded))
             }
-            _ => unreachable!(),
-        };
+            _ => err_at!(Fatal, msg: format!("unreachable")),
+        }?;
 
         let mut buffer = Vec::with_capacity(FLUSH_SIZE);
         let length = active.encode_active(&mut buffer)?;
@@ -759,9 +765,9 @@ where
                 fd,
                 batches,
                 active,
-            } => (file_path, fd, batches, active),
-            _ => unreachable!(),
-        };
+            } => Ok((file_path, fd, batches, active)),
+            _ => err_at!(Fatal, msg: format!("unreachable")),
+        }?;
 
         let length = buffer.len();
         let fpos = err_at!(IoError, fd.metadata())?.len();

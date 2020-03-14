@@ -683,7 +683,7 @@ where
             };
             let (seen, limit) =
                 // entry-point
-                Llrb::<K, V>::compact_loop(root, low, &mut cc, LIMIT)?;
+                Llrb::<K, V>::compact_loop(root, low.clone(), &mut cc, LIMIT)?;
             for key in cc.dels {
                 self.delete_index_entry(key)?;
             }
@@ -691,7 +691,7 @@ where
             match (seen, limit) {
                 (_, limit) if limit > 0 => break count + (LIMIT - limit),
                 (Some(key), _) => low = Bound::Excluded(key),
-                _ => unreachable!(),
+                _ => err_at!(Fatal, msg: format!("unreachable"))?,
             }
             count += LIMIT;
         };
@@ -1425,7 +1425,7 @@ where
                     Self::compact_loop(right, Excluded(key), cc, limit)
                 }
             },
-            _ => unreachable!(),
+            _ => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
 
@@ -1462,6 +1462,7 @@ where
             }
         };
         mself.root = res.node;
+
         match res.old_entry {
             Some(old_entry) => {
                 mself.key_footprint -= util::key_footprint(&key)?;
@@ -1470,11 +1471,10 @@ where
                 if old_entry.is_deleted() {
                     mself.n_deleted -= 1;
                 }
+                Ok(())
             }
-            None => unreachable!(),
+            None => err_at!(Fatal, msg: format!("unreachable")),
         }
-
-        Ok(())
     }
 }
 
@@ -1502,7 +1502,7 @@ where
         Ok(Box::new(Iter {
             _latch,
             _arc: Default::default(),
-            paths: Some(build_iter(IFlag::Left, node, vec![])),
+            paths: Some(build_iter(IFlag::Left, node, vec![])?),
         }))
     }
 
@@ -1517,7 +1517,7 @@ where
 
         let root = self.root.as_ref().map(Deref::deref);
         let paths = match range.start_bound() {
-            Bound::Unbounded => Some(build_iter(IFlag::Left, root, vec![])),
+            Bound::Unbounded => Some(build_iter(IFlag::Left, root, vec![])?),
             Bound::Included(low) => Some(find_start(root, low, true, vec![])),
             Bound::Excluded(low) => Some(find_start(root, low, false, vec![])),
         };
@@ -1541,7 +1541,7 @@ where
 
         let root = self.root.as_ref().map(Deref::deref);
         let paths = match range.end_bound() {
-            Bound::Unbounded => Some(build_iter(IFlag::Right, root, vec![])),
+            Bound::Unbounded => Some(build_iter(IFlag::Right, root, vec![])?),
             Bound::Included(high) => Some(find_end(root, high, true, vec![])),
             Bound::Excluded(high) => Some(find_end(root, high, false, vec![])),
         };
@@ -1770,7 +1770,7 @@ where
         // similar to range pre-processing
         let root = self.root.as_ref().map(Deref::deref);
         let paths = match from {
-            Bound::Unbounded => Some(build_iter(IFlag::Left, root, vec![])),
+            Bound::Unbounded => Some(build_iter(IFlag::Left, root, vec![])?),
             Bound::Included(low) => {
                 let paths = Some(find_start(root, low.borrow(), true, vec![]));
                 paths

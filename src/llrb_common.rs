@@ -197,7 +197,10 @@ where
                             path.flag = IFlag::Right;
                             paths.push(path);
                             let rnref = nref.as_right_deref();
-                            Some(build_iter(IFlag::Left, rnref, paths))
+                            match build_iter(IFlag::Left, rnref, paths) {
+                                Ok(paths) => Some(paths),
+                                Err(err) => break Some(Err(err)),
+                            }
                         };
                     }
                     (_, _) => self.paths = Some(paths),
@@ -273,7 +276,10 @@ where
                             path.flag = IFlag::Right;
                             paths.push(path);
                             let rnref = nref.as_right_deref();
-                            Some(build_iter(IFlag::Left, rnref, paths))
+                            match build_iter(IFlag::Left, rnref, paths) {
+                                Ok(paths) => Some(paths),
+                                Err(err) => break Some(Err(err)),
+                            }
                         };
                     }
                     (_, _) => self.paths = Some(paths),
@@ -313,13 +319,13 @@ where
             let mut paths = match self.paths.take() {
                 Some(paths) => paths,
                 None => {
-                    break None;
+                    break Ok(None);
                 }
             };
 
             match paths.pop() {
                 None => {
-                    break None;
+                    break Ok(None);
                 }
                 Some(mut path) => match (path.flag, path.nref) {
                     (IFlag::Left, nref) => {
@@ -328,14 +334,17 @@ where
                             paths.push(path);
                             Some(paths)
                         };
-                        break Some(nref.entry.clone());
+                        break Ok(Some(nref.entry.clone()));
                     }
                     (IFlag::Center, nref) => {
                         self.paths = {
                             path.flag = IFlag::Right;
                             paths.push(path);
                             let rnref = nref.as_right_deref();
-                            Some(build_iter(IFlag::Left, rnref, paths))
+                            match build_iter(IFlag::Left, rnref, paths) {
+                                Ok(paths) => Some(paths),
+                                Err(err) => break Err(err),
+                            }
                         };
                     }
                     (_, _) => self.paths = Some(paths),
@@ -344,8 +353,8 @@ where
         };
 
         match item {
-            None => None,
-            Some(entry) => {
+            Ok(None) => None,
+            Ok(Some(entry)) => {
                 let qey = entry.as_key().borrow();
                 match self.range.end_bound() {
                     Bound::Unbounded => Some(Ok(entry)),
@@ -357,6 +366,7 @@ where
                     }
                 }
             }
+            Err(err) => Some(Err(err)),
         }
     }
 }
@@ -391,13 +401,13 @@ where
             let mut paths = match self.paths.take() {
                 Some(paths) => paths,
                 None => {
-                    break None;
+                    break Ok(None);
                 }
             };
 
             match paths.pop() {
                 None => {
-                    break None;
+                    break Ok(None);
                 }
                 Some(mut path) => match (path.flag, path.nref) {
                     (IFlag::Right, nref) => {
@@ -406,14 +416,17 @@ where
                             paths.push(path);
                             Some(paths)
                         };
-                        break Some(nref.entry.clone());
+                        break Ok(Some(nref.entry.clone()));
                     }
                     (IFlag::Center, nref) => {
                         self.paths = {
                             path.flag = IFlag::Left;
                             paths.push(path);
                             let rnref = nref.as_left_deref();
-                            Some(build_iter(IFlag::Right, rnref, paths))
+                            match build_iter(IFlag::Right, rnref, paths) {
+                                Ok(paths) => Some(paths),
+                                Err(err) => break Err(err),
+                            }
                         };
                     }
                     (_, _) => self.paths = Some(paths),
@@ -422,8 +435,8 @@ where
         };
 
         match item {
-            None => None,
-            Some(entry) => {
+            Ok(None) => None,
+            Ok(Some(entry)) => {
                 let qey = entry.as_key().borrow();
                 match self.range.start_bound() {
                     Bound::Included(low) if qey.ge(low) => Some(Ok(entry)),
@@ -435,6 +448,7 @@ where
                     }
                 }
             }
+            Err(err) => Some(Err(err)),
         }
     }
 }
@@ -465,19 +479,19 @@ fn build_iter<'a, K, V>(
     flag: IFlag,
     nref: Option<&'a Node<K, V>>, // subtree
     mut paths: Vec<Fragment<'a, K, V>>,
-) -> Vec<Fragment<'a, K, V>>
+) -> Result<Vec<Fragment<'a, K, V>>>
 where
     K: Ord + Clone,
     V: Clone + Diff,
 {
     match nref {
-        None => paths,
+        None => Ok(paths),
         Some(nref) => {
             let item = Fragment { flag, nref };
             let nref = match flag {
                 IFlag::Left => nref.as_left_deref(),
                 IFlag::Right => nref.as_right_deref(),
-                IFlag::Center => unreachable!(),
+                IFlag::Center => err_at!(Fatal, msg: format!("unreachable"))?,
             };
             paths.push(item);
             build_iter(flag, nref, paths)

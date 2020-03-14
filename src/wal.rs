@@ -210,7 +210,7 @@ where
                 if journal.is_cold() {
                     continue;
                 }
-                match journal.to_last_index() {
+                match journal.to_last_index()? {
                     Some(index) if index <= seqno => continue,
                     _ => (),
                 }

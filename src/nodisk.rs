@@ -3,7 +3,7 @@
 use std::{borrow::Borrow, ffi, hash::Hash, marker, ops::RangeBounds};
 
 use crate::{
-    core::{CommitIter, CommitIterator, Cutoff, Result, Serialize, Writer},
+    core::{CommitIter, CommitIterator, Cutoff, Result, Serialize},
     core::{Diff, DiskIndexFactory, Entry, Footprint, Index, IndexIter, Reader},
     error::Error,
     panic::Panic,
@@ -132,28 +132,6 @@ where
     }
 }
 
-impl<K, V> Writer<K, V> for NoDisk<K, V>
-where
-    K: Clone + Ord + Footprint,
-    V: Clone + Diff + Footprint,
-{
-    fn set(&mut self, _: K, _: V) -> Result<Option<Entry<K, V>>> {
-        panic!("not supported")
-    }
-
-    fn set_cas(&mut self, _: K, _: V, _cas: u64) -> Result<Option<Entry<K, V>>> {
-        panic!("not supported")
-    }
-
-    fn delete<Q>(&mut self, _key: &Q) -> Result<Option<Entry<K, V>>>
-    where
-        K: Borrow<Q>,
-        Q: ToOwned<Owned = K> + Ord + ?Sized,
-    {
-        panic!("not supported")
-    }
-}
-
 impl<K, V> Reader<K, V> for NoDisk<K, V>
 where
     K: Clone + Ord,
@@ -235,14 +213,14 @@ where
     where
         G: Clone + RangeBounds<u64>,
     {
-        panic!("scan operation not supported by nodisk !!")
+        err_at!(NotImplemented, msg:"CommitIterator.scan()".to_string())
     }
 
     fn scans<G>(&mut self, _n_shards: usize, _within: G) -> Result<Vec<IndexIter<K, V>>>
     where
         G: Clone + RangeBounds<u64>,
     {
-        panic!("scans operation not supported by nodisk !!")
+        err_at!(NotImplemented, msg:"CommitIterator.scans()".to_string())
     }
 
     fn range_scans<N, G>(&mut self, _ranges: Vec<N>, _within: G) -> Result<Vec<IndexIter<K, V>>>
@@ -250,6 +228,6 @@ where
         G: Clone + RangeBounds<u64>,
         N: Clone + RangeBounds<K>,
     {
-        panic!("range_scans operation not supported by nodisk !!")
+        err_at!(NotImplemented, msg:"CommitIterator.range_scans()".to_string())
     }
 }

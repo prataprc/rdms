@@ -210,7 +210,7 @@ fn test_root3() {
     ];
     let seqno = 200001;
     for (cutoff, lref, tref) in cutoffs.into_iter() {
-        root.update_cutoff(cutoff, seqno);
+        root.update_cutoff(cutoff, seqno).unwrap();
         assert_eq!(root.lsm_cutoff, lref);
         assert_eq!(root.tombstone_cutoff, tref);
     }

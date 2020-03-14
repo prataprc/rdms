@@ -1102,7 +1102,7 @@ where
             }
         }
 
-        unreachable!()
+        None
     }
 
     /// Return an iterator for all existing versions for this entry.

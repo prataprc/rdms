@@ -413,7 +413,7 @@ impl Root {
         }
     }
 
-    fn update_cutoff(&mut self, cutoff: Cutoff, tip_seqno: u64) {
+    fn update_cutoff(&mut self, cutoff: Cutoff, tip_seqno: u64) -> Result<()> {
         use std::ops::Bound::{Excluded, Included, Unbounded};
 
         let cutoff = match cutoff {
@@ -430,7 +430,10 @@ impl Root {
 
         match cutoff {
             Cutoff::Lsm(n_cutoff) => match self.lsm_cutoff.clone() {
-                None => self.lsm_cutoff = Some(n_cutoff),
+                None => {
+                    self.lsm_cutoff = Some(n_cutoff);
+                    Ok(())
+                }
                 Some(o) => {
                     let range = (Unbounded, o.clone());
                     self.lsm_cutoff = Some(match n_cutoff {
@@ -440,10 +443,14 @@ impl Root {
                         Included(n) => Included(n),
                         Unbounded => Included(tip_seqno),
                     });
+                    Ok(())
                 }
             },
             Cutoff::Tombstone(n_cutoff) => match self.tombstone_cutoff.clone() {
-                None => self.tombstone_cutoff = Some(n_cutoff),
+                None => {
+                    self.tombstone_cutoff = Some(n_cutoff);
+                    Ok(())
+                }
                 Some(o) => {
                     let range = (Unbounded, o.clone());
                     self.tombstone_cutoff = Some(match n_cutoff {
@@ -453,9 +460,10 @@ impl Root {
                         Included(n) => Included(n),
                         Unbounded => Included(tip_seqno),
                     });
+                    Ok(())
                 }
             },
-            Cutoff::Mono => unreachable!(),
+            Cutoff::Mono => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
 }
@@ -834,7 +842,7 @@ where
         Ok(())
     }
 
-    fn active_compact_levels(disks: &[Snapshot<K, V, D::I>]) -> Vec<usize> {
+    fn active_compact_levels(disks: &[Snapshot<K, V, D::I>]) -> Result<Vec<usize>> {
         // ignore empty levels in the begining.
         let mut disks = disks
             .iter()
@@ -856,19 +864,19 @@ where
                 match disk {
                     Snapshot::Active(_) => res.push(*level),
                     Snapshot::None => continue,
-                    _ => unreachable!(),
+                    _ => return err_at!(Fatal, msg: format!("unreachable")),
                 }
             }
         }
 
-        res
+        Ok(res)
     }
 
     fn find_compact_levels(
         disks: &[Snapshot<K, V, D::I>],
         disk_ratio: f64,
     ) -> Result<Option<(Vec<usize>, usize)>> {
-        let mut levels = Self::active_compact_levels(disks);
+        let mut levels = Self::active_compact_levels(disks)?;
 
         match levels.len() {
             0 | 1 => Ok(None),
@@ -903,7 +911,7 @@ where
 
         match levels {
             None if self.n_ccommits < N_COMMITS => Ok(None),
-            None => match Self::active_compact_levels(&self.disks).pop() {
+            None => match Self::active_compact_levels(&self.disks)?.pop() {
                 None => Ok(None),
                 Some(d) => Ok(Some((vec![d], vec![], d))),
             },
@@ -916,15 +924,17 @@ where
         }
     }
 
-    fn move_to_compact(&mut self, levels: &[usize]) {
+    fn move_to_compact(&mut self, levels: &[usize]) -> Result<()> {
         for level in levels.to_vec().into_iter() {
             let d = mem::replace(&mut self.disks[level], Default::default());
             let d = match d {
                 Snapshot::Active(d) => d,
-                _ => unreachable!(),
+                _ => return err_at!(Fatal, msg: format!("unreachable")),
             };
             self.disks[level] = Snapshot::new_compact(d);
         }
+
+        Ok(())
     }
 
     fn repopulate_readers(&mut self, commit: bool) -> Result<()> {
@@ -1072,7 +1082,7 @@ where
             Compact(d) => d.footprint(),
             Active(d) => d.footprint(),
             Snapshot::None => Ok(0),
-            _ => unreachable!(),
+            _ => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
 }
@@ -1133,7 +1143,7 @@ where
                 let msg = format!("dgm disk not commit/compact/active snapshot");
                 Err(Error::UnExpectedFail(msg))
             }
-            _ => unreachable!(),
+            _ => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
 
@@ -1149,7 +1159,7 @@ where
                 let msg = format!("dgm disk not commit/compact/active snapshot");
                 Err(Error::UnExpectedFail(msg))
             }
-            _ => unreachable!(),
+            _ => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
 
@@ -1589,13 +1599,13 @@ where
                 inn.n_high_compacts += 1;
 
                 let tip_seqno = inn.m0.as_m0()?.to_seqno()?;
-                inn.root.update_cutoff(cutoff, tip_seqno);
+                inn.root.update_cutoff(cutoff, tip_seqno)?;
                 inn.root.to_cutoff(inn.n_high_compacts)
             } else {
                 // remember the cutoff, don't apply for intermediate compaction.
                 {
                     let tip_seqno = inn.m0.as_m0()?.to_seqno()?;
-                    inn.root.update_cutoff(cutoff, tip_seqno);
+                    inn.root.update_cutoff(cutoff, tip_seqno)?;
                 }
                 Cutoff::new_lsm_empty()
             };
@@ -1625,7 +1635,7 @@ where
     ) -> Result<usize> {
         let mut high_disk = {
             let mut inn = to_inner_lock(inner)?;
-            inn.move_to_compact(&levels);
+            inn.move_to_compact(&levels)?;
 
             inn.root = inn.root.to_next();
             inn.disks[d_level].as_disk()?.unwrap().clone()
@@ -1667,7 +1677,7 @@ where
         let (s_disks, mut disk) = {
             let mut inn = to_inner_lock(inner)?;
 
-            inn.move_to_compact(&levels);
+            inn.move_to_compact(&levels)?;
 
             inn.root = inn.root.to_next();
             let (s_disks, disk) = inn.do_compact_disks(&s_levels, d_level)?;
@@ -1675,7 +1685,7 @@ where
         };
         let metadata = match s_disks.first() {
             Some(s_disk) => s_disk.to_metadata()?,
-            _ => unreachable!(),
+            _ => return err_at!(Fatal, msg: format!("unreachable")),
         };
 
         let scanner = {
@@ -1693,7 +1703,7 @@ where
                 let d = mem::replace(&mut inn.disks[level], Default::default());
                 match d {
                     Snapshot::Compact(d) => compacted_disks.push(d),
-                    _ => unreachable!(),
+                    _ => return err_at!(Fatal, msg: format!("unreachable")),
                 }
             }
             let disk = Snapshot::new_active(disk);
@@ -1884,18 +1894,19 @@ where
 
         {
             let n = seqnos.len();
-            let mut iter = seqnos[..n - 1]
+            let iter = seqnos[..n - 1]
                 .to_vec()
                 .into_iter()
                 .zip(seqnos[1..].to_vec().into_iter());
-            let bad = iter.any(|(x, y)| match y.start_bound() {
-                Bound::Included(y) if x.contains(y) => true,
-                Bound::Included(_) => false,
-                _ => unreachable!(),
-            });
-            if bad {
-                let msg = format!("overlapping snapshot {:?}", seqnos);
-                return Err(Error::UnExpectedFail(msg));
+            for (x, y) in iter {
+                match y.start_bound() {
+                    Bound::Included(y) if x.contains(y) => (),
+                    Bound::Included(_) => {
+                        let msg = format!("overlapping snapshot {:?}", seqnos);
+                        return Err(Error::UnExpectedFail(msg));
+                    }
+                    _ => return err_at!(Fatal, msg: format!("unreachable")),
+                }
             }
         }
 
@@ -1949,7 +1960,7 @@ where
             Some(cutoff) => match cutoff {
                 Included(lseqno) if min_seqno <= lseqno => false,
                 Excluded(lseqno) if min_seqno < lseqno => false,
-                Unbounded => unreachable!(),
+                Unbounded => return err_at!(Fatal, msg: format!("unreachable")),
                 _ => true,
             },
             None => true,
@@ -1958,7 +1969,7 @@ where
             Some(cutoff) if entry.is_deleted() => match cutoff {
                 Included(tseqno) if max_seqno <= tseqno => false,
                 Excluded(tseqno) if max_seqno < tseqno => false,
-                Unbounded => unreachable!(),
+                Unbounded => return err_at!(Fatal, msg: format!("unreachable")),
                 _ => true,
             },
             _ => true,
@@ -2162,11 +2173,11 @@ where
     }
 
     fn close(self) -> Result<()> {
-        unimplemented!()
+        todo!()
     }
 
     fn purge(self) -> Result<()> {
-        unimplemented!()
+        todo!()
     }
 }
 
@@ -2339,7 +2350,7 @@ where
             iters.push(disk.iter()?);
         }
 
-        let iter = Self::merge_iters(iters, false /*reverse*/, false /*ver*/);
+        let iter = Self::merge_iters(iters, false /*reverse*/, false /*ver*/)?;
         Ok(Box::new(DgmIter::new(rs, iter)))
     }
 
@@ -2364,7 +2375,7 @@ where
             iters.push(disk.range(range.clone())?)
         }
 
-        let iter = Self::merge_iters(iters, false /*reverse*/, false /*ver*/);
+        let iter = Self::merge_iters(iters, false /*reverse*/, false /*ver*/)?;
         Ok(Box::new(DgmIter::new(rs, iter)))
     }
 
@@ -2392,7 +2403,7 @@ where
             iters.push(disk.reverse(range.clone())?)
         }
 
-        let iter = Self::merge_iters(iters, true /*reverse*/, false /*ver*/);
+        let iter = Self::merge_iters(iters, true /*reverse*/, false /*ver*/)?;
         Ok(Box::new(DgmIter::new(rs, iter)))
     }
 
@@ -2451,7 +2462,7 @@ where
             iters.push(disk.iter_with_versions()?);
         }
 
-        let iter = Self::merge_iters(iters, false /*reverse*/, true /*ver*/);
+        let iter = Self::merge_iters(iters, false /*reverse*/, true /*ver*/)?;
         Ok(Box::new(DgmIter::new(rs, iter)))
     }
 
@@ -2479,7 +2490,7 @@ where
             iters.push(disk.range_with_versions(range.clone())?);
         }
 
-        let iter = Self::merge_iters(iters, false /*reverse*/, true /*ver*/);
+        let iter = Self::merge_iters(iters, false /*reverse*/, true /*ver*/)?;
         Ok(Box::new(DgmIter::new(rs, iter)))
     }
 
@@ -2509,7 +2520,7 @@ where
             iters.push(disk.reverse_with_versions(range)?);
         }
 
-        let iter = Self::merge_iters(iters, true /*reverse*/, true /*ver*/);
+        let iter = Self::merge_iters(iters, true /*reverse*/, true /*ver*/)?;
         Ok(Box::new(DgmIter::new(rs, iter)))
     }
 
@@ -2517,7 +2528,7 @@ where
         mut iters: Vec<IndexIter<'a, K, V>>,
         reverse: bool,
         versions: bool,
-    ) -> IndexIter<'a, K, V>
+    ) -> Result<IndexIter<'a, K, V>>
     where
         K: 'a,
         V: 'a,
@@ -2525,7 +2536,7 @@ where
         iters.reverse();
 
         match iters.len() {
-            1 => iters.remove(0),
+            1 => Ok(iters.remove(0)),
             n if n > 1 => {
                 let mut older_iter = iters.remove(0);
                 for newer_iter in iters.into_iter() {
@@ -2535,9 +2546,9 @@ where
                         lsm::y_iter(newer_iter, older_iter, reverse)
                     };
                 }
-                older_iter
+                Ok(older_iter)
             }
-            _ => unreachable!(),
+            _ => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
 }
@@ -2778,7 +2789,7 @@ where
         let no_reverse = false;
 
         match self.rs.len() {
-            0 => unreachable!(),
+            0 => err_at!(Fatal, msg: format!("unreachable")),
             1 => Ok(self.rs[0].iter_with_versions()?),
             _n => {
                 let r = unsafe {
@@ -2902,7 +2913,7 @@ where
             };
             match rx.recv_timeout(interval) {
                 Ok((cmd, resp_tx)) if cmd == "do_commit" => (cmd, resp_tx),
-                Ok(_) => unreachable!(),
+                Ok(_) => break err_at!(Fatal, msg: format!("unreachable")),
                 Err(mpsc::RecvTimeoutError::Timeout) => ("".to_string(), None),
                 Err(mpsc::RecvTimeoutError::Disconnected) => break Ok(()),
             }
@@ -2937,7 +2948,7 @@ where
                 }
             }
             "" => (),
-            _ => unreachable!(),
+            _ => break err_at!(Fatal, msg: format!("unreachable")),
         }
 
         elapsed = start.elapsed().ok().unwrap();
@@ -2980,7 +2991,7 @@ where
             };
             match rx.recv_timeout(interval) {
                 Ok((cmd, resp_tx)) if cmd == "do_compact" => resp_tx,
-                Ok(_) => unreachable!(),
+                Ok(_) => break err_at!(Fatal, msg: format!("unreachable")),
                 Err(mpsc::RecvTimeoutError::Timeout) => None,
                 Err(mpsc::RecvTimeoutError::Disconnected) => break Ok(()),
             }

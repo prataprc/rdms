@@ -595,7 +595,7 @@ where
             self.seqno = seqno;
             Ok(())
         } else {
-            err_at!(APIMisuse, msg: format!("active-handles:{}", n));
+            err_at!(APIMisuse, msg: format!("active-handles:{}", n))
         }
     }
 

@@ -1468,7 +1468,7 @@ pub(crate) fn write_meta_items(
                 hdr[32..40].copy_from_slice(&ln.to_be_bytes());
                 block.extend_from_slice(&data);
             }
-            (i, m) => panic!("unreachable arm at {} {}", i, m),
+            (i, m) => return err_at!(Fatal, msg: format!("meta-item {},{}", i, m)),
         }
     }
     block.extend_from_slice(&hdr[..]);

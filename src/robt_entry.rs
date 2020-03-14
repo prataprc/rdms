@@ -174,8 +174,7 @@ where
             } => {
                 let (fpos, length, seqno) = (*fpos | Self::REFERENCE_FLAG, *length, *seqno);
                 if seqno != *seqno1 {
-                    // TODO: remove this once robt stabilizes.
-                    panic!("mismatch in delta-reference seqno {} != {}", seqno, *seqno1);
+                    return err_at!(Fatal, msg: format!("{} != {}", seqno, *seqno1));
                 }
 
                 let hdr1 = length | Self::UPSERT_FLAG;

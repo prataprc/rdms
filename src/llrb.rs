@@ -591,11 +591,12 @@ where
 
     fn set_seqno(&mut self, seqno: u64) -> Result<()> {
         let n = self.multi_rw();
-        if n > 0 {
-            return err_at!(APIMisuse, msg: format!("active-handles:{}", n));
+        if n == 0 {
+            self.seqno = seqno;
+            Ok(())
+        } else {
+            err_at!(APIMisuse, msg: format!("active-handles:{}", n));
         }
-        self.seqno = seqno;
-        Ok(())
     }
 
     /// Create a new reader handle, for multi-threading.

@@ -992,15 +992,12 @@ where
         let snapshot = self.lock_snapshot()?;
 
         let n = snapshot.rdrefns.len() + snapshot.wtrefns.len();
-        if n > 0 {
-            panic!(
-                "cannot configure sharded_llrb with active readers/writers {}",
-                n
-            )
+        if n == 0 {
+            snapshot.root_seqno.store(seqno, Ordering::SeqCst);
+            Ok(())
+        } else {
+            err_at!(APIMisuse, msg: format!("active-handles:{}", n))
         }
-        snapshot.root_seqno.store(seqno, Ordering::SeqCst);
-
-        Ok(())
     }
 
     fn to_reader(&mut self) -> Result<Self::R> {

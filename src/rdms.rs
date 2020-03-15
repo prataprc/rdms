@@ -13,6 +13,7 @@ use crate::core;
 use crate::{
     core::{CommitIter, CommitIterator, Diff, Footprint, Index},
     core::{Cutoff, Result, Validate},
+    error::Error,
 };
 
 /// Index type, composable index type. Check module documentation for
@@ -60,20 +61,24 @@ where
     pub fn close(mut self) -> Result<()> {
         self.do_close()?;
         match Arc::try_unwrap(self.index.take().unwrap()) {
-            Ok(index) => index.into_inner().unwrap().close()?,
-            Err(_) => unreachable!(),
+            Ok(index) => {
+                index.into_inner().unwrap().close()?;
+                Ok(())
+            }
+            Err(_) => err_at!(Fatal, msg: format!("unreachable")),
         }
-        Ok(())
     }
 
     /// Purge this index along with disk data.
     pub fn purge(mut self) -> Result<()> {
         self.do_close()?;
         match Arc::try_unwrap(self.index.take().unwrap()) {
-            Ok(index) => index.into_inner().unwrap().close()?,
-            Err(_) => unreachable!(),
+            Ok(index) => {
+                index.into_inner().unwrap().close()?;
+                Ok(())
+            }
+            Err(_) => err_at!(Fatal, msg: format!("unreachable")),
         }
-        Ok(())
     }
 
     fn do_close(&mut self) -> Result<()> {

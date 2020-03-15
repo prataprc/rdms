@@ -56,7 +56,7 @@ where
         }
     }
 
-    pub(crate) fn reset(&mut self) {
+    pub(crate) fn reset(&mut self) -> Result<()> {
         match self {
             MBlock::Encode {
                 mblock,
@@ -67,8 +67,9 @@ where
                 mblock.truncate(0);
                 offsets.truncate(0);
                 first_key.take();
+                Ok(())
             }
-            MBlock::Decode { .. } => unreachable!(),
+            MBlock::Decode { .. } => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
 
@@ -78,17 +79,17 @@ where
                 let err = Error::UnExpectedFail(format!("mblock no first key"));
                 Ok(first_key.as_ref().ok_or(err)?)
             }
-            MBlock::Decode { .. } => unreachable!(),
+            MBlock::Decode { .. } => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
 
-    pub(crate) fn has_first_key(&self) -> bool {
+    pub(crate) fn has_first_key(&self) -> Result<bool> {
         match self {
             MBlock::Encode {
                 first_key: Some(_), ..
-            } => true,
-            MBlock::Encode { .. } => false,
-            MBlock::Decode { .. } => unreachable!(),
+            } => Ok(true),
+            MBlock::Encode { .. } => Ok(false),
+            MBlock::Decode { .. } => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
 
@@ -113,7 +114,7 @@ where
                     Err(Error::__MBlockOverflow(n))
                 }
             }
-            MBlock::Decode { .. } => unreachable!(),
+            MBlock::Decode { .. } => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
 
@@ -138,7 +139,7 @@ where
                     Err(Error::__MBlockOverflow(n))
                 }
             }
-            MBlock::Decode { .. } => unreachable!(),
+            MBlock::Decode { .. } => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
 
@@ -174,7 +175,7 @@ where
 
                 Ok(convert_at!((*m_blocksize))?)
             }
-            MBlock::Decode { .. } => unreachable!(),
+            MBlock::Decode { .. } => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
 
@@ -185,18 +186,19 @@ where
         match self {
             MBlock::Encode { mblock, .. } => match iflusher {
                 Some(iflusher) => iflusher.post(mblock.clone())?,
-                None => unreachable!(),
+                None => err_at!(Fatal, msg: format!("unreachable"))?,
             },
-            MBlock::Decode { .. } => unreachable!(),
+            MBlock::Decode { .. } => err_at!(Fatal, msg: format!("unreachable"))?,
         }
+
         Ok(())
     }
 
     #[cfg(test)]
-    fn buffer(&self) -> Vec<u8> {
+    fn buffer(&self) -> Result<Vec<u8>> {
         match self {
-            MBlock::Encode { mblock, .. } => mblock.clone(),
-            MBlock::Decode { .. } => unreachable!(),
+            MBlock::Encode { mblock, .. } => Ok(mblock.clone()),
+            MBlock::Decode { .. } => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
 }
@@ -238,7 +240,7 @@ where
             Bound::Included(f) | Bound::Excluded(f) => f,
             Bound::Unbounded => 0,
         };
-        let pivot = self.find_pivot(from, to);
+        let pivot = self.find_pivot(from, to)?;
 
         //println!(
         //    "mget {:?} {:?} {} {} {:?}",
@@ -250,7 +252,7 @@ where
         //);
         match key.cmp(self.to_key(pivot)?.borrow()) {
             Ordering::Less if pivot == 0 => Err(Error::__LessThan),
-            Ordering::Less if pivot == f => unreachable!(),
+            Ordering::Less if pivot == f => err_at!(Fatal, msg: format!("unreachable")),
             Ordering::Less => self.get(key, from, Bound::Excluded(pivot)),
             Ordering::Equal => self.to_entry(pivot),
             Ordering::Greater if pivot == f => self.to_entry(pivot),
@@ -267,7 +269,7 @@ where
             Bound::Included(f) | Bound::Excluded(f) => f,
             Bound::Unbounded => 0,
         };
-        let pivot = self.find_pivot(from, to);
+        let pivot = self.find_pivot(from, to)?;
 
         //println!(
         //    "mfind {:?} {:?} {} {} {:?}",
@@ -279,7 +281,7 @@ where
         //);
         match key.cmp(self.to_key(pivot)?.borrow()) {
             Ordering::Less if pivot == 0 => Err(Error::__LessThan),
-            Ordering::Less if pivot == f => unreachable!(),
+            Ordering::Less if pivot == f => err_at!(Fatal, msg: format!("unreachable")),
             Ordering::Less => self.find(key, from, Bound::Excluded(pivot)),
             Ordering::Equal => self.to_entry(pivot),
             Ordering::Greater if pivot == f => self.to_entry(pivot),
@@ -288,20 +290,20 @@ where
     }
 
     // [from, to)
-    fn find_pivot(&self, from: Bound<usize>, to: Bound<usize>) -> usize {
+    fn find_pivot(&self, from: Bound<usize>, to: Bound<usize>) -> Result<usize> {
         let from = match from {
             Bound::Included(from) => from,
             Bound::Unbounded => 0,
-            Bound::Excluded(_) => unreachable!(),
+            Bound::Excluded(_) => err_at!(Fatal, msg: format!("unreachable"))?,
         };
         let to = match to {
             Bound::Excluded(to) => to,
             Bound::Unbounded => self.len(),
-            Bound::Included(_) => unreachable!(),
+            Bound::Included(_) => err_at!(Fatal, msg: format!("unreachable"))?,
         };
         match to - from {
-            n if n > 0 => from + (n / 2),
-            _ => unreachable!(),
+            n if n > 0 => Ok(from + (n / 2)),
+            _ => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
 
@@ -313,7 +315,7 @@ where
                 offsets,
                 ..
             } => (block, *count, offsets),
-            MBlock::Encode { .. } => unreachable!(),
+            MBlock::Encode { .. } => err_at!(Fatal, msg: format!("unreachable"))?,
         };
         if index < count {
             let idx = index * 4;
@@ -332,7 +334,7 @@ where
                 offsets,
                 ..
             } => (block, *count, offsets),
-            MBlock::Encode { .. } => unreachable!(),
+            MBlock::Encode { .. } => err_at!(Fatal, msg: format!("unreachable"))?,
         };
         if count > 0 {
             let index = count - 1;
@@ -355,7 +357,7 @@ where
                 offsets,
                 ..
             } => (block, *count, offsets),
-            MBlock::Encode { .. } => unreachable!(),
+            MBlock::Encode { .. } => err_at!(Fatal, msg: format!("unreachable"))?,
         };
         if index < count {
             let idx = index * 4;
@@ -436,7 +438,7 @@ where
         }
     }
 
-    pub(crate) fn reset(&mut self, vpos: u64) {
+    pub(crate) fn reset(&mut self, vpos: u64) -> Result<()> {
         match self {
             ZBlock::Encode {
                 leaf,
@@ -453,8 +455,9 @@ where
                 zentries.truncate(0);
                 *vpos_ref = vpos;
                 first_key.take();
+                Ok(())
             }
-            ZBlock::Decode { .. } => unreachable!(),
+            ZBlock::Decode { .. } => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
 
@@ -465,17 +468,17 @@ where
                 let err = Error::UnExpectedFail(format!("mblock no first key"));
                 Ok(first_key.as_ref().ok_or(err)?)
             }
-            ZBlock::Decode { .. } => unreachable!(),
+            ZBlock::Decode { .. } => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
 
-    pub(crate) fn has_first_key(&self) -> bool {
+    pub(crate) fn has_first_key(&self) -> Result<bool> {
         match self {
             ZBlock::Encode { first_key, .. } => match first_key {
-                Some(_) => true,
-                None => false,
+                Some(_) => Ok(true),
+                None => Ok(false),
             },
-            ZBlock::Decode { .. } => unreachable!(),
+            ZBlock::Decode { .. } => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
 
@@ -502,7 +505,7 @@ where
                     (true, false) => DZ::encode_lv(entry, leaf, blob)?,
                     (true, true) => DZ::encode_lvd(entry, leaf, blob)?,
                 };
-                let (k, v, d) = de.to_kvd_stats();
+                let (k, v, d) = de.to_kvd_stats()?;
                 zentries.push(de);
 
                 let n = 4 + ((offsets.len() + 1) * 4) + leaf.len();
@@ -519,7 +522,7 @@ where
                     Err(Error::__ZBlockOverflow(n))
                 }
             }
-            ZBlock::Decode { .. } => unreachable!(),
+            ZBlock::Decode { .. } => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
 
@@ -566,7 +569,7 @@ where
                     convert_at!(blob.len())?,
                 ))
             }
-            ZBlock::Decode { .. } => unreachable!(),
+            ZBlock::Decode { .. } => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
 
@@ -579,23 +582,23 @@ where
             ZBlock::Encode { leaf, blob, .. } => {
                 match iflusher {
                     Some(iflusher) => iflusher.post(leaf.clone())?,
-                    None => unreachable!(),
+                    None => err_at!(Fatal, msg: format!("unreachable"))?,
                 }
                 match vflusher {
                     Some(vflusher) => vflusher.post(blob.clone())?,
                     None => (),
                 }
             }
-            ZBlock::Decode { .. } => unreachable!(),
+            ZBlock::Decode { .. } => err_at!(Fatal, msg: format!("unreachable"))?,
         }
         Ok(())
     }
 
     #[cfg(test)]
-    fn buffer(&self) -> (Vec<u8>, Vec<u8>) {
+    fn buffer(&self) -> Result<(Vec<u8>, Vec<u8>)> {
         match self {
-            ZBlock::Encode { leaf, blob, .. } => (leaf.clone(), blob.clone()),
-            ZBlock::Decode { .. } => unreachable!(),
+            ZBlock::Encode { leaf, blob, .. } => Ok((leaf.clone(), blob.clone())),
+            ZBlock::Decode { .. } => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
 }
@@ -620,10 +623,10 @@ where
     }
 
     #[inline]
-    pub(crate) fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> Result<usize> {
         match self {
-            ZBlock::Decode { count, .. } => *count,
-            ZBlock::Encode { .. } => unreachable!(),
+            ZBlock::Decode { count, .. } => Ok(*count),
+            ZBlock::Encode { .. } => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
 
@@ -643,7 +646,7 @@ where
             Bound::Included(f) | Bound::Excluded(f) => f,
             Bound::Unbounded => 0,
         };
-        let pivot = self.find_pivot(from, to);
+        let pivot = self.find_pivot(from, to)?;
 
         //println!(
         //    "zfind {:?} {:?} {} {} {:?}",
@@ -655,7 +658,7 @@ where
         //);
         match key.cmp(self.to_key(pivot)?.borrow()) {
             Ordering::Less if pivot == 0 => Err(Error::__LessThan),
-            Ordering::Less if pivot == f => unreachable!(),
+            Ordering::Less if pivot == f => err_at!(Fatal, msg: format!("unreachable")),
             Ordering::Less => self.find(key, from, Bound::Excluded(pivot)),
             Ordering::Equal => self.to_entry(pivot),
             Ordering::Greater if pivot == f => Err(Error::__ZBlockExhausted(f)),
@@ -664,19 +667,19 @@ where
     }
 
     // [from, to)
-    fn find_pivot(&self, from: Bound<usize>, to: Bound<usize>) -> usize {
+    fn find_pivot(&self, from: Bound<usize>, to: Bound<usize>) -> Result<usize> {
         let from = match from {
             Bound::Included(from) | Bound::Excluded(from) => from,
             Bound::Unbounded => 0,
         };
         let to = match to {
             Bound::Excluded(to) => to,
-            Bound::Unbounded => self.len(),
-            Bound::Included(_) => unreachable!(),
+            Bound::Unbounded => self.len()?,
+            Bound::Included(_) => err_at!(Fatal, msg: format!("unreachable"))?,
         };
         match to - from {
-            n if n > 0 => from + (n / 2),
-            _ => unreachable!(),
+            n if n > 0 => Ok(from + (n / 2)),
+            _ => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
 
@@ -692,7 +695,7 @@ where
                 offsets,
                 ..
             } => (block, *count, offsets),
-            ZBlock::Encode { .. } => unreachable!(),
+            ZBlock::Encode { .. } => err_at!(Fatal, msg: format!("unreachable"))?,
         };
 
         if index < count {
@@ -717,7 +720,7 @@ where
                 offsets,
                 ..
             } => (block, *count, offsets),
-            ZBlock::Encode { .. } => unreachable!(),
+            ZBlock::Encode { .. } => err_at!(Fatal, msg: format!("unreachable"))?,
         };
         if count > 0 {
             let index = count - 1;
@@ -736,7 +739,7 @@ where
     {
         let (block, offsets) = match self {
             ZBlock::Decode { block, offsets, .. } => (block, offsets),
-            ZBlock::Encode { .. } => unreachable!(),
+            ZBlock::Encode { .. } => err_at!(Fatal, msg: format!("unreachable"))?,
         };
         let idx = index * 4;
         let offset: usize = convert_at!(u32::from_be_bytes(array_at!(offsets[idx..idx + 4])?))?;

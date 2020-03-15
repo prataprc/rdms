@@ -8,7 +8,7 @@ use crate::{core, util, vlog};
 fn test_mblock_m() {
     let config: Config = Default::default();
     let mut mb = MBlock::<i32, i32>::new_encode(config.clone());
-    assert_eq!(mb.has_first_key(), false);
+    assert_eq!(mb.has_first_key().unwrap(), false);
 
     let mut stats: Stats = Default::default();
     let mut keys = vec![];
@@ -24,7 +24,7 @@ fn test_mblock_m() {
             }
             _ => unreachable!(),
         }
-        assert_eq!(mb.has_first_key(), true);
+        assert_eq!(mb.has_first_key().unwrap(), true);
     }
     assert_eq!(keys[0].0, *mb.as_first_key().unwrap());
 
@@ -38,7 +38,7 @@ fn test_mblock_m() {
     assert_eq!(stats.v_bytes, 0);
 
     // flush
-    let mblock = mb.buffer();
+    let mblock = mb.buffer().unwrap();
     let file = {
         let mut dir = std::env::temp_dir();
         dir.push("test-mblock-m-mblock.dat");
@@ -133,7 +133,7 @@ fn test_mblock_m() {
 fn test_mblock_z() {
     let config: Config = Default::default();
     let mut mb = MBlock::<i32, i32>::new_encode(config.clone());
-    assert_eq!(mb.has_first_key(), false);
+    assert_eq!(mb.has_first_key().unwrap(), false);
 
     let mut stats: Stats = Default::default();
     let mut keys = vec![];
@@ -149,7 +149,7 @@ fn test_mblock_z() {
             }
             _ => unreachable!(),
         }
-        assert_eq!(mb.has_first_key(), true);
+        assert_eq!(mb.has_first_key().unwrap(), true);
     }
     assert_eq!(keys[0].0, *mb.as_first_key().unwrap());
 
@@ -163,7 +163,7 @@ fn test_mblock_z() {
     assert_eq!(stats.v_bytes, 0);
 
     // flush
-    let mblock = mb.buffer();
+    let mblock = mb.buffer().unwrap();
     let file = {
         let mut dir = std::env::temp_dir();
         dir.push("test-mblock-z-mblock.dat");
@@ -249,7 +249,7 @@ fn test_zblock1() {
     config.value_in_vlog = false;
     config.delta_ok = false;
     let mut zb = ZBlock::new_encode(vpos, config.clone());
-    assert_eq!(zb.has_first_key(), false);
+    assert_eq!(zb.has_first_key().unwrap(), false);
 
     let mut entries = gen_entries(0x100, 100000);
     let mut stats: Stats = Default::default();
@@ -263,7 +263,7 @@ fn test_zblock1() {
             }
             _ => unreachable!(),
         }
-        assert_eq!(zb.has_first_key(), true);
+        assert_eq!(zb.has_first_key().unwrap(), true);
         if !entry.is_deleted() {
             val_mem += 4;
         }
@@ -288,7 +288,7 @@ fn test_zblock1() {
     assert_eq!(stats.v_bytes, 0);
 
     // flush
-    let (leaf, _blob) = zb.buffer();
+    let (leaf, _blob) = zb.buffer().unwrap();
     let file = {
         let mut dir = std::env::temp_dir();
         dir.push("test-zblock1-leaf.dat");
@@ -305,7 +305,7 @@ fn test_zblock1() {
         )
         .unwrap()
     };
-    assert_eq!(zb.len(), entries.len());
+    assert_eq!(zb.len().unwrap(), entries.len());
 
     let mut last_entry: Option<core::Entry<i32, i32>> = None;
     let mut last_index: Option<usize> = None;
@@ -350,7 +350,7 @@ fn test_zblock2() {
     config.value_in_vlog = false;
     config.delta_ok = true;
     let mut zb = ZBlock::new_encode(vpos, config.clone());
-    assert_eq!(zb.has_first_key(), false);
+    assert_eq!(zb.has_first_key().unwrap(), false);
 
     let mut entries = gen_entries(0x100, 100000);
     let mut stats: Stats = Default::default();
@@ -364,7 +364,7 @@ fn test_zblock2() {
             }
             _ => unreachable!(),
         }
-        assert_eq!(zb.has_first_key(), true);
+        assert_eq!(zb.has_first_key().unwrap(), true);
         if !entry.is_deleted() {
             val_mem += 4;
         }
@@ -395,7 +395,7 @@ fn test_zblock2() {
     assert_eq!(stats.v_bytes, diff_mem);
 
     // flush
-    let (leaf, blob) = zb.buffer();
+    let (leaf, blob) = zb.buffer().unwrap();
     let file = {
         let mut dir = std::env::temp_dir();
         dir.push("test-zblock2-leaf.dat");
@@ -411,7 +411,7 @@ fn test_zblock2() {
         )
         .unwrap()
     };
-    assert_eq!(zb.len(), entries.len());
+    assert_eq!(zb.len().unwrap(), entries.len());
 
     let mut doff = 0;
     for (i, entry) in entries.iter().enumerate() {
@@ -471,7 +471,7 @@ fn test_zblock3() {
     config.value_in_vlog = true;
     config.delta_ok = false;
     let mut zb = ZBlock::new_encode(vpos, config.clone());
-    assert_eq!(zb.has_first_key(), false);
+    assert_eq!(zb.has_first_key().unwrap(), false);
 
     let mut entries = gen_entries(0x100, 100000);
     let mut stats: Stats = Default::default();
@@ -485,7 +485,7 @@ fn test_zblock3() {
             }
             _ => unreachable!(),
         }
-        assert_eq!(zb.has_first_key(), true);
+        assert_eq!(zb.has_first_key().unwrap(), true);
         if !entry.is_deleted() {
             val_mem += 12;
         }
@@ -510,7 +510,7 @@ fn test_zblock3() {
     assert_eq!(stats.v_bytes, val_mem);
 
     // flush
-    let (leaf, blob) = zb.buffer();
+    let (leaf, blob) = zb.buffer().unwrap();
     let file = {
         let mut dir = std::env::temp_dir();
         dir.push("test-zblock3-leaf.dat");
@@ -526,7 +526,7 @@ fn test_zblock3() {
         )
         .unwrap()
     };
-    assert_eq!(zb.len(), entries.len());
+    assert_eq!(zb.len().unwrap(), entries.len());
 
     let mut voff = 0;
     for (i, entry) in entries.iter().enumerate() {
@@ -574,7 +574,7 @@ fn test_zblock4() {
     config.value_in_vlog = true;
     config.delta_ok = true;
     let mut zb = ZBlock::new_encode(vpos, config.clone());
-    assert_eq!(zb.has_first_key(), false);
+    assert_eq!(zb.has_first_key().unwrap(), false);
 
     let mut entries = gen_entries(0x100, 100000);
     let mut stats: Stats = Default::default();
@@ -588,7 +588,7 @@ fn test_zblock4() {
             }
             _ => unreachable!(),
         }
-        assert_eq!(zb.has_first_key(), true);
+        assert_eq!(zb.has_first_key().unwrap(), true);
         if !entry.is_deleted() {
             val_mem += 12;
         }
@@ -619,7 +619,7 @@ fn test_zblock4() {
     assert_eq!(stats.v_bytes, val_mem + diff_mem);
 
     // flush
-    let (leaf, blob) = zb.buffer();
+    let (leaf, blob) = zb.buffer().unwrap();
     let file = {
         let mut dir = std::env::temp_dir();
         dir.push("test-zblock4-leaf.dat");
@@ -635,7 +635,7 @@ fn test_zblock4() {
         )
         .unwrap()
     };
-    assert_eq!(zb.len(), entries.len());
+    assert_eq!(zb.len().unwrap(), entries.len());
 
     let (mut doff, mut voff) = (0, 0);
     for (i, entry) in entries.iter().enumerate() {

@@ -63,7 +63,7 @@ where
                 let hdr1 = (klen | Self::ZBLOCK_FLAG).to_be_bytes();
                 (hdr1, klen, fpos)
             }
-            _ => unreachable!(),
+            _ => err_at!(Fatal, msg: format!("unreachable"))?,
         };
         let klen: usize = convert_at!(klen)?;
         if klen < core::Entry::<i32, i32>::KEY_SIZE_LIMIT {
@@ -118,11 +118,11 @@ where
         }
     }
 
-    pub(crate) fn to_index(&self) -> usize {
+    pub(crate) fn to_index(&self) -> Result<usize> {
         match self {
-            &MEntry::DecM { index, .. } => index,
-            &MEntry::DecZ { index, .. } => index,
-            _ => unreachable!(),
+            &MEntry::DecM { index, .. } => Ok(index),
+            &MEntry::DecZ { index, .. } => Ok(index),
+            _ => err_at!(Fatal, msg: format!("unreachable"))?,
         }
     }
 }
@@ -528,7 +528,7 @@ where
                 Self::re_encode_d(leaf, vpos, doff, n_deltas)?;
                 Self::re_encode_v(leaf, vpos, voff)
             }
-            _ => unreachable!(),
+            _ => err_at!(Fatal, msg: format!("unreachable"))?,
         }
     }
 
@@ -559,13 +559,13 @@ where
         Ok(())
     }
 
-    pub(crate) fn to_kvd_stats(&self) -> (usize, usize, usize) {
+    pub(crate) fn to_kvd_stats(&self) -> Result<(usize, usize, usize)> {
         match self {
-            ZEntry::EncL { k, v, .. } => (*k, *v, 0),
-            ZEntry::EncLD { k, v, d, .. } => (*k, *v, *d),
-            ZEntry::EncLV { k, v, .. } => (*k, *v, 0),
-            ZEntry::EncLVD { k, v, d, .. } => (*k, *v, *d),
-            _ => unreachable!(),
+            ZEntry::EncL { k, v, .. } => Ok((*k, *v, 0)),
+            ZEntry::EncLD { k, v, d, .. } => Ok((*k, *v, *d)),
+            ZEntry::EncLV { k, v, .. } => Ok((*k, *v, 0)),
+            ZEntry::EncLVD { k, v, d, .. } => Ok((*k, *v, *d)),
+            _ => err_at!(Fatal, msg: format!("unreachable"))?,
         }
     }
 }

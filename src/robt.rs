@@ -591,7 +591,7 @@ where
     pub fn to_next_version(&mut self) -> Result<Vec<ffi::OsString>> {
         let mut inner = self.as_inner()?;
         let (new_inner, purge_files) = match inner.deref() {
-            InnerRobt::Build { .. } => unreachable!(),
+            InnerRobt::Build { .. } => err_at!(Fatal, msg: format!("unreachable")),
             InnerRobt::Snapshot {
                 dir, name, config, ..
             } => {
@@ -607,7 +607,7 @@ where
                 let mut config = config.clone();
                 config.vlog_file = None; // ignore the old file.
 
-                (
+                Ok((
                     InnerRobt::Build {
                         dir: dir.clone(),
                         name: name.clone().next(),
@@ -617,9 +617,9 @@ where
                         _phantom_val: marker::PhantomData,
                     },
                     purge_files,
-                )
+                ))
             }
-        };
+        }?;
         *inner = new_inner;
         Ok(purge_files)
     }
@@ -690,7 +690,7 @@ where
                 let mut snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
                 snapshot.validate()
             }
-            InnerRobt::Build { .. } => unreachable!(),
+            InnerRobt::Build { .. } => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
 }
@@ -720,7 +720,7 @@ where
                 if let MetaItem::AppMetadata(data) = &meta[2] {
                     Ok(data.clone())
                 } else {
-                    unreachable!()
+                    err_at!(Fatal, msg: format!("unreachable"))
                 }
             }
             InnerRobt::Build { .. } => {
@@ -986,7 +986,7 @@ where
                         };
                         let meta = match &meta[2] {
                             MetaItem::AppMetadata(data) => data.clone(),
-                            _ => unreachable!(),
+                            _ => err_at!(Fatal, msg: format!("unreachable"))?,
                         };
                         let mut b = Builder::<K, V, B>::initial(dir, &name.0, conf)?;
                         // let mbbytes = b.build(comp_iter, meta)?;
@@ -1186,7 +1186,7 @@ where
         let inner = self.as_inner()?;
         match inner.deref() {
             InnerRobt::Snapshot { footprint, .. } => Ok(*footprint),
-            InnerRobt::Build { .. } => unreachable!(),
+            InnerRobt::Build { .. } => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
 }
@@ -2045,7 +2045,7 @@ where
         // flush blocks and close
         let (index_file, _) = match self.iflusher.take() {
             Some(iflusher) => iflusher.close_wait()?,
-            None => unreachable!(),
+            None => err_at!(Fatal, msg: format!("unreachable"))?,
         };
         match self.vflusher.take() {
             Some(vflusher) => {
@@ -2108,7 +2108,7 @@ where
                             c.ms = r.0;
                             c.fpos = r.1;
 
-                            m.reset();
+                            m.reset()?;
                             m.insertz(c.z.as_first_key()?, c.zfpos)?;
                             c.ms.push(m)
                         }
@@ -2116,7 +2116,7 @@ where
                     }
 
                     c.zfpos = c.fpos;
-                    c.z.reset(c.vfpos);
+                    c.z.reset(c.vfpos)?;
 
                     c.z.insert(&entry, &mut self.stats)?;
                 }
@@ -2124,7 +2124,7 @@ where
             };
         }
 
-        if c.z.has_first_key() == false && c.fpos == 0 {
+        if c.z.has_first_key()? == false && c.fpos == 0 {
             // empty iterator.
             return Ok(std::u64::MAX);
         }
@@ -2132,7 +2132,7 @@ where
         // println!(" number of mblocks: {}", c.ms.len());
 
         // flush final z-block
-        if c.z.has_first_key() {
+        if c.z.has_first_key()? {
             // println!(" flush final zblock: {:?}", c.z.as_first_key());
             let (zbytes, vbytes) = c.z.finalize(&mut self.stats)?;
             c.z.flush(self.iflusher.as_ref(), self.vflusher.as_ref())?;
@@ -2150,24 +2150,24 @@ where
                     c.ms = res.0;
                     c.fpos = res.1;
 
-                    m.reset();
+                    m.reset()?;
                     m.insertz(c.z.as_first_key()?, c.zfpos)?;
                     c.ms.push(m);
                 }
                 Err(err) => return Err(err),
             }
         } else {
-            unreachable!()
+            err_at!(Fatal, msg: format!("unreachable"))?
         }
 
         // flush final set of m-blocks
         while let Some(mut m) = c.ms.pop() {
-            let is_root = m.has_first_key() && c.ms.len() == 0;
+            let is_root = m.has_first_key()? && c.ms.len() == 0;
             if is_root {
                 let x = m.finalize(&mut self.stats)?;
                 m.flush(self.iflusher.as_ref())?;
                 c.fpos += x;
-            } else if m.has_first_key() {
+            } else if m.has_first_key()? {
                 // x is m_blocksize
                 let x = m.finalize(&mut self.stats)?;
                 m.flush(self.iflusher.as_ref())?;
@@ -2209,7 +2209,7 @@ where
                     ms = res.0;
                     fpos = res.1;
 
-                    m0.reset();
+                    m0.reset()?;
                     m0.insertm(key, mfpos)?;
                     m0
                 }
@@ -2658,7 +2658,7 @@ where
                 let msg = format!("error unlocking {:?}", index_file);
                 Err(Error::InvalidFile(msg))
             }
-            _ => unreachable!(),
+            _ => err_at!(Fatal, msg: format!("unreachable")),
         }?;
 
         if let Some(vlog_file) = vlog_file {
@@ -2672,7 +2672,7 @@ where
                     let msg = format!("error unlocking {:?}", vlog_file);
                     Err(Error::InvalidFile(msg))
                 }
-                _ => unreachable!(),
+                _ => err_at!(Fatal, msg: format!("unreachable")),
             }
         } else {
             Ok(())
@@ -2706,7 +2706,7 @@ where
                     target: "robt  ", "{:?}, meta-item marker {} bytes",
                     self.name, data.len()
                 ),
-                _ => unreachable!(),
+                _ => err_at!(Fatal, msg: format!("unreachable"))?,
             }
         }
         Ok(())
@@ -2764,17 +2764,20 @@ where
         }
     }
 
-    pub fn to_vlog_path_file(&self) -> Option<String> {
+    pub fn to_vlog_path_file(&self) -> Result<Option<String>> {
         let stats: Stats = match &self.meta[3] {
-            MetaItem::Stats(stats) => stats.parse().ok()?,
-            _ => unreachable!(),
+            MetaItem::Stats(stats) => stats.parse()?,
+            _ => err_at!(Fatal, msg: format!("unreachable"))?,
         };
         match stats.vlog_file {
-            Some(vlog_file) => {
-                let vf = path::Path::new(&vlog_file).file_name()?;
-                Some(vf.to_str()?.to_string())
-            }
-            None => None,
+            Some(vlog_file) => match path::Path::new(&vlog_file).file_name() {
+                Some(vf) => match vf.to_str() {
+                    Some(vf) => Ok(Some(vf.to_string())),
+                    None => Ok(None),
+                },
+                None => Ok(None),
+            },
+            None => Ok(None),
         }
     }
 }
@@ -3508,10 +3511,10 @@ where
                         Ok(())
                     }
                     Err(Error::__MBlockExhausted(_)) => self.rebuild_fwd(mzs),
-                    _ => unreachable!(),
+                    _ => err_at!(Fatal, msg: format!("unreachable")),
                 }
             }
-            Some(MZ::Z { .. }) => unreachable!(),
+            Some(MZ::Z { .. }) => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
 
@@ -3543,7 +3546,7 @@ where
             config.z_blocksize,
             "build_rev(), reading zblock",
         )?)?;
-        let index: isize = convert_at!((zblock.len() - 1))?;
+        let index: isize = convert_at!((zblock.len()? - 1))?;
         mzs.push(MZ::Z { zblock, index });
         Ok(())
     }
@@ -3570,7 +3573,7 @@ where
                             config.z_blocksize,
                             "rebuild_rev(), reading zblock",
                         )?)?;
-                        let idx: isize = convert_at!((zblock.len() - 1))?;
+                        let idx: isize = convert_at!((zblock.len()? - 1))?;
                         mzs.push(MZ::Z { zblock, index: idx });
                         Ok(())
                     }
@@ -3579,10 +3582,10 @@ where
                         self.build_rev(mfpos, mzs)?;
                         Ok(())
                     }
-                    _ => unreachable!(),
+                    _ => err_at!(Fatal, msg: format!("unreachable")),
                 }
             }
-            Some(MZ::Z { .. }) => unreachable!(),
+            Some(MZ::Z { .. }) => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
 
@@ -3610,7 +3613,7 @@ where
                 Err(Error::__LessThan) => mblock.to_entry(0),
                 Err(err) => Err(err),
             }?;
-            let index = mentry.to_index();
+            let index = mentry.to_index()?;
             mzs.push(MZ::M { fpos, index });
             if mentry.is_zblock() {
                 break mentry.to_fpos();
@@ -4089,7 +4092,7 @@ where
                     Err(err) => Some(Err(err)),
                 }
             }
-            MZ::M { .. } => unreachable!(),
+            MZ::M { .. } => Some(err_at!(Fatal, msg: format!("unreachable"))),
         }
     }
 }
@@ -4114,7 +4117,7 @@ where
                 }
             }
             MZ::Z { .. } => None,
-            MZ::M { .. } => unreachable!(),
+            MZ::M { .. } => Some(err_at!(Fatal, msg: format!("unreachable"))),
         }
     }
 }
@@ -4171,7 +4174,7 @@ fn thread_purger(name: String, rx: rt::Rx<ffi::OsString, ()>) -> Result<()> {
             Ok((file, None)) => {
                 purge_file(file.clone(), &mut locked_files, &mut err_files);
             }
-            Ok((_, Some(_))) => unreachable!(),
+            Ok((_, Some(_))) => err_at!(Fatal, msg: format!("unreachable"))?,
             Err(mpsc::TryRecvError::Empty) => (),
             Err(mpsc::TryRecvError::Disconnected) => break,
         }

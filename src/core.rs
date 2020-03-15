@@ -1176,7 +1176,7 @@ where
             //        .map(|d| d.to_seqno())
             //        .collect::<Vec<u64>>(),
             //);
-            Err(Error::UnExpectedFail(format!("Entry.validate_xmerge()")))
+            err_at!(UnExpectedFail, msg: format!("Entry.validate_xmerge()"))
         } else {
             Ok(())
         }

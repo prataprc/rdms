@@ -75,10 +75,10 @@ where
 
     pub(crate) fn as_first_key(&self) -> Result<&K> {
         match self {
-            MBlock::Encode { first_key, .. } => {
-                let err = Error::UnExpectedFail(format!("mblock no first key"));
-                Ok(first_key.as_ref().ok_or(err)?)
-            }
+            MBlock::Encode { first_key, .. } => match first_key.as_ref() {
+                Some(fk) => Ok(fk),
+                None => err_at!(UnExpectedFail, msg: format!("mepty")),
+            },
             MBlock::Decode { .. } => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
@@ -464,10 +464,10 @@ where
     // TODO: make unwrap into valid error.
     pub(crate) fn as_first_key(&self) -> Result<&K> {
         match self {
-            ZBlock::Encode { first_key, .. } => {
-                let err = Error::UnExpectedFail(format!("mblock no first key"));
-                Ok(first_key.as_ref().ok_or(err)?)
-            }
+            ZBlock::Encode { first_key, .. } => match first_key.as_ref() {
+                Some(fk) => Ok(fk),
+                None => err_at!(UnExpectedFail, msg: format!("empty")),
+            },
             ZBlock::Decode { .. } => err_at!(Fatal, msg: format!("unreachable")),
         }
     }

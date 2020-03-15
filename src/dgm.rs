@@ -1131,10 +1131,7 @@ where
             Compact(d) => Ok(Some(d)),
             Active(d) => Ok(Some(d)),
             Snapshot::None => Ok(None),
-            Write(_) | Flush(_) => {
-                let msg = format!("dgm disk not commit/compact/active snapshot");
-                Err(Error::UnExpectedFail(msg))
-            }
+            Write(_) | Flush(_) => err_at!(UnExpectedFail, msg: format!("not disk snapshot ")),
             _ => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
@@ -1147,10 +1144,7 @@ where
             Compact(d) => Ok(Some(d)),
             Active(d) => Ok(Some(d)),
             Snapshot::None => Ok(None),
-            Write(_) | Flush(_) => {
-                let msg = format!("dgm disk not commit/compact/active snapshot");
-                Err(Error::UnExpectedFail(msg))
-            }
+            Write(_) | Flush(_) => err_at!(UnExpectedFail, msg: format!("not disk snapshot")),
             _ => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
@@ -1158,30 +1152,21 @@ where
     fn as_m0(&self) -> Result<&I> {
         match self {
             Snapshot::Write(m) => Ok(m),
-            _ => {
-                let msg = format!("dgm m0 not a write snapshot");
-                Err(Error::UnExpectedFail(msg))
-            }
+            _ => err_at!(UnExpectedFail, msg: format!("m0 not write snapshot")),
         }
     }
 
     fn as_mut_m0(&mut self) -> Result<&mut I> {
         match self {
             Snapshot::Write(m) => Ok(m),
-            _ => {
-                let msg = format!("dgm m0 not a write snapshot");
-                Err(Error::UnExpectedFail(msg))
-            }
+            _ => err_at!(UnExpectedFail, msg: format!("m0 not write snapshot")),
         }
     }
 
     fn as_mut_m1(&mut self) -> Result<&mut I> {
         match self {
             Snapshot::Flush(m) => Ok(m),
-            _ => {
-                let msg = format!("dgm m0 not a flush snapshot");
-                Err(Error::UnExpectedFail(msg))
-            }
+            _ => err_at!(UnExpectedFail, msg: format!("m0 not flush snapshot")),
         }
     }
 }
@@ -1894,10 +1879,10 @@ where
                 match y.start_bound() {
                     Bound::Included(y) if x.contains(y) => {
                         let msg = format!("overlapping snapshot {:?}", seqnos);
-                        return Err(Error::UnExpectedFail(msg));
+                        err_at!(UnExpectedFail, msg: msg)?;
                     }
                     Bound::Included(_) => (),
-                    _ => return err_at!(Fatal, msg: format!("unreachable")),
+                    _ => err_at!(Fatal, msg: format!("unreachable"))?,
                 }
             }
         }
@@ -1926,15 +1911,11 @@ where
     for entry in iter {
         let entry = entry?;
         if !lsm && entry.is_deleted() {
-            let msg = format!(
-                "deleted entry {:?}/{} in non-lsm",
-                entry.to_key(),
-                entry.to_seqno()
-            );
-            return Err(Error::UnExpectedFail(msg));
+            let msg = format!("{:?}/{}", entry.to_key(), entry.to_seqno());
+            err_at!(UnExpectedFail, msg: msg)?;
         } else if !lsm && entry.as_deltas().len() > 0 {
             let msg = format!("old versions in non-lsm");
-            return Err(Error::UnExpectedFail(msg));
+            err_at!(UnExpectedFail, msg: msg)?;
         }
 
         let mut seqnos: Vec<u64> = entry.as_deltas().iter().map(|d| d.to_seqno()).collect();
@@ -1968,7 +1949,7 @@ where
         };
         if !l_ok && !t_ok {
             let msg = format!("entry < lsm/tombstone cutoff");
-            return Err(Error::UnExpectedFail(msg));
+            err_at!(UnExpectedFail, msg: msg)?;
         }
     }
 

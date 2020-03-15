@@ -406,7 +406,7 @@ where
         } else if is_snapshot {
             Ok(("snapshot".to_string(), num_shards))
         } else {
-            Err(Error::UnExpectedFail(format!("shrobt, mixed shard state")))
+            err_at!(UnExpectedFail, msg: format!("mixed shard state"))
         }
     }
 
@@ -774,15 +774,14 @@ where
     }
 
     fn to_reader(&mut self) -> Result<Self::R> {
-        let err_msg = format!("shrobt.to_reader() in build state");
-
         let mut shards = self.as_shards()?;
 
         let mut readers = vec![];
         for shard in shards.iter_mut().rev() {
-            let high_key = shard
-                .to_high_key()
-                .ok_or(Error::UnInitialized(err_msg.clone()))?;
+            let high_key = match shard.to_high_key() {
+                Some(high_key) => high_key,
+                None => err_at!(UnInitialized, msg: format!("shrobt.to_reader()"))?,
+            };
             let mut snapshot = shard.as_mut_robt().to_reader()?;
             snapshot.set_mmap(self.mmap)?;
             readers.push(ShardReader::new(high_key, snapshot));
@@ -888,11 +887,8 @@ where
         }?;
 
         if shards.len() != iters.len() {
-            return Err(Error::UnExpectedFail(format!(
-                "shrobt.commit(), {}/{} iters/shards",
-                iters.len(),
-                shards.len(),
-            )));
+            let msg = format!("{}/{} iters/shards", iters.len(), shards.len());
+            err_at!(UnExpectedFail, msg: msg)?
         }
 
         let indexes: Vec<Robt<K, V, B>> = {

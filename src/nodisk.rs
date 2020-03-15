@@ -213,14 +213,14 @@ where
     where
         G: Clone + RangeBounds<u64>,
     {
-        err_at!(NotImplemented, msg:"CommitIterator.scan()".to_string())
+        err_at!(NotImplemented, msg:"<NoDisk as CommitIterator>.scan()".to_string())
     }
 
     fn scans<G>(&mut self, _n_shards: usize, _within: G) -> Result<Vec<IndexIter<K, V>>>
     where
         G: Clone + RangeBounds<u64>,
     {
-        err_at!(NotImplemented, msg:"CommitIterator.scans()".to_string())
+        err_at!(NotImplemented, msg:"<NoDisk as CommitIterator>.scans()".to_string())
     }
 
     fn range_scans<N, G>(&mut self, _ranges: Vec<N>, _within: G) -> Result<Vec<IndexIter<K, V>>>
@@ -228,6 +228,6 @@ where
         G: Clone + RangeBounds<u64>,
         N: Clone + RangeBounds<K>,
     {
-        err_at!(NotImplemented, msg:"CommitIterator.range_scans()".to_string())
+        err_at!(NotImplemented, msg:"<NoDisk as CommitIterator>.range_scans()".to_string())
     }
 }

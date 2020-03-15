@@ -654,10 +654,7 @@ where
     pub fn len(&self) -> Result<usize> {
         match self.as_inner()?.deref() {
             InnerRobt::Snapshot { stats, .. } => Ok(convert_at!(stats.n_count)?),
-            InnerRobt::Build { .. } => {
-                let msg = format!("Robt.len(), in build state");
-                Err(Error::UnInitialized(msg))
-            }
+            InnerRobt::Build { .. } => err_at!(UnInitialized, msg: format!("Robt.len()")),
         }
     }
 
@@ -723,10 +720,7 @@ where
                     err_at!(Fatal, msg: format!("unreachable"))
                 }
             }
-            InnerRobt::Build { .. } => {
-                let msg = format!("Robt.to_metadata(), in build state");
-                Err(Error::UnInitialized(msg))
-            }
+            InnerRobt::Build { .. } => err_at!(UnInitialized, msg: format!("Robt.to_metadata()")),
         }
     }
 
@@ -734,10 +728,7 @@ where
     fn to_seqno(&self) -> Result<u64> {
         match self.as_inner()?.deref() {
             InnerRobt::Snapshot { stats, .. } => Ok(stats.seqno),
-            InnerRobt::Build { .. } => {
-                let msg = format!("Robt.to_seqno(), in build state");
-                Err(Error::UnInitialized(msg))
-            }
+            InnerRobt::Build { .. } => err_at!(UnInitialized, msg: format!("Robt.to_seqno()")),
         }
     }
 
@@ -760,10 +751,7 @@ where
                 snapshot.log()?;
                 Ok(snapshot)
             }
-            InnerRobt::Build { .. } => {
-                let msg = format!("Robt.to_reader(), in build state");
-                Err(Error::UnInitialized(msg))
-            }
+            InnerRobt::Build { .. } => err_at!(UnInitialized, msg: format!("Robt.to_reader()")),
         }
     }
 
@@ -1072,10 +1060,7 @@ where
                 let snapshot = Snapshot::<K, V, B>::open(&dir, &name.0)?;
                 snapshot.purge()
             }
-            InnerRobt::Build { .. } => {
-                let msg = format!("Robt.purge(), in build state");
-                Err(Error::UnInitialized(msg))
-            }
+            InnerRobt::Build { .. } => err_at!(UnInitialized, msg: format!("Robt.purge()")),
         }
     }
 }
@@ -1100,10 +1085,7 @@ where
                 };
                 Ok(Box::new(iter))
             }
-            InnerRobt::Build { .. } => {
-                let err = "Robt.scan(), in build state".to_string();
-                Err(Error::UnInitialized(err))
-            }
+            InnerRobt::Build { .. } => err_at!(UnInitialized, msg: format!("Robt.scan()")),
         }
     }
 
@@ -1139,10 +1121,7 @@ where
 
                 Ok(iters)
             }
-            InnerRobt::Build { .. } => {
-                let err = "Robt.scans(), in build state".to_string();
-                Err(Error::UnInitialized(err))
-            }
+            InnerRobt::Build { .. } => err_at!(UnInitialized, msg: format!("Robt.scans()")),
         }
     }
 
@@ -1167,10 +1146,7 @@ where
 
                 Ok(iters)
             }
-            InnerRobt::Build { .. } => {
-                let err = "Robt.range_scans() in build state".to_string();
-                Err(Error::UnInitialized(err))
-            }
+            InnerRobt::Build { .. } => err_at!(UnInitialized, msg: format!("Robt.range_scans()")),
         }
     }
 }
@@ -1789,21 +1765,36 @@ impl FromStr for Stats {
 
     fn from_str(s: &str) -> Result<Stats> {
         let js: Json = err_at!(InvalidInput, s.parse())?;
-        let err1 = format!("string-to-robt-stats, not an integer");
-        let err2 = format!("string-to-robt-stats, not string");
-        let err3 = format!("string-to-robt-stats, not boolean");
 
         let to_usize = |key: &str| -> Result<usize> {
-            let n: usize = convert_at!(err_at!(InvalidInput, js.get(key))?
-                .integer()
-                .ok_or(Error::UnExpectedFail(err1.clone()))?)?;
-            Ok(n)
+            match err_at!(InvalidInput, js.get(key))?.integer() {
+                Some(n) => convert_at!(n),
+                None => err_at!(InvalidInput, msg: format!("key:{}", key)),
+            }
         };
         let to_u64 = |key: &str| -> Result<u64> {
-            let n: u64 = convert_at!(err_at!(InvalidInput, js.get(key))?
-                .integer()
-                .ok_or(Error::UnExpectedFail(err1.clone()))?)?;
-            Ok(n)
+            match err_at!(InvalidInput, js.get(key))?.integer() {
+                Some(n) => convert_at!(n),
+                None => err_at!(InvalidInput, msg: format!("key:{}", key)),
+            }
+        };
+        let to_i128 = |key: &str| -> Result<i128> {
+            match err_at!(InvalidInput, js.get(key))?.integer() {
+                Some(n) => convert_at!(n),
+                None => err_at!(InvalidInput, msg: format!("key:{}", key)),
+            }
+        };
+        let to_bool = |key: &str| -> Result<bool> {
+            match err_at!(InvalidInput, js.get(key))?.boolean() {
+                Some(val) => Ok(val),
+                None => err_at!(InvalidInput, msg: format!("key:{}", key)),
+            }
+        };
+        let to_string = |key: &str| -> Result<String> {
+            match err_at!(InvalidInput, js.get(key))?.string() {
+                Some(val) => Ok(val),
+                None => err_at!(InvalidInput, msg: format!("key:{}", key)),
+            }
         };
         let vlog_file = {
             let arg = err_at!(InvalidInput, js.get("/vlog_file"))?.string();
@@ -1818,20 +1809,14 @@ impl FromStr for Stats {
         };
 
         Ok(Stats {
-            name: err_at!(InvalidInput, js.get("/name"))?
-                .string()
-                .ok_or(Error::UnExpectedFail(err2))?,
+            name: to_string("/name")?,
             // config fields.
             z_blocksize: to_usize("/z_blocksize")?,
             m_blocksize: to_usize("/m_blocksize")?,
             v_blocksize: to_usize("/v_blocksize")?,
-            delta_ok: err_at!(InvalidInput, js.get("/delta_ok"))?
-                .boolean()
-                .ok_or(Error::UnExpectedFail(err3.clone()))?,
+            delta_ok: to_bool("/delta_ok")?,
             vlog_file: vlog_file,
-            value_in_vlog: err_at!(InvalidInput, js.get("/value_in_vlog"))?
-                .boolean()
-                .ok_or(Error::UnExpectedFail(err3.clone()))?,
+            value_in_vlog: to_bool("/value_in_vlog")?,
             flush_queue_size: to_usize("/flush_queue_size")?,
             // statitics fields.
             n_count: to_u64("/n_count")?,
@@ -1849,9 +1834,7 @@ impl FromStr for Stats {
             n_abytes: to_usize("/n_abytes")?,
 
             build_time: to_u64("/build_time")?,
-            epoch: err_at!(InvalidInput, js.get("/epoch"))?
-                .integer()
-                .ok_or(Error::UnExpectedFail(err1))?,
+            epoch: to_i128("/epoch")?,
         })
     }
 }

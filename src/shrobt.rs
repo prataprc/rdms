@@ -572,15 +572,15 @@ where
     fn to_ranges(&self) -> Result<Vec<(Bound<K>, Bound<K>)>> {
         let mut shards = self.as_shards()?;
 
-        let mut high_keys: Vec<Bound<K>> = shards
-            .iter_mut()
-            .filter_map(|shard| shard.to_high_key())
-            .take_while(|high_key| match high_key {
-                Bound::Unbounded => false,
-                Bound::Excluded(_) => true,
-                Bound::Included(_) => unreachable!(),
-            })
-            .collect();
+        let mut high_keys: Vec<Bound<K>> = vec![];
+        let iter = shards.iter_mut().filter_map(|shard| shard.to_high_key());
+        for high_key in iter {
+            match high_key {
+                Bound::Unbounded => break,
+                Bound::Excluded(_) => high_keys.push(high_key),
+                Bound::Included(_) => err_at!(Fatal, msg: format!("unreachable"))?,
+            }
+        }
 
         assert!(
             high_keys.len() < shards.len(),
@@ -673,17 +673,16 @@ where
                 vec![Some((f.1, l.2))]
             }
             (true, _) => {
-                let ranges = util::as_sharded_array(&partitions, num_shards);
-                let ranges: Vec<Option<(Bound<K>, Bound<K>)>> = ranges
-                    .into_iter()
-                    .map(|rs| match (rs.first(), rs.last()) {
+                let mut ranges: Vec<Option<(Bound<K>, Bound<K>)>> = vec![];
+                for rs in util::as_sharded_array(&partitions, num_shards).into_iter() {
+                    match (rs.first(), rs.last()) {
                         (Some((_, l, _)), Some((_, _, h))) => {
                             let (l, h) = (l.clone(), h.clone());
-                            Some((l, h))
+                            ranges.push(Some((l, h)))
                         }
-                        _ => unreachable!(),
-                    })
-                    .collect();
+                        _ => err_at!(Fatal, msg: format!("unreachable"))?,
+                    }
+                }
                 ranges
             }
         };
@@ -735,7 +734,7 @@ where
                     let meta = shard.as_robt().to_metadata()?;
                     metacb(meta)
                 }
-                _ => unreachable!(),
+                _ => err_at!(Fatal, msg: format!("unreachable"))?,
             });
         }
 
@@ -807,7 +806,7 @@ where
         let re_ranges = match state.as_str() {
             "build" => None,
             "snapshot" => self.rebalance()?,
-            _ => unreachable!(),
+            _ => err_at!(Fatal, msg: format!("unreachable"))?,
         };
         let re_iters = match re_ranges.clone() {
             None => None,
@@ -877,7 +876,7 @@ where
                 };
                 (iters, vec![], Some(r))
             }
-            _ => unreachable!(),
+            _ => err_at!(Fatal, msg: format!("unreachable"))?,
         };
 
         let mut shards = match self.shards.lock() {
@@ -986,7 +985,7 @@ where
             match state.as_str() {
                 "build" => None,
                 "snapshot" => Some(self.to_reader()?),
-                _ => unreachable!(),
+                _ => err_at!(Fatal, msg: format!("unreachable"))?,
             };
         };
 
@@ -1236,19 +1235,19 @@ where
     fn find<'a, Q>(
         key: &Q,
         rs: &'a mut [ShardReader<K, V, B>],
-    ) -> (usize, &'a mut ShardReader<K, V, B>)
+    ) -> Result<(usize, &'a mut ShardReader<K, V, B>)>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
         match rs.len() {
-            0 => unreachable!(),
-            1 => (0, &mut rs[0]),
+            0 => err_at!(Fatal, msg: format!("unreachable")),
+            1 => Ok((0, &mut rs[0])),
             2 => {
                 if ShardReader::less(key, &rs[0]) {
-                    (0, &mut rs[0])
+                    Ok((0, &mut rs[0]))
                 } else {
-                    (1, &mut rs[1])
+                    Ok((1, &mut rs[1]))
                 }
             }
             n => {
@@ -1256,8 +1255,8 @@ where
                 if ShardReader::less(key, &rs[pivot]) {
                     Self::find(key, &mut rs[..pivot + 1])
                 } else {
-                    let (off, sr) = Self::find(key, &mut rs[pivot + 1..]);
-                    (pivot + 1 + off, sr)
+                    let (off, sr) = Self::find(key, &mut rs[pivot + 1..])?;
+                    Ok((pivot + 1 + off, sr))
                 }
             }
         }
@@ -1328,7 +1327,7 @@ where
         K: Borrow<Q>,
         Q: Ord + ?Sized + Hash,
     {
-        let (_, reader) = Self::find(key, self.readers.as_mut_slice());
+        let (_, reader) = Self::find(key, self.readers.as_mut_slice())?;
         reader.snapshot.get(key)
     }
 
@@ -1348,7 +1347,7 @@ where
     {
         let start = match range.start_bound() {
             Bound::Excluded(lr) | Bound::Included(lr) => {
-                Self::find(lr, self.readers.as_mut_slice()).0
+                Self::find(lr, self.readers.as_mut_slice())?.0
             }
             Bound::Unbounded => 0,
         };
@@ -1362,7 +1361,7 @@ where
                 (_, Bound::Unbounded) => false, // last shard.
                 (Bound::Included(hr), Bound::Excluded(hk)) => hr.ge(hk.borrow()),
                 (Bound::Excluded(hr), Bound::Excluded(hk)) => hr.gt(hk.borrow()),
-                _ => unreachable!(),
+                _ => err_at!(Fatal, msg: format!("unreachable"))?,
             };
             if !ok {
                 break;
@@ -1379,7 +1378,7 @@ where
     {
         let start = match range.start_bound() {
             Bound::Excluded(lr) | Bound::Included(lr) => {
-                Self::find(lr, self.readers.as_mut_slice()).0
+                Self::find(lr, self.readers.as_mut_slice())?.0
             }
             Bound::Unbounded => 0,
         };
@@ -1393,7 +1392,7 @@ where
                 (_, Bound::Unbounded) => false, // last shard.
                 (Bound::Included(hr), Bound::Excluded(hk)) => hr.ge(hk.borrow()),
                 (Bound::Excluded(hr), Bound::Excluded(hk)) => hr.ge(hk.borrow()),
-                _ => unreachable!(),
+                _ => err_at!(Fatal, msg: format!("unreachable"))?,
             };
             if !ok {
                 break;
@@ -1409,7 +1408,7 @@ where
         K: Borrow<Q>,
         Q: Ord + ?Sized + Hash,
     {
-        let (_, reader) = Self::find(key, self.readers.as_mut_slice());
+        let (_, reader) = Self::find(key, self.readers.as_mut_slice())?;
         reader.snapshot.get_with_versions(key)
     }
 
@@ -1429,7 +1428,7 @@ where
     {
         let start = match range.start_bound() {
             Bound::Excluded(lr) | Bound::Included(lr) => {
-                Self::find(lr, self.readers.as_mut_slice()).0
+                Self::find(lr, self.readers.as_mut_slice())?.0
             }
             Bound::Unbounded => 0,
         };
@@ -1443,7 +1442,7 @@ where
                 (_, Bound::Unbounded) => false, // last shard.
                 (Bound::Included(hr), Bound::Excluded(hk)) => hr.ge(hk.borrow()),
                 (Bound::Excluded(hr), Bound::Excluded(hk)) => hr.gt(hk.borrow()),
-                _ => unreachable!(),
+                _ => err_at!(Fatal, msg: format!("unreachable"))?,
             };
             if !ok {
                 break;
@@ -1460,7 +1459,7 @@ where
     {
         let start = match range.start_bound() {
             Bound::Excluded(lr) | Bound::Included(lr) => {
-                Self::find(lr, self.readers.as_mut_slice()).0
+                Self::find(lr, self.readers.as_mut_slice())?.0
             }
             Bound::Unbounded => 0,
         };
@@ -1474,7 +1473,7 @@ where
                 (_, Bound::Unbounded) => false, // last shard.
                 (Bound::Included(hr), Bound::Excluded(hk)) => hr.ge(hk.borrow()),
                 (Bound::Excluded(hr), Bound::Excluded(hk)) => hr.ge(hk.borrow()),
-                _ => unreachable!(),
+                _ => err_at!(Fatal, msg: format!("unreachable"))?,
             };
             if !ok {
                 break;
@@ -1663,7 +1662,7 @@ where
     fn to_snapshot(&mut self) -> Result<robt::Snapshot<K, V, B>> {
         match self {
             Shard::Snapshot { inner, .. } => inner.to_reader(),
-            Shard::Build { .. } => unreachable!(),
+            Shard::Build { .. } => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
 

@@ -286,7 +286,7 @@ where
         let op = Op::new_set(key, value);
         match shard.request(OpRequest::new_op(op))? {
             OpResponse::Index(index) => Ok(index),
-            _ => unreachable!(),
+            _ => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
 
@@ -298,7 +298,7 @@ where
         let op = Op::new_set_cas(key, value, cas);
         match shard.request(OpRequest::new_op(op))? {
             OpResponse::Index(index) => Ok(index),
-            _ => unreachable!(),
+            _ => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
 
@@ -316,7 +316,7 @@ where
         let op = Op::new_delete(key);
         match shard.request(OpRequest::new_op(op))? {
             OpResponse::Index(index) => Ok(index),
-            _ => unreachable!(),
+            _ => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
 

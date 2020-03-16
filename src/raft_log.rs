@@ -7,7 +7,6 @@ use crate::{
     dlog,
     dlog_entry::DEntry,
     error::Error,
-    util,
 };
 
 // term value when not using consensus
@@ -97,7 +96,7 @@ impl Serialize for State {
     fn decode(&mut self, buf: &[u8]) -> Result<usize> {
         use std::str::from_utf8;
 
-        util::check_remaining(buf, 24, "dlog batch-config")?;
+        check_remaining!(buf, 24, "raft-batch-config")?;
         self.term = u64::from_be_bytes(array_at!(buf[0..8])?);
         self.committed = u64::from_be_bytes(array_at!(buf[8..16])?);
         self.persisted = u64::from_be_bytes(array_at!(buf[16..24])?);
@@ -108,24 +107,24 @@ impl Serialize for State {
         n += 2;
 
         for _i in 0..count {
-            util::check_remaining(buf, n + 2, "dlog batch-config")?;
+            check_remaining!(buf, n + 2, "raft-batch-config")?;
 
             let m: usize = convert_at!(u16::from_be_bytes(array_at!(buf[n..n + 2])?))?;
             n += 2;
 
-            util::check_remaining(buf, n + m, "dlog batch-config")?;
+            check_remaining!(buf, n + m, "raft-batch-config")?;
 
             let s = err_at!(InvalidInput, from_utf8(&buf[n..n + m]))?;
             self.config.push(s.to_string());
             n += m;
         }
 
-        util::check_remaining(buf, n + 2, "dlog batch-votedfor")?;
+        check_remaining!(buf, n + 2, "raft-batch-votedfor")?;
 
         let m: usize = convert_at!(u16::from_be_bytes(array_at!(buf[n..n + 2])?))?;
         n += 2;
 
-        util::check_remaining(buf, n + m, "dlog batch-votedfor")?;
+        check_remaining!(buf, n + m, "raft-batch-votedfor")?;
         self.votedfor = err_at!(
             //
             InvalidInput,
@@ -257,7 +256,7 @@ where
     }
 
     fn op_type(buf: &[u8]) -> Result<OpType> {
-        util::check_remaining(buf, 8, "raft op-type")?;
+        check_remaining!(buf, 8, "raft-op-type")?;
         let hdr1 = u64::from_be_bytes(array_at!(buf[..8])?);
         Ok(((hdr1 >> 32) & 0x00FFFFFF).into())
     }
@@ -338,7 +337,7 @@ where
     fn decode_set(buf: &[u8], k: &mut K, v: &mut V) -> Result<usize> {
         let mut n = 16;
         let (klen, vlen) = {
-            util::check_remaining(buf, 16, "raft op-set-hdr")?;
+            check_remaining!(buf, 16, "raft-op-set-hdr")?;
             let hdr1 = u64::from_be_bytes(array_at!(buf[..8])?);
             let klen: usize = convert_at!((hdr1 & 0xFFFFFFFF))?;
             let vlen = u64::from_be_bytes(array_at!(buf[8..16])?);
@@ -347,13 +346,13 @@ where
         };
 
         n += {
-            util::check_remaining(buf, n + klen, "raft op-set-key")?;
+            check_remaining!(buf, n + klen, "raft-op-set-key")?;
             k.decode(&buf[n..n + klen])?;
             klen
         };
 
         n += {
-            util::check_remaining(buf, n + vlen, "raft op-set-value")?;
+            check_remaining!(buf, n + vlen, "raft-op-set-value")?;
             v.decode(&buf[n..n + vlen])?;
             vlen
         };
@@ -412,7 +411,7 @@ where
     ) -> Result<usize> {
         let mut n = 24;
         let (klen, vlen, cas_seqno) = {
-            util::check_remaining(buf, n, "raft op-setcas-hdr")?;
+            check_remaining!(buf, n, "raft-op-setcas-hdr")?;
             let hdr1 = u64::from_be_bytes(array_at!(buf[..8])?);
             let klen: usize = convert_at!((hdr1 & 0xFFFFFFFF))?;
             let vlen = u64::from_be_bytes(array_at!(buf[8..16])?);
@@ -423,13 +422,13 @@ where
         *cas = cas_seqno;
 
         n += {
-            util::check_remaining(buf, n + klen, "raft op-setcas-key")?;
+            check_remaining!(buf, n + klen, "raft-op-setcas-key")?;
             key.decode(&buf[n..n + klen])?;
             klen
         };
 
         n += {
-            util::check_remaining(buf, n + vlen, "raft op-setcas-value")?;
+            check_remaining!(buf, n + vlen, "raft-op-setcas-value")?;
             value.decode(&buf[n..n + vlen])?;
             vlen
         };
@@ -470,13 +469,13 @@ where
     fn decode_delete(buf: &[u8], key: &mut K) -> Result<usize> {
         let mut n = 8;
         let klen: usize = {
-            util::check_remaining(buf, n, "raft op-delete-hdr1")?;
+            check_remaining!(buf, n, "raft-op-delete-hdr1")?;
             let hdr1 = u64::from_be_bytes(array_at!(buf[..n])?);
             convert_at!((hdr1 & 0xFFFFFFFF))?
         };
 
         n += {
-            util::check_remaining(buf, n + klen, "raft op-delete-key")?;
+            check_remaining!(buf, n + klen, "raft-op-delete-key")?;
             key.decode(&buf[n..n + klen])?;
             klen
         };

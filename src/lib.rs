@@ -98,6 +98,7 @@ pub mod sync;
 mod sync_writer;
 pub mod thread;
 pub mod types;
+#[macro_use]
 mod util;
 mod vlog;
 

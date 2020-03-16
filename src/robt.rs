@@ -2940,29 +2940,29 @@ where
         let c = self.config.clone();
         let s = self.to_stats()?;
         if c.name != s.name {
-            let msg = format!("robt name {} != {}", c.name, s.name);
-            return Err(Error::ValidationFail(msg));
+            let msg = format!("validate, name {} != {}", c.name, s.name);
+            return err_at!(Fatal, msg: msg);
         } else if c.z_blocksize != s.z_blocksize {
             let (x, y) = (c.z_blocksize, s.z_blocksize);
-            let msg = format!("robt z_blocksize {} != {}", x, y);
-            return Err(Error::ValidationFail(msg));
+            let msg = format!("validate, z_blocksize {} != {}", x, y);
+            return err_at!(Fatal, msg: msg);
         } else if c.m_blocksize != s.m_blocksize {
             let (x, y) = (c.m_blocksize, s.m_blocksize);
-            let msg = format!("robt m_blocksize {} != {}", x, y);
-            return Err(Error::ValidationFail(msg));
+            let msg = format!("validate, m_blocksize {} != {}", x, y);
+            return err_at!(Fatal, msg: msg);
         } else if c.v_blocksize != s.v_blocksize {
             let (x, y) = (c.v_blocksize, s.v_blocksize);
-            let msg = format!("robt v_blocksize {} != {}", x, y);
-            return Err(Error::ValidationFail(msg));
+            let msg = format!("validate, v_blocksize {} != {}", x, y);
+            return err_at!(Fatal, msg: msg);
         } else if c.delta_ok != s.delta_ok {
-            let msg = format!("robt delta_ok {} != {}", c.delta_ok, s.delta_ok);
-            return Err(Error::ValidationFail(msg));
+            let msg = format!("validate, delta_ok {} != {}", c.delta_ok, s.delta_ok);
+            return err_at!(Fatal, msg: msg);
         } else if c.value_in_vlog != s.value_in_vlog {
             let msg = format!(
-                "robt value_in_vlog {} != {}",
+                "validate, value_in_vlog {} != {}",
                 c.value_in_vlog, s.value_in_vlog
             );
-            return Err(Error::ValidationFail(msg));
+            return err_at!(Fatal, msg: msg);
         }
 
         let mut footprint: isize = {
@@ -2994,22 +2994,26 @@ where
             //);
             prev_key = match prev_key {
                 Some(prev_key) if prev_key.ge(entry.as_key()) => {
-                    let msg = format!("robt sort error {:?} >= {:?}", prev_key, entry.as_key());
-                    return Err(Error::ValidationFail(msg));
+                    let msg = format!(
+                        "validate, sort error {:?} >= {:?}",
+                        prev_key,
+                        entry.as_key()
+                    );
+                    return err_at!(Fatal, msg: msg);
                 }
                 _ => Some(entry.to_key()),
             }
         }
 
         if n_count != s.n_count {
-            let msg = format!("robt n_count {} > {}", n_count, s.n_count);
-            Err(Error::ValidationFail(msg))
+            let msg = format!("validate, n_count {} > {}", n_count, s.n_count);
+            err_at!(Fatal, msg: msg)
         } else if n_deleted != s.n_deleted {
-            let msg = format!("robt n_deleted {} > {}", n_deleted, s.n_deleted);
-            Err(Error::ValidationFail(msg))
+            let msg = format!("validate, n_deleted {} > {}", n_deleted, s.n_deleted);
+            err_at!(Fatal, msg: msg)
         } else if seqno > 0 && seqno > s.seqno {
-            let msg = format!("robt seqno {} > {}", seqno, s.seqno);
-            Err(Error::ValidationFail(msg))
+            let msg = format!("validate, seqno {} > {}", seqno, s.seqno);
+            err_at!(Fatal, msg: msg)
         } else {
             Ok(s)
         }

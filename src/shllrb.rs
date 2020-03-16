@@ -820,12 +820,12 @@ where
         if errs.len() == 0 {
             Ok((snapshot, n_merges))
         } else {
-            Err(Error::MemIndexFail(
-                errs.into_iter()
-                    .map(|e| format!("{:?}", e))
-                    .collect::<Vec<String>>()
-                    .join("; "),
-            ))
+            let msg = errs
+                .into_iter()
+                .map(|e| format!("merge-err:{:?}", e))
+                .collect::<Vec<String>>()
+                .join("; ");
+            err_at!(Fatal, msg: msg)
         }
     }
 
@@ -894,12 +894,12 @@ where
         if errs.len() == 0 {
             Ok((snapshot, n_splits))
         } else {
-            Err(Error::MemIndexFail(
-                errs.into_iter()
-                    .map(|e| format!("{:?}", e))
-                    .collect::<Vec<String>>()
-                    .join("; "),
-            ))
+            let msg = errs
+                .into_iter()
+                .map(|e| format!("split-err:{:?}", e))
+                .collect::<Vec<String>>()
+                .join("; ");
+            err_at!(Fatal, msg: msg)
         }
     }
 }

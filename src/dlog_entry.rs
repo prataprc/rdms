@@ -241,7 +241,7 @@ where
     }
 
     pub(crate) fn decode_refer(&mut self, buf: &[u8], fpos: u64) -> Result<usize> {
-        util::check_remaining(buf, 24, "dlog batch-refer-hdr")?;
+        check_remaining!(buf, 24, "dlog-batch-refer-hdr")?;
 
         let length = Self::validate(buf)?;
         let start_index = u64::from_be_bytes(array_at!(buf[8..16])?);
@@ -262,7 +262,7 @@ where
         S: Default,
         T: Default,
     {
-        util::check_remaining(buf, 24, "dlog batch-active-hdr")?;
+        check_remaining!(buf, 24, "dlog-batch-active-hdr")?;
 
         let length = Self::validate(buf)?;
         let mut n = 24;
@@ -372,7 +372,7 @@ where
     }
 
     fn decode(&mut self, buf: &[u8]) -> Result<usize> {
-        util::check_remaining(buf, 8, "dlog entry-index")?;
+        check_remaining!(buf, 8, "dlog-entry-index")?;
         self.index = u64::from_be_bytes(array_at!(buf[0..8])?);
 
         let n = 8;

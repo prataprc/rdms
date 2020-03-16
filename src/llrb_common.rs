@@ -89,12 +89,12 @@ where
     let red = is_red(node);
     let node = match node {
         Some(node) if node.dirty => {
-            let msg = "llrb has dirty node".to_string();
-            return Err(Error::ValidationFail(msg));
+            let msg = "validation, llrb has dirty node".to_string();
+            err_at!(Fatal, msg: msg)?
         }
         Some(_node) if fromred && red => {
-            let msg = "llrb has consecutive reds".to_string();
-            return Err(Error::ValidationFail(msg));
+            let msg = "validate, llrb has consecutive reds".to_string();
+            err_at!(Fatal, msg: msg)?
         }
         Some(node) => node,
         None => {
@@ -108,21 +108,23 @@ where
         if let Some(left) = node.as_left_deref() {
             if left.as_key().ge(node.as_key()) {
                 /// Fatal case, index entries are not in sort-order.
-                return Err(Error::ValidationFail(format!(
-                    "llrb sort error left:{:?} parent:{:?}",
+                let msg = format!(
+                    "validate, llrb sort error left:{:?} parent:{:?}",
                     left.as_key(),
                     node.as_key()
-                )));
+                );
+                return err_at!(Fatal, msg: msg);
             }
         }
         if let Some(right) = node.as_right_deref() {
             if right.as_key().le(node.as_key()) {
                 /// Fatal case, index entries are not in sort-order.
-                return Err(Error::ValidationFail(format!(
-                    "llrb sort error right:{:?} parent:{:?}",
+                let msg = format!(
+                    "validate, llrb sort error right:{:?} parent:{:?}",
                     right.as_key(),
                     node.as_key()
-                )));
+                );
+                return err_at!(Fatal, msg: msg);
             }
         }
         (node.as_left_deref(), node.as_right_deref())
@@ -136,10 +138,8 @@ where
 
     {
         if ss_l.0 != ss_r.0 {
-            return Err(Error::ValidationFail(format!(
-                "llrb has unbalacked blacks l:{}, r:{}",
-                ss_l.0, ss_r.0
-            )));
+            let msg = format!("validate, unbalanced blacks l:{}, r:{}", ss_l.0, ss_r.0);
+            return err_at!(Fatal, msg: msg);
         }
     }
     {

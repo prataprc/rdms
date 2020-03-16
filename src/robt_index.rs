@@ -77,7 +77,7 @@ where
         match self {
             MBlock::Encode { first_key, .. } => match first_key.as_ref() {
                 Some(fk) => Ok(fk),
-                None => err_at!(UnExpectedFail, msg: format!("mepty")),
+                None => err_at!(Fatal, msg: format!("mepty")),
             },
             MBlock::Decode { .. } => err_at!(Fatal, msg: format!("unreachable")),
         }
@@ -466,7 +466,7 @@ where
         match self {
             ZBlock::Encode { first_key, .. } => match first_key.as_ref() {
                 Some(fk) => Ok(fk),
-                None => err_at!(UnExpectedFail, msg: format!("empty")),
+                None => err_at!(Fatal, msg: format!("empty")),
             },
             ZBlock::Decode { .. } => err_at!(Fatal, msg: format!("unreachable")),
         }

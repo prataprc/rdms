@@ -1943,20 +1943,20 @@ where
         let mut depths: LlrbDepth = Default::default();
 
         if red {
-            let msg = format!("Mvcc Root node must be black: {}", self.name);
-            return Err(Error::ValidationFail(msg));
+            let msg = format!("validate, root node must be black: {}", self.name);
+            return err_at!(Fatal, msg: msg);
         }
 
         let ss = (0, 0); // (blacks, n_deleted);
         let ss = validate_tree(root, red, ss, depth, &mut depths)?;
         if ss.1 != self.n_deleted {
-            let msg = format!("Mvcc n_deleted {} != {}", ss.1, self.n_deleted);
-            return Err(Error::ValidationFail(msg));
+            let msg = format!("validate, n_deleted {} != {}", ss.1, self.n_deleted);
+            return err_at!(Fatal, msg: msg);
         }
 
         if depths.to_max() > MAX_TREE_DEPTH {
-            let msg = format!("Mvcc tree exceeds max_depth {}", depths.to_max());
-            return Err(Error::ValidationFail(msg));
+            let msg = format!("validate, tree exceeds max_depth {}", depths.to_max());
+            return err_at!(Fatal, msg: msg);
         }
 
         let mut stats = Stats::new(&self.name);

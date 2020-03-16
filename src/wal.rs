@@ -63,7 +63,7 @@ use crate::{
     dlog_entry::DEntry,
     dlog_journal::Shard,
     error::Error,
-    thread as rt, util,
+    thread as rt,
 };
 
 #[allow(unused_imports)]
@@ -478,7 +478,7 @@ impl<K, V> Op<K, V> {
     }
 
     fn op_type(buf: &[u8]) -> Result<OpType> {
-        util::check_remaining(buf, 8, "wal op-type")?;
+        check_remaining!(buf, 8, "wal-op-type")?;
         let hdr1 = u64::from_be_bytes(array_at!(buf[..8])?);
         Ok(((hdr1 >> 32) & 0x00FFFFFF).into())
     }
@@ -559,7 +559,7 @@ where
     fn decode_set(buf: &[u8], k: &mut K, v: &mut V) -> Result<usize> {
         let mut n = 16;
         let (klen, vlen) = {
-            util::check_remaining(buf, 16, "wal op-set-hdr")?;
+            check_remaining!(buf, 16, "wal-op-set-hdr")?;
             let hdr1 = u64::from_be_bytes(array_at!(buf[..8])?);
             let klen: usize = convert_at!((hdr1 & 0xFFFFFFFF))?;
             let vlen = u64::from_be_bytes(array_at!(buf[8..16])?);
@@ -568,13 +568,13 @@ where
         };
 
         n += {
-            util::check_remaining(buf, n + klen, "wal op-set-key")?;
+            check_remaining!(buf, n + klen, "wal-op-set-key")?;
             k.decode(&buf[n..n + klen])?;
             klen
         };
 
         n += {
-            util::check_remaining(buf, n + vlen, "wal op-set-value")?;
+            check_remaining!(buf, n + vlen, "wal-op-set-value")?;
             v.decode(&buf[n..n + vlen])?;
             vlen
         };
@@ -633,7 +633,7 @@ where
     ) -> Result<usize> {
         let mut n = 24;
         let (klen, vlen, cas_seqno) = {
-            util::check_remaining(buf, n, "wal op-setcas-hdr")?;
+            check_remaining!(buf, n, "wal-op-setcas-hdr")?;
             let hdr1 = u64::from_be_bytes(array_at!(buf[..8])?);
             let klen: usize = convert_at!((hdr1 & 0xFFFFFFFF))?;
             let vlen = u64::from_be_bytes(array_at!(buf[8..16])?);
@@ -644,13 +644,13 @@ where
         *cas = cas_seqno;
 
         n += {
-            util::check_remaining(buf, n + klen, "wal op-setcas-key")?;
+            check_remaining!(buf, n + klen, "wal-op-setcas-key")?;
             key.decode(&buf[n..n + klen])?;
             klen
         };
 
         n += {
-            util::check_remaining(buf, n + vlen, "wal op-setcas-value")?;
+            check_remaining!(buf, n + vlen, "wal-op-setcas-value")?;
             value.decode(&buf[n..n + vlen])?;
             vlen
         };
@@ -691,13 +691,13 @@ where
     fn decode_delete(buf: &[u8], key: &mut K) -> Result<usize> {
         let mut n = 8;
         let klen: usize = {
-            util::check_remaining(buf, n, "wal op-delete-hdr1")?;
+            check_remaining!(buf, n, "wal-op-delete-hdr1")?;
             let hdr1 = u64::from_be_bytes(array_at!(buf[..n])?);
             convert_at!((hdr1 & 0xFFFFFFFF))?
         };
 
         n += {
-            util::check_remaining(buf, n + klen, "wal op-delete-key")?;
+            check_remaining!(buf, n + klen, "wal-op-delete-key")?;
             key.decode(&buf[n..n + klen])?;
             klen
         };

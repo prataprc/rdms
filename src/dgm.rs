@@ -774,20 +774,15 @@ where
             Snapshot::None => Ok(false),
             Active(_) => Ok(true),
             Commit(_) | Compact(_) => Ok(true),
-            _ => {
-                let msg = format!("Dgm.is_commit_exhausted()");
-                Err(Error::DiskIndexFail(msg))
-            }
+            _ => err_at!(Fatal, msg: format!("Dgm.is_commit_exhausted()")),
         }
     }
 
     fn commit_level(&mut self) -> Result<usize> {
         use Snapshot::{Active, Compact};
 
-        let msg = format!("dgm: exhausted all levels !!");
-
         if self.is_commit_exhausted()? {
-            return Err(Error::DiskIndexFail(msg));
+            err_at!(Fatal, msg: format!("exhausted all levels !!"))?
         }
 
         let mf = self.m0.footprint()? as f64;
@@ -1131,7 +1126,7 @@ where
             Compact(d) => Ok(Some(d)),
             Active(d) => Ok(Some(d)),
             Snapshot::None => Ok(None),
-            Write(_) | Flush(_) => err_at!(UnExpectedFail, msg: format!("not disk snapshot ")),
+            Write(_) | Flush(_) => err_at!(Fatal, msg: format!("not disk snapshot ")),
             _ => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
@@ -1144,7 +1139,7 @@ where
             Compact(d) => Ok(Some(d)),
             Active(d) => Ok(Some(d)),
             Snapshot::None => Ok(None),
-            Write(_) | Flush(_) => err_at!(UnExpectedFail, msg: format!("not disk snapshot")),
+            Write(_) | Flush(_) => err_at!(Fatal, msg: format!("not disk snapshot")),
             _ => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
@@ -1152,21 +1147,21 @@ where
     fn as_m0(&self) -> Result<&I> {
         match self {
             Snapshot::Write(m) => Ok(m),
-            _ => err_at!(UnExpectedFail, msg: format!("m0 not write snapshot")),
+            _ => err_at!(Fatal, msg: format!("m0 not write snapshot")),
         }
     }
 
     fn as_mut_m0(&mut self) -> Result<&mut I> {
         match self {
             Snapshot::Write(m) => Ok(m),
-            _ => err_at!(UnExpectedFail, msg: format!("m0 not write snapshot")),
+            _ => err_at!(Fatal, msg: format!("m0 not write snapshot")),
         }
     }
 
     fn as_mut_m1(&mut self) -> Result<&mut I> {
         match self {
             Snapshot::Flush(m) => Ok(m),
-            _ => err_at!(UnExpectedFail, msg: format!("m0 not flush snapshot")),
+            _ => err_at!(Fatal, msg: format!("m0 not flush snapshot")),
         }
     }
 }
@@ -1550,10 +1545,7 @@ where
 
     fn do_compact(inner: &Arc<Mutex<InnerDgm<K, V, M, D>>>, cutoff: Cutoff) -> Result<usize> {
         match cutoff {
-            Cutoff::Mono => {
-                let msg = format!("can't have mono-cutoff");
-                Err(Error::InvalidArg(msg))
-            }
+            Cutoff::Mono => err_at!(InvalidInput, msg: format!("can't have mono-cutoff")),
             _ => Ok(()),
         }?;
 
@@ -1818,8 +1810,8 @@ where
         let root = inner.root.clone();
 
         if inner.n_ccommits > N_COMMITS {
-            let msg = format!("{} commited to highest level", inner.n_ccommits);
-            Err(Error::ValidationFail(msg))
+            let msg = format!("validate, {} commited to highest level", inner.n_ccommits);
+            err_at!(Fatal, msg: msg)
         } else {
             Ok(())
         }?;
@@ -1879,7 +1871,7 @@ where
                 match y.start_bound() {
                     Bound::Included(y) if x.contains(y) => {
                         let msg = format!("overlapping snapshot {:?}", seqnos);
-                        err_at!(UnExpectedFail, msg: msg)?;
+                        err_at!(Fatal, msg: msg)?;
                     }
                     Bound::Included(_) => (),
                     _ => err_at!(Fatal, msg: format!("unreachable"))?,
@@ -1912,10 +1904,10 @@ where
         let entry = entry?;
         if !lsm && entry.is_deleted() {
             let msg = format!("{:?}/{}", entry.to_key(), entry.to_seqno());
-            err_at!(UnExpectedFail, msg: msg)?;
+            err_at!(Fatal, msg: msg)?;
         } else if !lsm && entry.as_deltas().len() > 0 {
             let msg = format!("old versions in non-lsm");
-            err_at!(UnExpectedFail, msg: msg)?;
+            err_at!(Fatal, msg: msg)?;
         }
 
         let mut seqnos: Vec<u64> = entry.as_deltas().iter().map(|d| d.to_seqno()).collect();
@@ -1949,7 +1941,7 @@ where
         };
         if !l_ok && !t_ok {
             let msg = format!("entry < lsm/tombstone cutoff");
-            err_at!(UnExpectedFail, msg: msg)?;
+            err_at!(Fatal, msg: msg)?;
         }
     }
 
@@ -3039,7 +3031,7 @@ fn ok_commit(m0_fp: isize, m0_limit: Option<usize>) -> Result<bool> {
         Some(0) => {
             let m = match sys_info::mem_info() {
                 Ok(m) => Ok(m),
-                Err(err) => Err(Error::SystemFail(format!("{:?}", err))),
+                Err(err) => err_at!(SystemFail, msg: format!("{:?}", err)),
             }?;
             Ok((m0_fp * 3) > (m.avail as isize)) // TODO: no magic formula
         }

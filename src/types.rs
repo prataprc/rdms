@@ -124,13 +124,13 @@ impl Serialize for Vec<u8> {
 
     fn decode(&mut self, buf: &[u8]) -> Result<usize> {
         if buf.len() < 4 {
-            let msg = format!("type-bytes decode header {} < 4", buf.len());
-            return Err(Error::DecodeFail(msg));
+            let msg = format!("type-Vec<u8>, header {} < 4", buf.len());
+            return err_at!(DecodeFail, msg: msg);
         }
         let len: usize = convert_at!(u32::from_be_bytes(array_at!(buf[..4])?))?;
         if buf.len() < (len + 4) {
-            let msg = format!("type-bytes decode payload {} < {}", buf.len(), len);
-            return Err(Error::DecodeFail(msg));
+            let msg = format!("type-Vec<u8>, payload {} < {}", buf.len(), len);
+            return err_at!(DecodeFail, msg: msg);
         }
         self.resize(len, 0);
         self.copy_from_slice(&buf[4..len + 4]);
@@ -175,8 +175,7 @@ impl Serialize for i32 {
             *self = i32::from_be_bytes(scratch);
             Ok(4)
         } else {
-            let msg = format!("type-i32 encoded len {}", buf.len());
-            Err(Error::DecodeFail(msg))
+            err_at!(DecodeFail, msg: format!("type-i32, len {}", buf.len()))
         }
     }
 }
@@ -218,8 +217,7 @@ impl Serialize for i64 {
             *self = i64::from_be_bytes(scratch);
             Ok(8)
         } else {
-            let msg = format!("type-i64 encoded len {}", buf.len());
-            Err(Error::DecodeFail(msg))
+            err_at!(DecodeFail, msg: format!("type-i64, len {}", buf.len()))
         }
     }
 }

@@ -406,7 +406,7 @@ where
         } else if is_snapshot {
             Ok(("snapshot".to_string(), num_shards))
         } else {
-            err_at!(UnExpectedFail, msg: format!("mixed shard state"))
+            err_at!(Fatal, msg: format!("mixed shard state"))
         }
     }
 
@@ -888,7 +888,7 @@ where
 
         if shards.len() != iters.len() {
             let msg = format!("{}/{} iters/shards", iters.len(), shards.len());
-            err_at!(UnExpectedFail, msg: msg)?
+            err_at!(Fatal, msg: msg)?
         }
 
         let indexes: Vec<Robt<K, V, B>> = {
@@ -935,12 +935,12 @@ where
             indexes.sort_by(|x, y| x.0.cmp(&y.0));
             Ok(indexes.into_iter().map(|x| x.1).collect())
         } else {
-            Err(Error::DiskIndexFail(
-                errs.into_iter()
-                    .map(|e| format!("{:?}", e))
-                    .collect::<Vec<String>>()
-                    .join("; "),
-            ))
+            let msg = errs
+                .into_iter()
+                .map(|e| format!("commit-err:{:?}", e))
+                .collect::<Vec<String>>()
+                .join("; ");
+            err_at!(Fatal, msg: msg)
         }?;
 
         {
@@ -1019,12 +1019,12 @@ where
             indexes.sort_by(|x, y| x.0.cmp(&y.0));
             Ok(indexes.into_iter().map(|x| x.1).collect())
         } else {
-            Err(Error::DiskIndexFail(
-                errs.into_iter()
-                    .map(|e| format!("{:?}", e))
-                    .collect::<Vec<String>>()
-                    .join("; "),
-            ))
+            let msg = errs
+                .into_iter()
+                .map(|e| format!("compact-err:{:?}", e))
+                .collect::<Vec<String>>()
+                .join("; ");
+            err_at!(Fatal, msg: msg)
         }?;
 
         robts_to_shards(indexes)?

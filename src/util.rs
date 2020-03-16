@@ -68,14 +68,16 @@ pub(crate) fn read_buffer(fd: &mut fs::File, fpos: u64, n: u64, msg: &str) -> Re
     }
 }
 
-#[inline]
-pub(crate) fn check_remaining(buf: &[u8], want: usize, msg: &str) -> Result<()> {
-    if buf.len() < want {
-        let msg = format!("{} unexpected buf size {} {}", msg, buf.len(), want);
-        Err(Error::DecodeFail(msg))
-    } else {
-        Ok(())
-    }
+#[macro_export]
+macro_rules! check_remaining {
+    ($buf:expr, $want:expr, $msg:expr) => {
+        if $buf.len() < $want {
+            let msg = format!("insufficient input {}/{} ({})", $msg, $buf.len(), $want);
+            err_at!(DecodeFail, msg: msg)
+        } else {
+            Ok(())
+        }
+    };
 }
 
 pub(crate) fn to_start_end<G, K>(within: G) -> (Bound<K>, Bound<K>)

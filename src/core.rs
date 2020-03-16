@@ -1135,7 +1135,7 @@ where
             Ok((entry, self))
         } else {
             let msg = format!("{} == {}", entry.to_seqno(), self.to_seqno());
-            err_at!(UnExpectedFail, msg: msg)
+            err_at!(Fatal, msg: msg)
         }?;
 
         if cfg!(debug_assertions) {
@@ -1176,7 +1176,7 @@ where
             //        .map(|d| d.to_seqno())
             //        .collect::<Vec<u64>>(),
             //);
-            err_at!(UnExpectedFail, msg: format!("Entry.validate_xmerge()"))
+            err_at!(Fatal, msg: format!("Entry.validate_xmerge()"))
         } else {
             Ok(())
         }

@@ -21,21 +21,21 @@ pub enum Error {
     NotImplemented(String),
     /// Error because the value was not initialized as expected.
     UnInitialized(String),
-    /// Execution flow entered into an un-expected situation.
-    UnExpectedFail(String),
-    /// Invalid argument to the API.
-    InvalidArg(String),
     /// TimeFail, std time related API failed.
     TimeFail(String),
     /// Inter-Process-Communication error from std::mpsc
     IPCFail(String),
     /// System level failure.
     SystemFail(String),
-    /// Invalid input
+    /// Invalid input from application, like function arguments,
+    /// file input etc..
     InvalidInput(String),
     /// API is being misused, as in there are not invoked in
     /// suggested order/manner.
     APIMisuse(String),
+    /// De-serialization failed.
+    DecodeFail(String),
+
     /// Supplied key is not found in the index.
     KeyNotFound,
     /// Index is empty
@@ -58,19 +58,7 @@ pub enum Error {
     ValueSizeExceeded(usize),
     /// Value-diff size, after serializing, exceeds limit.
     DiffSizeExceeded(usize),
-    /// Index has failed to meet the validation criteria. String
-    /// argument contains more details.
-    ValidationFail(String),
-    /// Index has failed.
-    MemIndexFail(String),
-    /// Index has failed.
-    DiskIndexFail(String),
-    /// Expected a native value. TODO: hide this ?
-    NotNativeValue,
-    /// Expected a native delta. TODO: hide this ?
-    NotNativeDelta,
-    /// De-serialization failed.
-    DecodeFail(String),
+
     /// Unable to read expected bytes from file.
     PartialRead(String),
     /// Unable to write full buffer into file.

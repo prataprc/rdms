@@ -126,7 +126,7 @@ where
                 };
                 Ok(vlen)
             }
-            _ => Err(Error::NotNativeValue),
+            _ => err_at!(Fatal, msg: format!("not-native-value")),
         }
     }
 }
@@ -237,7 +237,7 @@ where
 
                 Ok(dlen + 8)
             }
-            _ => Err(Error::NotNativeDelta),
+            _ => err_at!(Fatal, msg: format!("not-native-delta")),
         }
     }
 }

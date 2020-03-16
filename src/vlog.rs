@@ -1,9 +1,12 @@
-use std::{convert::TryInto, fs};
+use std::{
+    convert::TryInto,
+    fs,
+    io::{self, Read, Seek},
+};
 
 use crate::{
     core::{self, Diff, Footprint, Result, Serialize},
     error::Error,
-    util,
 };
 
 // *-----*------------------------------------*
@@ -135,7 +138,7 @@ pub(crate) fn fetch_value<V>(fpos: u64, n: u64, fd: &mut fs::File) -> Result<Val
 where
     V: Default + Serialize,
 {
-    let block = util::read_buffer(fd, fpos, n, "reading value from vlog")?;
+    let block = read_buffer!(fd, fpos, n, "reading value from vlog")?;
     let mut value: V = Default::default();
     value.decode(&block[8..])?;
     Ok(Value::new_native(value))
@@ -247,7 +250,7 @@ where
     V: Diff,
     <V as Diff>::D: Default + Serialize,
 {
-    let block = util::read_buffer(fd, fpos, n, "reading delta from vlog")?;
+    let block = read_buffer!(fd, fpos, n, "reading delta from vlog")?;
     let mut delta: <V as Diff>::D = Default::default();
     delta.decode(&block[8..])?;
     Ok(Delta::new_native(delta))

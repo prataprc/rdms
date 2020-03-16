@@ -2,7 +2,7 @@ use std::{
     cmp,
     convert::{TryFrom, TryInto},
     ffi, fmt, fs,
-    io::Write,
+    io::{self, Read, Seek, Write},
     mem,
     ops::Bound,
     path, result,
@@ -519,12 +519,12 @@ where
             let (mut fpos, till) = (0_usize, fd.metadata().ok()?.len() as usize);
             while fpos < till {
                 let n = cmp::min(DLOG_BLOCK_SIZE, till - fpos) as u64;
-                let block = util::read_buffer(
+                let block = read_buffer!(
                     //
                     &mut fd,
                     fpos as u64,
                     n,
-                    "journal block read",
+                    "journal block read"
                 )
                 .ok()?;
 

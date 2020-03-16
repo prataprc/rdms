@@ -59,8 +59,6 @@ pub enum Error {
     /// Value-diff size, after serializing, exceeds limit.
     DiffSizeExceeded(usize),
 
-    /// Unable to read expected bytes from file.
-    PartialRead(String),
     /// Unable to write full buffer into file.
     PartialWrite(String),
     /// Returned by disk index or dlog that provide durability support.

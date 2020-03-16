@@ -2,7 +2,6 @@ use std::{
     borrow::Borrow,
     convert::TryInto,
     ffi, fs,
-    io::{self, Read, Seek},
     ops::{Bound, RangeBounds},
     path,
 };
@@ -11,6 +10,46 @@ use crate::{
     core::{Footprint, Result},
     error::Error,
 };
+
+#[macro_export]
+macro_rules! check_remaining {
+    ($buf:expr, $want:expr, $msg:expr) => {
+        if $buf.len() < $want {
+            let msg = format!("insufficient input {}/{} ({})", $msg, $buf.len(), $want);
+            err_at!(DecodeFail, msg: msg)
+        } else {
+            Ok(())
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! read_buffer {
+    ($fd:expr, $fpos:expr, $n:expr, $msg:expr) => {
+        match $fd.seek(io::SeekFrom::Start($fpos)) {
+            Ok(_) => {
+                let mut buf = {
+                    let mut buf = Vec::with_capacity($n as usize);
+                    buf.resize(buf.capacity(), 0);
+                    buf
+                };
+                match $fd.read(&mut buf) {
+                    Ok(n) if buf.len() == n => Ok(buf),
+                    Ok(n) => {
+                        let m = buf.len();
+                        err_at!(
+                            //
+                            Fatal,
+                            msg: format!("{}, {}/{} at {}", $msg, m, n, $fpos)
+                        )
+                    }
+                    Err(err) => err_at!(IoError, Err(err)),
+                }
+            }
+            Err(err) => err_at!(IoError, Err(err)),
+        }
+    };
+}
 
 // create a file in append mode for writing.
 pub(crate) fn create_file_a(file: ffi::OsString) -> Result<fs::File> {
@@ -48,36 +87,6 @@ pub(crate) fn open_file_r(file: &ffi::OsStr) -> Result<fs::File> {
         IoError,
         fs::OpenOptions::new().read(true).open(os_file)
     )?)
-}
-
-pub(crate) fn read_buffer(fd: &mut fs::File, fpos: u64, n: u64, msg: &str) -> Result<Vec<u8>> {
-    err_at!(IoError, fd.seek(io::SeekFrom::Start(fpos)))?;
-
-    let mut buf = {
-        let mut buf = Vec::with_capacity(convert_at!(n)?);
-        buf.resize(buf.capacity(), 0);
-        buf
-    };
-
-    let n = err_at!(IoError, fd.read(&mut buf))?;
-    if buf.len() == n {
-        Ok(buf)
-    } else {
-        let msg = format!("{} partial read {}/{} at {}", msg, buf.len(), n, fpos);
-        Err(Error::PartialRead(msg))
-    }
-}
-
-#[macro_export]
-macro_rules! check_remaining {
-    ($buf:expr, $want:expr, $msg:expr) => {
-        if $buf.len() < $want {
-            let msg = format!("insufficient input {}/{} ({})", $msg, $buf.len(), $want);
-            err_at!(DecodeFail, msg: msg)
-        } else {
-            Ok(())
-        }
-    };
 }
 
 pub(crate) fn to_start_end<G, K>(within: G) -> (Bound<K>, Bound<K>)

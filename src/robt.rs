@@ -50,7 +50,7 @@ use std::{
     convert::{TryFrom, TryInto},
     ffi, fmt, fs,
     hash::Hash,
-    io::Write,
+    io::{self, Read, Seek, Write},
     marker, mem,
     ops::{Bound, Deref, RangeBounds},
     path, result,
@@ -1482,22 +1482,22 @@ pub fn read_meta_items(
     let mut fd = util::open_file_r(index_file.as_ref())?;
 
     // read header
-    let hdr = util::read_buffer(&mut fd, m - 40, 40, "read root-block header")?;
+    let hdr = read_buffer!(&mut fd, m - 40, 40, "read root-block header")?;
     let root = u64::from_be_bytes(array_at!(hdr[..8])?);
     let n_bmap: usize = convert_at!(u64::from_be_bytes(array_at!(hdr[8..16])?))?;
     let n_md: usize = convert_at!(u64::from_be_bytes(array_at!(hdr[16..24])?))?;
     let n_stats: usize = convert_at!(u64::from_be_bytes(array_at!(hdr[24..32])?))?;
     let n_marker: usize = convert_at!(u64::from_be_bytes(array_at!(hdr[32..40])?))?;
     // read block
-    let meta_block_bytes = {
+    let meta_block_bytes: u64 = {
         let n_total = n_bmap + n_md + n_stats + n_marker + 40;
         convert_at!(Config::compute_root_block(n_total))?
     };
-    let block: Vec<u8> = util::read_buffer(
+    let block: Vec<u8> = read_buffer!(
         &mut fd,
         m - meta_block_bytes,
         meta_block_bytes,
-        "read root-block",
+        "read root-block"
     )?
     .into_iter()
     .collect();
@@ -2455,7 +2455,7 @@ impl IndexFile {
         Ok(match self {
             IndexFile::Block { fd, .. } => {
                 let n: u64 = convert_at!(n)?;
-                util::read_buffer(fd, fpos, n, msg)?
+                read_buffer!(fd, fpos, n, msg)?
             }
             IndexFile::Mmap { mmap, .. } => {
                 let start: usize = convert_at!(fpos)?;

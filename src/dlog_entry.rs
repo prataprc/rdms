@@ -1,12 +1,16 @@
 use lazy_static::lazy_static;
 
-use std::{convert::TryInto, fmt, fs, result};
+use std::{
+    convert::TryInto,
+    fmt, fs,
+    io::{self, Read, Seek},
+    result,
+};
 
 use crate::{
     core::{Result, Serialize},
     dlog::DlogState,
     error::Error,
-    util,
 };
 
 include!("dlog_marker.rs");
@@ -164,7 +168,7 @@ impl<S, T> Batch<S, T> {
         match self {
             Batch::Refer { fpos, length, .. } => {
                 let n: u64 = convert_at!(length)?;
-                let buf = util::read_buffer(fd, fpos, n, "fetching batch")?;
+                let buf = read_buffer!(fd, fpos, n, "fetching batch")?;
                 self.decode_active(&buf)?;
 
                 Ok(self)

@@ -1,5 +1,8 @@
 use rand::prelude::random;
-use std::fs;
+use std::{
+    fs,
+    io::{self, Read, Seek},
+};
 
 use super::*;
 use crate::{core, util, vlog};
@@ -50,7 +53,14 @@ fn test_mblock_m() {
     let mb = {
         let (mut fd, fpos) = (util::open_file_r(&file).unwrap(), 0);
         MBlock::<i32, i32>::new_decode(
-            util::read_buffer(&mut fd, fpos, config.m_blocksize as u64, "reading mblock").unwrap(),
+            read_buffer!(
+                //
+                &mut fd,
+                fpos,
+                config.m_blocksize as u64,
+                "reading mblock"
+            )
+            .unwrap(),
         )
         .unwrap()
     };
@@ -175,7 +185,14 @@ fn test_mblock_z() {
     let mb = {
         let (mut fd, fpos) = (util::open_file_r(&file).unwrap(), 0);
         MBlock::<i32, i32>::new_decode(
-            util::read_buffer(&mut fd, fpos, config.m_blocksize as u64, "reading mblock").unwrap(),
+            read_buffer!(
+                //
+                &mut fd,
+                fpos,
+                config.m_blocksize as u64,
+                "reading mblock"
+            )
+            .unwrap(),
         )
         .unwrap()
     };
@@ -301,7 +318,8 @@ fn test_zblock1() {
     let zb = {
         let (mut fd, fpos) = (util::open_file_r(&file).unwrap(), 0);
         ZBlock::<i32, i32>::new_decode(
-            util::read_buffer(&mut fd, fpos, zbs, "reading zblock").unwrap(),
+            //
+            read_buffer!(&mut fd, fpos, zbs, "reading zblock").unwrap(),
         )
         .unwrap()
     };
@@ -407,7 +425,14 @@ fn test_zblock2() {
     let zb = {
         let (mut fd, fpos) = (util::open_file_r(&file).unwrap(), 0);
         ZBlock::<i32, i32>::new_decode(
-            util::read_buffer(&mut fd, fpos, config.z_blocksize as u64, "reading zblock").unwrap(),
+            read_buffer!(
+                //
+                &mut fd,
+                fpos,
+                config.z_blocksize as u64,
+                "reading zblock"
+            )
+            .unwrap(),
         )
         .unwrap()
     };
@@ -522,7 +547,14 @@ fn test_zblock3() {
     let zb = {
         let (mut fd, fpos) = (util::open_file_r(&file).unwrap(), 0);
         ZBlock::<i32, i32>::new_decode(
-            util::read_buffer(&mut fd, fpos, config.z_blocksize as u64, "reading zblock").unwrap(),
+            read_buffer!(
+                //
+                &mut fd,
+                fpos,
+                config.z_blocksize as u64,
+                "reading zblock"
+            )
+            .unwrap(),
         )
         .unwrap()
     };
@@ -631,7 +663,14 @@ fn test_zblock4() {
     let zb = {
         let (mut fd, fpos) = (util::open_file_r(&file).unwrap(), 0);
         ZBlock::<i32, i32>::new_decode(
-            util::read_buffer(&mut fd, fpos, config.z_blocksize as u64, "reading zblock").unwrap(),
+            read_buffer!(
+                //
+                &mut fd,
+                fpos,
+                config.z_blocksize as u64,
+                "reading zblock"
+            )
+            .unwrap(),
         )
         .unwrap()
     };

@@ -73,6 +73,7 @@ fn test_root1() {
             compact_interval: Some(time::Duration::from_secs(10)),
         };
         let bytes: Vec<u8> = ref_root.clone().try_into().unwrap();
+        println!("{:?}", std::str::from_utf8(&bytes));
         let root: Root = bytes.try_into().unwrap();
         assert_eq!(root, ref_root);
     }

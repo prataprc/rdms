@@ -255,128 +255,109 @@ impl TryFrom<Vec<u8>> for Root {
     type Error = crate::error::Error;
 
     fn try_from(bytes: Vec<u8>) -> Result<Root> {
-        use crate::error::Error::InvalidFile;
         use std::str::from_utf8;
 
-        let err1 = InvalidFile(format!("dgm-root, not a table"));
-        let err2 = format!("dgm-root, fault in config field");
+        let to_usize = |key: &str, dict: &toml::value::Table| -> Result<usize> {
+            match dict.get(key) {
+                Some(field) => match field.as_integer() {
+                    Some(field) => convert_at!(field),
+                    None => err_at!(InvalidFile, msg: format!("{}:{}", key, field)),
+                },
+                None => err_at!(InvalidFile, msg: format!("{} in root", key)),
+            }
+        };
+        let to_i64 = |key: &str, dict: &toml::value::Table| -> Result<i64> {
+            match dict.get(key) {
+                Some(field) => match field.as_integer() {
+                    Some(field) => Ok(field),
+                    None => err_at!(InvalidFile, msg: format!("{}:{}", key, field)),
+                },
+                None => err_at!(InvalidFile, msg: format!("{} in root", key)),
+            }
+        };
+        let to_f64 = |key: &str, dict: &toml::value::Table| -> Result<f64> {
+            match dict.get(key) {
+                Some(field) => match field.as_float() {
+                    Some(value) => Ok(value),
+                    None => err_at!(InvalidFile, msg: format!("{}:{}", key, field)),
+                },
+                None => err_at!(InvalidFile, msg: format!("{} in root", key)),
+            }
+        };
+        let to_bool = |key: &str, dict: &toml::value::Table| -> Result<bool> {
+            match dict.get(key) {
+                Some(field) => match field.as_bool() {
+                    Some(value) => Ok(value),
+                    None => err_at!(InvalidFile, msg: format!("{}:{}", key, field)),
+                },
+                None => err_at!(InvalidFile, msg: format!("{} in root", key)),
+            }
+        };
 
-        let text = err_at!(InvalidInput, from_utf8(&bytes))?.to_string();
-
-        let value: toml::Value = text
-            .parse()
-            .map_err(|_| InvalidFile(format!("dgm-root, invalid root file")))?;
-
-        let dict = value.as_table().ok_or(err1)?;
+        let text = err_at!(InvalidFile, from_utf8(&bytes))?.to_string();
+        let value = parse_at!(text, toml::Value)?;
+        let dict = match value.as_table() {
+            Some(table) => Ok(table),
+            None => err_at!(InvalidFile, msg: format!("no table")),
+        }?;
         let mut root: Root = Default::default();
 
-        root.version = {
-            let field = dict.get("version");
-            convert_at!(field
-                .ok_or(InvalidFile(err2.clone()))?
-                .as_integer()
-                .ok_or(InvalidFile(err2.clone()))?)?
+        root.version = to_usize("version", dict)?;
+        root.levels = to_usize("levels", dict)?;
+        root.lsm = to_bool("lsm", dict)?;
+        root.m0_limit = match to_i64("m0_limit", dict)? {
+            m0_limit if m0_limit < 0 => None,
+            m0_limit => Some(convert_at!(m0_limit)?),
         };
-        root.levels = {
-            let field = dict.get("levels");
-            convert_at!(field
-                .ok_or(InvalidFile(err2.clone()))?
-                .as_integer()
-                .ok_or(InvalidFile(err2.clone()))?)?
+        root.mem_ratio = to_f64("mem_ratio", dict)?;
+        root.disk_ratio = to_f64("disk_ratio", dict)?;
+        root.commit_interval = match to_i64("commit_interval", dict)? {
+            duration if duration < 0 => None,
+            duration => Some(time::Duration::from_secs(convert_at!(duration)?)),
         };
-        root.lsm = {
-            let field = dict.get("lsm");
-            field
-                .ok_or(InvalidFile(err2.clone()))?
-                .as_bool()
-                .ok_or(InvalidFile(err2.clone()))?
+        root.compact_interval = match to_i64("compact_interval", dict)? {
+            duration if duration < 0 => None,
+            duration => Some(time::Duration::from_secs(convert_at!(duration)?)),
         };
-        root.m0_limit = {
-            let field = dict.get("m0_limit");
-            let m0_limit = field
-                .ok_or(InvalidFile(err2.clone()))?
-                .as_integer()
-                .ok_or(InvalidFile(err2.clone()))?;
-            if m0_limit > 0 {
-                Some(convert_at!(m0_limit)?)
-            } else {
-                None
-            }
-        };
-        root.mem_ratio = {
-            let field = dict.get("mem_ratio");
-            field
-                .ok_or(InvalidFile(err2.clone()))?
-                .as_float()
-                .ok_or(InvalidFile(err2.clone()))?
-        };
-        root.disk_ratio = {
-            let field = dict.get("disk_ratio");
-            field
-                .ok_or(InvalidFile(err2.clone()))?
-                .as_float()
-                .ok_or(InvalidFile(err2.clone()))?
-        };
-        root.commit_interval = {
-            let field = dict.get("commit_interval");
-            let duration: i64 = field
-                .ok_or(InvalidFile(err2.clone()))?
-                .as_integer()
-                .ok_or(InvalidFile(err2.clone()))?;
-            if duration > 0 {
-                Some(time::Duration::from_secs(convert_at!(duration)?))
-            } else {
-                None
-            }
-        };
-        root.compact_interval = {
-            let field = dict.get("compact_interval");
-            let duration: i64 = field
-                .ok_or(InvalidFile(err2.clone()))?
-                .as_integer()
-                .ok_or(InvalidFile(err2.clone()))?;
-            if duration > 0 {
-                Some(time::Duration::from_secs(convert_at!(duration)?))
-            } else {
-                None
-            }
-        };
-        root.lsm_cutoff = {
-            let field = dict.get("lsm_cutoff").ok_or(InvalidFile(err2.clone()))?;
-            let arr = field.as_array().ok_or(InvalidFile(err2.clone()))?;
-            let bound = arr[0].as_str().ok_or(InvalidFile(err2.clone()))?;
-            let cutoff: u64 = {
-                let cutoff = &arr[1].as_str().ok_or(InvalidFile(err2.clone()))?;
-                parse_at!(cutoff, u64)?
-            };
-            match bound {
-                "excluded" => Ok(Some(Bound::Excluded(cutoff))),
-                "included" => Ok(Some(Bound::Included(cutoff))),
-                "unbounded" => Ok(Some(Bound::Unbounded)),
-                "none" => Ok(None),
-                _ => err_at!(InvalidInput, msg: format!("dgm.root.lsm-cutoff")),
-            }
+        root.lsm_cutoff = match dict.get("lsm_cutoff") {
+            Some(field) => match field.as_array() {
+                Some(array) => match array.as_slice() {
+                    [bound, cutoff] => match (bound.as_str(), cutoff.as_str()) {
+                        (Some("excluded"), Some(c)) => {
+                            Ok(Some(Bound::Excluded(parse_at!(c, u64)?)))
+                        }
+                        (Some("included"), Some(c)) => {
+                            Ok(Some(Bound::Included(parse_at!(c, u64)?)))
+                        }
+                        (Some("unbounded"), _) => Ok(Some(Bound::Unbounded)),
+                        (Some("none"), _) => Ok(None),
+                        (b, c) => err_at!(InvalidFile, msg: format!("b:{:?} c:{:?}", b, c)),
+                    },
+                    _ => err_at!(InvalidFile, msg: format!("invalid root")),
+                },
+                None => err_at!(InvalidFile, msg: format!("invalid root")),
+            },
+            None => err_at!(InvalidFile, msg: format!("invalid root")),
         }?;
-        root.tombstone_cutoff = {
-            let field = dict
-                .get("tombstone_cutoff")
-                .ok_or(InvalidFile(err2.clone()))?;
-            let arr = field.as_array().ok_or(InvalidFile(err2.clone()))?;
-            let bound = arr[0].as_str().ok_or(InvalidFile(err2.clone()))?;
-            let cutoff: u64 = {
-                let cutoff = &arr[1].as_str().ok_or(InvalidFile(err2.clone()))?;
-                parse_at!(cutoff, u64)?
-            };
-            match bound {
-                "excluded" => Ok(Some(Bound::Excluded(cutoff))),
-                "included" => Ok(Some(Bound::Included(cutoff))),
-                "unbounded" => Ok(Some(Bound::Unbounded)),
-                "none" => Ok(None),
-                _ => {
-                    let msg = format!("dgm.root.tombstone-cutoff");
-                    err_at!(InvalidInput, msg: msg)
-                }
-            }
+        root.tombstone_cutoff = match dict.get("tombstone_cutoff") {
+            Some(field) => match field.as_array() {
+                Some(array) => match array.as_slice() {
+                    [bound, cutoff] => match (bound.as_str(), cutoff.as_str()) {
+                        (Some("excluded"), Some(c)) => {
+                            Ok(Some(Bound::Excluded(parse_at!(c, u64)?)))
+                        }
+                        (Some("included"), Some(c)) => {
+                            Ok(Some(Bound::Included(parse_at!(c, u64)?)))
+                        }
+                        (Some("unbounded"), _) => Ok(Some(Bound::Unbounded)),
+                        (Some("none"), _) => Ok(None),
+                        _ => err_at!(InvalidFile, msg: format!("invalid root")),
+                    },
+                    _ => err_at!(InvalidFile, msg: format!("invalid root")),
+                },
+                None => err_at!(InvalidFile, msg: format!("invalid root")),
+            },
+            None => err_at!(InvalidFile, msg: format!("invalid root")),
         }?;
 
         Ok(root)
@@ -478,9 +459,6 @@ impl TryFrom<RootFileName> for (String, usize) {
     type Error = Error;
 
     fn try_from(fname: RootFileName) -> Result<(String, usize)> {
-        use crate::error::Error::InvalidFile;
-        let err = format!("{} not dgm root file", fname);
-
         let check_file = |fname: RootFileName| -> Option<(String, usize)> {
             let fname = path::Path::new(&fname.0);
             match fname.extension()?.to_str()? {
@@ -504,7 +482,10 @@ impl TryFrom<RootFileName> for (String, usize) {
             }
         };
 
-        check_file(fname).ok_or(InvalidFile(err.clone()))
+        match check_file(fname) {
+            Some(val) => Ok(val),
+            None => err_at!(InvalidFile, msg: format!("not root file")),
+        }
     }
 }
 
@@ -537,19 +518,17 @@ impl TryFrom<LevelName> for (String, usize) {
 
     fn try_from(name: LevelName) -> Result<(String, usize)> {
         let parts: Vec<&str> = name.0.split('-').collect();
-        let err = Error::InvalidFile(format!("{} not dgm level", name));
-
         if parts.len() >= 3 {
             match &parts[parts.len() - 2..] {
                 ["dgmlevel", level] => {
-                    let level = level.parse::<usize>().map_err(|_| err)?;
+                    let level = parse_at!(level, usize)?;
                     let s = parts[..(parts.len() - 2)].join("-");
                     Ok((s, level))
                 }
-                _ => Err(err),
+                _ => err_at!(InvalidFile, msg: format!("invalid level")),
             }
         } else {
-            Err(err)
+            err_at!(InvalidFile, msg: format!("invalid level"))
         }
     }
 }
@@ -1726,8 +1705,6 @@ where
     }
 
     fn find_root_file(dir: &ffi::OsStr, name: &str) -> Result<(Root, ffi::OsString)> {
-        use crate::error::Error::InvalidFile;
-
         let mut versions = vec![];
         for item in err_at!(IoError, fs::read_dir(dir))? {
             match item {
@@ -1742,9 +1719,9 @@ where
             }
         }
 
-        let version = {
-            let err = InvalidFile(format!("dgm, missing root file"));
-            versions.into_iter().max().ok_or(err)
+        let version = match versions.into_iter().max() {
+            Some(version) => Ok(version),
+            None => err_at!(InvalidFile, msg: format!("not root file")),
         }?;
 
         let root_file = {

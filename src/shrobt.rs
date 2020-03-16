@@ -58,28 +58,23 @@ impl TryFrom<Vec<u8>> for Root {
     type Error = crate::error::Error;
 
     fn try_from(bytes: Vec<u8>) -> Result<Root> {
-        use crate::error::Error::InvalidFile;
         use std::str::from_utf8;
 
-        let err1 = InvalidFile(format!("shrobt-root, not a table"));
-        let err2 = InvalidFile(format!("shrobt-root, missing num_shards"));
-        let err3 = InvalidFile(format!("shrobt-root, num_shards not int"));
+        let text = err_at!(InvalidFile, from_utf8(&bytes))?.to_string();
 
-        let text = err_at!(InvalidInput, from_utf8(&bytes))?.to_string();
-
-        let value: toml::Value = text
-            .parse()
-            .map_err(|_| InvalidFile(format!("shrobt, invalid root file")))?;
-
-        let num_shards = convert_at!(value
-            .as_table()
-            .ok_or(err1)?
-            .get("num_shards")
-            .ok_or(err2)?
-            .as_integer()
-            .ok_or(err3)?)?;
-
-        Ok(Root { num_shards })
+        let value = parse_at!(text, toml::Value)?;
+        match value.as_table() {
+            Some(table) => match table.get("num_shards") {
+                Some(value) => match value.as_integer() {
+                    Some(num_shards) => Ok(Root {
+                        num_shards: convert_at!(num_shards)?,
+                    }),
+                    None => err_at!(InvalidFile, msg: format!("not integer")),
+                },
+                None => err_at!(InvalidFile, msg: format!("no num_shards")),
+            },
+            None => err_at!(InvalidFile, msg: format!("no table")),
+        }
     }
 }
 
@@ -98,35 +93,34 @@ impl TryFrom<RootFileName> for String {
     type Error = crate::error::Error;
 
     fn try_from(name: RootFileName) -> Result<String> {
-        use crate::error::Error::InvalidFile;
-        let err = format!("not shrobt root file");
-
         let rootp = path::Path::new(&name.0);
-        let ext = rootp
-            .extension()
-            .ok_or(InvalidFile(err.clone()))?
-            .to_str()
-            .ok_or(InvalidFile(err.clone()))?;
+        let ext = match rootp.extension() {
+            Some(ext) => match ext.to_str() {
+                Some(ext) => Ok(ext),
+                None => err_at!(InvalidFile, msg: format!("not str")),
+            },
+            None => err_at!(InvalidFile, msg: format!("no extension")),
+        }?;
+        let stem = match rootp.file_stem() {
+            Some(stem) => match stem.to_str() {
+                Some(stem) => Ok(stem.to_string()),
+                None => err_at!(InvalidFile, msg: format!("not str")),
+            },
+            None => err_at!(InvalidFile, msg: format!("no stem")),
+        }?;
 
         if ext == "root" {
-            let stem = rootp
-                .file_stem()
-                .ok_or(InvalidFile(err.clone()))?
-                .to_str()
-                .ok_or(InvalidFile(err.clone()))?
-                .to_string();
-
             let parts: Vec<&str> = stem.split('-').collect();
 
             if parts.len() < 2 {
-                Err(InvalidFile(err.clone()))
+                err_at!(InvalidFile, msg: format!("not shrot root file"))
             } else if parts[parts.len() - 1] != "shrobt" {
-                Err(InvalidFile(err.clone()))
+                err_at!(InvalidFile, msg: format!("not shrot root file"))
             } else {
                 Ok(parts[..(parts.len() - 1)].join("-"))
             }
         } else {
-            Err(InvalidFile(err.clone()))
+            err_at!(InvalidFile, msg: format!("not shrot root file"))
         }
     }
 }
@@ -162,20 +156,16 @@ impl TryFrom<ShardName> for (String, usize) {
     type Error = crate::error::Error;
 
     fn try_from(name: ShardName) -> Result<(String, usize)> {
-        use crate::error::Error::InvalidFile;
-
         let parts: Vec<&str> = name.0.split('-').collect();
 
         if parts.len() < 4 {
-            Err(InvalidFile(format!("shard not shrobt index")))
+            err_at!(InvalidFile, msg: format!("not shrobt shard"))
         } else if parts[parts.len() - 2] != "shard" {
-            Err(InvalidFile(format!("shard not shrobt index")))
+            err_at!(InvalidFile, msg: format!("shard not shrobt index"))
         } else if parts[parts.len() - 3] != "shrobt" {
-            Err(InvalidFile(format!("shard not shrobt index")))
+            err_at!(InvalidFile, msg: format!("shard not shrobt index"))
         } else {
-            let shard_i: usize = parts[parts.len() - 1]
-                .parse()
-                .map_err(|_| InvalidFile(format!("shard not shrobt index")))?;
+            let shard_i = parse_at!(parts[parts.len() - 1], usize)?;
             let s = parts[..(parts.len() - 3)].join("-");
             Ok((s, shard_i))
         }
@@ -352,8 +342,6 @@ where
     }
 
     pub fn open(dir: &ffi::OsStr, name: &str, mmap: bool) -> Result<ShRobt<K, V, B>> {
-        use crate::error::Error::InvalidFile;
-
         let root = Self::find_root_file(dir, name)?;
 
         let num_shards: usize = {
@@ -362,8 +350,10 @@ where
             if root.num_shards > 0 {
                 Ok(root.num_shards)
             } else {
-                let msg = format!("shrobt-root, num_shards:{}", root.num_shards);
-                Err(InvalidFile(msg))
+                err_at!(
+                    InvalidFile,
+                    msg: format!("unexpected num_shards:{}", root.num_shards)
+                )
             }
         }?;
 
@@ -468,8 +458,6 @@ where
     }
 
     fn find_root_file(dir: &ffi::OsStr, name: &str) -> Result<ffi::OsString> {
-        use crate::error::Error::InvalidFile;
-
         for item in err_at!(IoError, fs::read_dir(dir))? {
             match item {
                 Ok(item) => {
@@ -484,7 +472,7 @@ where
             }
         }
 
-        Err(InvalidFile(format!("shrobt, missing index file")))
+        err_at!(InvalidFile, msg: format!("missing root file"))
     }
 }
 

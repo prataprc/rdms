@@ -51,12 +51,10 @@ impl TryFrom<ShardName> for (String, usize) {
 
     fn try_from(name: ShardName) -> Result<(String, usize)> {
         let parts: Vec<&str> = name.0.split('-').collect();
-        let err = Error::InvalidFile(format!("not shrobt index"));
-
         if parts.len() < 3 {
-            Err(err)
+            err_at!(InvalidInput, msg: format!("not shard name"))
         } else if parts[parts.len() - 2] != "shard" {
-            Err(err)
+            err_at!(InvalidInput, msg: format!("not shard name"))
         } else {
             let shard = {
                 let off = parts.len() - 1;

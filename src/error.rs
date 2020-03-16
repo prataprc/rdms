@@ -35,6 +35,10 @@ pub enum Error {
     APIMisuse(String),
     /// De-serialization failed.
     DecodeFail(String),
+    /// Returned by disk index or dlog that provide durability support.
+    InvalidFile(String),
+    /// Error converting from one type to another.
+    ConversionFail(String),
 
     /// Supplied key is not found in the index.
     KeyNotFound,
@@ -59,10 +63,6 @@ pub enum Error {
     /// Value-diff size, after serializing, exceeds limit.
     DiffSizeExceeded(usize),
 
-    /// Unable to write full buffer into file.
-    PartialWrite(String),
-    /// Returned by disk index or dlog that provide durability support.
-    InvalidFile(String),
     /// Thread has failed.
     ThreadFail(String),
     /// On disk snapshot is invalid.
@@ -77,10 +77,9 @@ pub enum Error {
     JsonError(jsondata::Error),
     /// String conversion error from std::String, str::str
     Utf8Error(std::str::Utf8Error),
-    /// Error converting from one type to another.
-    ConversionFail(String),
     /// Return list of files that needs to be purged.
     PurgeFiles(Vec<ffi::OsString>),
+
     #[doc(hidden)]
     // internal error, given key is less than the entire data set.
     __LessThan,
@@ -102,13 +101,13 @@ pub enum Error {
 macro_rules! err_at {
     ($v:ident, msg:$m:expr) => {
         //
-        Err(Error::$v(format!("{}:{} msg:{}", file!(), line!(), $m)))
+        Err(Error::$v(format!("{}:{} msg: {}", file!(), line!(), $m)))
     };
     ($v:ident, $e:expr) => {
         match $e {
             Ok(val) => Ok(val),
             Err(err) => {
-                let msg = format!("{}:{} err:{}", file!(), line!(), err);
+                let msg = format!("{}:{} err: {}", file!(), line!(), err);
                 Err(Error::$v(msg))
             }
         }
@@ -121,7 +120,7 @@ macro_rules! parse_at {
         match $e.parse::<$t>() {
             Ok(val) => Ok(val),
             Err(err) => {
-                let msg = format!("{}:{} parse:{}", file!(), line!(), err);
+                let msg = format!("{}:{} parse: {}", file!(), line!(), err);
                 Err(Error::ConversionFail(msg))
             }
         }
@@ -134,7 +133,7 @@ macro_rules! convert_at {
         match $e.try_into() {
             Ok(val) => Ok(val),
             Err(err) => {
-                let msg = format!("{}:{} convert:{}", file!(), line!(), err);
+                let msg = format!("{}:{} {:?} convert: {}", file!(), line!(), $e, err);
                 Err(Error::ConversionFail(msg))
             }
         }

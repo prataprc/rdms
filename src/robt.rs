@@ -109,19 +109,17 @@ impl TryFrom<Name> for (String, usize) {
 
     fn try_from(name: Name) -> Result<(String, usize)> {
         let parts: Vec<&str> = name.0.split('-').collect();
-        let err = Error::InvalidFile(format!("{} not robt index name", name));
-
         if parts.len() >= 3 {
             match &parts[parts.len() - 2..] {
                 ["robt", ver] => {
-                    let ver = ver.parse::<usize>().map_err(|_| err)?;
+                    let ver = parse_at!(ver, usize)?;
                     let s = parts[..(parts.len() - 2)].join("-");
                     Ok((s, ver))
                 }
-                _ => Err(err),
+                _ => err_at!(InvalidFile, msg: format!("invalid name")),
             }
         } else {
-            Err(err)
+            err_at!(InvalidFile, msg: format!("invalid name"))
         }
     }
 }
@@ -153,9 +151,6 @@ impl TryFrom<IndexFileName> for Name {
     type Error = Error;
 
     fn try_from(fname: IndexFileName) -> Result<Name> {
-        use crate::error::Error::InvalidFile;
-        let err = format!("{} not robt index file", fname);
-
         let check_file = |fname: IndexFileName| -> Option<String> {
             let fname = path::Path::new(&fname.0);
             match fname.extension()?.to_str()? {
@@ -164,7 +159,10 @@ impl TryFrom<IndexFileName> for Name {
             }
         };
 
-        let name = check_file(fname.clone()).ok_or(InvalidFile(err.clone()))?;
+        let name = match check_file(fname.clone()) {
+            Some(name) => Ok(name),
+            None => err_at!(InvalidFile, msg: format!("{}", fname)),
+        }?;
         Ok(Name(name))
     }
 }
@@ -199,9 +197,6 @@ impl TryFrom<VlogFileName> for Name {
     type Error = Error;
 
     fn try_from(fname: VlogFileName) -> Result<Name> {
-        use crate::error::Error::InvalidFile;
-        let err = format!("{} not robt vlog file", fname);
-
         let check_file = |fname: VlogFileName| -> Option<String> {
             let fname = path::Path::new(&fname.0);
             match fname.extension()?.to_str()? {
@@ -210,7 +205,10 @@ impl TryFrom<VlogFileName> for Name {
             }
         };
 
-        let name = check_file(fname.clone()).ok_or(InvalidFile(err.clone()))?;
+        let name = match check_file(fname.clone()) {
+            Some(name) => Ok(name),
+            None => err_at!(InvalidFile, msg: format!("invalid file")),
+        }?;
         Ok(Name(name))
     }
 }
@@ -500,10 +498,7 @@ where
             // instance and also assert that it belongs to an older snapshot.
             let file_name = match path::PathBuf::from(file.clone()).file_name() {
                 Some(file_name) => Ok(file_name.to_os_string()),
-                None => {
-                    let msg = format!("purge_files() {:?}", file);
-                    Err(Error::InvalidFile(msg))
-                }
+                None => err_at!(InvalidFile, msg: format!("purge_files() {:?}", file)),
             }?;
             let nm: Name = match IndexFileName(file_name.clone()).try_into() {
                 Ok(nm) => nm,
@@ -526,11 +521,13 @@ where
                 self.purger.as_ref().unwrap().post(file)?;
                 Ok(())
             } else {
-                let msg = format!(
-                    "purge_files() {:?} {} {} {} {}",
-                    file, nm, name, ver, version
-                );
-                Err(Error::InvalidFile(msg))
+                err_at!(
+                    InvalidFile,
+                    msg: format!(
+                        "purge_files() {:?} {} {} {} {}",
+                        file, nm, name, ver, version
+                    )
+                )
             }?;
         }
 
@@ -538,8 +535,6 @@ where
     }
 
     fn find_index_file(dir: &ffi::OsStr, name: &str) -> Result<ffi::OsString> {
-        use crate::error::Error::InvalidFile;
-
         let mut versions = vec![];
         for item in err_at!(IoError, fs::read_dir(dir))? {
             match item {
@@ -558,9 +553,9 @@ where
             }
         }
 
-        let version = {
-            let err = InvalidFile(format!("robt, missing index file"));
-            versions.into_iter().max().ok_or(err)
+        let version = match versions.into_iter().max() {
+            Some(version) => Ok(version),
+            None => err_at!(InvalidInput, msg: format!("invalid file")),
         }?;
 
         let nm: Name = (name.to_string(), version).into();
@@ -1460,8 +1455,10 @@ pub(crate) fn write_meta_items(
     if n == ln {
         Ok(convert_at!(n)?)
     } else {
-        let msg = format!("robt write_meta_items: {:?} {}/{}...", &file, ln, n);
-        Err(Error::PartialWrite(msg))
+        err_at!(
+            Fatal,
+            msg: format!("robt write_meta_items: {:?} {}/{}...", &file, ln, n)
+        )
     }
 }
 
@@ -2387,9 +2384,11 @@ fn thread_flush(
         let n = err_at!(IoError, fd.write(&data))?;
         let m = data.len();
         if n != m {
-            let msg = format!("robt flusher: {:?} {}/{}...", &file, m, n);
             err_at!(IoError, fd.unlock())?; // <----- read un-lock
-            return Err(Error::PartialWrite(msg));
+            err_at!(
+                Fatal,
+                msg: format!("robt flusher: {:?} {}/{}...", &file, m, n)
+            )?
         }
     }
 
@@ -2633,28 +2632,16 @@ where
 
         match purge_file(index_file.clone(), &mut vec![], &mut vec![]) {
             "ok" => Ok(()),
-            "locked" => {
-                let msg = format!("{:?} locked", index_file);
-                Err(Error::InvalidFile(msg))
-            }
-            "error" => {
-                let msg = format!("error unlocking {:?}", index_file);
-                Err(Error::InvalidFile(msg))
-            }
+            "locked" => err_at!(InvalidFile, msg: format!("{:?} locked", index_file)),
+            "error" => err_at!(Fatal, msg: format!("error unlocking {:?}", index_file)),
             _ => err_at!(Fatal, msg: format!("unreachable")),
         }?;
 
         if let Some(vlog_file) = vlog_file {
             match purge_file(vlog_file.clone(), &mut vec![], &mut vec![]) {
                 "ok" => Ok(()),
-                "locked" => {
-                    let msg = format!("{:?} locked", vlog_file);
-                    Err(Error::InvalidFile(msg))
-                }
-                "error" => {
-                    let msg = format!("error unlocking {:?}", vlog_file);
-                    Err(Error::InvalidFile(msg))
-                }
+                "locked" => err_at!(InvalidFile, msg: format!("{:?} locked", vlog_file)),
+                "error" => err_at!(Fatal, msg: format!("error unlocking {:?}", vlog_file)),
                 _ => err_at!(Fatal, msg: format!("unreachable")),
             }
         } else {

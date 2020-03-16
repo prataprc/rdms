@@ -55,10 +55,6 @@ impl TryFrom<JournalFile> for (String, String, usize, usize) {
     type Error = Error;
 
     fn try_from(jfile: JournalFile) -> Result<(String, String, usize, usize)> {
-        use crate::error::Error::InvalidFile;
-
-        let err = format!("{:?} not dlog name", jfile.0);
-
         let check_file = |jfile: JournalFile| -> Option<String> {
             let fname = path::Path::new(&jfile.0);
             match fname.extension()?.to_str()? {
@@ -67,7 +63,10 @@ impl TryFrom<JournalFile> for (String, String, usize, usize) {
             }
         };
 
-        let stem = check_file(jfile.clone()).ok_or(InvalidFile(err.clone()))?;
+        let stem = match check_file(jfile.clone()) {
+            Some(stem) => Ok(stem),
+            None => err_at!(InvalidInput, msg: format!("not dlog journal")),
+        }?;
         let mut parts: Vec<&str> = stem.split('-').collect();
 
         let (name, parts) = match parts.len() {
@@ -79,7 +78,7 @@ impl TryFrom<JournalFile> for (String, String, usize, usize) {
                 };
                 Ok((name.to_string(), parts))
             }
-            _ => Err(InvalidFile(err.clone())),
+            _ => err_at!(InvalidFile, msg: format!("not dlog journal")),
         }?;
 
         match &parts[..] {
@@ -88,7 +87,7 @@ impl TryFrom<JournalFile> for (String, String, usize, usize) {
                 let num: usize = parse_at!(num, usize)?;
                 Ok((name.to_string(), typ.to_string(), shard_id, num))
             }
-            _ => Err(InvalidFile(err.clone())),
+            _ => err_at!(InvalidFile, msg: format!("not dlog journal")),
         }
     }
 }
@@ -739,8 +738,7 @@ where
                 let n = err_at!(IoError, fd.write(&buffer))?;
                 if length != n {
                     let f = file_path.clone();
-                    let msg = format!("wal-flush: {:?}, {}/{}", f, length, n);
-                    Err(Error::PartialWrite(msg))
+                    err_at!(Fatal, msg: format!("wal-flush: {:?}, {}/{}", f, length, n))
                 } else {
                     if !nosync {
                         err_at!(IoError, fd.sync_all())?;
@@ -785,8 +783,7 @@ where
             Ok(())
         } else {
             let f = file_path.clone();
-            let msg = format!("wal-flush: {:?}, {}/{}", f, length, n);
-            Err(Error::PartialWrite(msg))
+            err_at!(Fatal, msg: format!("wal-flush: {:?}, {}/{}", f, length, n))
         }
     }
 }

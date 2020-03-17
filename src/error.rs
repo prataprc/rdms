@@ -3,14 +3,7 @@
 //! Convertion traits, from other error types, like from std-lib, to `rdms`
 //! error are implemented in this module.
 
-use jsondata;
-
 use std::ffi;
-
-// TODO: check unused error variants and double check error arguments.
-// TODO: Generic but meaningful error messages.
-// TODO: Document error variants.
-// TODO: Consolidate convertion traits from other error types.
 
 /// Error enumerates over all possible errors cases in `rdms` package.
 #[derive(Debug)]
@@ -39,6 +32,8 @@ pub enum Error {
     InvalidFile(String),
     /// Error converting from one type to another.
     ConversionFail(String),
+    /// IO error from std::io
+    IoError(String),
 
     /// Supplied key is not found in the index.
     KeyNotFound,
@@ -62,21 +57,6 @@ pub enum Error {
     ValueSizeExceeded(usize),
     /// Value-diff size, after serializing, exceeds limit.
     DiffSizeExceeded(usize),
-
-    /// Thread has failed.
-    ThreadFail(String),
-    /// On disk snapshot is invalid.
-    InvalidSnapshot(String),
-    /// Invalid Dlog
-    InvalidDlog(String),
-    /// Invalid Wal
-    InvalidWAL(String),
-    /// IO error from std::io
-    IoError(String),
-    /// Json processing error from jsondata package
-    JsonError(jsondata::Error),
-    /// String conversion error from std::String, str::str
-    Utf8Error(std::str::Utf8Error),
     /// Return list of files that needs to be purged.
     PurgeFiles(Vec<ffi::OsString>),
 

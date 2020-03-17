@@ -622,10 +622,7 @@ where
     fn as_inner(&self) -> Result<MutexGuard<InnerRobt<K, V, B>>> {
         match self.inner.lock() {
             Ok(value) => Ok(value),
-            Err(err) => {
-                let msg = format!("robt.as_inner(), poison-lock {:?}", err);
-                Err(Error::ThreadFail(msg))
-            }
+            Err(err) => err_at!(Fatal, msg: format!("poisened lock {}", err)),
         }
     }
 
@@ -1508,8 +1505,7 @@ pub fn read_meta_items(
     let (x, y) = (z - n_marker, z);
     let marker = block[x..y].to_vec();
     if marker.ne(&ROOT_MARKER.as_slice()) {
-        let msg = format!("robt unexpected marker {:?}", marker);
-        return Err(Error::InvalidSnapshot(msg));
+        return err_at!(InvalidFile, msg: format!("marker {:?}", marker));
     }
 
     let (x, y) = (z - n_marker - n_stats, z - n_marker);
@@ -1537,11 +1533,10 @@ pub fn read_meta_items(
     } else {
         let at: u64 = convert_at!(stats.m_blocksize)?;
         let at = m - meta_block_bytes - at;
-        if at != root {
-            let msg = format!("robt expected root at {}, found {}", at, root);
-            Err(Error::InvalidSnapshot(msg))
-        } else {
+        if at == root {
             Ok((meta_items, convert_at!(meta_block_bytes)?))
+        } else {
+            err_at!(InvalidFile, msg: format!("root:{}, found:{}", at, root))
         }
     }
 }
@@ -2433,10 +2428,10 @@ impl IndexFile {
                         *self = IndexFile::Mmap { fd, file, mmap };
                         Ok(())
                     }
-                    Err(err) => Err(Error::InvalidSnapshot(format!(
-                        "opening {:?} in mmap mode failed, {:?}",
-                        file, err
-                    ))),
+                    Err(err) => {
+                        let msg = format!("file:{:?} err:{}", file, err);
+                        err_at!(SystemFail, msg: msg)
+                    }
                 }
             }
             IndexFile::Mmap { file, .. } if !ok => {
@@ -2551,16 +2546,14 @@ where
         let stats: Stats = if let MetaItem::Stats(stats) = &meta_items[3] {
             Ok(stats.parse()?)
         } else {
-            let msg = "robt snapshot statistics missing".to_string();
-            Err(Error::InvalidSnapshot(msg))
+            err_at!(InvalidFile, msg: format!("{:?}/{:?}", dir, name))
         }?;
         let bitmap: Arc<B> = if let MetaItem::Bitmap(data) = &mut meta_items[1] {
             let bitmap = <B as Bloom>::from_vec(&data)?;
             data.drain(..);
             Ok(Arc::new(bitmap))
         } else {
-            let msg = "robt snapshot bitmap missing".to_string();
-            Err(Error::InvalidSnapshot(msg))
+            err_at!(InvalidFile, msg: format!("{:?}/{:?}", dir, name))
         }?;
 
         let config: Config = stats.into();
@@ -2571,14 +2564,13 @@ where
         // open optional value log file.
         let valog_fd = match config.vlog_file {
             Some(vfile) => {
-                let err = {
-                    let msg = "robt snapshot bad vlog file-name".to_string();
-                    Error::InvalidSnapshot(msg)
-                };
                 // stem the file name.
                 let mut vpath = path::PathBuf::new();
                 vpath.push(path::Path::new(dir));
-                vpath.push(path::Path::new(&vfile).file_name().ok_or(err)?);
+                vpath.push(match path::Path::new(&vfile).file_name() {
+                    Some(vfile) => Ok(vfile),
+                    None => err_at!(InvalidFile, msg: format!("{:?}", vfile)),
+                }?);
                 let vlog_file = vpath.as_os_str().to_os_string();
                 let fd = util::open_file_r(&vlog_file)?;
                 err_at!(IoError, fd.lock_shared())?;
@@ -2708,9 +2700,7 @@ where
                 Ok(root)
             }
         } else {
-            Err(Error::InvalidSnapshot(
-                "robt snapshot root missing".to_string(),
-            ))
+            err_at!(Fatal, msg: format!("{}", self.meta[0]))
         }
     }
 
@@ -2719,8 +2709,7 @@ where
         if let MetaItem::AppMetadata(data) = &self.meta[2] {
             Ok(data.clone())
         } else {
-            let msg = "robt snapshot app-metadata missing".to_string();
-            Err(Error::InvalidSnapshot(msg))
+            err_at!(Fatal, msg: format!("{}", self.meta[2]))
         }
     }
 
@@ -2729,8 +2718,7 @@ where
         if let MetaItem::Stats(stats) = &self.meta[3] {
             Ok(stats.parse()?)
         } else {
-            let msg = "robt snapshot statistics missing".to_string();
-            Err(Error::InvalidSnapshot(msg))
+            err_at!(Fatal, msg: format!("{}", self.meta[3]))
         }
     }
 

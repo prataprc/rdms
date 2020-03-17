@@ -1439,10 +1439,7 @@ where
     fn as_inner(&self) -> Result<MutexGuard<InnerDgm<K, V, M, D>>> {
         match self.inner.lock() {
             Ok(value) => Ok(value),
-            Err(err) => {
-                let msg = format!("Dgm.as_inner(), poisonlock {:?}", err);
-                Err(Error::ThreadFail(msg))
-            }
+            Err(err) => err_at!(Fatal, msg: format!("poisened lock {}", err)),
         }
     }
 
@@ -2162,10 +2159,7 @@ where
     fn as_writer(&self) -> Result<MutexGuard<Ws<K, V, W, A, B>>> {
         match self.w.lock() {
             Ok(value) => Ok(value),
-            Err(err) => {
-                let msg = format!("DgmWriter.as_writer(), poisonlock {:?}", err);
-                Err(Error::ThreadFail(msg))
-            }
+            Err(err) => err_at!(Fatal, msg: format!("poisened lock {}", err)),
         }
     }
 }
@@ -2526,10 +2520,7 @@ where
     fn as_reader(&self) -> Result<MutexGuard<Rs<K, V, M, D>>> {
         match self.rs.lock() {
             Ok(value) => Ok(value),
-            Err(err) => {
-                let msg = format!("DgmReader.as_reader(), poisonlock {:?}", err);
-                Err(Error::ThreadFail(msg))
-            }
+            Err(err) => err_at!(Fatal, msg: format!("poisened lock {}", err)),
         }
     }
 }
@@ -2976,10 +2967,7 @@ where
 {
     match inner.lock() {
         Ok(value) => Ok(value),
-        Err(err) => {
-            let msg = format!("Dgm.as_inner(), poisonlock {:?}", err);
-            Err(Error::ThreadFail(msg))
-        }
+        Err(err) => err_at!(Fatal, msg: format!("poisened lock {}", err)),
     }
 }
 

@@ -532,10 +532,7 @@ where
     fn as_shards(&self) -> Result<MutexGuard<Vec<Shard<K, V, B>>>> {
         match self.shards.lock() {
             Ok(value) => Ok(value),
-            Err(err) => {
-                let msg = format!("shrobt.as_shards(), poison-lock {:?}", err);
-                Err(Error::ThreadFail(msg))
-            }
+            Err(err) => err_at!(Fatal, msg: format!("poisened lock {}", err)),
         }
     }
 
@@ -868,10 +865,7 @@ where
 
         let mut shards = match self.shards.lock() {
             Ok(value) => Ok(value),
-            Err(err) => {
-                let msg = format!("shrobt.commit(), poison-lock {:?}", err);
-                Err(Error::ThreadFail(msg))
-            }
+            Err(err) => err_at!(Fatal, msg: format!("poisened lock {}", err)),
         }?;
 
         if shards.len() != iters.len() {

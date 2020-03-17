@@ -93,13 +93,10 @@ where
     I: Index<K, V>,
 {
     fn as_index(&self) -> Result<MutexGuard<I>> {
-        use crate::error::Error::ThreadFail;
-
-        self.index
-            .as_ref()
-            .unwrap()
-            .lock()
-            .map_err(|err| ThreadFail(format!("rdms lock poisened, {:?}", err)))
+        match self.index.as_ref().unwrap().lock() {
+            Ok(value) => Ok(value),
+            Err(err) => err_at!(Fatal, msg: format!("poisened lock {}", err)),
+        }
     }
 }
 

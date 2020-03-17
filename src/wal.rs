@@ -196,8 +196,7 @@ where
     {
         // validate
         if self.is_active() {
-            let msg = format!("cannot replay with active shards");
-            return Err(Error::InvalidWAL(msg));
+            return err_at!(APIMisuse, msg: format!("active-shards"));
         }
 
         let mut ops = 0;

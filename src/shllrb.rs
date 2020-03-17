@@ -384,8 +384,6 @@ where
     K: Clone + Ord + Footprint,
     V: Clone + Diff + Footprint,
 {
-    use crate::error::Error::ThreadFail;
-
     let mut readers = vec![];
     let rdrefns = unsafe {
         let ss = snapshot.rdrefns.as_slice();
@@ -394,9 +392,10 @@ where
             .unwrap()
     };
     for rd in rdrefns.iter() {
-        let r = rd
-            .lock()
-            .map_err(|e| ThreadFail(format!("shllrb poison-rd {:?}", e)))?;
+        let r = match rd.lock() {
+            Ok(r) => Ok(r),
+            Err(err) => err_at!(Fatal, msg: format!("poisened lock {}", err)),
+        }?;
         readers.push(r);
     }
 
@@ -408,9 +407,10 @@ where
             .unwrap()
     };
     for wt in wtrefns.iter() {
-        let w = wt
-            .lock()
-            .map_err(|e| ThreadFail(format!("shllrb poison-wt {:?}", e)))?;
+        let w = match wt.lock() {
+            Ok(w) => Ok(w),
+            Err(err) => err_at!(Fatal, msg: format!("poisened lock {}", err)),
+        }?;
         writers.push(w);
     }
 
@@ -654,11 +654,10 @@ where
     }
 
     fn as_snapshot(&self) -> Result<MutexGuard<Snapshot<K, V>>> {
-        use crate::error::Error::ThreadFail;
-
-        self.snapshot
-            .lock()
-            .map_err(|e| ThreadFail(format!("shllrb: lock poisened, {:?}", e)))
+        match self.snapshot.lock() {
+            Ok(value) => Ok(value),
+            Err(err) => err_at!(Fatal, msg: format!("poisened lock {}", err)),
+        }
     }
 
     // Return only if shards are locked and all shards are in active state.
@@ -1335,11 +1334,10 @@ where
     }
 
     fn as_snapshot(&self) -> Result<MutexGuard<Snapshot<K, V>>> {
-        use crate::error::Error::ThreadFail;
-
-        self.snapshot
-            .lock()
-            .map_err(|e| ThreadFail(format!("shllrbr: lock poisened, {:?}", e)))
+        match self.snapshot.lock() {
+            Ok(value) => Ok(value),
+            Err(err) => err_at!(Fatal, msg: format!("poisened lock {}", err)),
+        }
     }
 
     // Return only if shards are locked and all shards are in active state.
@@ -1362,10 +1360,7 @@ where
     fn as_readers(&self) -> Result<MutexGuard<Vec<ShardReader<K, V>>>> {
         match self.readers.lock() {
             Ok(value) => Ok(value),
-            Err(err) => {
-                let msg = format!("shllrb.as_readers(), poison-lock {:?}", err);
-                Err(Error::ThreadFail(msg))
-            }
+            Err(err) => err_at!(Fatal, msg: format!("poisened lock {}", err)),
         }
     }
 }
@@ -1669,10 +1664,7 @@ where
     fn as_writers(&self) -> Result<MutexGuard<Vec<ShardWriter<K, V>>>> {
         match self.writers.lock() {
             Ok(value) => Ok(value),
-            Err(err) => {
-                let msg = format!("shllrb.as_writers(), poison-lock {:?}", err);
-                Err(Error::ThreadFail(msg))
-            }
+            Err(err) => err_at!(Fatal, msg: format!("poisened lock {}", err)),
         }
     }
 }
@@ -2323,8 +2315,6 @@ where
     V: 'static + Send + Clone + Diff + Footprint,
     <V as Diff>::D: Send,
 {
-    use crate::error::Error::ThreadFail;
-
     info!(
         target: "shllrb",
         "{}, auto-sharding thread started with interval {:?}",
@@ -2347,9 +2337,10 @@ where
         };
 
         let (r, w, _) = {
-            let s = snapshot
-                .lock()
-                .map_err(|e| ThreadFail(format!("shllrb: poisened, {:?}", e)))?;
+            let s = match snapshot.lock() {
+                Ok(s) => Ok(s),
+                Err(e) => err_at!(Fatal, msg: format!("poisened lock {}", e)),
+            }?;
             ShLlrb::<K, V>::prune_rw(s)?
         };
         if r > 0 || w > 0 {
@@ -2362,9 +2353,10 @@ where
         let start = time::SystemTime::now();
         let res = {
             let name = index_name.clone();
-            let s = snapshot
-                .lock()
-                .map_err(|e| ThreadFail(format!("shllrb: poisened, {:?}", e)))?;
+            let s = match snapshot.lock() {
+                Ok(s) => Ok(s),
+                Err(e) => err_at!(Fatal, msg: format!("poisoned lock {}", e)),
+            }?;
             ShLlrb::<K, V>::do_balance(name, s, config.clone())
         };
 

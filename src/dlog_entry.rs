@@ -302,17 +302,15 @@ where
             )
         };
         if a != z {
-            let msg = format!("batch length mismatch, {} {}", a, z);
-            return Err(Error::InvalidDlog(msg));
+            return err_at!(Fatal, msg: format!("{} != {}", a, z));
         }
 
         let (m, n) = (a - 8 - DLOG_BATCH_MARKER.len(), a - 8);
-        if DLOG_BATCH_MARKER.as_slice() != &buf[m..n] {
-            let msg = format!("batch-marker {:?}", &buf[m..n]);
-            return Err(Error::InvalidDlog(msg));
+        if DLOG_BATCH_MARKER.as_slice() == &buf[m..n] {
+            Ok(a)
+        } else {
+            err_at!(Fatal, msg: format!("{:?}", &buf[m..n]))
         }
-
-        Ok(a)
     }
 }
 

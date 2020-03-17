@@ -1922,6 +1922,63 @@ where
     Ok((Bound::Included(min_seqno), Bound::Included(max_seqno)))
 }
 
+macro_rules! do_close_purge {
+    ($s:expr, $func:ident) => {{
+        match $s.auto_commit.take() {
+            Some(auto_commit) => auto_commit.close_wait()?,
+            None => (),
+        }
+        match $s.auto_compact.take() {
+            Some(auto_compact) => auto_compact.close_wait()?,
+            None => (),
+        }
+
+        let mut inner = loop {
+            let inner = $s.as_inner()?;
+            let ok = inner.disks.iter().all(|disk| match disk {
+                Snapshot::Active(_) | Snapshot::None => true,
+                _ => false,
+            });
+            if ok {
+                break inner;
+            }
+            thread::sleep(time::Duration::from_secs(1));
+        };
+
+        let w = inner.writers.iter().any(|w| Arc::strong_count(w) > 1);
+        let r = inner.readers.iter().any(|r| Arc::strong_count(r) > 1);
+        if w == true || r == true {
+            err_at!(APIMisuse, msg: format!("active read/write handles"))?
+        }
+
+        for writer in inner.writers.drain(..) {
+            mem::drop(writer);
+        }
+        for reader in inner.readers.drain(..) {
+            mem::drop(reader);
+        }
+
+        match mem::replace(&mut inner.m0, Default::default()) {
+            Snapshot::Write(m0) => m0.$func()?,
+            _ => err_at!(Fatal, msg: format!("m0 not write"))?,
+        }
+        match inner.m1.take() {
+            Some(Snapshot::Flush(m1)) => m1.$func()?,
+            Some(_) => err_at!(Fatal, msg: format!("m1 not flush"))?,
+            None => (),
+        }
+        for disk in inner.disks.drain(..) {
+            match disk {
+                Snapshot::Active(disk) => disk.$func()?,
+                Snapshot::None => (),
+                _ => err_at!(Fatal, msg: format!("unreachable"))?,
+            }
+        }
+
+        Ok(())
+    }};
+}
+
 impl<K, V, M, D> Index<K, V> for Box<Dgm<K, V, M, D>>
 where
     K: Clone + Ord + Hash + Serialize + Footprint,
@@ -2111,12 +2168,12 @@ where
         Self::do_compact(&self.inner, cutoff)
     }
 
-    fn close(self) -> Result<()> {
-        todo!()
+    fn close(mut self) -> Result<()> {
+        do_close_purge!(self, close)
     }
 
-    fn purge(self) -> Result<()> {
-        todo!()
+    fn purge(mut self) -> Result<()> {
+        do_close_purge!(self, purge)
     }
 }
 

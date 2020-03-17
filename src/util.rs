@@ -62,7 +62,7 @@ pub(crate) fn create_file_a(file: ffi::OsString) -> Result<fs::File> {
     {
         let parent = match os_file.parent() {
             Some(parent) => Ok(parent),
-            None => err_at!(InvalidInput, msg: format!("{:?}", file)),
+            None => err_at!(InvalidFile, msg: format!("{:?}", file)),
         }?;
         err_at!(IoError, fs::create_dir_all(parent))?;
     };

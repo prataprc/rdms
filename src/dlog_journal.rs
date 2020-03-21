@@ -25,9 +25,6 @@ use crate::{
     thread as rt, util,
 };
 
-// default size for flush buffer.
-const FLUSH_SIZE: usize = 1 * 1024 * 1024;
-
 // default block size while loading the Dlog/Journal batches.
 const DLOG_BLOCK_SIZE: usize = 10 * 1024 * 1024;
 
@@ -745,28 +742,18 @@ where
             _ => err_at!(Fatal, msg: format!("unreachable")),
         }?;
 
-        let mut buffer = Vec::with_capacity(FLUSH_SIZE);
-        let length = active.encode_active(&mut buffer)?;
-
         match rotate {
-            true if active.len()? > 0 => {
-                // rotate journal files.
-                let a = active.to_first_index().unwrap();
-                let z = active.to_last_index().unwrap();
-                let batch = Batch::new_refer(0, length, a, z);
-                Ok(Some((buffer, batch)))
-            }
+            true if active.len()? > 0 => Ok(Some(active.to_refer(0)?)),
             false if active.len()? > 0 => {
-                let fpos = err_at!(IoError, fd.metadata())?.len();
+                let (buffer, batch) = {
+                    let fpos = err_at!(IoError, fd.metadata())?.len();
+                    active.to_refer(fpos)?
+                };
+                batches.push(batch);
                 write_file!(fd, &buffer, file_path.clone(), "wal-flush1")?;
                 if !nosync {
                     err_at!(IoError, fd.sync_all())?;
                 }
-
-                let a = active.to_first_index().unwrap();
-                let z = active.to_last_index().unwrap();
-                let batch = Batch::new_refer(fpos, length, a, z);
-                batches.push(batch);
                 *active = Batch::default_active();
                 Ok(None)
             }
@@ -785,16 +772,12 @@ where
             _ => err_at!(Fatal, msg: format!("unreachable")),
         }?;
 
-        let length = buffer.len();
         let fpos = err_at!(IoError, fd.metadata())?.len();
+        let (buffer, batch) = active.to_refer(fpos)?;
         write_file!(fd, &buffer, file_path.clone(), "wal-flush2")?;
         if !nosync {
             err_at!(IoError, fd.sync_all())?;
         }
-
-        let a = batch.to_first_index().unwrap();
-        let z = batch.to_last_index().unwrap();
-        batch = Batch::new_refer(fpos, length, a, z);
         batches.push(batch);
         *active = Batch::default_active();
 

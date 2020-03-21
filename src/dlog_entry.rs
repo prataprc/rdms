@@ -15,6 +15,9 @@ use crate::{
 
 include!("dlog_marker.rs");
 
+// default size for flush buffer.
+const FLUSH_SIZE: usize = 1 * 1024 * 1024;
+
 #[derive(Clone)]
 pub(crate) enum Batch<S, T> {
     // Reference to immutable batch in log file,
@@ -174,6 +177,26 @@ impl<S, T> Batch<S, T> {
                 Ok(self)
             }
             Batch::Active { .. } => Ok(self),
+        }
+    }
+
+    pub(crate) fn to_refer(&self, fpos: u64) -> Result<(Vec<u8>, Batch<S, T>)>
+    where
+        S: Default + Serialize,
+        T: Serialize,
+    {
+        match self {
+            Batch::Active { .. } => {
+                let mut buffer = Vec::with_capacity(FLUSH_SIZE);
+                let batch = {
+                    let length = self.encode_active(&mut buffer)?;
+                    let a = self.to_first_index().unwrap();
+                    let z = self.to_last_index().unwrap();
+                    Batch::new_refer(fpos, length, a, z)
+                };
+                Ok((buffer, batch))
+            }
+            Batch::Refer { .. } => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
 }

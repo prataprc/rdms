@@ -158,6 +158,18 @@ where
     T: fmt::Display,
 {
     fn validate(&mut self) -> Result<T> {
+        self.as_mut().validate()
+    }
+}
+
+impl<K, V, T, I> Validate<T> for Rdms<K, V, I>
+where
+    K: Clone + Ord + Footprint + fmt::Debug,
+    V: Clone + Diff + Footprint,
+    I: Index<K, V> + Validate<T>,
+    T: fmt::Display,
+{
+    fn validate(&mut self) -> Result<T> {
         let mut index = self.as_index()?;
         index.validate()
     }

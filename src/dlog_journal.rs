@@ -1,3 +1,5 @@
+use log::debug;
+
 use std::{
     cmp,
     convert::{TryFrom, TryInto},
@@ -51,11 +53,17 @@ impl From<(String, String, usize, usize)> for JournalFile {
     }
 }
 
+impl From<JournalFile> for ffi::OsString {
+    fn from(jf: JournalFile) -> ffi::OsString {
+        jf.0
+    }
+}
+
 impl TryFrom<JournalFile> for (String, String, usize, usize) {
     type Error = Error;
 
     fn try_from(jfile: JournalFile) -> Result<(String, String, usize, usize)> {
-        let check_file = |jfile: JournalFile| -> Option<String> {
+        let get_stem = |jfile: JournalFile| -> Option<String> {
             let fname = path::Path::new(&jfile.0);
             match fname.extension()?.to_str()? {
                 "dlog" => Some(fname.file_stem()?.to_str()?.to_string()),
@@ -63,7 +71,7 @@ impl TryFrom<JournalFile> for (String, String, usize, usize) {
             }
         };
 
-        let stem = match check_file(jfile.clone()) {
+        let stem = match get_stem(jfile.clone()) {
             Some(stem) => Ok(stem),
             None => err_at!(InvalidInput, msg: format!("not dlog journal")),
         }?;
@@ -72,11 +80,8 @@ impl TryFrom<JournalFile> for (String, String, usize, usize) {
         let (name, parts) = match parts.len() {
             6 => Ok((parts.remove(0).to_string(), parts)),
             n if n > 6 => {
-                let name = {
-                    let name: Vec<&str> = parts.drain(..n - 5).collect();
-                    name.join("-")
-                };
-                Ok((name.to_string(), parts))
+                let name: Vec<&str> = parts.drain(..n - 5).collect();
+                Ok((name.join("-").to_string(), parts))
             }
             _ => err_at!(InvalidFile, msg: format!("not dlog journal")),
         }?;
@@ -85,7 +90,7 @@ impl TryFrom<JournalFile> for (String, String, usize, usize) {
             [typ, "shard", shard_id, "journal", num] => {
                 let shard_id: usize = parse_at!(shard_id, usize)?;
                 let num: usize = parse_at!(num, usize)?;
-                Ok((name.to_string(), typ.to_string(), shard_id, num))
+                Ok((name, typ.to_string(), shard_id, num))
             }
             _ => err_at!(InvalidFile, msg: format!("not dlog journal")),
         }
@@ -139,7 +144,7 @@ where
         for item in err_at!(IoError, fs::read_dir(&dir))? {
             let file_name = err_at!(IoError, item)?.file_name();
             let (n, id) = (name.clone(), shard_id);
-            match Journal::<S, T>::new_cold(n, id, dir.clone(), file_name) {
+            match Journal::<S, T>::new_cold(dir.clone(), n, id, file_name) {
                 Some(journal) => journal.purge()?,
                 None => (),
             }
@@ -179,7 +184,7 @@ where
         for item in err_at!(IoError, fs::read_dir(&dir))? {
             let file_name = err_at!(IoError, item)?.file_name();
             let (n, id) = (name.clone(), shard_id);
-            match Journal::<S, T>::new_archive(n, id, dir.clone(), file_name) {
+            match Journal::<S, T>::new_archive(dir.clone(), n, id, file_name) {
                 Some(journal) => journals.push(journal),
                 None => (),
             }
@@ -254,7 +259,7 @@ where
                 Bound::Unbounded => true,
             };
             if ok {
-                journals.push(journal.into_cold());
+                journals.push(journal.into_cold()?);
             } else {
                 journals.push(journal);
             }
@@ -415,7 +420,6 @@ where
 }
 
 pub(crate) struct Journal<S, T> {
-    _shard_id: usize,
     num: usize,               // starts from 1
     file_path: ffi::OsString, // dir/{name}-shard-{shard_id}-journal-{num}.dlog
 
@@ -423,16 +427,22 @@ pub(crate) struct Journal<S, T> {
 }
 
 enum InnerJournal<S, T> {
+    // Active journal, the latest journal, in the journal-set. A journal
+    // set is managed by Shard.
     Active {
         file_path: ffi::OsString,
         fd: fs::File,
         batches: Vec<Batch<S, T>>,
         active: Batch<S, T>,
     },
+    // All journals except lastest journal are archives, which means only
+    // the metadata for each batch shall be stored.
     Archive {
         file_path: ffi::OsString,
         batches: Vec<Batch<S, T>>,
     },
+    // Cold journals are colder than archives, that is, they are not
+    // required by the application, may be as frozen-backup.
     Cold {
         file_path: ffi::OsString,
     },
@@ -440,7 +450,13 @@ enum InnerJournal<S, T> {
 
 impl<S, T> fmt::Debug for Journal<S, T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
-        write!(f, "Journal<{:?}>", self.file_path)
+        use InnerJournal::{Active, Archive, Cold};
+
+        match &self.inner {
+            Active { .. } => write!(f, "Journal<active,{:?}>", self.file_path),
+            Archive { .. } => write!(f, "Journal<archive,{:?}>", self.file_path),
+            Cold { .. } => write!(f, "Journal<cold,{:?}>", self.file_path),
+        }
     }
 }
 
@@ -458,34 +474,35 @@ where
     where
         S: DlogState<T>,
     {
-        let file: JournalFile = {
+        let file: ffi::OsString = {
             let state: S = Default::default();
-            (name.to_string(), state.to_type(), shard_id, num).into()
+            let name = name.to_string();
+            let typ = state.to_type();
+            let file: JournalFile = (name, typ, shard_id, num).into();
+            file.into()
+        };
+        let fpath = {
+            let mut fpath = path::PathBuf::new();
+            fpath.push(&dir);
+            fpath.push(&file);
+            fpath
         };
 
-        let file_path = {
-            let mut file_path = path::PathBuf::new();
-            file_path.push(&dir);
-            file_path.push(&file.0);
-            file_path
-        };
+        fs::remove_file(&fpath).ok(); // cleanup a single journal file
 
-        fs::remove_file(&file_path).ok(); // cleanup a single journal file
-
-        let file_path: &ffi::OsStr = file_path.as_ref();
-        let file_path = file_path.to_os_string();
         let fd = {
             let mut opts = fs::OpenOptions::new();
-            err_at!(IoError, opts.append(true).create_new(true).open(&file_path))?
+            err_at!(IoError, opts.append(true).create_new(true).open(&fpath))?
         };
 
+        debug!(target: "dlogjn", "New active journal {:?}", fpath);
+
         Ok(Journal {
-            _shard_id: shard_id,
             num: num,
-            file_path: file_path.clone(),
+            file_path: fpath.clone().into_os_string(),
 
             inner: InnerJournal::Active {
-                file_path,
+                file_path: fpath.into_os_string(),
                 fd: fd,
                 batches: Default::default(),
                 active: Batch::default_active(),
@@ -494,93 +511,97 @@ where
     }
 
     fn new_archive(
+        dir: ffi::OsString,
         name: String,
         shard_id: usize,
-        dir: ffi::OsString,
         fname: ffi::OsString,
     ) -> Option<Journal<S, T>>
     where
         S: DlogState<T>,
     {
-        let (nm, _, id, num): (String, String, usize, usize) =
+        let (nm, _typ, id, num): (String, String, usize, usize) =
             TryFrom::try_from(JournalFile(fname.clone())).ok()?;
 
-        if nm == name && id == shard_id {
-            let file_path = {
-                let mut fp = path::PathBuf::new();
-                fp.push(&dir);
-                fp.push(fname);
-                fp.into_os_string()
-            };
-
-            let mut batches = vec![];
-            let mut fd = util::open_file_r(&file_path).ok()?;
-            let (mut fpos, till) = (0_usize, fd.metadata().ok()?.len() as usize);
-            while fpos < till {
-                let n = cmp::min(DLOG_BLOCK_SIZE, till - fpos) as u64;
-                let block = read_buffer!(
-                    //
-                    &mut fd,
-                    fpos as u64,
-                    n,
-                    "journal block read"
-                )
-                .ok()?;
-
-                let mut m = 0_usize;
-                while m < block.len() {
-                    let mut batch: Batch<S, T> = Batch::default_active();
-                    m += batch.decode_refer(&block[m..], (fpos + m) as u64).ok()?;
-                    batches.push(batch);
-                }
-                fpos += block.len();
-            }
-
-            Some(Journal {
-                _shard_id: shard_id,
-                num: num,
-                file_path: file_path.clone(),
-
-                inner: InnerJournal::Archive {
-                    file_path: file_path.clone(),
-                    batches,
-                },
-            })
-        } else {
-            None
+        if nm != name || id != shard_id {
+            return None;
         }
+
+        let file_path = {
+            let mut fp = path::PathBuf::new();
+            fp.push(&dir);
+            fp.push(fname);
+            fp.into_os_string()
+        };
+
+        let mut batches = vec![];
+        let mut fd = util::open_file_r(&file_path).ok()?;
+        let mut fpos = 0_usize;
+        let till: usize = convert_at!(fd.metadata().ok()?.len()).ok()?;
+
+        while fpos < till {
+            let n = cmp::min(DLOG_BLOCK_SIZE, till - fpos) as u64;
+            let fpos_u64: u64 = convert_at!(fpos).ok()?;
+            let block = read_buffer!(&mut fd, fpos_u64, n, "journal corrupted").ok()?;
+
+            let mut m = 0_usize;
+            while m < block.len() {
+                let mut batch: Batch<S, T> = Batch::default_active();
+                m += batch
+                    .decode_refer(&block[m..], convert_at!((fpos + m)).ok()?)
+                    .ok()?;
+                batches.push(batch);
+            }
+            fpos += block.len();
+        }
+
+        debug!(
+            target: "dlogjn",
+            "Opening archive journal {:?}, loaded {} batches",
+            file_path, batches.len()
+        );
+
+        Some(Journal {
+            num: num,
+            file_path: file_path.clone(),
+
+            inner: InnerJournal::Archive {
+                file_path: file_path.clone(),
+                batches,
+            },
+        })
     }
 
     // don't load the batches. use this only for purging the journal.
     fn new_cold(
+        dir: ffi::OsString,
         name: String,
         shard_id: usize,
-        dir: ffi::OsString,
         fname: ffi::OsString,
     ) -> Option<Journal<S, T>> {
         let (nm, _, id, num): (String, String, usize, usize) =
             TryFrom::try_from(JournalFile(fname.clone())).ok()?;
 
-        if nm == name && id == shard_id {
-            let file_path = {
-                let mut fp = path::PathBuf::new();
-                fp.push(&dir);
-                fp.push(fname);
-                fp.into_os_string()
-            };
-
-            Some(Journal {
-                _shard_id: shard_id,
-                num: num,
-                file_path: file_path.clone(),
-
-                inner: InnerJournal::Cold {
-                    file_path: file_path.clone(),
-                },
-            })
-        } else {
-            None
+        if nm != name || id != shard_id {
+            return None;
         }
+
+        let file_path = {
+            let mut fp = path::PathBuf::new();
+            fp.push(&dir);
+            fp.push(fname);
+            fp.into_os_string()
+        };
+
+        debug!(target: "dlogjn", "Opening cold journal {:?}, loaded", file_path);
+
+        Some(Journal {
+            num: num,
+            file_path: file_path.clone(),
+
+            inner: InnerJournal::Cold {
+                file_path: file_path.clone(),
+            },
+        })
     }
 
     fn purge(self) -> Result<()> {
@@ -614,7 +635,7 @@ where
                 let (name, _, shard_id, _): (String, String, usize, usize) =
                     TryFrom::try_from(JournalFile(fname.clone())).unwrap();
 
-                Ok(Self::new_archive(name, shard_id, dir, fname).unwrap())
+                Ok(Self::new_archive(dir, name, shard_id, fname).unwrap())
             }
             _ => err_at!(Fatal, msg: format!("unreachable")),
         }
@@ -687,14 +708,15 @@ impl<S, T> Journal<S, T> {
         }
     }
 
-    pub(crate) fn into_cold(mut self) -> Self {
-        use InnerJournal::{Archive, Cold};
+    pub(crate) fn into_cold(mut self) -> Result<Self> {
+        use InnerJournal::{Active, Archive, Cold};
 
         self.inner = match self.inner {
             Archive { file_path, .. } => Cold { file_path },
-            inner => inner,
+            inner @ Cold { .. } => inner,
+            Active { .. } => err_at!(Fatal, msg: format!("unreachable"))?,
         };
-        self
+        Ok(self)
     }
 }
 
@@ -703,12 +725,13 @@ where
     S: Default + Serialize,
     T: Serialize,
 {
+    // periodically flush journal entries from memory to disk.
     fn flush1(
         &mut self,
         journal_limit: usize,
         nosync: bool,
     ) -> Result<Option<(Vec<u8>, Batch<S, T>)>> {
-        let (file_path, fd, batches, active, exceeded) = match &mut self.inner {
+        let (file_path, fd, batches, active, rotate) = match &mut self.inner {
             InnerJournal::Active {
                 file_path,
                 fd,
@@ -716,8 +739,8 @@ where
                 active,
             } => {
                 let limit: u64 = convert_at!(journal_limit)?;
-                let exceeded = err_at!(IoError, fd.metadata())?.len() > limit;
-                Ok((file_path, fd, batches, active, exceeded))
+                let rotate = err_at!(IoError, fd.metadata())?.len() > limit;
+                Ok((file_path, fd, batches, active, rotate))
             }
             _ => err_at!(Fatal, msg: format!("unreachable")),
         }?;
@@ -725,7 +748,7 @@ where
         let mut buffer = Vec::with_capacity(FLUSH_SIZE);
         let length = active.encode_active(&mut buffer)?;
 
-        match exceeded {
+        match rotate {
             true if active.len()? > 0 => {
                 // rotate journal files.
                 let a = active.to_first_index().unwrap();

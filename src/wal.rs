@@ -47,6 +47,8 @@
 //!
 //! [wal-link]: https://en.wikipedia.org/wiki/Write-ahead_logging
 
+use log::debug;
+
 use std::{
     borrow::Borrow,
     convert::{self, TryInto},
@@ -112,6 +114,8 @@ where
             threads: Default::default(),
         };
 
+        debug!(target: "wal   ", "convert from dlog {:?}/{}", wl.dir, wl.name);
+
         for shard in dl.shards {
             wl.threads.push(shard.into_thread())
         }
@@ -169,6 +173,8 @@ where
 
     /// Create a new writer handle.
     pub fn to_writer(&mut self) -> Result<Writer<K, V, H>> {
+        debug!(target: "wal   ", "new writer for {:?}/{}", self.dir, self.name);
+
         Ok(Writer {
             hash_builder: self.hash_builder.clone(),
             shards: self
@@ -200,6 +206,11 @@ where
         if self.is_active() {
             return err_at!(APIMisuse, msg: format!("active-shards"));
         }
+
+        debug!(
+            target: "wal   ",
+            "replay from seqno:{} for {:?}/{}", seqno, self.dir, self.name
+        );
 
         let mut ops = 0;
 

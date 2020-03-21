@@ -137,6 +137,8 @@ where
     where
         S: DlogState<T>,
     {
+        fs::create_dir_all(&dir).ok();
+
         // purge existing journals for this shard.
         for item in err_at!(IoError, fs::read_dir(&dir))? {
             let file_name = err_at!(IoError, item)?.file_name();
@@ -301,6 +303,12 @@ where
     where
         S: DlogState<T>,
     {
+        let seqno = self.dlog_seqno.load(SeqCst);
+        debug!(
+            target: "dlogsd",
+            "convert shard:{} {:?}/{} to thread, at seqno:{}",
+            self.shard_id, self.dir, self.name, seqno
+        );
         rt::Thread::new(move |rx| move || self.routine(rx))
     }
 }

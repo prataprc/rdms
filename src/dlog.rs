@@ -29,6 +29,8 @@
 //!
 //! Refer to the [Dlog] documentation for more details.
 
+use log::debug;
+
 use std::{
     cmp, ffi, fmt,
     ops::Bound,
@@ -114,6 +116,8 @@ where
             )?);
         }
 
+        debug!(target: "dlog  ", "create a new dlog {:?}/{}", dir, name);
+
         // create this Dlog. later shards/journals can be added.
         Ok(Dlog {
             dir,
@@ -157,6 +161,8 @@ where
         }
 
         dlog_seqno.store(last_seqno, SeqCst);
+
+        debug!(target: "dlog  ", "load existing dlog from {:?}/{}", dir, name);
 
         Ok(Dlog {
             dir,

@@ -27,9 +27,9 @@ pub(crate) enum Batch<S, T> {
         // length of the batch block
         length: usize,
         // index-seqno of first entry in this batch.
-        start_index: u64,
+        start_seqno: u64,
         // index-seqno of last entry in this batch.
-        last_index: u64,
+        last_seqno: u64,
     },
     // Current active batch. Once flush is called, it becomes a
     // ``Refer`` varaint and hence immutable.
@@ -46,8 +46,8 @@ impl<S, T> Default for Batch<S, T> {
         Batch::Refer {
             fpos: Default::default(),
             length: Default::default(),
-            start_index: Default::default(),
-            last_index: Default::default(),
+            start_seqno: Default::default(),
+            last_seqno: Default::default(),
         }
     }
 }
@@ -63,14 +63,14 @@ where
                 Batch::Refer {
                     fpos: f1,
                     length: n1,
-                    start_index: s1,
-                    last_index: l1,
+                    start_seqno: s1,
+                    last_seqno: l1,
                 },
                 Batch::Refer {
                     fpos: f2,
                     length: n2,
-                    start_index: s2,
-                    last_index: l2,
+                    start_seqno: s2,
+                    last_seqno: l2,
                 },
             ) => f1 == f2 && n1 == n2 && s1 == s2 && l1 == l2,
             (
@@ -102,14 +102,14 @@ impl<S, T> Batch<S, T> {
     pub(crate) fn new_refer(
         fpos: u64,
         length: usize,
-        start_index: u64,
-        last_index: u64,
+        start_seqno: u64,
+        last_seqno: u64,
     ) -> Batch<S, T> {
         Batch::Refer {
             fpos,
             length,
-            start_index,
-            last_index,
+            start_seqno,
+            last_seqno,
         }
     }
 
@@ -129,22 +129,22 @@ impl<S, T> Batch<S, T> {
 }
 
 impl<S, T> Batch<S, T> {
-    pub(crate) fn to_first_index(&self) -> Option<u64> {
+    pub(crate) fn to_first_seqno(&self) -> Option<u64> {
         match self {
-            Batch::Refer { start_index, .. } => Some(*start_index),
+            Batch::Refer { start_seqno, .. } => Some(*start_seqno),
             Batch::Active { entries, .. } => {
-                let index = entries.first().map(|entry| entry.index);
-                index
+                let seqno = entries.first().map(|entry| entry.seqno);
+                seqno
             }
         }
     }
 
-    pub(crate) fn to_last_index(&self) -> Option<u64> {
+    pub(crate) fn to_last_seqno(&self) -> Option<u64> {
         match self {
-            Batch::Refer { last_index, .. } => Some(*last_index),
+            Batch::Refer { last_seqno, .. } => Some(*last_seqno),
             Batch::Active { entries, .. } => {
-                let index = entries.last().map(|entry| entry.index);
-                index
+                let seqno = entries.last().map(|entry| entry.seqno);
+                seqno
             }
         }
     }
@@ -190,8 +190,8 @@ impl<S, T> Batch<S, T> {
                 let mut buffer = Vec::with_capacity(FLUSH_SIZE);
                 let batch = {
                     let length = self.encode_active(&mut buffer)?;
-                    let a = self.to_first_index().unwrap();
-                    let z = self.to_last_index().unwrap();
+                    let a = self.to_first_seqno().unwrap();
+                    let z = self.to_last_seqno().unwrap();
                     Batch::new_refer(fpos, length, a, z)
                 };
                 Ok((buffer, batch))
@@ -204,9 +204,9 @@ impl<S, T> Batch<S, T> {
 // +----------------------------------------------------------------+
 // |                              length                            |
 // +----------------------------------------------------------------+
-// |                            start_index                         |
+// |                            start_seqno                         |
 // +----------------------------------------------------------------+
-// |                            last_index                          |
+// |                            last_seqno                          |
 // +----------------------------------------------------------------+
 // |                            state-bytes                         |
 // +----------------------------------------------------------------+
@@ -231,16 +231,16 @@ where
                 buf.resize(buf.len() + 8, 0); // adjust for length
                 let mut n = 8;
 
-                let start_index = match entries.first() {
-                    Some(entry) => entry.index,
+                let start_seqno = match entries.first() {
+                    Some(entry) => entry.seqno,
                     None => 0,
                 };
-                buf.extend_from_slice(&start_index.to_be_bytes());
-                let last_index = match entries.last() {
-                    Some(entry) => entry.index,
+                buf.extend_from_slice(&start_seqno.to_be_bytes());
+                let last_seqno = match entries.last() {
+                    Some(entry) => entry.seqno,
                     None => 0,
                 };
-                buf.extend_from_slice(&last_index.to_be_bytes());
+                buf.extend_from_slice(&last_seqno.to_be_bytes());
                 n += 16;
 
                 n += state.encode(buf)?;
@@ -271,14 +271,14 @@ where
         check_remaining!(buf, 24, "dlog-batch-refer-hdr")?;
 
         let length = Self::validate(buf)?;
-        let start_index = u64::from_be_bytes(array_at!(buf[8..16])?);
-        let last_index = u64::from_be_bytes(array_at!(buf[16..24])?);
+        let start_seqno = u64::from_be_bytes(array_at!(buf[8..16])?);
+        let last_seqno = u64::from_be_bytes(array_at!(buf[16..24])?);
 
         *self = Batch::Refer {
             fpos,
             length,
-            start_index,
-            last_index,
+            start_seqno,
+            last_seqno,
         };
 
         Ok(length)
@@ -341,7 +341,7 @@ where
 pub struct DEntry<T> {
     // Index seqno for this entry. This will be monotonically
     // increasing number.
-    index: u64,
+    seqno: u64,
     // Operation to be logged.
     op: T,
 }
@@ -352,7 +352,7 @@ where
 {
     fn default() -> DEntry<T> {
         DEntry {
-            index: Default::default(),
+            seqno: Default::default(),
             op: Default::default(),
         }
     }
@@ -363,23 +363,23 @@ where
     T: fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
-        write!(f, "DEntry<term: index:{}  op:{:?}>", self.index, self.op)
+        write!(f, "DEntry<term: seqno:{}  op:{:?}>", self.seqno, self.op)
     }
 }
 
 impl<T> DEntry<T> {
-    pub(crate) fn new(index: u64, op: T) -> DEntry<T> {
-        DEntry { index, op }
+    pub(crate) fn new(seqno: u64, op: T) -> DEntry<T> {
+        DEntry { seqno, op }
     }
 
     #[inline]
-    pub(crate) fn into_index_op(self) -> (u64, T) {
-        (self.index, self.op)
+    pub(crate) fn into_seqno_op(self) -> (u64, T) {
+        (self.seqno, self.op)
     }
 }
 
 // +----------------------------------------------------------------+
-// |                            index                               |
+// |                            seqno                               |
 // +----------------------------------------------------------------+
 // |                           op-bytes                             |
 // +----------------------------------------------------------------+
@@ -389,7 +389,7 @@ where
     T: Serialize,
 {
     fn encode(&self, buf: &mut Vec<u8>) -> Result<usize> {
-        buf.extend_from_slice(&self.index.to_be_bytes());
+        buf.extend_from_slice(&self.seqno.to_be_bytes());
         let mut n = 8;
 
         n += self.op.encode(buf)?;
@@ -397,8 +397,8 @@ where
     }
 
     fn decode(&mut self, buf: &[u8]) -> Result<usize> {
-        check_remaining!(buf, 8, "dlog-entry-index")?;
-        self.index = u64::from_be_bytes(array_at!(buf[0..8])?);
+        check_remaining!(buf, 8, "dlog-entry-seqno")?;
+        self.seqno = u64::from_be_bytes(array_at!(buf[0..8])?);
 
         let n = 8;
         Ok(n + self.op.decode(&buf[n..])?)

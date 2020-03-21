@@ -80,7 +80,7 @@ where
     name: String,
     hash_builder: H,
 
-    index: Arc<AtomicU64>, // seqno
+    seqno: Arc<AtomicU64>, // seqno
     threads: Vec<rt::Thread<OpRequest<Op<K, V>>, OpResponse, Shard<State, Op<K, V>>>>,
 }
 
@@ -101,13 +101,14 @@ where
     V: 'static + Send + Clone + Default + Diff + Serialize,
     H: Clone + BuildHasher,
 {
+    /// Convert dlog instance into Wal.
     pub fn from_dlog(dl: Dlog<State, Op<K, V>>, h: H) -> Wal<K, V, H> {
         let mut wl = Wal {
             dir: dl.dir,
             name: dl.name,
 
             hash_builder: h,
-            index: dl.index,
+            seqno: dl.seqno,
             threads: Default::default(),
         };
 
@@ -118,6 +119,12 @@ where
         wl
     }
 
+    /// Set a different hash-builder.
+    pub fn set_hasher(&mut self, hash_builder: H) -> Result<&mut Self> {
+        self.hash_builder = hash_builder;
+        Ok(self)
+    }
+
     /// Purge this [Wal] instance and all its memory and disk footprints.
     pub fn purge(self) -> Result<u64> {
         for thread in self.threads.into_iter() {
@@ -125,7 +132,7 @@ where
             shard.purge()?;
         }
 
-        Ok(self.index.load(SeqCst))
+        Ok(self.seqno.load(SeqCst))
     }
 
     /// Close the [Wal] instance. To purge the instance use [Wal::purge] api.
@@ -135,7 +142,7 @@ where
             shard.close()?;
         }
 
-        Ok(self.index.load(SeqCst))
+        Ok(self.seqno.load(SeqCst))
     }
 }
 
@@ -145,13 +152,7 @@ where
     V: 'static + Send + Clone + Default + Diff + Serialize,
     H: Clone + BuildHasher,
 {
-    /// Set a different hash-builder.
-    pub fn set_hasher(&mut self, hash_builder: H) -> Result<&mut Self> {
-        self.hash_builder = hash_builder;
-        Ok(self)
-    }
-
-    /// Purge all journal files whose `last_index` is  le/lt `before`. If
+    /// Purge all journal files whose `last_seqno` is  le/lt `before`. If
     /// `before` is Bound::Unbounded all log files shall be purged.
     pub fn purge_till(&mut self, before: Bound<u64>) -> Result<Bound<u64>> {
         for thread in self.threads.iter() {
@@ -161,9 +162,9 @@ where
         Ok(before)
     }
 
-    /// Create a new writer handle.
-    pub fn to_index(&mut self) -> u64 {
-        self.index.load(SeqCst)
+    /// Return the current seqno.
+    pub fn to_seqno(&mut self) -> u64 {
+        self.seqno.load(SeqCst)
     }
 
     /// Create a new writer handle.
@@ -205,12 +206,12 @@ where
         for thread in self.threads.into_iter() {
             let journals = thread.close_wait()?.into_journals();
             for journal in journals.into_iter() {
-                // println!("journal li:{:?}", journal.to_last_index());
+                // println!("journal li:{:?}", journal.to_last_seqno());
                 if journal.is_cold() {
                     continue;
                 }
-                match journal.to_last_index()? {
-                    Some(index) if index <= seqno => continue,
+                match journal.to_last_seqno()? {
+                    Some(last_seqno) if last_seqno <= seqno => continue,
                     _ => (),
                 }
 
@@ -221,26 +222,26 @@ where
                 };
 
                 for batch in journal.into_batches()? {
-                    // println!("batch li:{:?}", batch.to_last_index());
-                    match batch.to_last_index() {
-                        Some(index) if index <= seqno => continue,
+                    // println!("batch li:{:?}", batch.to_last_seqno());
+                    match batch.to_last_seqno() {
+                        Some(seqno) if seqno <= seqno => continue,
                         _ => (),
                     }
                     for entry in batch.into_active(&mut fd)?.into_entries()? {
-                        let (index, op) = entry.into_index_op();
-                        if index <= seqno {
+                        let (seqno, op) = entry.into_seqno_op();
+                        if seqno <= seqno {
                             continue;
                         }
-                        // println!("index {}", index);
+                        // println!("seqno {}", seqno);
                         match op {
                             Op::Set { key, value } => {
-                                db.set_index(key, value, index)?;
+                                db.set_index(key, value, seqno)?;
                             }
                             Op::SetCAS { key, value, cas } => {
-                                db.set_cas_index(key, value, cas, index)?;
+                                db.set_cas_index(key, value, cas, seqno)?;
                             }
                             Op::Delete { key } => {
-                                db.delete_index(key, index)?;
+                                db.delete_index(key, seqno)?;
                             }
                         }
                         ops += 1;
@@ -284,7 +285,7 @@ where
 
         let op = Op::new_set(key, value);
         match shard.request(OpRequest::new_op(op))? {
-            OpResponse::Index(index) => Ok(index),
+            OpResponse::Seqno(seqno) => Ok(seqno),
             _ => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
@@ -296,7 +297,7 @@ where
 
         let op = Op::new_set_cas(key, value, cas);
         match shard.request(OpRequest::new_op(op))? {
-            OpResponse::Index(index) => Ok(index),
+            OpResponse::Seqno(seqno) => Ok(seqno),
             _ => err_at!(Fatal, msg: format!("unreachable")),
         }
     }
@@ -314,7 +315,7 @@ where
 
         let op = Op::new_delete(key);
         match shard.request(OpRequest::new_op(op))? {
-            OpResponse::Index(index) => Ok(index),
+            OpResponse::Seqno(seqno) => Ok(seqno),
             _ => err_at!(Fatal, msg: format!("unreachable")),
         }
     }

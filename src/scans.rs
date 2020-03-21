@@ -9,7 +9,7 @@
 //!
 //! **From [core]**
 //!
-//! * [VersionIter][core::VersionIter], iterate over older versions of an entry.
+//! * [VersionIter][entry::VersionIter], iterate over older versions of an entry.
 //!
 //! **From [llrb]**
 //!
@@ -84,6 +84,7 @@ use crate::{
 use crate::{
     core,
     dgm::Dgm,
+    entry,
     llrb::{self, Llrb},
     lsm,
     mvcc::{self, Mvcc},

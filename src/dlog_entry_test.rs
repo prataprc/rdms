@@ -10,11 +10,11 @@ fn test_entry() {
 
     {
         let entry = DEntry::<i64>::new(10, 20);
-        assert_eq!(r_entry.index, entry.index);
+        assert_eq!(r_entry.seqno, entry.seqno);
         assert_eq!(r_entry.op, entry.op);
 
-        let (index, op) = entry.into_index_op();
-        assert_eq!(index, 10);
+        let (seqno, op) = entry.into_seqno_op();
+        assert_eq!(seqno, 10);
         assert_eq!(op, 20);
     }
 
@@ -25,7 +25,7 @@ fn test_entry() {
     {
         let mut entry: DEntry<i64> = Default::default();
         entry.decode(&buf).unwrap();
-        assert_eq!(entry.index, r_entry.index);
+        assert_eq!(entry.seqno, r_entry.seqno);
         assert_eq!(entry.op, r_entry.op);
     }
 }
@@ -50,8 +50,8 @@ fn test_batch2() {
             .into_iter()
             .enumerate()
             .for_each(|(i, e)| {
-                let (index, op) = e.into_index_op();
-                assert_eq!(index, (i + 1) as u64);
+                let (seqno, op) = e.into_seqno_op();
+                assert_eq!(seqno, (i + 1) as u64);
                 assert_eq!(op, wal::Op::<i64, i64>::new_set(10, 20));
             })
     };
@@ -67,8 +67,8 @@ fn test_batch2() {
         }
         batch
     };
-    assert_eq!(batch.to_first_index().unwrap(), 1);
-    assert_eq!(batch.to_last_index().unwrap(), 100);
+    assert_eq!(batch.to_first_seqno().unwrap(), 1);
+    assert_eq!(batch.to_last_seqno().unwrap(), 100);
     assert_eq!(batch.len().unwrap(), 100);
 
     validate(batch.clone());
@@ -101,15 +101,15 @@ fn test_batch2() {
         Batch::Refer {
             fpos: 0,
             length: 4099,
-            start_index: 1,
-            last_index: 100,
+            start_seqno: 1,
+            last_seqno: 100,
         } => (),
         Batch::Refer {
             fpos,
             length,
-            start_index,
-            last_index,
-        } => panic!("{} {} {} {}", fpos, length, start_index, last_index),
+            start_seqno,
+            last_seqno,
+        } => panic!("{} {} {} {}", fpos, length, start_seqno, last_seqno),
         _ => unreachable!(),
     }
 }

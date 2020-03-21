@@ -52,14 +52,14 @@ fn test_journal() {
     for i in 0..100 {
         for j in 0..1000 {
             let op = wal::Op::<i64, i64>::new_set(10 * i + j, 20 + i);
-            let index = (i * 1000 + j) as u64 + 1;
-            journal.add_entry(DEntry::new(index, op)).unwrap();
+            let seqno = (i * 1000 + j) as u64 + 1;
+            journal.add_entry(DEntry::new(seqno, op)).unwrap();
         }
         let nosync: bool = rng.gen();
         assert_eq!(journal.flush1(limit, nosync).unwrap().is_none(), true);
     }
 
-    assert_eq!(journal.to_last_index().unwrap(), Some(100_000));
+    assert_eq!(journal.to_last_seqno().unwrap(), Some(100_000));
     let rf: &ffi::OsStr = "journal-wal-shard-001-journal-001.dlog".as_ref();
     assert_eq!(
         path::Path::new(&journal.to_file_path())
@@ -77,9 +77,9 @@ fn test_journal() {
     for (i, batch) in journal.into_batches().unwrap().into_iter().enumerate() {
         let batch = batch.into_active(&mut fd).unwrap();
         for (j, entry) in batch.into_entries().unwrap().into_iter().enumerate() {
-            let (index, op) = entry.into_index_op();
-            let ref_index = (i * 1000 + j) as u64 + 1;
-            assert_eq!(index, ref_index);
+            let (seqno, op) = entry.into_seqno_op();
+            let ref_seqno = (i * 1000 + j) as u64 + 1;
+            assert_eq!(seqno, ref_seqno);
             let (k, v) = ((10 * i + j) as i64, (20 + i) as i64);
             let ref_op = wal::Op::<i64, i64>::new_set(k, v);
             assert_eq!(op, ref_op);
@@ -106,7 +106,7 @@ fn test_shard() {
         let shard_id = 1;
         let journal_limit = 1_000_000;
         let nosync: bool = rng.gen();
-        let dlog_index = Arc::new(AtomicU64::new(1));
+        let dlog_seqno = Arc::new(AtomicU64::new(1));
         let batch_size = ((rng.gen::<usize>() % 1000) + 1) as i64;
         let n_batches = (rng.gen::<usize>() % 30) as i64;
 
@@ -119,7 +119,7 @@ fn test_shard() {
             dir.clone(),
             name.clone(),
             shard_id,
-            Arc::clone(&dlog_index),
+            Arc::clone(&dlog_seqno),
             journal_limit,
             batch_size as usize,
             nosync,
@@ -141,39 +141,39 @@ fn test_shard() {
                     _ => unreachable!(),
                 };
 
-                let index = {
+                let seqno = {
                     match tshard.request(OpRequest::new_op(op.clone())).unwrap() {
-                        OpResponse::Index(index) => index,
+                        OpResponse::Seqno(seqno) => seqno,
                         _ => unreachable!(),
                     }
                 };
 
-                ref_entries.push((index, op.clone()));
+                ref_entries.push((seqno, op.clone()));
             }
         }
 
         tshard.close_wait().unwrap();
-        assert_eq!(dlog_index.load(SeqCst), (n_batches * batch_size + 1) as u64);
+        assert_eq!(dlog_seqno.load(SeqCst), (n_batches * batch_size + 1) as u64);
 
-        let (last_index, shard) = Shard::<wal::State, wal::Op<i64, i64>>::load(
+        let (last_seqno, shard) = Shard::<wal::State, wal::Op<i64, i64>>::load(
             dir.clone(),
             name.clone(),
             shard_id,
-            Arc::clone(&dlog_index),
+            Arc::clone(&dlog_seqno),
             journal_limit,
             batch_size as usize,
             nosync,
         )
         .unwrap();
-        assert_eq!(last_index, (n_batches * batch_size) as u64);
+        assert_eq!(last_seqno, (n_batches * batch_size) as u64);
 
         let journals = shard.into_journals();
-        assert_eq!(dlog_index.load(SeqCst), (n_batches * batch_size + 1) as u64);
+        assert_eq!(dlog_seqno.load(SeqCst), (n_batches * batch_size + 1) as u64);
 
         if journals.len() > 0 {
             match &journals[0].inner {
                 InnerJournal::Archive { batches, .. } if batches.len() > 0 => {
-                    assert_eq!(batches[0].to_first_index().unwrap(), 1);
+                    assert_eq!(batches[0].to_first_seqno().unwrap(), 1);
                 }
                 InnerJournal::Archive { .. } => (),
                 _ => unreachable!(),
@@ -198,8 +198,8 @@ fn test_shard() {
         assert_eq!(ref_entries.len(), entries.len());
 
         for (r, e) in ref_entries.into_iter().zip(entries.into_iter()) {
-            let (index, op) = e.into_index_op();
-            assert_eq!(index, r.0);
+            let (seqno, op) = e.into_seqno_op();
+            assert_eq!(seqno, r.0);
             assert_eq!(op, r.1);
         }
 
@@ -207,7 +207,7 @@ fn test_shard() {
             dir.clone(),
             name.clone(),
             shard_id,
-            Arc::clone(&dlog_index),
+            Arc::clone(&dlog_seqno),
             journal_limit,
             batch_size as usize,
             nosync,

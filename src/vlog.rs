@@ -188,6 +188,7 @@ impl<V> Delta<V>
 where
     V: Diff,
 {
+    #[cfg(test)]
     pub(crate) fn to_native_delta(&self) -> Option<<V as Diff>::D> {
         match self {
             Delta::Native { diff } => Some(diff.clone()),

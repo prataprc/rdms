@@ -115,7 +115,7 @@ pub(crate) struct Shard<S, T> {
     batch_size: usize,
     nosync: bool,
 
-    dlog_index: Arc<AtomicU64>,
+    dlog_seqno: Arc<AtomicU64>,
     journals: Vec<Journal<S, T>>,
     active: Journal<S, T>,
 }
@@ -129,7 +129,7 @@ where
         dir: ffi::OsString,
         name: String,
         shard_id: usize,
-        index: Arc<AtomicU64>,
+        seqno: Arc<AtomicU64>,
         journal_limit: usize,
         batch_size: usize,
         nosync: bool,
@@ -158,7 +158,7 @@ where
             batch_size,
             nosync,
 
-            dlog_index: index,
+            dlog_seqno: seqno,
             journals: vec![],
             active,
         })
@@ -168,7 +168,7 @@ where
         dir: ffi::OsString,
         name: String,
         shard_id: usize,
-        index: Arc<AtomicU64>,
+        seqno: Arc<AtomicU64>,
         journal_limit: usize,
         batch_size: usize,
         nosync: bool,
@@ -187,17 +187,17 @@ where
             }
         }
 
-        let idx = index.load(SeqCst);
+        let idx = seqno.load(SeqCst);
 
         journals.sort_by(|x, y| x.num.cmp(&y.num));
-        let last_index = {
+        let last_seqno = {
             let mut iter = journals.iter().rev();
             loop {
                 match iter.next() {
                     None if idx == 0 => break 0,
                     None => break idx - 1,
-                    Some(journal) => match journal.to_last_index()? {
-                        Some(last_index) => break last_index,
+                    Some(journal) => match journal.to_last_seqno()? {
+                        Some(last_seqno) => break last_seqno,
                         None => (),
                     },
                 }
@@ -216,7 +216,7 @@ where
         let active = Journal::<S, T>::new_active(d, n, shard_id, num)?;
 
         Ok((
-            last_index,
+            last_seqno,
             Shard {
                 dir,
                 name,
@@ -225,7 +225,7 @@ where
                 batch_size,
                 nosync,
 
-                dlog_index: index,
+                dlog_seqno: seqno,
                 journals,
                 active,
             },
@@ -242,17 +242,17 @@ where
     }
 
     pub(crate) fn into_deep_freeze(self, before: Bound<u64>) -> Result<Self> {
-        let mut last_index = 0;
+        let mut last_seqno = 0;
         let mut journals = vec![];
         for journal in self.journals.into_iter() {
-            let index = match journal.to_last_index()? {
-                Some(index) => index,
+            let seqno = match journal.to_last_seqno()? {
+                Some(seqno) => seqno,
                 None => break,
             };
-            assert!(index <= last_index, "fatal {} > {}", index, last_index);
+            assert!(seqno <= last_seqno, "fatal {} > {}", seqno, last_seqno);
             let ok = match before {
-                Bound::Included(before) => last_index <= before,
-                Bound::Excluded(before) => last_index < before,
+                Bound::Included(before) => last_seqno <= before,
+                Bound::Excluded(before) => last_seqno < before,
                 Bound::Unbounded => true,
             };
             if ok {
@@ -261,7 +261,7 @@ where
                 journals.push(journal);
             }
 
-            last_index = index
+            last_seqno = seqno
         }
 
         Ok(Shard {
@@ -272,7 +272,7 @@ where
             batch_size: self.batch_size,
             nosync: self.nosync,
 
-            dlog_index: self.dlog_index,
+            dlog_seqno: self.dlog_seqno,
             journals,
             active: self.active,
         })
@@ -354,9 +354,9 @@ where
         for cmd in cmds {
             match cmd {
                 (OpRequest::Op { op }, Some(caller)) => {
-                    let index = self.dlog_index.fetch_add(1, AcqRel);
-                    self.active.add_entry(DEntry::new(index, op))?;
-                    err_at!(IPCFail, caller.send(OpResponse::new_index(index)))?;
+                    let seqno = self.dlog_seqno.fetch_add(1, AcqRel);
+                    self.active.add_entry(DEntry::new(seqno, op))?;
+                    err_at!(IPCFail, caller.send(OpResponse::new_seqno(seqno)))?;
                 }
                 (OpRequest::PurgeTill { before }, Some(caller)) => {
                     let before = self.do_purge_till(before)?;
@@ -377,10 +377,10 @@ where
         Ok(false)
     }
 
-    // return index or io::Error.
+    // return seqno or io::Error.
     fn do_purge_till(&mut self, before: Bound<u64>) -> Result<Bound<u64>> {
         for _ in 0..self.journals.len() {
-            match (self.journals[0].to_last_index()?, before) {
+            match (self.journals[0].to_last_seqno()?, before) {
                 (Some(li), Bound::Included(before)) if li <= before => {
                     self.journals.remove(0).purge()?;
                 }
@@ -640,21 +640,21 @@ where
 }
 
 impl<S, T> Journal<S, T> {
-    pub(crate) fn to_last_index(&self) -> Result<Option<u64>> {
+    pub(crate) fn to_last_seqno(&self) -> Result<Option<u64>> {
         use InnerJournal::{Active, Archive};
 
         match &self.inner {
             Active {
                 batches, active, ..
-            } => match active.to_last_index() {
-                index @ Some(_) => Ok(index),
+            } => match active.to_last_seqno() {
+                seqno @ Some(_) => Ok(seqno),
                 None => match batches.last() {
-                    Some(last) => Ok(last.to_last_index()),
+                    Some(last) => Ok(last.to_last_seqno()),
                     None => Ok(None),
                 },
             },
             Archive { batches, .. } => match batches.last() {
-                Some(last) => Ok(last.to_last_index()),
+                Some(last) => Ok(last.to_last_seqno()),
                 None => Ok(None),
             },
             _ => err_at!(Fatal, msg: format!("unreachable"))?,

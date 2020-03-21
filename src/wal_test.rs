@@ -118,7 +118,7 @@ fn test_wal() {
         };
 
         let mut items = create_wal(seed, &mut wl, false /*nocas*/);
-        let last_index = items.len() as u64;
+        let last_seqno = items.len() as u64;
         items.sort_by(|x, y| x.0.cmp(&y.0));
 
         {
@@ -134,7 +134,7 @@ fn test_wal() {
             validate_dlog1(dl, items.clone());
         }
 
-        let befr = rng.gen::<u64>() % last_index;
+        let befr = rng.gen::<u64>() % last_seqno;
         let before = Bound::Included(befr);
         wl.purge_till(before).unwrap();
 
@@ -151,7 +151,7 @@ fn test_wal() {
             let mut lis: Vec<u64> = vec![];
             let iter = dl.shards.into_iter().map(|shard| shard.into_journals());
             for journal in iter.flatten() {
-                lis.push(journal.to_last_index().unwrap().unwrap_or(std::u64::MAX));
+                lis.push(journal.to_last_seqno().unwrap().unwrap_or(std::u64::MAX));
             }
             println!("before:{:?} lis:{:?}", before, lis);
             assert!(lis.into_iter().all(|x| x > befr));
@@ -201,7 +201,7 @@ fn test_wal() {
                 nosync,
             )
             .unwrap();
-            assert_eq!(dl.index.load(SeqCst), 1);
+            assert_eq!(dl.seqno.load(SeqCst), 1);
             assert_eq!(dl.shards.len(), 1);
         }
     }
@@ -302,8 +302,8 @@ fn create_wal(
     nocas: bool,
 ) -> Vec<(u64, Op<i64, i64>)> {
     let (tx, rx) = mpsc::channel();
-    let mut last_index = wl.to_index();
-    assert_eq!(last_index, 1);
+    let mut last_seqno = wl.to_seqno();
+    assert_eq!(last_seqno, 1);
 
     let mut threads = vec![];
     for i in 0..1000 {
@@ -316,34 +316,34 @@ fn create_wal(
             };
             for _ in 0..100 {
                 let op: u8 = rng.gen();
-                let (index, op) = match op % 3 {
+                let (seqno, op) = match op % 3 {
                     0 => {
                         let key = rng.gen::<i64>().abs();
                         let value = rng.gen::<i64>().abs();
-                        let index = w.set(key, value).unwrap();
-                        (index, Op::new_set(key, value))
+                        let seqno = w.set(key, value).unwrap();
+                        (seqno, Op::new_set(key, value))
                     }
                     1 if nocas => {
                         let key = rng.gen::<i64>().abs();
                         let value = rng.gen::<i64>().abs();
-                        let index = w.set(key, value).unwrap();
-                        (index, Op::new_set(key, value))
+                        let seqno = w.set(key, value).unwrap();
+                        (seqno, Op::new_set(key, value))
                     }
                     1 => {
                         let key = rng.gen::<i64>().abs();
                         let value = rng.gen::<i64>().abs();
                         let cas = rng.gen::<u64>();
-                        let index = w.set_cas(key, value, cas).unwrap();
-                        (index, Op::new_set_cas(key, value, cas))
+                        let seqno = w.set_cas(key, value, cas).unwrap();
+                        (seqno, Op::new_set_cas(key, value, cas))
                     }
                     2 => {
                         let key = rng.gen::<i64>().abs();
-                        let index = w.delete(&key).unwrap();
-                        (index, Op::new_delete(key))
+                        let seqno = w.delete(&key).unwrap();
+                        (seqno, Op::new_delete(key))
                     }
                     _ => unreachable!(),
                 };
-                wl_tx.send((index, op)).unwrap()
+                wl_tx.send((seqno, op)).unwrap()
             }
         });
         threads.push(thread)
@@ -355,12 +355,12 @@ fn create_wal(
 
     mem::drop(tx);
 
-    last_index += 100_000;
+    last_seqno += 100_000;
     let mut items = vec![];
     for item in rx {
         items.push(item)
     }
-    assert_eq!(items.len() as u64, last_index - 1);
+    assert_eq!(items.len() as u64, last_seqno - 1);
 
     items
 }
@@ -371,8 +371,8 @@ fn load_wal(
     nocas: bool,
 ) -> Vec<(u64, Op<i64, i64>)> {
     let (tx, rx) = mpsc::channel();
-    let last_index = wl.to_index();
-    assert_eq!(last_index, 100_001);
+    let last_seqno = wl.to_seqno();
+    assert_eq!(last_seqno, 100_001);
 
     let mut threads = vec![];
     for i in 0..1000 {
@@ -385,34 +385,34 @@ fn load_wal(
             };
             for _ in 0..100 {
                 let op: u8 = rng.gen();
-                let (index, op) = match op % 3 {
+                let (seqno, op) = match op % 3 {
                     0 => {
                         let key = rng.gen::<i64>().abs();
                         let value = rng.gen::<i64>().abs();
-                        let index = w.set(key, value).unwrap();
-                        (index, Op::new_set(key, value))
+                        let seqno = w.set(key, value).unwrap();
+                        (seqno, Op::new_set(key, value))
                     }
                     1 if nocas => {
                         let key = rng.gen::<i64>().abs();
                         let value = rng.gen::<i64>().abs();
-                        let index = w.set(key, value).unwrap();
-                        (index, Op::new_set(key, value))
+                        let seqno = w.set(key, value).unwrap();
+                        (seqno, Op::new_set(key, value))
                     }
                     1 => {
                         let key = rng.gen::<i64>().abs();
                         let value = rng.gen::<i64>().abs();
                         let cas = rng.gen::<u64>();
-                        let index = w.set_cas(key, value, cas).unwrap();
-                        (index, Op::new_set_cas(key, value, cas))
+                        let seqno = w.set_cas(key, value, cas).unwrap();
+                        (seqno, Op::new_set_cas(key, value, cas))
                     }
                     2 => {
                         let key = rng.gen::<i64>().abs();
-                        let index = w.delete(&key).unwrap();
-                        (index, Op::new_delete(key))
+                        let seqno = w.delete(&key).unwrap();
+                        (seqno, Op::new_delete(key))
                     }
                     _ => unreachable!(),
                 };
-                wl_tx.send((index, op)).unwrap()
+                wl_tx.send((seqno, op)).unwrap()
             }
         });
         threads.push(thread)
@@ -433,8 +433,8 @@ fn load_wal(
 }
 
 fn validate_dlog1(dl: Dlog<State, Op<i64, i64>>, items: Vec<(u64, Op<i64, i64>)>) {
-    let last_index = items.len() as u64;
-    assert_eq!(dl.index.load(SeqCst), last_index + 1);
+    let last_seqno = items.len() as u64;
+    assert_eq!(dl.seqno.load(SeqCst), last_seqno + 1);
     let mut entries = vec![];
     let journals: Vec<Journal<State, Op<i64, i64>>> = dl
         .shards
@@ -459,9 +459,9 @@ fn validate_dlog1(dl: Dlog<State, Op<i64, i64>>, items: Vec<(u64, Op<i64, i64>)>
         entries.extend_from_slice(&es);
     }
 
-    for (e, (index, op)) in entries.into_iter().zip(items.into_iter()) {
-        let (rindex, rop) = e.into_index_op();
-        assert!(rindex == index);
+    for (e, (seqno, op)) in entries.into_iter().zip(items.into_iter()) {
+        let (rseqno, rop) = e.into_seqno_op();
+        assert!(rseqno == seqno);
         assert!(rop == op);
     }
 }
@@ -470,8 +470,8 @@ fn validate_dlog2(
     dl: Dlog<State, Op<i64, i64>>,
     mut items: Vec<(u64, Op<i64, i64>)>, // includes both create and loaded items
 ) {
-    let last_index = items.len() as u64;
-    assert_eq!(dl.index.load(SeqCst), last_index + 1);
+    let last_seqno = items.len() as u64;
+    assert_eq!(dl.seqno.load(SeqCst), last_seqno + 1);
     let mut entries = vec![];
     let journals: Vec<Journal<State, Op<i64, i64>>> = dl
         .shards
@@ -497,9 +497,9 @@ fn validate_dlog2(
     }
 
     items.drain(..(items.len() - entries.len()));
-    for (e, (index, op)) in entries.into_iter().zip(items.into_iter()) {
-        let (rindex, rop) = e.into_index_op();
-        assert!(rindex == index);
+    for (e, (seqno, op)) in entries.into_iter().zip(items.into_iter()) {
+        let (rseqno, rop) = e.into_seqno_op();
+        assert!(rseqno == seqno);
         assert!(rop == op);
     }
 }

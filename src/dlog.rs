@@ -64,7 +64,7 @@ where
     pub(crate) dir: ffi::OsString,
     pub(crate) name: String,
 
-    pub(crate) index: Arc<AtomicU64>, // seqno
+    pub(crate) seqno: Arc<AtomicU64>,
     pub(crate) shards: Vec<Shard<S, T>>,
 }
 
@@ -97,17 +97,17 @@ where
     where
         S: DlogState<T>,
     {
-        let dlog_index = Arc::new(AtomicU64::new(1));
+        let dlog_seqno = Arc::new(AtomicU64::new(1));
 
         // purge existing shard/journals for name.
         let mut shards = vec![];
         for shard_id in 0..nshards {
-            let index = Arc::clone(&dlog_index);
+            let seqno = Arc::clone(&dlog_seqno);
             shards.push(Shard::<S, T>::create(
                 dir.clone(),
                 name.clone(),
                 shard_id,
-                index,
+                seqno,
                 journal_limit,
                 batch_size,
                 nosync,
@@ -119,7 +119,7 @@ where
             dir,
             name,
 
-            index: dlog_index,
+            seqno: dlog_seqno,
             shards,
         })
     }
@@ -137,32 +137,32 @@ where
     where
         S: DlogState<T>,
     {
-        let mut last_index = 0;
-        let dlog_index = Arc::new(AtomicU64::new(last_index));
+        let mut last_seqno = 0;
+        let dlog_seqno = Arc::new(AtomicU64::new(last_seqno));
 
         let mut shards = vec![];
         for shard_id in 0..nshards {
-            let index = Arc::clone(&dlog_index);
+            let seqno = Arc::clone(&dlog_seqno);
             let (li, shard) = Shard::<S, T>::load(
                 dir.clone(),
                 name.clone(),
                 shard_id,
-                index,
+                seqno,
                 journal_limit,
                 batch_size,
                 nosync,
             )?;
             shards.push(shard);
-            last_index = cmp::max(last_index, li + 1);
+            last_seqno = cmp::max(last_seqno, li + 1);
         }
 
-        dlog_index.store(last_index, SeqCst);
+        dlog_seqno.store(last_seqno, SeqCst);
 
         Ok(Dlog {
             dir,
             name,
 
-            index: dlog_index,
+            seqno: dlog_seqno,
             shards,
         })
     }
@@ -194,17 +194,17 @@ impl<T> OpRequest<T> {
 
 #[derive(PartialEq)]
 pub(crate) enum OpResponse {
-    Index(u64),
+    Seqno(u64),
     Purged(Bound<u64>),
 }
 
 impl OpResponse {
-    pub(crate) fn new_index(index: u64) -> OpResponse {
-        OpResponse::Index(index)
+    pub(crate) fn new_seqno(seqno: u64) -> OpResponse {
+        OpResponse::Seqno(seqno)
     }
 
-    pub(crate) fn new_purged(index: Bound<u64>) -> OpResponse {
-        OpResponse::Purged(index)
+    pub(crate) fn new_purged(seqno: Bound<u64>) -> OpResponse {
+        OpResponse::Purged(seqno)
     }
 }
 

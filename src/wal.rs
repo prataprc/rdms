@@ -98,7 +98,7 @@ where
 impl<K, V, H> Wal<K, V, H>
 where
     K: 'static + Send + Clone + Default + Ord + Hash + Serialize,
-    V: 'static + Send + Clone + Default + Diff + Serialize,
+    V: 'static + Send + Clone + Default + Serialize,
     H: Clone + BuildHasher,
 {
     /// Convert dlog instance into Wal.
@@ -149,7 +149,7 @@ where
 impl<K, V, H> Wal<K, V, H>
 where
     K: 'static + Send + Clone + Default + Ord + Hash + Serialize,
-    V: 'static + Send + Clone + Default + Diff + Serialize,
+    V: 'static + Send + Clone + Default + Serialize,
     H: Clone + BuildHasher,
 {
     /// Purge all journal files whose `last_seqno` is  le/lt `before`. If
@@ -183,7 +183,7 @@ where
 impl<K, V, H> Wal<K, V, H>
 where
     K: 'static + Send + Clone + Default + Ord + Hash + Serialize,
-    V: 'static + Send + Clone + Default + Diff + Serialize,
+    V: 'static + Send + Clone + Default + Serialize,
     H: Clone + BuildHasher,
 {
     /// When DB suffer a crash and looses latest set of mutations, [Wal]
@@ -193,6 +193,7 @@ where
     /// Return total number of operations replayed on DB.
     pub fn replay<P>(self, db: &mut P, seqno: u64) -> Result<usize>
     where
+        V: Diff,
         P: Replay<K, V>,
     {
         // validate

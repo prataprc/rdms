@@ -761,7 +761,7 @@ where
         }
     }
 
-    fn flush2(&mut self, buffer: &[u8], mut batch: Batch<S, T>, nosync: bool) -> Result<()> {
+    fn flush2(&mut self, buffer: &[u8], batch: Batch<S, T>, nosync: bool) -> Result<()> {
         let (file_path, fd, batches, active) = match &mut self.inner {
             InnerJournal::Active {
                 file_path,
@@ -772,8 +772,6 @@ where
             _ => err_at!(Fatal, msg: format!("unreachable")),
         }?;
 
-        let fpos = err_at!(IoError, fd.metadata())?.len();
-        let (buffer, batch) = active.to_refer(fpos)?;
         write_file!(fd, &buffer, file_path.clone(), "wal-flush2")?;
         if !nosync {
             err_at!(IoError, fd.sync_all())?;

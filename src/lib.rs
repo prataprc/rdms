@@ -92,6 +92,7 @@ pub mod error;
 
 // core modules
 pub mod core;
+mod entry;
 pub mod panic;
 pub mod spinlock;
 pub mod sync;

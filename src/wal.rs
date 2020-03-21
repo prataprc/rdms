@@ -224,24 +224,24 @@ where
                 for batch in journal.into_batches()? {
                     // println!("batch li:{:?}", batch.to_last_seqno());
                     match batch.to_last_seqno() {
-                        Some(seqno) if seqno <= seqno => continue,
+                        Some(last_seqno) if last_seqno <= seqno => continue,
                         _ => (),
                     }
                     for entry in batch.into_active(&mut fd)?.into_entries()? {
-                        let (seqno, op) = entry.into_seqno_op();
-                        if seqno <= seqno {
+                        let (e_seqno, op) = entry.into_seqno_op();
+                        if e_seqno <= seqno {
                             continue;
                         }
-                        // println!("seqno {}", seqno);
+                        // println!("seqno {}", e_seqno);
                         match op {
                             Op::Set { key, value } => {
-                                db.set_index(key, value, seqno)?;
+                                db.set_index(key, value, e_seqno)?;
                             }
                             Op::SetCAS { key, value, cas } => {
-                                db.set_cas_index(key, value, cas, seqno)?;
+                                db.set_cas_index(key, value, cas, e_seqno)?;
                             }
                             Op::Delete { key } => {
-                                db.delete_index(key, seqno)?;
+                                db.delete_index(key, e_seqno)?;
                             }
                         }
                         ops += 1;

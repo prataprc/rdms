@@ -24,7 +24,22 @@ macro_rules! check_remaining {
 }
 
 #[macro_export]
-macro_rules! read_buffer {
+macro_rules! write_file {
+    ($fd:expr, $buffer:expr, $file:expr, $msg:expr) => {{
+        let n = err_at!(IoError, $fd.write($buffer))?;
+        if $buffer.len() == n {
+            Ok(n)
+        } else {
+            err_at!(
+                Fatal,
+                msg: format!("{}, {:?}, {}/{}", $msg, $file, $buffer.len(), n)
+            )
+        }
+    }};
+}
+
+#[macro_export]
+macro_rules! read_file {
     ($fd:expr, $fpos:expr, $n:expr, $msg:expr) => {
         match $fd.seek(io::SeekFrom::Start($fpos)) {
             Ok(_) => {

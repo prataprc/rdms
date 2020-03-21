@@ -1446,17 +1446,10 @@ pub(crate) fn write_meta_items(
     let (shift, m) = (n - block.len(), block.len());
     block.resize(n, 0);
     block.copy_within(0..m, shift);
-    let ln = block.len();
-    let n = err_at!(IoError, fd.write(&block))?;
+    let n = write_file!(fd, &block, file.clone(), "robt-write_meta_items")?;
     err_at!(IoError, fd.sync_all())?;
-    if n == ln {
-        Ok(convert_at!(n)?)
-    } else {
-        err_at!(
-            Fatal,
-            msg: format!("robt write_meta_items: {:?} {}/{}...", &file, ln, n)
-        )
-    }
+
+    Ok(convert_at!(n)?)
 }
 
 /// Read meta items from [Robt] index file.
@@ -1476,7 +1469,7 @@ pub fn read_meta_items(
     let mut fd = util::open_file_r(index_file.as_ref())?;
 
     // read header
-    let hdr = read_buffer!(&mut fd, m - 40, 40, "read root-block header")?;
+    let hdr = read_file!(&mut fd, m - 40, 40, "read root-block header")?;
     let root = u64::from_be_bytes(array_at!(hdr[..8])?);
     let n_bmap: usize = convert_at!(u64::from_be_bytes(array_at!(hdr[8..16])?))?;
     let n_md: usize = convert_at!(u64::from_be_bytes(array_at!(hdr[16..24])?))?;
@@ -1487,7 +1480,7 @@ pub fn read_meta_items(
         let n_total = n_bmap + n_md + n_stats + n_marker + 40;
         convert_at!(Config::compute_root_block(n_total))?
     };
-    let block: Vec<u8> = read_buffer!(
+    let block: Vec<u8> = read_file!(
         &mut fd,
         m - meta_block_bytes,
         meta_block_bytes,
@@ -2376,14 +2369,9 @@ fn thread_flush(
     for (data, _) in rx {
         // println!("flusher {:?} {} {}", file, fpos, data.len());
         // fpos += data.len();
-        let n = err_at!(IoError, fd.write(&data))?;
-        let m = data.len();
-        if n != m {
+        let n = write_file!(fd, &data, file.clone(), "robt-thread-flush")?;
+        if n != data.len() {
             err_at!(IoError, fd.unlock())?; // <----- read un-lock
-            err_at!(
-                Fatal,
-                msg: format!("robt flusher: {:?} {}/{}...", &file, m, n)
-            )?
         }
     }
 
@@ -2449,7 +2437,7 @@ impl IndexFile {
         Ok(match self {
             IndexFile::Block { fd, .. } => {
                 let n: u64 = convert_at!(n)?;
-                read_buffer!(fd, fpos, n, msg)?
+                read_file!(fd, fpos, n, msg)?
             }
             IndexFile::Mmap { mmap, .. } => {
                 let start: usize = convert_at!(fpos)?;

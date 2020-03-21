@@ -53,7 +53,7 @@ fn test_mblock_m() {
     let mb = {
         let (mut fd, fpos) = (util::open_file_r(&file).unwrap(), 0);
         MBlock::<i32, i32>::new_decode(
-            read_buffer!(
+            read_file!(
                 //
                 &mut fd,
                 fpos,
@@ -185,7 +185,7 @@ fn test_mblock_z() {
     let mb = {
         let (mut fd, fpos) = (util::open_file_r(&file).unwrap(), 0);
         MBlock::<i32, i32>::new_decode(
-            read_buffer!(
+            read_file!(
                 //
                 &mut fd,
                 fpos,
@@ -319,7 +319,7 @@ fn test_zblock1() {
         let (mut fd, fpos) = (util::open_file_r(&file).unwrap(), 0);
         ZBlock::<i32, i32>::new_decode(
             //
-            read_buffer!(&mut fd, fpos, zbs, "reading zblock").unwrap(),
+            read_file!(&mut fd, fpos, zbs, "reading zblock").unwrap(),
         )
         .unwrap()
     };
@@ -425,7 +425,7 @@ fn test_zblock2() {
     let zb = {
         let (mut fd, fpos) = (util::open_file_r(&file).unwrap(), 0);
         ZBlock::<i32, i32>::new_decode(
-            read_buffer!(
+            read_file!(
                 //
                 &mut fd,
                 fpos,
@@ -547,7 +547,7 @@ fn test_zblock3() {
     let zb = {
         let (mut fd, fpos) = (util::open_file_r(&file).unwrap(), 0);
         ZBlock::<i32, i32>::new_decode(
-            read_buffer!(
+            read_file!(
                 //
                 &mut fd,
                 fpos,
@@ -663,7 +663,7 @@ fn test_zblock4() {
     let zb = {
         let (mut fd, fpos) = (util::open_file_r(&file).unwrap(), 0);
         ZBlock::<i32, i32>::new_decode(
-            read_buffer!(
+            read_file!(
                 //
                 &mut fd,
                 fpos,

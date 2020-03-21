@@ -1697,7 +1697,7 @@ where
         let data: Vec<u8> = root.try_into()?;
 
         let mut fd = util::create_file_a(root_file.clone())?;
-        err_at!(IoError, fd.write(&data))?;
+        write_file!(fd, &data, root_file.clone(), "dgm-root-file")?;
         Ok(root_file.into())
     }
 

@@ -541,7 +541,7 @@ where
         while fpos < till {
             let n = cmp::min(DLOG_BLOCK_SIZE, till - fpos) as u64;
             let fpos_u64: u64 = convert_at!(fpos).ok()?;
-            let block = read_buffer!(&mut fd, fpos_u64, n, "journal corrupted").ok()?;
+            let block = read_file!(&mut fd, fpos_u64, n, "journal corrupted").ok()?;
 
             let mut m = 0_usize;
             while m < block.len() {
@@ -758,22 +758,17 @@ where
             }
             false if active.len()? > 0 => {
                 let fpos = err_at!(IoError, fd.metadata())?.len();
-                let n = err_at!(IoError, fd.write(&buffer))?;
-                if length != n {
-                    let f = file_path.clone();
-                    err_at!(Fatal, msg: format!("wal-flush: {:?}, {}/{}", f, length, n))
-                } else {
-                    if !nosync {
-                        err_at!(IoError, fd.sync_all())?;
-                    }
-
-                    let a = active.to_first_index().unwrap();
-                    let z = active.to_last_index().unwrap();
-                    let batch = Batch::new_refer(fpos, length, a, z);
-                    batches.push(batch);
-                    *active = Batch::default_active();
-                    Ok(None)
+                write_file!(fd, &buffer, file_path.clone(), "wal-flush1")?;
+                if !nosync {
+                    err_at!(IoError, fd.sync_all())?;
                 }
+
+                let a = active.to_first_index().unwrap();
+                let z = active.to_last_index().unwrap();
+                let batch = Batch::new_refer(fpos, length, a, z);
+                batches.push(batch);
+                *active = Batch::default_active();
+                Ok(None)
             }
             _ => Ok(None),
         }
@@ -792,22 +787,18 @@ where
 
         let length = buffer.len();
         let fpos = err_at!(IoError, fd.metadata())?.len();
-        let n = err_at!(IoError, fd.write(&buffer))?;
-        if length == n {
-            if !nosync {
-                err_at!(IoError, fd.sync_all())?;
-            }
-
-            let a = batch.to_first_index().unwrap();
-            let z = batch.to_last_index().unwrap();
-            batch = Batch::new_refer(fpos, length, a, z);
-            batches.push(batch);
-            *active = Batch::default_active();
-            Ok(())
-        } else {
-            let f = file_path.clone();
-            err_at!(Fatal, msg: format!("wal-flush: {:?}, {}/{}", f, length, n))
+        write_file!(fd, &buffer, file_path.clone(), "wal-flush2")?;
+        if !nosync {
+            err_at!(IoError, fd.sync_all())?;
         }
+
+        let a = batch.to_first_index().unwrap();
+        let z = batch.to_last_index().unwrap();
+        batch = Batch::new_refer(fpos, length, a, z);
+        batches.push(batch);
+        *active = Batch::default_active();
+
+        Ok(())
     }
 }
 

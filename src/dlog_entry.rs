@@ -168,7 +168,7 @@ impl<S, T> Batch<S, T> {
         match self {
             Batch::Refer { fpos, length, .. } => {
                 let n: u64 = convert_at!(length)?;
-                let buf = read_buffer!(fd, fpos, n, "fetching batch")?;
+                let buf = read_file!(fd, fpos, n, "fetching batch")?;
                 self.decode_active(&buf)?;
 
                 Ok(self)

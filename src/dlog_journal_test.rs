@@ -55,8 +55,8 @@ fn test_journal() {
             let seqno = (i * 1000 + j) as u64 + 1;
             journal.add_entry(DEntry::new(seqno, op)).unwrap();
         }
-        let nosync: bool = rng.gen();
-        assert_eq!(journal.flush1(limit, nosync).unwrap().is_none(), true);
+        let fsync: bool = rng.gen();
+        assert_eq!(journal.flush1(limit, fsync).unwrap().is_none(), true);
     }
 
     assert_eq!(journal.to_last_seqno().unwrap(), Some(100_000));
@@ -105,14 +105,14 @@ fn test_shard() {
         let name = "myshard".to_string();
         let shard_id = 1;
         let journal_limit = 1_000_000;
-        let nosync: bool = rng.gen();
+        let fsync: bool = rng.gen();
         let dlog_seqno = Arc::new(AtomicU64::new(1));
         let batch_size = ((rng.gen::<usize>() % 1000) + 1) as i64;
         let n_batches = (rng.gen::<usize>() % 30) as i64;
 
         println!(
-            "dir:{:?} nosync:{} batch_size:{} n_batches:{}",
-            dir, nosync, batch_size, n_batches
+            "dir:{:?} fsync:{} batch_size:{} n_batches:{}",
+            dir, fsync, batch_size, n_batches
         );
 
         let tshard = Shard::<wal::State, wal::Op<i64, i64>>::create(
@@ -122,7 +122,7 @@ fn test_shard() {
             Arc::clone(&dlog_seqno),
             journal_limit,
             batch_size as usize,
-            nosync,
+            fsync,
         )
         .unwrap()
         .into_thread();
@@ -162,7 +162,7 @@ fn test_shard() {
             Arc::clone(&dlog_seqno),
             journal_limit,
             batch_size as usize,
-            nosync,
+            fsync,
         )
         .unwrap();
         assert_eq!(last_seqno, (n_batches * batch_size) as u64);
@@ -210,7 +210,7 @@ fn test_shard() {
             Arc::clone(&dlog_seqno),
             journal_limit,
             batch_size as usize,
-            nosync,
+            fsync,
         )
         .unwrap();
 

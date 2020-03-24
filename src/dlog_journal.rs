@@ -113,7 +113,7 @@ pub(crate) struct Shard<S, T> {
     shard_id: usize,
     journal_limit: usize,
     batch_size: usize,
-    nosync: bool,
+    fsync: bool,
 
     dlog_seqno: Arc<AtomicU64>,
     journals: Vec<Journal<S, T>>,
@@ -132,7 +132,7 @@ where
         seqno: Arc<AtomicU64>,
         journal_limit: usize,
         batch_size: usize,
-        nosync: bool,
+        fsync: bool,
     ) -> Result<Shard<S, T>>
     where
         S: DlogState<T>,
@@ -158,7 +158,7 @@ where
             shard_id,
             journal_limit,
             batch_size,
-            nosync,
+            fsync,
 
             dlog_seqno: seqno,
             journals: vec![],
@@ -173,7 +173,7 @@ where
         seqno: Arc<AtomicU64>,
         journal_limit: usize,
         batch_size: usize,
-        nosync: bool,
+        fsync: bool,
     ) -> Result<(u64, Shard<S, T>)>
     where
         S: DlogState<T>,
@@ -225,7 +225,7 @@ where
                 shard_id,
                 journal_limit,
                 batch_size,
-                nosync,
+                fsync,
 
                 dlog_seqno: seqno,
                 journals,
@@ -272,7 +272,7 @@ where
             shard_id: self.shard_id,
             journal_limit: self.journal_limit,
             batch_size: self.batch_size,
-            nosync: self.nosync,
+            fsync: self.fsync,
 
             dlog_seqno: self.dlog_seqno,
             journals,
@@ -374,11 +374,11 @@ where
             }
         }
 
-        match self.active.flush1(self.journal_limit, self.nosync)? {
+        match self.active.flush1(self.journal_limit, self.fsync)? {
             None => (),
             Some((buffer, batch)) => {
                 self.rotate_journal()?;
-                self.active.flush2(&buffer, batch, self.nosync)?;
+                self.active.flush2(&buffer, batch, self.fsync)?;
             }
         }
 
@@ -734,7 +734,7 @@ where
     fn flush1(
         &mut self,
         journal_limit: usize,
-        nosync: bool,
+        fsync: bool,
     ) -> Result<Option<(Vec<u8>, Batch<S, T>)>> {
         let (file_path, fd, batches, active, rotate) = match &mut self.inner {
             InnerJournal::Active {
@@ -759,7 +759,7 @@ where
                 };
                 batches.push(batch);
                 write_file!(fd, &buffer, file_path.clone(), "wal-flush1")?;
-                if !nosync {
+                if fsync {
                     err_at!(IoError, fd.sync_all())?;
                 }
                 *active = Batch::default_active();
@@ -769,7 +769,7 @@ where
         }
     }
 
-    fn flush2(&mut self, buffer: &[u8], batch: Batch<S, T>, nosync: bool) -> Result<()> {
+    fn flush2(&mut self, buffer: &[u8], batch: Batch<S, T>, fsync: bool) -> Result<()> {
         let (file_path, fd, batches, active) = match &mut self.inner {
             InnerJournal::Active {
                 file_path,
@@ -781,7 +781,7 @@ where
         }?;
 
         write_file!(fd, &buffer, file_path.clone(), "wal-flush2")?;
-        if !nosync {
+        if fsync {
             err_at!(IoError, fd.sync_all())?;
         }
         batches.push(batch);

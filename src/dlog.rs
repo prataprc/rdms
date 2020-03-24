@@ -10,7 +10,7 @@
 //! * Multiple shards can append to separate files concurrently.
 //! * Entries are appended into a journal file and automatically rotated
 //!   when `journal_limit` is exceeded.
-//! * Durability guarantee is controlled via `nosync` parameter.
+//! * Durability guarantee is controlled via `fsync` parameter.
 //!
 //! **Shards**:
 //!
@@ -94,7 +94,7 @@ where
         nshards: usize,
         journal_limit: usize,
         batch_size: usize,
-        nosync: bool,
+        fsync: bool,
     ) -> Result<Dlog<S, T>>
     where
         S: DlogState<T>,
@@ -112,7 +112,7 @@ where
                 seqno,
                 journal_limit,
                 batch_size,
-                nosync,
+                fsync,
             )?);
         }
 
@@ -136,7 +136,7 @@ where
         nshards: usize,
         journal_limit: usize,
         batch_size: usize,
-        nosync: bool,
+        fsync: bool,
     ) -> Result<Dlog<S, T>>
     where
         S: DlogState<T>,
@@ -154,7 +154,7 @@ where
                 seqno,
                 journal_limit,
                 batch_size,
-                nosync,
+                fsync,
             )?;
             shards.push(shard);
             last_seqno = cmp::max(last_seqno, li + 1);

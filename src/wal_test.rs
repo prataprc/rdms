@@ -97,11 +97,11 @@ fn test_wal() {
         let nshards = 1;
         let journal_limit = (rng.gen::<usize>() % 100_000) + 1_000;
         let batch_size = (rng.gen::<usize>() % 100) + 1;
-        let nosync: bool = rng.gen();
+        let fsync: bool = rng.gen();
 
         println!(
-            "seed:{} dir:{:?} journal_limit:{} batch_size:{} nosync:{}",
-            seed, dir, journal_limit, batch_size, nosync
+            "seed:{} dir:{:?} journal_limit:{} batch_size:{} fsync:{}",
+            seed, dir, journal_limit, batch_size, fsync
         );
 
         let mut wl: Wal<i64, i64, RandomState> = {
@@ -111,7 +111,7 @@ fn test_wal() {
                 nshards,
                 journal_limit,
                 batch_size,
-                nosync,
+                fsync,
             )
             .unwrap();
             Wal::from_dlog(dl, RandomState::new())
@@ -128,7 +128,7 @@ fn test_wal() {
                 nshards,
                 journal_limit,
                 batch_size,
-                nosync,
+                fsync,
             )
             .unwrap();
             validate_dlog1(dl, items.clone());
@@ -145,7 +145,7 @@ fn test_wal() {
                 nshards,
                 journal_limit,
                 batch_size,
-                nosync,
+                fsync,
             )
             .unwrap();
             let mut lis: Vec<u64> = vec![];
@@ -166,7 +166,7 @@ fn test_wal() {
                 nshards,
                 journal_limit,
                 batch_size,
-                nosync,
+                fsync,
             )
             .unwrap();
             Wal::from_dlog(dl, RandomState::new())
@@ -183,7 +183,7 @@ fn test_wal() {
                 nshards,
                 journal_limit,
                 batch_size,
-                nosync,
+                fsync,
             )
             .unwrap();
             validate_dlog2(dl, items)
@@ -198,7 +198,7 @@ fn test_wal() {
                 nshards,
                 journal_limit,
                 batch_size,
-                nosync,
+                fsync,
             )
             .unwrap();
             assert_eq!(dl.seqno.load(SeqCst), 1);
@@ -228,11 +228,11 @@ fn test_wal_replay() {
         let nshards = 1;
         let journal_limit = (rng.gen::<usize>() % 100_000) + 1_000;
         let batch_size = (rng.gen::<usize>() % 100) + 1;
-        let nosync: bool = rng.gen();
+        let fsync: bool = rng.gen();
 
         println!(
-            "seed:{} dir:{:?} journal_limit:{} batch_size:{} nosync:{}",
-            seed, dir, journal_limit, batch_size, nosync
+            "seed:{} dir:{:?} journal_limit:{} batch_size:{} fsync:{}",
+            seed, dir, journal_limit, batch_size, fsync
         );
 
         let mut wl: Wal<i64, i64, RandomState> = {
@@ -242,7 +242,7 @@ fn test_wal_replay() {
                 nshards,
                 journal_limit,
                 batch_size,
-                nosync,
+                fsync,
             )
             .unwrap();
             Wal::from_dlog(dl, RandomState::new())

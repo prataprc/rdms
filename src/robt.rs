@@ -40,7 +40,6 @@
 //!
 
 use fs2::FileExt;
-use jsondata::Json;
 use lazy_static::lazy_static;
 use log::{debug, error, info};
 
@@ -1749,6 +1748,8 @@ impl FromStr for Stats {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Stats> {
+        use jsondata::Json;
+
         let js: Json = err_at!(InvalidInput, s.parse())?;
 
         let to_usize = |key: &str| -> Result<usize> {

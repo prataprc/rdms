@@ -114,7 +114,7 @@ where
             threads: Default::default(),
         };
 
-        debug!(target: "wal   ", "convert from dlog {:?}/{}", wl.dir, wl.name);
+        debug!(target: "wal   ", "{:?}/{} from dlog", wl.dir, wl.name);
 
         for shard in dl.shards {
             wl.threads.push(shard.into_thread())
@@ -125,8 +125,21 @@ where
 
     /// Set a different hash-builder.
     pub fn set_hasher(&mut self, hash_builder: H) -> Result<&mut Self> {
+        debug!(target: "wal   ", "{:?}/{} new hasher set", wl.dir, wl.name);
         self.hash_builder = hash_builder;
         Ok(self)
+    }
+
+    /// Close the [Wal] instance. To purge the instance use [Wal::purge] api.
+    pub fn close(&mut self) -> Result<u64> {
+        for thread in self.threads.into_iter() {
+            let shard = thread.close_wait()?;
+            shard.close()?;
+        }
+
+        debug!(target: "wal   ", "{:?}/{} closed", wl.dir, wl.name);
+
+        Ok(self.seqno.load(SeqCst))
     }
 
     /// Purge this [Wal] instance and all its memory and disk footprints.
@@ -136,15 +149,7 @@ where
             shard.purge()?;
         }
 
-        Ok(self.seqno.load(SeqCst))
-    }
-
-    /// Close the [Wal] instance. To purge the instance use [Wal::purge] api.
-    pub fn close(&mut self) -> Result<u64> {
-        for thread in self.threads.drain(..).into_iter() {
-            let shard = thread.close_wait()?;
-            shard.close()?;
-        }
+        debug!(target: "wal   ", "{:?}/{} purged", wl.dir, wl.name);
 
         Ok(self.seqno.load(SeqCst))
     }

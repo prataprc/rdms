@@ -234,15 +234,6 @@ where
         ))
     }
 
-    pub(crate) fn purge(self) -> Result<()> {
-        for journal in self.journals.into_iter() {
-            journal.purge()?
-        }
-        self.active.purge()?;
-
-        Ok(())
-    }
-
     pub(crate) fn into_deep_freeze(self, before: Bound<u64>) -> Result<Self> {
         let mut last_seqno = 0;
         let mut journals = vec![];
@@ -281,6 +272,25 @@ where
     }
 
     pub(crate) fn close(self) -> Result<()> {
+        debug!(
+            target: "dlogsd",
+            "shard:{} {:?}/{} closed", self.shard_id, self.dir, self.name,
+        );
+
+        Ok(())
+    }
+
+    pub(crate) fn purge(self) -> Result<()> {
+        for journal in self.journals.into_iter() {
+            journal.purge()?
+        }
+        self.active.purge()?;
+
+        debug!(
+            target: "dlogsd",
+            "shard:{} {:?}/{} purged", self.shard_id, self.dir, self.name,
+        );
+
         Ok(())
     }
 }
@@ -612,6 +622,8 @@ where
     fn purge(self) -> Result<()> {
         let file_path = self.to_file_path();
         err_at!(IoError, fs::remove_file(&file_path))?;
+
+        debug!(target: "dlogjn", "purged {:?}", fpath);
 
         Ok(())
     }

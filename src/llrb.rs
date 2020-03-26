@@ -131,17 +131,18 @@ where
     }
 
     fn new(&self, name: &str) -> Result<Self::I> {
-        info!(
-            target: "llrbfc",
-            "{:?}, new llrb instance, with config {}", name, self.to_config_string()
-        );
-
         let mut index = if self.lsm {
             Llrb::new_lsm(name)
         } else {
             Llrb::new(name)
         };
         index.set_sticky(self.sticky)?.set_spinlatch(self.spin)?;
+
+        debug!(
+            target: "llrbfc",
+            "{}, new llrb with config {}", name, self.to_config_string()
+        );
+
         Ok(index)
     }
 }
@@ -184,11 +185,11 @@ where
             }
             error!(
                 target: "llrb  ",
-                "{:?}, dropped before read/write handles {}", self.name, n
+                "{}, dropped before read/write handles {}", self.name, n
             );
         }
 
-        debug!(target: "llrb  ", "{:?}, dropped ...", self.name);
+        debug!(target: "llrb  ", "{}, dropped", self.name);
         self.root.take().map(drop_tree);
     }
 }
@@ -229,6 +230,11 @@ where
         index.n_deleted = debris.n_deleted;
         index.key_footprint = debris.key_footprint;
         index.tree_footprint = debris.tree_footprint;
+
+        debug!(
+            target: "llrb  ", "{}, from mvcc seqno:{} len:{}",
+            index.name, index.seqno, index.n_count
+        );
 
         Ok(index)
     }
@@ -321,6 +327,11 @@ where
 
     /// Squash this index and return the root and its book-keeping.
     pub(crate) fn squash(mut self) -> Result<SquashDebris<K, V>> {
+        debug!(
+            target: "llrb  ", "{}, squashing seqno:{} len:{}",
+            self.name, self.seqno, self.n_count
+        );
+
         let n = self.multi_rw();
         if n == 0 {
             Ok(SquashDebris {
@@ -337,6 +348,11 @@ where
     }
 
     pub fn clone(&self) -> Box<Llrb<K, V>> {
+        debug!(
+            target: "llrb  ", "{}, cloning seqno:{} len:{}",
+            self.name, self.seqno, self.n_count
+        );
+
         Box::new(Llrb {
             name: self.name.clone(),
             lsm: self.lsm,
@@ -372,6 +388,11 @@ where
             return err_at!(APIMisuse, msg: format!("active-handles:{}", n));
         }
 
+        debug!(
+            target: "llrb  ", "{}, splitting seqno:{} len:{}",
+            self.name, self.seqno, self.n_count
+        );
+
         let (mut one, mut two) = if self.lsm {
             (Llrb::new_lsm(&name1), Llrb::new_lsm(&name2))
         } else {
@@ -390,6 +411,15 @@ where
         }
         one.seqno = self.seqno;
         two.seqno = self.seqno;
+
+        debug!(
+            target: "llrb  ", "{}, split1 seqno:{} len:{}",
+            one.name, one.seqno, one.n_count
+        );
+        debug!(
+            target: "llrb  ", "{}, split2 seqno:{} len:{}",
+            one.name, one.seqno, one.n_count
+        );
 
         // validation
         assert_eq!(cmp::max(one.seqno, two.seqno), self.seqno);
@@ -592,6 +622,11 @@ where
     fn set_seqno(&mut self, seqno: u64) -> Result<()> {
         let n = self.multi_rw();
         if n == 0 {
+            debug!(
+                target: "llrb  ", "{}, set-seqno {}->{}",
+                self.name, self.seqno, seqno
+            );
+
             self.seqno = seqno;
             Ok(())
         } else {
@@ -628,9 +663,9 @@ where
         C: CommitIterator<K, V>,
         F: Fn(Vec<u8>) -> Vec<u8>,
     {
-        warn!(
+        debug!(
             target: "llrb  ",
-            "{:?}, commit started (blocks all other index operations) ...",
+            "{}, commit started (blocks all other index operations) ...",
             self.name
         );
 
@@ -648,7 +683,7 @@ where
 
         self.metadata = metacb(self.metadata.clone());
 
-        info!(target: "llrb  ", "{:?}, committed {} items", self.name, count);
+        info!(target: "llrb  ", "{}, committed {} items", self.name, count);
         Ok(())
     }
 
@@ -696,7 +731,7 @@ where
             count += LIMIT;
         };
 
-        info!(target: "llrb  ", "{:?}, compacted {} items", self.name, count);
+        info!(target: "llrb  ", "{}, compacted {} items", self.name, count);
         Ok(count)
     }
 
@@ -1993,7 +2028,7 @@ where
     V: Clone + Diff,
 {
     fn new(index: Box<ffi::c_void>, _refn: Arc<u32>) -> LlrbReader<K, V> {
-        let id = Arc::strong_count(&_refn);
+        let id = Arc::strong_count(&_refn) - 1;
         let mut r = LlrbReader {
             _refn,
             id,
@@ -2004,7 +2039,7 @@ where
 
         let index: &mut Llrb<K, V> = r.as_mut();
         debug!(
-            target: "llrb  ", "{:?}, creating a new reader {} ...",
+            target: "llrb  ", "{}, creating a new reader {} ...",
             index.name, id
         );
 
@@ -2020,7 +2055,7 @@ where
     fn drop(&mut self) {
         let id = self.id;
         let index: &mut Llrb<K, V> = self.as_mut();
-        debug!(target: "llrb  ", "{:?}, dropping reader {}", index.name, id);
+        debug!(target: "llrb  ", "{}, dropping reader {}", index.name, id);
 
         // leak this index, it is only a reference
         Box::leak(self.index.take().unwrap());
@@ -2193,7 +2228,7 @@ where
     V: Clone + Diff,
 {
     fn new(index: Box<ffi::c_void>, _refn: Arc<u32>) -> LlrbWriter<K, V> {
-        let id = Arc::strong_count(&_refn);
+        let id = Arc::strong_count(&_refn) - 2;
         let mut w = LlrbWriter {
             _refn,
             id,
@@ -2203,7 +2238,7 @@ where
         };
 
         let index: &mut Llrb<K, V> = w.as_mut();
-        debug!(target: "llrb  ", "{:?}, creating a new writer {}", index.name, id);
+        debug!(target: "llrb  ", "{}, creating a new writer {}", index.name, id);
 
         w
     }
@@ -2217,7 +2252,7 @@ where
     fn drop(&mut self) {
         let id = self.id;
         let index: &mut Llrb<K, V> = self.as_mut();
-        debug!(target: "llrb  ", "{:?}, dropping writer {}", index.name, id);
+        debug!(target: "llrb  ", "{}, dropping writer {}", index.name, id);
 
         // leak this index, it is only a reference
         Box::leak(self.index.take().unwrap());

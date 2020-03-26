@@ -1384,9 +1384,10 @@ where
 
         self.auto_commit = {
             let inner = Arc::clone(&self.inner);
-            Some(rt::Thread::new(move |rx| {
-                || auto_commit::<K, V, M, D>(name, root, inner, rx)
-            }))
+            Some(rt::Thread::new(
+                format!("dgm-auto-commit-{}", name),
+                move |rx| || auto_commit::<K, V, M, D>(name, root, inner, rx),
+            ))
         };
 
         Ok(())
@@ -1417,9 +1418,10 @@ where
         self.auto_compact = match root.compact_interval {
             Some(_) => {
                 let inner = Arc::clone(&self.inner);
-                Some(rt::Thread::new(move |rx| {
-                    || auto_compact::<K, V, M, D>(name, root, inner, rx)
-                }))
+                Some(rt::Thread::new(
+                    format!("dgm-auto-compact-{}", name),
+                    move |rx| || auto_compact::<K, V, M, D>(name, root, inner, rx),
+                ))
             }
             None => None,
         };

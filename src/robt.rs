@@ -380,7 +380,9 @@ where
         };
         let purger = {
             let name = name.to_string();
-            rt::Thread::new(move |rx| move || thread_purger(name, rx))
+            rt::Thread::new(format!("robt-purger-{}", name), move |rx| {
+                move || thread_purger(name, rx)
+            })
         };
         Robt {
             inner: sync::Mutex::new(inner.clone()),
@@ -441,7 +443,9 @@ where
 
         let purger = {
             let name = name.to_string();
-            rt::Thread::new(move |rx| move || thread_purger(name, rx))
+            rt::Thread::new(format!("robt-purger-{}", name), move |rx| {
+                move || thread_purger(name, rx)
+            })
         };
 
         Ok(Robt {
@@ -469,7 +473,9 @@ where
 
         let purger = {
             let name = name.0.clone();
-            rt::Thread::new(move |rx| move || thread_purger(name, rx))
+            rt::Thread::new(format!("robt-purger-{}", name), move |rx| {
+                move || thread_purger(name, rx)
+            })
         };
 
         Ok(Robt {
@@ -484,7 +490,9 @@ where
             InnerRobt::Build { name, .. } => name.clone(),
             InnerRobt::Snapshot { name, .. } => name.clone(),
         };
-        let purger = rt::Thread::new(move |rx| move || thread_purger(name.0, rx));
+        let purger = rt::Thread::new(format!("robt-purger-{}", name), move |rx| {
+            move || thread_purger(name.0, rx)
+        });
         Ok(Robt {
             inner: sync::Mutex::new(inner.deref().clone()),
             purger: Some(purger),
@@ -1865,6 +1873,7 @@ where
         let iflusher = {
             let ifile = Config::stitch_index_file(dir, name);
             rt::Thread::new_sync(
+                format!("robt-index-flusher-{}", name),
                 move |rx| move || thread_flush(ifile, create, rx),
                 config.flush_queue_size,
             )
@@ -1881,6 +1890,7 @@ where
             Some(vfile) => {
                 let vfile = vfile.clone();
                 Some(rt::Thread::new_sync(
+                    format!("robt-vlog-flusher-{}", name),
                     move |rx| move || thread_flush(vfile, create, rx),
                     config.flush_queue_size,
                 ))
@@ -1910,6 +1920,7 @@ where
         let iflusher = {
             let ifile = Config::stitch_index_file(dir, name);
             rt::Thread::new_sync(
+                format!("robt-index-flusher-{}", name),
                 move |rx| move || thread_flush(ifile, true /*create*/, rx),
                 config.flush_queue_size,
             )
@@ -1930,6 +1941,7 @@ where
                 let vf_fpos = err_at!(IoError, fs::metadata(&vfile))?.len();
 
                 let t = rt::Thread::new_sync(
+                    format!("robt-vlog-flusher-{}", name),
                     move |rx| move || thread_flush(vfile, create, rx),
                     config.flush_queue_size,
                 );

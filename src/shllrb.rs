@@ -550,9 +550,10 @@ where
         index.auto_shard = if index.interval.as_secs() > 0 {
             let name = index.name.clone();
             let snapshot = Arc::clone(&index.snapshot);
-            Some(rt::Thread::new(move |rx| {
-                || auto_shard::<K, V>(name, config, snapshot, rx)
-            }))
+            Some(rt::Thread::new(
+                format!("shllrb-auto-shard-{}", index.name),
+                move |rx| || auto_shard::<K, V>(name, config, snapshot, rx),
+            ))
         } else {
             None
         };

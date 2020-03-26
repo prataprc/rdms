@@ -125,19 +125,19 @@ where
 
     /// Set a different hash-builder.
     pub fn set_hasher(&mut self, hash_builder: H) -> Result<&mut Self> {
-        debug!(target: "wal   ", "{:?}/{} new hasher set", wl.dir, wl.name);
+        debug!(target: "wal   ", "{:?}/{} new hasher set", self.dir, self.name);
         self.hash_builder = hash_builder;
         Ok(self)
     }
 
     /// Close the [Wal] instance. To purge the instance use [Wal::purge] api.
     pub fn close(&mut self) -> Result<u64> {
-        for thread in self.threads.into_iter() {
+        for thread in self.threads.drain(..).into_iter() {
             let shard = thread.close_wait()?;
             shard.close()?;
         }
 
-        debug!(target: "wal   ", "{:?}/{} closed", wl.dir, wl.name);
+        debug!(target: "wal   ", "{:?}/{} closed", self.dir, self.name);
 
         Ok(self.seqno.load(SeqCst))
     }
@@ -149,7 +149,7 @@ where
             shard.purge()?;
         }
 
-        debug!(target: "wal   ", "{:?}/{} purged", wl.dir, wl.name);
+        debug!(target: "wal   ", "{:?}/{} purged", self.dir, self.name);
 
         Ok(self.seqno.load(SeqCst))
     }
@@ -185,7 +185,7 @@ where
             shards: self
                 .threads
                 .iter()
-                .map(|thread| thread.to_writer())
+                .map(|thread| thread.to_client())
                 .collect(),
         })
     }
@@ -286,7 +286,7 @@ where
     H: BuildHasher,
 {
     hash_builder: H,
-    shards: Vec<rt::Writer<OpRequest<Op<K, V>>, OpResponse>>,
+    shards: Vec<rt::Client<OpRequest<Op<K, V>>, OpResponse>>,
 }
 
 impl<K, V, H> Writer<K, V, H>
@@ -340,7 +340,7 @@ where
     fn as_shard<'a>(
         &'a mut self,
         key: &K,
-    ) -> Result<&'a mut rt::Writer<OpRequest<Op<K, V>>, OpResponse>> {
+    ) -> Result<&'a mut rt::Client<OpRequest<Op<K, V>>, OpResponse>> {
         let hash = {
             let mut hasher = self.hash_builder.build_hasher();
             key.hash(&mut hasher);

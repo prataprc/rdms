@@ -319,7 +319,8 @@ where
             "convert shard:{} {:?}/{} to thread, at seqno:{}",
             self.shard_id, self.dir, self.name, seqno
         );
-        rt::Thread::new(move |rx| move || self.routine(rx))
+        let name = format!("wal-{}-{}", self.shard_id, self.name);
+        rt::Thread::new(name, move |rx| move || self.routine(rx))
     }
 }
 
@@ -623,7 +624,7 @@ where
         let file_path = self.to_file_path();
         err_at!(IoError, fs::remove_file(&file_path))?;
 
-        debug!(target: "dlogjn", "purged {:?}", fpath);
+        debug!(target: "dlogjn", "purged {:?}", file_path);
 
         Ok(())
     }

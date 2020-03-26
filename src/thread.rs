@@ -5,7 +5,7 @@
 //! is expected hold onto its own state, FnOnce in rust parlance, and handle
 //! all inter-thread communication via channels and message queues.
 
-use log::error;
+use log::{error, info};
 
 #[allow(unused_imports)]
 use std::{
@@ -50,8 +50,9 @@ pub type Rx<Q, R> = mpsc::Receiver<(Q, Option<mpsc::Sender<R>>)>;
 ///
 /// * The thread's main loop should handle _disconnect_ signal on its
 ///   [Rx] channel.
-/// * All [Writer] handles on this thread should be dropped as well.
+/// * All [Client] handles on this thread should be dropped as well.
 pub struct Thread<Q, R, T> {
+    name: String,
     inner: Option<Inner<Q, R, T>>,
     refn: Arc<bool>,
 }
@@ -78,26 +79,31 @@ impl<Q, R, T> Drop for Thread<Q, R, T> {
             match Arc::get_mut(&mut self.refn) {
                 Some(_) => match self.inner.take() {
                     Some(inner) => break inner.close_wait().ok(),
-                    None => break None,
+                    None => error!(target: "thread", "unreachable"),
                 },
-                None => error!(target: "thread", "Thread.drop() unreachable"),
+                None => error!(target: "thread", "active clients"),
             }
         };
+
+        info!(target: "thread", "{} dropped", self.name);
     }
 }
 
 impl<Q, R, T> Thread<Q, R, T> {
     /// Create a new Thread instance, using asynchronous channel with
     /// infinite buffer.
-    pub fn new<F, N>(main_loop: F) -> Thread<Q, R, T>
+    pub fn new<F, N>(name: String, main_loop: F) -> Thread<Q, R, T>
     where
         F: 'static + FnOnce(Rx<Q, R>) -> N + Send,
         N: 'static + Send + FnOnce() -> Result<T>,
         T: 'static + Send,
     {
+        info!(target: "thread", "{} spawned in async mode", name);
+
         let (tx, rx) = mpsc::channel();
         let handle = thread::spawn(main_loop(rx));
         Thread {
+            name,
             inner: Some(Inner {
                 tx: Tx::N(tx),
                 handle,
@@ -108,15 +114,18 @@ impl<Q, R, T> Thread<Q, R, T> {
 
     /// Create a new Thread instance, using synchronous channel with
     /// finite buffer.
-    pub fn new_sync<F, N>(main_loop: F, channel_size: usize) -> Thread<Q, R, T>
+    pub fn new_sync<F, N>(name: String, main_loop: F, channel_size: usize) -> Thread<Q, R, T>
     where
         F: 'static + FnOnce(Rx<Q, R>) -> N + Send,
         N: 'static + Send + FnOnce() -> Result<T>,
         T: 'static + Send,
     {
+        info!(target: "thread", "{} spawned in sync mode", name);
+
         let (tx, rx) = mpsc::sync_channel(channel_size);
         let handle = thread::spawn(main_loop(rx));
         Thread {
+            name,
             inner: Some(Inner {
                 tx: Tx::S(tx),
                 handle,
@@ -128,9 +137,9 @@ impl<Q, R, T> Thread<Q, R, T> {
     /// Create a new write handle to communicate with this thread.
     ///
     /// NOTE: All write handles must be dropped for the thread to exit.
-    pub fn to_writer(&self) -> Writer<Q, R> {
+    pub fn to_client(&self) -> Client<Q, R> {
         let _refn = Arc::clone(&self.refn);
-        Writer {
+        Client {
             tx: self.inner.as_ref().unwrap().tx.clone(),
             _refn,
         }
@@ -171,7 +180,7 @@ impl<Q, R, T> Thread<Q, R, T> {
         }
     }
 
-    /// Return ref_count on this thread. This matches number of [Writer]
+    /// Return ref_count on this thread. This matches number of [Client]
     /// handle + 1.
     pub fn ref_count(&self) -> usize {
         Arc::strong_count(&self.refn)
@@ -197,14 +206,14 @@ impl<R, T> Flusher for Thread<Vec<u8>, R, T> {
     }
 }
 
-/// Writer handle to communicate with thread. Applications can create as many
-/// Writer handles as needed.
-pub struct Writer<Q, R> {
+/// Client handle to communicate with thread. Applications can create as many
+/// Client handles as needed.
+pub struct Client<Q, R> {
     tx: Tx<Q, R>,
     _refn: Arc<bool>,
 }
 
-impl<Q, R> Writer<Q, R> {
+impl<Q, R> Client<Q, R> {
     /// Same as [Thread::post] method.
     pub fn post(&mut self, msg: Q) -> Result<()> {
         match &self.tx {

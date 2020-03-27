@@ -2039,7 +2039,7 @@ where
 
         let index: &mut Llrb<K, V> = r.as_mut();
         debug!(
-            target: "llrb  ", "{}, creating a new reader {} ...",
+            target: "llrb  ", "{}, new reader {} ...",
             index.name, id
         );
 
@@ -2238,7 +2238,7 @@ where
         };
 
         let index: &mut Llrb<K, V> = w.as_mut();
-        debug!(target: "llrb  ", "{}, creating a new writer {}", index.name, id);
+        debug!(target: "llrb  ", "{}, new writer {}", index.name, id);
 
         w
     }

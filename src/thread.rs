@@ -79,7 +79,7 @@ impl<Q, R, T> Drop for Thread<Q, R, T> {
             match Arc::get_mut(&mut self.refn) {
                 Some(_) => match self.inner.take() {
                     Some(inner) => break inner.close_wait().ok(),
-                    None => error!(target: "thread", "unreachable"),
+                    None => error!(target: "thread", "{}:{} unreachable",  file!(), line!()),
                 },
                 None => error!(target: "thread", "active clients"),
             }

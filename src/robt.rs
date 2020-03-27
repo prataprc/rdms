@@ -131,7 +131,7 @@ impl fmt::Display for Name {
 
 impl fmt::Debug for Name {
     fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
-        write!(f, "{:?}", self.0)
+        write!(f, "{}", self.0)
     }
 }
 
@@ -267,18 +267,13 @@ where
         let mut config = self.config.clone();
         config.name = name.to_string();
 
-        info!(
-            target: "robtfc",
-            "{:?}, new index at {:?} with config ...\n{}", name, dir, config
-        );
-
         Robt::new(dir, name, config)
     }
 
     fn open(&self, dir: &ffi::OsStr, name: &str) -> Result<Robt<K, V, B>> {
-        info!(
+        debug!(
             target: "robtfc",
-            "{:?}, open from {:?} ...", name, dir,
+            "{}, open from {:?} ...", name, dir,
         );
 
         Robt::open(dir, name)
@@ -399,11 +394,11 @@ where
     B: Bloom,
 {
     fn drop(&mut self) {
-        let name = loop {
+        let (name, dir) = loop {
             match self.inner.get_mut() {
                 Ok(inner) => match inner {
-                    InnerRobt::Build { name, .. } => break name.clone(),
-                    InnerRobt::Snapshot { name, .. } => break name.clone(),
+                    InnerRobt::Build { name, dir, .. } => break (name.clone(), dir.clone()),
+                    InnerRobt::Snapshot { name, dir, .. } => break (name.clone(), dir.clone()),
                 },
                 Err(err) => error!(target: "robt  ", "drop {}", err),
             }
@@ -413,12 +408,14 @@ where
         match self.purger.take() {
             Some(purger) => match purger.close_wait() {
                 Err(err) => error!(
-                    target: "robt  ", "{:?}, purger failed {:?}", name, err
+                    target: "robt  ", "{}, purger failed {:?}", name, err
                 ),
                 Ok(_) => (),
             },
             None => (),
         }
+
+        debug!(target: "robt  ", "{:?}/{}, at dropped", dir, name);
     }
 }
 
@@ -435,7 +432,7 @@ where
         let inner = InnerRobt::Build {
             dir: dir.to_os_string(),
             name: (name.to_string(), 0).into(),
-            config,
+            config: config.clone(),
 
             _phantom_key: marker::PhantomData,
             _phantom_val: marker::PhantomData,
@@ -448,6 +445,11 @@ where
             })
         };
 
+        debug!(
+            target: "robt  ", "{:?}/{}, new instance with config ...\n{}",
+            dir, name, config
+        );
+
         Ok(Robt {
             inner: sync::Mutex::new(inner),
             purger: Some(purger),
@@ -459,7 +461,6 @@ where
         let name: Name = TryFrom::try_from(IndexFileName(index_file))?;
 
         let snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
-        snapshot.log()?;
 
         let inner = InnerRobt::Snapshot {
             dir: dir.to_os_string(),
@@ -477,6 +478,11 @@ where
                 move || thread_purger(name, rx)
             })
         };
+
+        debug!(
+            target: "robt  ", "{:?}/{}, open instance with config ...\n{}",
+            dir, name, snapshot.config
+        );
 
         Ok(Robt {
             inner: sync::Mutex::new(inner),
@@ -733,7 +739,6 @@ where
 
     /// Application can set the start sequence number for this index.
     fn set_seqno(&mut self, _seqno: u64) -> Result<()> {
-        // noop
         Ok(())
     }
 
@@ -742,12 +747,9 @@ where
             InnerRobt::Snapshot {
                 dir, name, bitmap, ..
             } => {
-                info!(target: "robt  ", "{:?}, new reader ...", name);
-
                 //println!("Robt.to_reader() {:?} {}", dir, name);
                 let mut snapshot = Snapshot::open(dir, &name.0)?;
                 snapshot.set_bitmap(Arc::clone(bitmap));
-                snapshot.log()?;
                 Ok(snapshot)
             }
             InnerRobt::Build { .. } => err_at!(UnInitialized, msg: format!("Robt.to_reader()")),
@@ -768,38 +770,29 @@ where
             InnerRobt::Build {
                 dir, name, config, ..
             } => {
-                info!(target: "robt  ", "{:?}, flush commit ...", name);
-
-                let snapshot = {
+                let (snapshot, meta_block_bytes) = {
                     let config = config.clone();
                     let b = Builder::<K, V, B>::initial(dir, &name.0, config)?;
-                    b.build(scanner.scan()?, metacb(vec![]))?;
+                    let meta_block_bytes = b.build(scanner.scan()?, metacb(vec![]))?;
 
                     let snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
-                    snapshot.log()?;
-                    snapshot
+                    (snapshot, meta_block_bytes)
                 };
 
                 let stats = snapshot.to_stats()?;
                 let footprint = snapshot.footprint()?;
 
-                info!(
+                let index_file = snapshot.index_fd.to_file();
+                let vlog_file = snapshot
+                    .valog_fd
+                    .as_ref()
+                    .map(|(vf, _)| vf.clone())
+                    .unwrap_or(ffi::OsString::new());
+                debug!(
                     target: "robt  ",
-                    "{:?}, flushed to index file {:?}",
-                    name, snapshot.index_fd.to_file()
-                );
-
-                if let Some((vlog_file, _)) = &snapshot.valog_fd {
-                    info!(
-                        target: "robt  ",
-                        "{:?}, flushed to valog file {:?}", name, vlog_file
-                    );
-                }
-
-                info!(
-                    target: "robt  ",
-                    "{:?}, footprint {}, wrote {} bytes",
-                    name, footprint, footprint
+                    "{:?}/{}, flush commit to index_file:{:?}, vlog_file:{:?}  footprint:{} wrote:{}",
+                    dir, name, index_file, vlog_file, footprint,
+                    stats.z_bytes + stats.m_bytes + stats.v_bytes + meta_block_bytes
                 );
 
                 InnerRobt::Snapshot {
@@ -815,8 +808,6 @@ where
             InnerRobt::Snapshot {
                 dir, name, config, ..
             } => {
-                info!(target: "robt  ", "{:?}, incremental commit ...", name);
-
                 let mut old = Snapshot::<K, V, B>::open(dir, &name.0)?;
                 let old_seqno = old.to_seqno()?;
                 let old_bitmap = Arc::clone(&old.bitmap);
@@ -854,10 +845,10 @@ where
 
                     let bitmap = old_bitmap.or(&new_bitmap)?;
 
-                    info!(
+                    debug!(
                         target: "robt  ",
-                        "{:?}, old_bitmap({}) + new_bitmap({}) = {}",
-                        name, old_bitmap.len()?, new_bitmap.len()?, bitmap.len()?
+                        "{:?}/{}, incremental commit old_bitmap({}) + new_bitmap({}) = {}",
+                        dir, name, old_bitmap.len()?, new_bitmap.len()?, bitmap.len()?
                     );
 
                     let meta_block_bytes = {
@@ -866,7 +857,6 @@ where
                     };
 
                     let snapshot = Snapshot::<K, V, B>::open(dir, &name.0)?;
-                    snapshot.log()?;
 
                     // purge old snapshot's index file.
                     self.purger.as_ref().unwrap().post(old.index_fd.to_file())?;
@@ -877,27 +867,18 @@ where
                 let stats = snapshot.to_stats()?;
                 let footprint = snapshot.footprint()?;
 
-                info!(
+                let index_file = snapshot.index_fd.to_file();
+                let vlog_file = snapshot
+                    .valog_fd
+                    .as_ref()
+                    .map(|(vf, _)| vf.clone())
+                    .unwrap_or(ffi::OsString::new());
+                debug!(
                     target: "robt  ",
-                    "{:?}, commited to index file {:?}",
-                    name, snapshot.index_fd.to_file()
+                    "{:?}/{}, incremental commit to index_file:{:?}, vlog_file:{:?}  footprint:{} wrote:{}",
+                    dir, name, index_file, vlog_file, footprint,
+                    stats.z_bytes + stats.m_bytes + stats.v_bytes + meta_block_bytes
                 );
-                if let Some((vlog_file, _)) = &snapshot.valog_fd {
-                    info!(
-                        target: "robt  ",
-                        "{:?}, commited to valog file {:?}", name, vlog_file
-                    );
-                }
-
-                {
-                    let s = stats.clone();
-                    info!(
-                        target: "robt  ",
-                        "{:?}, footprint {}, wrote {} bytes",
-                        name, footprint,
-                        s.z_bytes + s.m_bytes + s.v_bytes + meta_block_bytes
-                    );
-                }
 
                 InnerRobt::Snapshot {
                     dir: dir.clone(),
@@ -922,7 +903,7 @@ where
             } => {
                 error!(
                     target: "robt  ",
-                    "{:?}, cannot compact in build state ...", name
+                    "{}, cannot compact in build state ...", name
                 );
 
                 (
@@ -962,8 +943,6 @@ where
                         scans::CompactScan::new(iter, cutoff)
                     };
 
-                    info!(target: "robt  ", "{:?}, compact ...", name);
-
                     let name = name.clone().next();
                     let (meta_block_bytes, snapshot) = {
                         let conf = {
@@ -992,7 +971,6 @@ where
 
                         (mbbytes, Snapshot::<K, V, B>::open(dir, &name.0)?)
                     };
-                    snapshot.log()?;
 
                     // purge old snapshots file(s).
                     self.purger.as_ref().unwrap().post(old.index_fd.to_file())?;
@@ -1006,28 +984,18 @@ where
                 let stats = snapshot.to_stats()?;
                 let footprint = snapshot.footprint()?;
 
-                info!(
+                let index_file = snapshot.index_fd.to_file();
+                let vlog_file = snapshot
+                    .valog_fd
+                    .as_ref()
+                    .map(|(vf, _)| vf.clone())
+                    .unwrap_or(ffi::OsString::new());
+                debug!(
                     target: "robt  ",
-                    "{:?}, compacted to index file {:?}",
-                    name, snapshot.index_fd.to_file()
+                    "{:?}/{}, compacted to index_file:{:?} vlog_file:{:?} footprint:{} wrote:{}",
+                    dir, name, index_file, vlog_file, footprint,
+                    stats.z_bytes + stats.m_bytes + stats.v_bytes + meta_block_bytes
                 );
-                if let Some((vlog_file, _)) = &snapshot.valog_fd {
-                    info!(
-                        target: "robt  ",
-                        "{:?}, compacted to valog file {:?}",
-                        name, vlog_file
-                    );
-                }
-
-                {
-                    let s = stats.clone();
-                    info!(
-                        target: "robt  ",
-                        "{:?}, footprint {}, wrote {} bytes",
-                        name, footprint,
-                        s.z_bytes + s.m_bytes + s.v_bytes + meta_block_bytes
-                    );
-                }
 
                 (
                     InnerRobt::Snapshot {
@@ -1048,19 +1016,34 @@ where
     }
 
     fn close(mut self) -> Result<()> {
+        let (dir, name) = match self.as_inner()?.deref() {
+            InnerRobt::Snapshot { dir, name, .. } => (dir.clone(), name.clone()),
+            InnerRobt::Build { dir, name, .. } => (dir.clone(), name.clone()),
+        };
+
         self.do_close()?;
+
+        debug!(target: "robt  ", "{:?}/{} closed", dir, name);
+
         Ok(())
     }
 
     fn purge(mut self) -> Result<()> {
         self.do_close()?;
-        match self.as_inner()?.deref() {
+        let (res, dir, name) = match self.as_inner()?.deref() {
             InnerRobt::Snapshot { dir, name, .. } => {
                 let snapshot = Snapshot::<K, V, B>::open(&dir, &name.0)?;
-                snapshot.purge()
+                (snapshot.purge(), dir.clone(), name.clone())
             }
-            InnerRobt::Build { .. } => err_at!(UnInitialized, msg: format!("Robt.purge()")),
-        }
+            InnerRobt::Build { dir, name, .. } => {
+                let res = err_at!(UnInitialized, msg: format!("Robt.purge()"));
+                (res, dir.clone(), name.clone())
+            }
+        };
+
+        debug!(target: "robt  ", "{:?}/{} purged", dir, name);
+
+        res
     }
 }
 
@@ -2514,17 +2497,19 @@ where
         match self.index_fd.as_fd().unlock() {
             Ok(_) => (),
             Err(err) => error!(
-                target: "robt  ", "{:?}, unlock index file {}", self.name, err
+                target: "robtr ", "{}, unlock index file {}", self.name, err
             ),
         }
         if let Some((_, fd)) = &self.valog_fd {
             match fd.unlock() {
                 Ok(_) => (),
                 Err(err) => error!(
-                    target: "robt  ", "{:?}, unlock vlog file {}", self.name, err
+                    target: "robtr ", "{}, unlock vlog file {}", self.name, err
                 ),
             }
         }
+
+        debug!(target: "robtr ", "{:?}/{}, snapshot dropped", self.dir, self.name);
     }
 }
 
@@ -2547,14 +2532,14 @@ where
         let stats: Stats = if let MetaItem::Stats(stats) = &meta_items[3] {
             Ok(stats.parse()?)
         } else {
-            err_at!(InvalidFile, msg: format!("{:?}/{:?}", dir, name))
+            err_at!(InvalidFile, msg: format!("{:?}/{}", dir, name))
         }?;
         let bitmap: Arc<B> = if let MetaItem::Bitmap(data) = &mut meta_items[1] {
             let bitmap = <B as Bloom>::from_vec(&data)?;
             data.drain(..);
             Ok(Arc::new(bitmap))
         } else {
-            err_at!(InvalidFile, msg: format!("{:?}/{:?}", dir, name))
+            err_at!(InvalidFile, msg: format!("{:?}/{}", dir, name))
         }?;
 
         let config: Config = stats.into();
@@ -2595,6 +2580,8 @@ where
         };
         snap.config = snap.to_stats()?.into();
 
+        debug!(target: "robtr ", "{:?}/{}, open snapshot", snap.dir, snap.name);
+
         Ok(snap) // Okey dockey
     }
 
@@ -2620,6 +2607,7 @@ where
     pub fn purge(self) -> Result<()> {
         let index_file = self.index_fd.to_file();
         let vlog_file = self.valog_fd.as_ref().map(|x| x.0.clone());
+        let (dir, name) = (self.dir.clone(), self.name.clone());
 
         mem::drop(self); // IMPORTANT: Close this snapshot first.
 
@@ -2630,7 +2618,7 @@ where
             _ => err_at!(Fatal, msg: format!("unreachable")),
         }?;
 
-        if let Some(vlog_file) = vlog_file {
+        let res = if let Some(vlog_file) = vlog_file {
             match purge_file(vlog_file.clone(), &mut vec![], &mut vec![]) {
                 "ok" => Ok(()),
                 "locked" => err_at!(InvalidFile, msg: format!("{:?} locked", vlog_file)),
@@ -2639,34 +2627,38 @@ where
             }
         } else {
             Ok(())
-        }
+        };
+
+        debug!(target: "robtr ", "{:?}/{}, snapshot purged", dir, name);
+
+        res
     }
 
     pub fn log(&self) -> Result<()> {
         info!(
-            target: "robt  ",
-            "{:?}, opening snapshot in dir {:?} config ...\n{}",
-            self.name, self.dir, self.config
+            target: "robtr ",
+            "{:?}/{}, opening snapshot config ...\n{}",
+            self.dir, self.name, self.config
         );
         for item in self.meta.iter().enumerate() {
             match item {
                 (0, MetaItem::Root(fpos)) => info!(
-                    target: "robt  ", "{:?}, meta-item root at {}",
+                    target: "robt  ", "{}, meta-item root at {}",
                     self.name, fpos
                 ),
                 (1, MetaItem::Bitmap(_)) => info!(
-                    target: "robt  ", "{:?}, meta-item bit-map", self.name
+                    target: "robt  ", "{}, meta-item bit-map", self.name
                 ),
                 (2, MetaItem::AppMetadata(data)) => info!(
-                    target: "robt  ", "{:?}, meta-item app-meta-data {} bytes",
+                    target: "robt  ", "{}, meta-item app-meta-data {} bytes",
                     self.name, data.len()
                 ),
                 (3, MetaItem::Stats(_)) => info!(
-                    target: "robt  ", "{:?}, meta-item stats\n{}",
+                    target: "robt  ", "{}, meta-item stats\n{}",
                     self.name, self.to_stats()?
                 ),
                 (4, MetaItem::Marker(data)) => info!(
-                    target: "robt  ", "{:?}, meta-item marker {} bytes",
+                    target: "robt  ", "{}, meta-item marker {} bytes",
                     self.name, data.len()
                 ),
                 _ => err_at!(Fatal, msg: format!("unreachable"))?,
@@ -3677,7 +3669,7 @@ where
                     }
                 }
                 Some(Err(err)) => {
-                    // println!("two {:?}", err);
+                    // println!("two {}", err);
                     self.mzs.truncate(0);
                     Some(Err(err))
                 }
@@ -3832,7 +3824,7 @@ where
                     }
                 }
                 Some(Err(err)) => {
-                    // println!("two {:?}", err);
+                    // println!("two {}", err);
                     self.mzs.truncate(0);
                     Some(Err(err))
                 }
@@ -4096,7 +4088,7 @@ fn purge_file(
                 let res = match fs::remove_file(&file) {
                     Err(err) => (
                         "error", // return error
-                        format!("remove_file {:?} {:?}", file, err),
+                        format!("remove_file {:?} {}", file, err),
                     ),
                     Ok(_) => ("ok", format!("purged file {:?}", file)),
                 };
@@ -4127,7 +4119,7 @@ fn purge_file(
 }
 
 fn thread_purger(name: String, rx: rt::Rx<ffi::OsString, ()>) -> Result<()> {
-    info!(target: "robtpr", "{:?}, starting purger ...", name);
+    info!(target: "robtpr", "{}, starting purger ...", name);
 
     let mut locked_files = vec![];
     let mut err_files = vec![];
@@ -4146,7 +4138,7 @@ fn thread_purger(name: String, rx: rt::Rx<ffi::OsString, ()>) -> Result<()> {
         }
         if err_files.len() > 0 {
             error!(
-                target: "robtpr", "{:?}, failed purging {} files",
+                target: "robtpr", "{}, failed purging {} files",
                 name, err_files.len()
             );
         }
@@ -4157,10 +4149,10 @@ fn thread_purger(name: String, rx: rt::Rx<ffi::OsString, ()>) -> Result<()> {
         purge_file(file, &mut locked_files, &mut err_files);
     }
     for file in err_files.clone().into_iter() {
-        error!(target: "robtpr", "{:?}, error purging file {:?}", name, file);
+        error!(target: "robtpr", "{}, error purging file {:?}", name, file);
     }
 
-    info!(target: "robtpr", "{:?}, stopping purger ...", name);
+    info!(target: "robtpr", "{}, stopping purger ...", name);
 
     let files = {
         let mut files = vec![];

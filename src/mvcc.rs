@@ -132,11 +132,6 @@ where
     }
 
     fn new(&self, name: &str) -> Result<Self::I> {
-        info!(
-            target: "mvccfc",
-            "{:?}, new mvcc instance, with config {}", name, self.to_config_string()
-        );
-
         let mut index = if self.lsm {
             Mvcc::new_lsm(name)
         } else {
@@ -145,6 +140,12 @@ where
             index
         };
         index.set_spinlatch(self.spin)?;
+
+        info!(
+            target: "mvccfc",
+            "{}, new mvcc, with config {}", name, self.to_config_string()
+        );
+
         Ok(index)
     }
 }
@@ -188,7 +189,7 @@ where
             }
             error!(
                 target: "mvcc  ",
-                "{:?}, can't drop before read/write handles {}", self.name, n
+                "{}, can't drop before read/write handles {}", self.name, n
             );
         }
 
@@ -227,7 +228,8 @@ where
         if n != 0 {
             panic!("leak or double free n_nodes:{}", n);
         }
-        debug!(target: "mvcc  ", "{:?}, dropped ...", self.name);
+
+        debug!(target: "mvcc  ", "{}, dropped ...", self.name);
     }
 }
 
@@ -262,6 +264,12 @@ where
             debris.n_count,
             vec![], /*reclaim*/
         );
+
+        debug!(
+            target: "mvcc  ", "{}, from llrb seqno:{} len:{}",
+            mvcc_index.name, debris.seqno, debris.n_count
+        );
+
         Ok(mvcc_index)
     }
 }
@@ -354,6 +362,12 @@ where
             };
             self.n_reclaimed = 0;
             self.snapshot.n_nodes.store(0, SeqCst);
+
+            debug!(
+                target: "mvcc  ", "{}, squashing seqno:{} len:{}",
+                self.name, snapshot.seqno, snapshot.n_count
+            );
+
             Ok(SquashDebris {
                 root: snapshot.root.take(),
                 seqno: snapshot.seqno,
@@ -367,11 +381,20 @@ where
         }
     }
 
-    pub fn clone(&self) -> Result<Box<Mvcc<K, V>>> {
+    pub fn clone(&self) -> Result<Box<Mvcc<K, V>>>
+    where
+        K: Footprint,
+        V: Footprint,
+    {
         let n = self.multi_rw();
         if n > 0 {
             return err_at!(APIMisuse, msg: format!("active-handles:{}", n));
         }
+
+        debug!(
+            target: "mvcc  ", "{}, cloning seqno:{} len:{}",
+            self.name, self.to_seqno()?, self.len()
+        );
 
         let cloned = Box::new(Mvcc {
             name: self.name.clone(),
@@ -577,6 +600,9 @@ where
             let s = OuterSnapshot::clone(&self.snapshot);
             let root = s.root_duplicate();
             self.snapshot.shift_snapshot(root, seqno, s.n_count, vec![]);
+
+            debug!(target: "mvcc  ", "{}, set-seqno {}", self.name, seqno);
+
             Ok(())
         } else {
             err_at!(APIMisuse, msg: format!("active-handles:{}", n))
@@ -626,7 +652,7 @@ where
         let metadata = self.snapshot.to_metadata()?;
         self.snapshot.set_metadata(metacb(metadata))?;
 
-        info!(target: "mvcc  ", "{:?}, committed {} items", self.name, count);
+        info!(target: "mvcc  ", "{}, committed {} items", self.name, count);
         Ok(())
     }
 
@@ -684,7 +710,7 @@ where
             count += LIMIT;
         }?;
 
-        info!(target: "mvcc  ", "{:?}, compacted {} items", self.name, count);
+        info!(target: "mvcc  ", "{}, compacted {} items", self.name, count);
         Ok(count)
     }
 
@@ -2431,7 +2457,7 @@ where
     V: Clone + Diff,
 {
     fn new(index: Box<ffi::c_void>, _refn: Arc<u32>) -> MvccReader<K, V> {
-        let id = Arc::strong_count(&_refn);
+        let id = Arc::strong_count(&_refn) - 2;
         let mut r = MvccReader {
             _refn,
             id,
@@ -2441,7 +2467,7 @@ where
         };
 
         let index: &mut Mvcc<K, V> = r.as_mut();
-        debug!(target: "mvcc  ", "{:?}, new reader {}", index.name, id);
+        debug!(target: "mvcc  ", "{}, new reader {}", index.name, id);
         r
     }
 }
@@ -2454,7 +2480,7 @@ where
     fn drop(&mut self) {
         let id = self.id;
         let index: &mut Mvcc<K, V> = self.as_mut();
-        debug!(target: "mvcc  ", "{:?}, dropping reader {}", index.name, id);
+        debug!(target: "mvcc  ", "{}, dropping reader {}", index.name, id);
 
         // leak this index, it is only a reference
         Box::leak(self.index.take().unwrap());
@@ -2627,7 +2653,7 @@ where
     V: Clone + Diff,
 {
     fn new(index: Box<ffi::c_void>, _refn: Arc<u32>) -> MvccWriter<K, V> {
-        let id = Arc::strong_count(&_refn);
+        let id = Arc::strong_count(&_refn) - 2;
         let mut w = MvccWriter {
             _refn,
             id,
@@ -2637,7 +2663,7 @@ where
         };
 
         let index: &mut Mvcc<K, V> = w.as_mut();
-        debug!(target: "mvcc  ", "{:?}, new writer {}", index.name, id);
+        debug!(target: "mvcc  ", "{}, new writer {}", index.name, id);
         w
     }
 }
@@ -2650,7 +2676,7 @@ where
     fn drop(&mut self) {
         let id = self.id;
         let index: &mut Mvcc<K, V> = self.as_mut();
-        debug!(target: "mvcc  ", "{:?}, dropping writer {}", index.name, id);
+        debug!(target: "mvcc  ", "{}, dropping writer {}", index.name, id);
 
         // leak this index, it is only a reference
         Box::leak(self.index.take().unwrap());

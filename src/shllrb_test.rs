@@ -17,7 +17,7 @@ fn test_name() {
         );
         assert_eq!(
             format!("{:?}", name),
-            format!("{:?}", format!("test-shllrb-shard-{:03}", shard))
+            format!("{}", format!("test-shllrb-shard-{:03}", shard))
         );
         let (name, shard): (String, usize) = name.try_into().unwrap();
         assert_eq!(name, "test-shllrb".to_string());

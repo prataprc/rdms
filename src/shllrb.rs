@@ -23,7 +23,7 @@ use crate::{
     llrb::{Llrb, LlrbReader, LlrbWriter, Stats as LlrbStats},
     scans, thread as rt, util,
 };
-use log::{debug, error, info, warn};
+use log::{debug, error, warn};
 
 /// Periodic interval to manage auto-sharding. Refer to auto_shard() for
 /// more details.
@@ -74,7 +74,7 @@ impl fmt::Display for ShardName {
 
 impl fmt::Debug for ShardName {
     fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
-        write!(f, "{:?}", self.0)
+        write!(f, "{}", self.0)
     }
 }
 
@@ -170,7 +170,6 @@ where
 
     fn new(&self, name: &str) -> Result<Self::I> {
         let index = ShLlrb::<K, V>::new(name, self.clone().into());
-        index.log();
         Ok(index)
     }
 }
@@ -432,7 +431,7 @@ where
                 Ok(snapshot) => snapshot,
                 Err(err) => {
                     error!(
-                        target: "shllrb", "{:?}, lock snapshot:{:?}",
+                        target: "shllrb", "{}, lock snapshot:{:?}",
                         self.name, err
                     );
                     break;
@@ -443,14 +442,14 @@ where
                 Ok((_, _, active)) if active > 0 => {
                     error!(
                         target: "shllrb",
-                        "{:?}, open read/write handles {}", self.name, active
+                        "{}, open read/write handles {}", self.name, active
                     );
                     continue;
                 }
                 Ok((_, _, _)) => break,
                 Err(err) => {
                     error!(
-                        target: "shllrb", "{:?}, error locking {:?}",
+                        target: "shllrb", "{}, error locking {:?}",
                         self.name, err
                     );
                     break;
@@ -461,12 +460,14 @@ where
         match self.auto_shard.take() {
             Some(auto_shard) => match auto_shard.close_wait() {
                 Err(err) => error!(
-                    target: "shllrb", "{:?}, auto-shard {:?}", self.name, err
+                    target: "shllrb", "{}, auto-shard {:?}", self.name, err
                 ),
                 Ok(_) => (),
             },
             None => (),
         }
+
+        debug!(target: "shllrb", "{}, dropped", self.name);
     }
 }
 
@@ -558,6 +559,12 @@ where
             None
         };
 
+        debug!(
+            target: "shllrb",
+            "{}, new sharded-llrb instance, with config\n{}",
+            index.name, index.to_config_string()
+        );
+
         index
     }
 }
@@ -618,15 +625,6 @@ where
         let mut stats = statss.into_iter().fold(stats, |stats, s| stats.merge(s));
         stats.name = self.to_name();
         Ok(stats)
-    }
-
-    /// Applications can call this to log Information log for application
-    pub fn log(&self) {
-        info!(
-            target: "shllrb",
-            "{:?}, new sharded-llrb instance, with config {}",
-            self.name, self.to_config_string()
-        );
     }
 
     /// Try to balance the underlying shards using splits and merges.
@@ -737,7 +735,7 @@ where
         let new_count = snapshot.shards.len();
 
         if old_count != new_count {
-            info!(
+            debug!(
                 target: "shllrb",
                 "{}, {} old-shards balanced to {} new-shards",
                 name, old_count, new_count,
@@ -774,9 +772,7 @@ where
         merges.reverse(); // in descending order of offset
         let n_merges = merges.len();
         if n_merges > 0 {
-            info!(
-                target: "shllrb", "{:?}, {} shards to merge", name, n_merges
-            );
+            debug!(target: "shllrb", "{}, {} shards to merge", name, n_merges);
         }
 
         // phase-2 spawn threads to commit smaller shards into left/right shard
@@ -808,7 +804,7 @@ where
                     snapshot = gl.snapshot;
                 }
                 Err(err) => {
-                    error!(target: "shllrb", "merge: {:?}", err);
+                    error!(target: "shllrb", "{}, merge: {:?}", name, err);
                     errs.push(err);
                 }
             }
@@ -855,7 +851,7 @@ where
         splits.reverse(); // in descending order offset.
         let n_splits = splits.len();
         if n_splits > 0 {
-            info!(
+            debug!(
                 target: "shllrb", "{}, {} shards to split", name, n_splits
             );
         }
@@ -882,7 +878,7 @@ where
                     snapshot = gl.snapshot;
                 }
                 Err(err) => {
-                    error!(target: "shllrb", "split: {:?}", err);
+                    error!(target: "shllrb", "{}, split: {:?}", name, err);
                     errs.push(err);
                 }
             }
@@ -899,6 +895,21 @@ where
                 .join("; ");
             err_at!(Fatal, msg: msg)
         }
+    }
+}
+
+impl<K, V> ShLlrb<K, V>
+where
+    K: Clone + Ord + Footprint,
+    V: Clone + Diff + Footprint,
+{
+    fn do_close(&mut self) -> Result<()> {
+        match self.auto_shard.take() {
+            Some(auto_shard) => auto_shard.close_wait()?,
+            None => (),
+        }
+
+        Ok(())
     }
 }
 
@@ -1055,7 +1066,7 @@ where
 
         warn!(
             target: "shllrb",
-            "{:?}, commit started (blocks index meta-ops) ...", self.name,
+            "{}, commit started (blocks index meta-ops) ...", self.name,
         );
 
         // println!("num ranges {}", ranges.len());
@@ -1078,6 +1089,8 @@ where
 
         gl.snapshot.metadata = metacb(gl.snapshot.metadata.clone());
 
+        debug!(target: "shllrb", "{}, commit ok", self.name);
+
         Ok(())
     }
 
@@ -1089,23 +1102,26 @@ where
             count += shard.as_mut_index().compact(cutoff.clone())?
         }
 
-        info!(target: "shllrb", "{:?}, compacted {} items", self.name, count);
+        debug!(target: "shllrb", "{}, compacted {} items", self.name, count);
         Ok(count)
     }
 
     // to be called only after all other readers and writers exit.
     fn close(mut self) -> Result<()> {
-        match self.auto_shard.take() {
-            Some(auto_shard) => auto_shard.close_wait()?,
-            None => (),
-        }
+        self.do_close()?;
+
+        debug!(target: "shllrb", "{}, closed", self.name);
 
         Ok(())
     }
 
     // to be called only after all other readers and writers exit.
-    fn purge(self) -> Result<()> {
-        self.close()
+    fn purge(mut self) -> Result<()> {
+        self.do_close()?;
+
+        debug!(target: "shllrb", "{}, purged", self.name);
+
+        Ok(())
     }
 }
 
@@ -1300,7 +1316,7 @@ where
             snapshot,
             readers,
         };
-        info!(target: "shllrb", "{:?}, new reader {} ...", value.name, value.id);
+        debug!(target: "shllrb", "{}/{}, new reader ...", value.name, value.id);
         value
     }
 
@@ -1372,7 +1388,7 @@ where
     V: Clone + Diff + Footprint,
 {
     fn drop(&mut self) {
-        debug!(target: "shllrb", "{:?}, dropping reader {}", self.name, self.id);
+        debug!(target: "shllrb", "{}/{}, dropping reader", self.name, self.id);
     }
 }
 
@@ -1633,6 +1649,9 @@ where
             root_seqno,
             writers,
         };
+
+        debug!(target: "shllrb", "{}/{}, new writer ...", value.name, value.id);
+
         value
     }
 
@@ -1676,7 +1695,7 @@ where
     V: Clone + Diff,
 {
     fn drop(&mut self) {
-        debug!(target: "shllrb", "{:?}, dropping writer {}", self.name, self.id);
+        debug!(target: "shllrb", "{}/{}, dropped writer", self.name, self.id);
     }
 }
 
@@ -2316,7 +2335,7 @@ where
     V: 'static + Send + Clone + Diff + Footprint,
     <V as Diff>::D: Send,
 {
-    info!(
+    debug!(
         target: "shllrb",
         "{}, auto-sharding thread started with interval {:?}",
         index_name, config.interval,
@@ -2325,10 +2344,12 @@ where
     let mut elapsed = time::Duration::new(0, 0);
     loop {
         let resp_tx = {
-            let interval = {
-                let interval = ((config.interval * 2) + elapsed) / 2;
-                cmp::min(interval, elapsed)
+            let interval = if elapsed < config.interval {
+                config.interval - elapsed
+            } else {
+                time::Duration::new(0, 0)
             };
+
             match rx.recv_timeout(interval) {
                 Ok((cmd, resp_tx)) if cmd == "balance" => resp_tx,
                 Ok(_) => unreachable!(),
@@ -2345,9 +2366,9 @@ where
             ShLlrb::<K, V>::prune_rw(s)?
         };
         if r > 0 || w > 0 {
-            info!(
+            debug!(
                 target: "shllrb",
-                "{:?}, pruned {} readers {} writers", index_name, r, w
+                "{}, pruned {} readers {} writers", index_name, r, w
             );
         }
 
@@ -2366,11 +2387,11 @@ where
         match resp_tx {
             Some(tx) => err_at!(IPCFail, tx.send(res))?,
             None => match res {
-                Ok(n) => info!(
-                    target: "shllrb", "{:?}, balance done: {}", index_name, n
+                Ok(n) => debug!(
+                    target: "shllrb", "{}, balance done: {}", index_name, n
                 ),
-                Err(err) => info!(
-                    target: "dgm   ", "{:?}, balance err, {:?}", index_name, err
+                Err(err) => debug!(
+                    target: "shllrb", "{}, balance err, {:?}", index_name, err
                 ),
             },
         }
@@ -2404,15 +2425,15 @@ where
 
     match other_index.commit(iter, |meta| meta) {
         Ok(()) if c_off > o_off => {
-            info!(target: "shllrb", "{} left merge\n{}", o_name, o_stats);
+            debug!(target: "shllrb", "{} left merge\n{}", o_name, o_stats);
             Ok((c_off, o_off, Some(curr_hk), other))
         }
         Ok(()) => {
-            info!(target: "shllrb", "{} right merge\n{}", o_name, o_stats);
+            debug!(target: "shllrb", "{} right merge\n{}", o_name, o_stats);
             Ok((c_off, o_off, None, other))
         }
         Err(err) => {
-            error!(
+            debug!(
                 target: "shllrb",
                 "{}, error merging {} index: {:?}",
                 o_name, curr_name, err
@@ -2447,8 +2468,8 @@ where
     match curr_index.split(n1.to_string(), n2.to_string()) {
         Ok((one, two)) => {
             let (s1, s2) = (one.to_stats()?, two.to_stats()?);
-            info!(target: "llrb  ", "{} split-shard 1st half\n{}", n1, s1);
-            info!(target: "llrb  ", "{} split-shard 2nd half\n{}", n2, s2);
+            debug!(target: "llrb  ", "{} split-shard 1st half\n{}", n1, s1);
+            debug!(target: "llrb  ", "{} split-shard 2nd half\n{}", n2, s2);
 
             let one = {
                 let high_key = Bound::Excluded(two.first().unwrap().to_key());

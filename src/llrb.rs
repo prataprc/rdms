@@ -388,11 +388,6 @@ where
             return err_at!(APIMisuse, msg: format!("active-handles:{}", n));
         }
 
-        debug!(
-            target: "llrb  ", "{}, splitting seqno:{} len:{}",
-            self.name, self.seqno, self.n_count
-        );
-
         let (mut one, mut two) = if self.lsm {
             (Llrb::new_lsm(&name1), Llrb::new_lsm(&name2))
         } else {
@@ -413,12 +408,12 @@ where
         two.seqno = self.seqno;
 
         debug!(
-            target: "llrb  ", "{}, split1 seqno:{} len:{}",
-            one.name, one.seqno, one.n_count
-        );
-        debug!(
-            target: "llrb  ", "{}, split2 seqno:{} len:{}",
-            one.name, one.seqno, one.n_count
+            target: "llrb  ",
+            "{}, splitting (seqno:{} len:{}) -> {}(seqno:{} len:{}) {}(seqno:{} len:{})",
+            self.name, self.seqno, self.n_count,
+            one.name, one.seqno, one.n_count,
+            two.name, two.seqno, two.n_count
+
         );
 
         // validation

@@ -415,7 +415,7 @@ where
             None => (),
         }
 
-        debug!(target: "robt  ", "{:?}/{}, at dropped", dir, name);
+        debug!(target: "robt  ", "{:?}/{}, dropped", dir, name);
     }
 }
 
@@ -4101,11 +4101,11 @@ fn purge_file(
     };
     match res {
         ("ok", msg) => {
-            info!(target: "robtpr", "{}", msg);
+            debug!(target: "robtpr", "{}", msg);
             "ok"
         }
         ("locked", msg) => {
-            info!(target: "robtpr", "{}", msg);
+            debug!(target: "robtpr", "{}", msg);
             locked_files.push(file);
             "locked"
         }
@@ -4119,8 +4119,6 @@ fn purge_file(
 }
 
 fn thread_purger(name: String, rx: rt::Rx<ffi::OsString, ()>) -> Result<()> {
-    info!(target: "robtpr", "{}, starting purger ...", name);
-
     let mut locked_files = vec![];
     let mut err_files = vec![];
 
@@ -4151,8 +4149,6 @@ fn thread_purger(name: String, rx: rt::Rx<ffi::OsString, ()>) -> Result<()> {
     for file in err_files.clone().into_iter() {
         error!(target: "robtpr", "{}, error purging file {:?}", name, file);
     }
-
-    info!(target: "robtpr", "{}, stopping purger ...", name);
 
     let files = {
         let mut files = vec![];

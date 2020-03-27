@@ -5,7 +5,7 @@
 //! is expected hold onto its own state, FnOnce in rust parlance, and handle
 //! all inter-thread communication via channels and message queues.
 
-use log::{error, info};
+use log::{debug, error};
 
 #[allow(unused_imports)]
 use std::{
@@ -88,7 +88,7 @@ impl<Q, R, T> Drop for Thread<Q, R, T> {
             }
         }
 
-        info!(target: "thread", "{} dropped", self.name);
+        debug!(target: "thread", "{} dropped", self.name);
     }
 }
 
@@ -101,7 +101,7 @@ impl<Q, R, T> Thread<Q, R, T> {
         N: 'static + Send + FnOnce() -> Result<T>,
         T: 'static + Send,
     {
-        info!(target: "thread", "{} spawned in async mode", name);
+        debug!(target: "thread", "{} spawned in async mode", name);
 
         let (tx, rx) = mpsc::channel();
         let handle = thread::spawn(main_loop(rx));
@@ -123,7 +123,7 @@ impl<Q, R, T> Thread<Q, R, T> {
         N: 'static + Send + FnOnce() -> Result<T>,
         T: 'static + Send,
     {
-        info!(target: "thread", "{} spawned in sync mode", name);
+        debug!(target: "thread", "{} spawned in sync mode", name);
 
         let (tx, rx) = mpsc::sync_channel(channel_size);
         let handle = thread::spawn(main_loop(rx));

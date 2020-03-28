@@ -26,6 +26,27 @@ fn test_name() {
 }
 
 #[test]
+fn test_auto_shard_interval() {
+    let seed: u128 = random();
+    // let seed: u128 = 137122643011174645787755929141427491522;
+    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    println!("seed {}", seed);
+
+    let limit = time::Duration::from_secs(32);
+    let mut interval = time::Duration::from_secs(1);
+    for _ in 0..100 {
+        let elapsed = time::Duration::from_millis(rng.gen::<u64>() % 100_000);
+        interval = auto_shard_interval(elapsed, interval, limit);
+        // println!("elapsed:{:?} interval:{:?}", elapsed, interval);
+    }
+    for _ in 0..100 {
+        let elapsed = time::Duration::from_millis(rng.gen::<u64>() % 10);
+        interval = auto_shard_interval(elapsed, interval, limit);
+        // println!("elapsed:{:?} interval:{:?}", elapsed, interval);
+    }
+}
+
+#[test]
 fn test_len() {
     let config: Config = Default::default();
     let mut index: Box<ShLlrb<i32, Empty>> = ShLlrb::new("test-shllrb", config);

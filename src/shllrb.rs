@@ -2342,14 +2342,10 @@ where
     );
 
     let mut elapsed = time::Duration::new(0, 0);
+    let mut interval = time::Duration::from_secs(1);
     loop {
         let resp_tx = {
-            let interval = if elapsed < config.interval {
-                config.interval - elapsed
-            } else {
-                time::Duration::new(0, 0)
-            };
-
+            interval = auto_shard_interval(elapsed, interval, config.interval);
             match rx.recv_timeout(interval) {
                 Ok((cmd, resp_tx)) if cmd == "balance" => resp_tx,
                 Ok(_) => unreachable!(),
@@ -2583,6 +2579,22 @@ impl SplitOrder {
 
     fn take(self, n: usize) -> Vec<usize> {
         self.shards.into_iter().take(n).map(|x| x.0).collect()
+    }
+}
+
+fn auto_shard_interval(
+    elapsed: time::Duration,
+    interval: time::Duration,
+    limit: time::Duration,
+) -> time::Duration {
+    if elapsed > (interval * 2) && (interval * 2) > limit {
+        limit
+    } else if elapsed > (interval * 2) {
+        cmp::min(interval * 2, limit)
+    } else if elapsed > interval {
+        cmp::min(elapsed, limit)
+    } else {
+        cmp::min(interval, limit)
     }
 }
 

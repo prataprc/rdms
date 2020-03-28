@@ -1,6 +1,6 @@
 //! Module `shrobt` implement an ordered set of index using Robt shards.
 
-use log::{error, info};
+use log::{debug, error};
 use toml;
 
 use std::{
@@ -261,6 +261,7 @@ where
     <V as Diff>::D: Serialize,
     B: 'static + Send + Bloom,
 {
+    dir: ffi::OsString,
     name: String,
     mmap: bool,
 
@@ -287,6 +288,7 @@ where
         };
 
         ShRobt {
+            dir: self.dir.clone(),
             name: self.name.clone(),
             mmap: self.mmap.clone(),
             seqno: self.seqno.clone(),
@@ -327,7 +329,10 @@ where
             shards.push(Shard::new_build(index));
         }
 
+        debug!(target: "shrobt", "{:?}/{} new instance", dir, name);
+
         Ok(ShRobt {
+            dir: dir.to_os_string(),
             name: name.to_string(),
             mmap,
 
@@ -369,7 +374,10 @@ where
             Self::get_metadata(&mut indexes)?;
         let shards = Arc::new(Mutex::new(robts_to_shards(indexes)?));
 
+        debug!(target: "shrobt", "{:?}/{} open instance", dir, name);
+
         let index = ShRobt {
+            dir: dir.to_os_string(),
             name: name.to_string(),
             mmap,
 
@@ -800,18 +808,20 @@ where
 
         let (iters, pfs, r) = match (state.as_str(), re_ranges, re_iters) {
             ("build", _, _) => {
-                info!(
-                    target: "shrobt", "{:?}, initial commit", self.name,
+                debug!(
+                    target: "shrobt", "{:?}/{}, initial commit",
+                    self.dir, self.name
                 );
-                // println!("{:?}, initial shrobt-commit", self.name);
+                // println!("{}, initial shrobt-commit", self.name);
 
                 let iters = scanner.scans(self.to_num_shards()?)?;
                 (iters, vec![], None)
             }
             ("snapshot", Some(re_ranges), Some(re_iters)) => {
-                info!(
+                debug!(
                     target: "shrobt",
-                    "{:?}, commit with rebalance {}", self.name, re_ranges.len()
+                    "{:?}/{}, commit with rebalance {}",
+                    self.dir, self.name, re_ranges.len()
                 );
 
                 let purge_files = self.to_shard_files()?;
@@ -843,11 +853,11 @@ where
                 (iters, purge_files, None)
             }
             ("snapshot", None, _) => {
-                info!(
-                    target: "shrobt", "{:?}, commit without rebalance",
-                    self.name,
+                debug!(
+                    target: "shrobt", "{:?}/{}, commit without rebalance",
+                    self.dir, self.name
                 );
-                // println!("{:?}, shrobt-commit without rebalance", self.name);
+                // println!("{}, shrobt-commit without rebalance", self.name);
 
                 let r = self.to_reader()?;
 
@@ -1018,6 +1028,11 @@ where
         // purged only after new version for all shards are persisted. So
         // that recovery is possible.
         mem::drop(r);
+
+        debug!(
+            target: "shrobt", "{:?}/{}, compact items {}",
+            self.dir, self.name, count
+        );
 
         Ok(count)
     }

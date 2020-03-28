@@ -30,7 +30,7 @@
 //! [LSM mode]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
 //!
 
-use log::{debug, error, info, warn};
+use log::{debug, error, info, trace, warn};
 
 use std::{
     borrow::Borrow,
@@ -2033,7 +2033,7 @@ where
         };
 
         let index: &mut Llrb<K, V> = r.as_mut();
-        debug!(
+        trace!(
             target: "llrb  ", "{}, new reader {} ...",
             index.name, id
         );
@@ -2050,7 +2050,7 @@ where
     fn drop(&mut self) {
         let id = self.id;
         let index: &mut Llrb<K, V> = self.as_mut();
-        debug!(target: "llrb  ", "{}, dropping reader {}", index.name, id);
+        trace!(target: "llrb  ", "{}, dropping reader {}", index.name, id);
 
         // leak this index, it is only a reference
         Box::leak(self.index.take().unwrap());
@@ -2233,7 +2233,7 @@ where
         };
 
         let index: &mut Llrb<K, V> = w.as_mut();
-        debug!(target: "llrb  ", "{}, new writer {}", index.name, id);
+        trace!(target: "llrb  ", "{}, new writer {}", index.name, id);
 
         w
     }
@@ -2247,7 +2247,7 @@ where
     fn drop(&mut self) {
         let id = self.id;
         let index: &mut Llrb<K, V> = self.as_mut();
-        debug!(target: "llrb  ", "{}, dropping writer {}", index.name, id);
+        trace!(target: "llrb  ", "{}, dropping writer {}", index.name, id);
 
         // leak this index, it is only a reference
         Box::leak(self.index.take().unwrap());

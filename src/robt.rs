@@ -1744,42 +1744,41 @@ impl FromStr for Stats {
         let js: Json = err_at!(InvalidInput, s.parse())?;
 
         let to_usize = |key: &str| -> Result<usize> {
-            match err_at!(InvalidInput, js.get(key))?.integer() {
+            match err_at!(InvalidInput, js.get(key))?.to_integer() {
                 Some(n) => convert_at!(n),
                 None => err_at!(InvalidInput, msg: format!("key:{}", key)),
             }
         };
         let to_u64 = |key: &str| -> Result<u64> {
-            match err_at!(InvalidInput, js.get(key))?.integer() {
+            match err_at!(InvalidInput, js.get(key))?.to_integer() {
                 Some(n) => convert_at!(n),
                 None => err_at!(InvalidInput, msg: format!("key:{}", key)),
             }
         };
         let to_i128 = |key: &str| -> Result<i128> {
-            match err_at!(InvalidInput, js.get(key))?.integer() {
+            match err_at!(InvalidInput, js.get(key))?.to_integer() {
                 Some(n) => convert_at!(n),
                 None => err_at!(InvalidInput, msg: format!("key:{}", key)),
             }
         };
         let to_bool = |key: &str| -> Result<bool> {
-            match err_at!(InvalidInput, js.get(key))?.boolean() {
+            match err_at!(InvalidInput, js.get(key))?.to_bool() {
                 Some(val) => Ok(val),
                 None => err_at!(InvalidInput, msg: format!("key:{}", key)),
             }
         };
         let to_string = |key: &str| -> Result<String> {
-            match err_at!(InvalidInput, js.get(key))?.string() {
-                Some(val) => Ok(val),
+            match err_at!(InvalidInput, js.get(key))?.as_str() {
+                Some(val) => Ok(val.to_string()),
                 None => err_at!(InvalidInput, msg: format!("key:{}", key)),
             }
         };
         let vlog_file = {
-            let arg = err_at!(InvalidInput, js.get("/vlog_file"))?.string();
-            match arg {
+            match err_at!(InvalidInput, js.get("/vlog_file"))?.as_str() {
                 Some(s) if s.len() == 0 => None,
                 None => None,
                 Some(s) => {
-                    let vlog_file: ffi::OsString = s.into();
+                    let vlog_file: ffi::OsString = s.to_string().into();
                     Some(vlog_file)
                 }
             }

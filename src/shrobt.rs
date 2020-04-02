@@ -240,16 +240,16 @@ where
 {
     type I = ShRobt<K, V, B>;
 
+    fn to_type(&self) -> String {
+        "shrobt".to_string()
+    }
+
     fn new(&self, dir: &ffi::OsStr, name: &str) -> Result<ShRobt<K, V, B>> {
         ShRobt::new(dir, name, self.config.clone(), self.num_shards, self.mmap)
     }
 
     fn open(&self, dir: &ffi::OsStr, name: &str) -> Result<ShRobt<K, V, B>> {
         ShRobt::open(dir, name, self.mmap)
-    }
-
-    fn to_type(&self) -> String {
-        "shrobt".to_string()
     }
 }
 
@@ -653,7 +653,11 @@ where
             .any(|ratio| (ratio < 0.5) || (ratio > 1.5)); // TODO: no magic
 
         let mut partitions = self.to_partitions()?;
-        // println!("rebalance partitions {} {}", partitions.len(), num_shards);
+        debug!(
+            target: "shrobt",
+            "rebalance partitions {} {} {}",
+            do_rebalance, partitions.len(), num_shards
+        );
 
         let mut ranges = match (do_rebalance, partitions.len()) {
             (false, _) | (true, 0) => return Ok(None),

@@ -1385,41 +1385,31 @@ pub(crate) fn write_meta_items(
     let (mut hdr, mut block) = (vec![], vec![]);
     hdr.resize(40, 0);
 
+    // (fpos, bitmap-len, app-meta-len, stats-len)
+    let mut debug_args: (u64, u64, u64, u64) = Default::default();
     for (i, item) in items.into_iter().enumerate() {
         match (i, item) {
             (0, MetaItem::Root(fpos)) => {
-                debug!(
-                    target: "robt  ", "{:?}, writing root at {} ...",
-                    file, fpos
-                );
                 hdr[0..8].copy_from_slice(&fpos.to_be_bytes());
+                debug_args.0 = fpos;
             }
             (1, MetaItem::Bitmap(bitmap)) => {
                 let ln: u64 = convert_at!(bitmap.len())?;
-                debug!(
-                    target: "robt  ", "{:?}, writing bitmap {} bytes ...",
-                    file, ln
-                );
                 hdr[8..16].copy_from_slice(&ln.to_be_bytes());
                 block.extend_from_slice(&bitmap);
+                debug_args.1 = ln;
             }
             (2, MetaItem::AppMetadata(md)) => {
                 let ln: u64 = convert_at!(md.len())?;
-                debug!(
-                    target: "robt  ", "{:?}, writing app-meta {} bytes ...",
-                    file, ln
-                );
                 hdr[16..24].copy_from_slice(&ln.to_be_bytes());
                 block.extend_from_slice(&md);
+                debug_args.2 = ln;
             }
             (3, MetaItem::Stats(s)) => {
                 let ln: u64 = convert_at!(s.len())?;
-                debug!(
-                    target: "robt  ", "{:?}, writing stats {} bytes ...",
-                    file, ln
-                );
                 hdr[24..32].copy_from_slice(&ln.to_be_bytes());
                 block.extend_from_slice(s.as_bytes());
+                debug_args.3 = ln;
             }
             (4, MetaItem::Marker(data)) => {
                 let ln: u64 = convert_at!(data.len())?;
@@ -1429,6 +1419,11 @@ pub(crate) fn write_meta_items(
             (i, m) => return err_at!(Fatal, msg: format!("meta-item {},{}", i, m)),
         }
     }
+    debug!(
+        target: "robt  ",
+        "{:?}, writing root:{} bitmap_len:{} meta_len:{}  stats_len:{}",
+        file, debug_args.0, debug_args.1, debug_args.2, debug_args.3,
+    );
     block.extend_from_slice(&hdr[..]);
 
     // flush / append into file.

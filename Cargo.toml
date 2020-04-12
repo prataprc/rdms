@@ -24,7 +24,7 @@ travis-ci = { repository = "bnclabs/rdms" }
 [dependencies]
 lazy_static = "1.2.0"
 # jsondata = "0.6.2"
-jsondata = {path = "../jsondata/"}
+jsondata = { git = "https://github.com/bnclabs/jsondata.git" }
 log = "0.4.8"
 fs2 = "0.4.3"
 memmap = "0.7.0"

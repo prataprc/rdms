@@ -25,6 +25,16 @@ fn bench_random_64(b: &mut Bencher) {
     b.iter(|| busy_loop(1000));
 }
 
+#[bench]
+fn bench_atomicptr(b: &mut Bencher) {
+    let val = AtomicPtr<u32>;
+    let ptr = Box::leak(Box::new(10_u32));
+    b.iter(|| {
+        val.store(ptr, std::sync::atomic::Ordering::SeqCst);
+        val.load(std::sync::atomic::Ordering::SeqCst);
+    });
+}
+
 fn busy_loop(count: usize) -> u64 {
     let acc: u64 = (0..count).map(|_| random::<u32>() as u64).sum();
     acc

@@ -107,7 +107,7 @@ where
     let (left, right) = {
         if let Some(left) = node.as_left_deref() {
             if left.as_key().ge(node.as_key()) {
-                /// Fatal case, index entries are not in sort-order.
+                // Fatal case, index entries are not in sort-order.
                 let msg = format!(
                     "validate, llrb sort error left:{:?} parent:{:?}",
                     left.as_key(),
@@ -118,7 +118,7 @@ where
         }
         if let Some(right) = node.as_right_deref() {
             if right.as_key().le(node.as_key()) {
-                /// Fatal case, index entries are not in sort-order.
+                // Fatal case, index entries are not in sort-order.
                 let msg = format!(
                     "validate, llrb sort error right:{:?} parent:{:?}",
                     right.as_key(),

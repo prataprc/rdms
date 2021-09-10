@@ -2029,7 +2029,7 @@ where
             vfpos: u64,
             z: ZBlock<K, V>,
             ms: Vec<MBlock<K, V>>,
-        };
+        }
         let mut c = {
             let vfpos: u64 = convert_at!(self.stats.n_abytes)?;
             Context {

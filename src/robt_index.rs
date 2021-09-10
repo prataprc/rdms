@@ -161,7 +161,7 @@ where
                 };
                 // encode offset header
                 let num: u32 = convert_at!(offsets.len())?;
-                &mblock[..4].copy_from_slice(&num.to_be_bytes());
+                mblock[..4].copy_from_slice(&num.to_be_bytes());
                 for (i, offset) in offsets.iter().enumerate() {
                     let x = (i + 1) * 4;
                     let offset_bytes = (adjust + offset).to_be_bytes();
@@ -231,7 +231,12 @@ where
 
     // optimized version of find() for mblock. if key is less than the dataset
     // immediately returns with failure.
-    pub(crate) fn get<Q>(&self, key: &Q, from: Bound<usize>, to: Bound<usize>) -> Result<MEntry<K>>
+    pub(crate) fn get<Q>(
+        &self,
+        key: &Q,
+        from: Bound<usize>,
+        to: Bound<usize>,
+    ) -> Result<MEntry<K>>
     where
         K: Default + Borrow<Q>,
         Q: Ord + ?Sized,
@@ -260,7 +265,12 @@ where
         }
     }
 
-    pub(crate) fn find<Q>(&self, key: &Q, from: Bound<usize>, to: Bound<usize>) -> Result<MEntry<K>>
+    pub(crate) fn find<Q>(
+        &self,
+        key: &Q,
+        from: Bound<usize>,
+        to: Bound<usize>,
+    ) -> Result<MEntry<K>>
     where
         K: Default + Borrow<Q>,
         Q: Ord + ?Sized,
@@ -319,7 +329,8 @@ where
         };
         if index < count {
             let idx = index * 4;
-            let offset: usize = convert_at!(u32::from_be_bytes(array_at!(offsets[idx..idx + 4])?))?;
+            let offset: usize =
+                convert_at!(u32::from_be_bytes(array_at!(offsets[idx..idx + 4])?))?;
             Ok(MEntry::decode_entry(&block[offset..], index)?)
         } else {
             Err(Error::__MBlockExhausted(index))
@@ -339,7 +350,8 @@ where
         if count > 0 {
             let index = count - 1;
             let idx = index * 4;
-            let offset: usize = convert_at!(u32::from_be_bytes(array_at!(offsets[idx..idx + 4])?))?;
+            let offset: usize =
+                convert_at!(u32::from_be_bytes(array_at!(offsets[idx..idx + 4])?))?;
             Ok(MEntry::decode_entry(&block[offset..], index)?)
         } else {
             Err(Error::__MBlockExhausted(count))
@@ -361,7 +373,8 @@ where
         };
         if index < count {
             let idx = index * 4;
-            let offset: usize = convert_at!(u32::from_be_bytes(array_at!(offsets[idx..idx + 4])?))?;
+            let offset: usize =
+                convert_at!(u32::from_be_bytes(array_at!(offsets[idx..idx + 4])?))?;
             MEntry::decode_key(&block[offset..])
         } else {
             Err(Error::__MBlockExhausted(index))
@@ -427,7 +440,7 @@ where
         ZBlock::Encode {
             leaf: Vec::with_capacity(z_blocksize),
             blob: Vec::with_capacity(config.v_blocksize),
-            offsets: Vec::with_capacity(64),  // TODO: no magic number
+            offsets: Vec::with_capacity(64), // TODO: no magic number
             zentries: Vec::with_capacity(64), // TODO: no magic number
             vpos,
             first_key: Default::default(),
@@ -482,7 +495,11 @@ where
         }
     }
 
-    pub(crate) fn insert(&mut self, entry: &core::Entry<K, V>, stats: &mut Stats) -> Result<u64> {
+    pub(crate) fn insert(
+        &mut self,
+        entry: &core::Entry<K, V>,
+        stats: &mut Stats,
+    ) -> Result<u64> {
         use crate::robt_entry::ZEntry as DZ;
 
         match self {
@@ -548,7 +565,7 @@ where
                 };
                 // encode offset header
                 let num: u32 = convert_at!(offsets.len())?;
-                &leaf[..4].copy_from_slice(&num.to_be_bytes());
+                leaf[..4].copy_from_slice(&num.to_be_bytes());
                 for (i, offset) in offsets.iter().enumerate() {
                     let x = (i + 1) * 4;
                     let offset_bytes = (adjust + offset).to_be_bytes();
@@ -700,7 +717,8 @@ where
 
         if index < count {
             let idx = index * 4;
-            let offset: usize = convert_at!(u32::from_be_bytes(array_at!(offsets[idx..idx + 4])?))?;
+            let offset: usize =
+                convert_at!(u32::from_be_bytes(array_at!(offsets[idx..idx + 4])?))?;
             let entry = &block[offset..];
             Ok((index, ZEntry::decode_entry(entry)?))
         } else {
@@ -725,7 +743,8 @@ where
         if count > 0 {
             let index = count - 1;
             let idx = index * 4;
-            let offset: usize = convert_at!(u32::from_be_bytes(array_at!(offsets[idx..idx + 4])?))?;
+            let offset: usize =
+                convert_at!(u32::from_be_bytes(array_at!(offsets[idx..idx + 4])?))?;
             let entry = &block[offset..];
             Ok((index, ZEntry::decode_entry(entry)?))
         } else {
@@ -742,7 +761,8 @@ where
             ZBlock::Encode { .. } => err_at!(Fatal, msg: format!("unreachable"))?,
         };
         let idx = index * 4;
-        let offset: usize = convert_at!(u32::from_be_bytes(array_at!(offsets[idx..idx + 4])?))?;
+        let offset: usize =
+            convert_at!(u32::from_be_bytes(array_at!(offsets[idx..idx + 4])?))?;
         let entry = &block[offset..];
         ZEntry::<K, V>::decode_key(entry)
     }

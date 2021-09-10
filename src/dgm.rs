@@ -126,7 +126,10 @@ impl Config {
     /// Set interval in time duration, for invoking disk compaction
     /// between dgm disk-levels. Calling this method will spawn an auto
     /// compaction thread.
-    pub fn set_compact_interval(&mut self, interval: time::Duration) -> Result<&mut Self> {
+    pub fn set_compact_interval(
+        &mut self,
+        interval: time::Duration,
+    ) -> Result<&mut Self> {
         self.compact_interval = Some(interval);
         Ok(self)
     }
@@ -156,7 +159,7 @@ struct Root {
     m0_limit: Option<usize>,
     mem_ratio: f64,
     disk_ratio: f64,
-    commit_interval: Option<time::Duration>,  // in seconds.
+    commit_interval: Option<time::Duration>, // in seconds.
     compact_interval: Option<time::Duration>, // in seconds.
 }
 
@@ -331,7 +334,9 @@ impl TryFrom<Vec<u8>> for Root {
                         }
                         (Some("unbounded"), _) => Ok(Some(Bound::Unbounded)),
                         (Some("none"), _) => Ok(None),
-                        (b, c) => err_at!(InvalidFile, msg: format!("b:{:?} c:{:?}", b, c)),
+                        (b, c) => {
+                            err_at!(InvalidFile, msg: format!("b:{:?} c:{:?}", b, c))
+                        }
                     },
                     _ => err_at!(InvalidFile, msg: format!("invalid root")),
                 },
@@ -595,7 +600,8 @@ where
             >,
         >,
     >,
-    readers: Vec<Arc<Mutex<Rs<K, V, <M::I as Index<K, V>>::R, <D::I as Index<K, V>>::R>>>>,
+    readers:
+        Vec<Arc<Mutex<Rs<K, V, <M::I as Index<K, V>>::R, <D::I as Index<K, V>>::R>>>>,
 }
 
 impl<K, V, M, D> InnerDgm<K, V, M, D>
@@ -704,7 +710,7 @@ where
                 }
             }?;
             // update the m0 writer.
-            mem::replace(&mut self.m0, Snapshot::new_write(m0));
+            self.m0 = Snapshot::new_write(m0);
 
             // now replace old writer handle created from the new m0 snapshot.
             for handle in w_handles.iter_mut() {
@@ -722,7 +728,7 @@ where
                     }
                 }
 
-                mem::replace(&mut old.w, self.m0.as_mut_m0()?.to_writer()?);
+                let _old_w = mem::replace(&mut old.w, self.m0.as_mut_m0()?.to_writer()?);
                 // drop the old writer,
             }
         }
@@ -1500,7 +1506,7 @@ where
         {
             let mut inn = to_inner_lock(inner)?;
             let disk = Snapshot::new_active(d);
-            mem::replace(&mut inn.disks[level], disk);
+            let _disk = mem::replace(&mut inn.disks[level], disk);
             // don't drop _m1 before repopulate_readers().
             let _m1 = mem::replace(&mut inn.m1, None);
             inn.repopulate_readers(true /*commit*/)?;
@@ -1521,7 +1527,10 @@ where
         Ok(())
     }
 
-    fn do_compact(inner: &Arc<Mutex<InnerDgm<K, V, M, D>>>, cutoff: Cutoff) -> Result<usize> {
+    fn do_compact(
+        inner: &Arc<Mutex<InnerDgm<K, V, M, D>>>,
+        cutoff: Cutoff,
+    ) -> Result<usize> {
         match cutoff {
             Cutoff::Mono => err_at!(InvalidInput, msg: format!("can't have mono-cutoff")),
             _ => Ok(()),
@@ -1594,7 +1603,7 @@ where
             let mut inn = to_inner_lock(inner)?;
 
             let disk = Snapshot::new_active(high_disk);
-            mem::replace(&mut inn.disks[d_level], disk);
+            let _disk = mem::replace(&mut inn.disks[d_level], disk);
 
             inn.repopulate_readers(false /*commit*/)?;
             inn.n_ccommits = Default::default();
@@ -1654,7 +1663,7 @@ where
                 }
             }
             let disk = Snapshot::new_active(disk);
-            mem::replace(&mut inn.disks[d_level], disk);
+            let _disk = mem::replace(&mut inn.disks[d_level], disk);
 
             inn.repopulate_readers(false /*commit*/)?;
             inn.n_ccommits += 1;
@@ -1886,7 +1895,8 @@ where
             err_at!(Fatal, msg: msg)?;
         }
 
-        let mut seqnos: Vec<u64> = entry.as_deltas().iter().map(|d| d.to_seqno()).collect();
+        let mut seqnos: Vec<u64> =
+            entry.as_deltas().iter().map(|d| d.to_seqno()).collect();
         seqnos.insert(0, entry.to_seqno());
         max_seqno = cmp::max(
             max_seqno,
@@ -2349,7 +2359,10 @@ where
         Ok(Box::new(DgmIter::new(rs, iter)))
     }
 
-    fn range<'a, R, Q>(mut rs: MutexGuard<'a, Rs<K, V, M, D>>, range: R) -> Result<IndexIter<K, V>>
+    fn range<'a, R, Q>(
+        mut rs: MutexGuard<'a, Rs<K, V, M, D>>,
+        range: R,
+    ) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
         R: 'a + Clone + RangeBounds<Q>,
@@ -2402,7 +2415,10 @@ where
         Ok(Box::new(DgmIter::new(rs, iter)))
     }
 
-    fn get_with_versions<Q>(mut rs: MutexGuard<Rs<K, V, M, D>>, key: &Q) -> Result<Entry<K, V>>
+    fn get_with_versions<Q>(
+        mut rs: MutexGuard<Rs<K, V, M, D>>,
+        key: &Q,
+    ) -> Result<Entry<K, V>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized + Hash,
@@ -2690,7 +2706,11 @@ where
         err_at!(NotImplemented, msg: msg)
     }
 
-    fn range_scans<N, G>(&mut self, _ranges: Vec<N>, _within: G) -> Result<Vec<IndexIter<K, V>>>
+    fn range_scans<N, G>(
+        &mut self,
+        _ranges: Vec<N>,
+        _within: G,
+    ) -> Result<Vec<IndexIter<K, V>>>
     where
         G: Clone + RangeBounds<u64>,
         N: Clone + RangeBounds<K>,
@@ -2836,7 +2856,11 @@ where
         Ok(result_iters)
     }
 
-    fn range_scans<N, G>(&mut self, ranges: Vec<N>, within: G) -> Result<Vec<IndexIter<K, V>>>
+    fn range_scans<N, G>(
+        &mut self,
+        ranges: Vec<N>,
+        within: G,
+    ) -> Result<Vec<IndexIter<K, V>>>
     where
         N: Clone + RangeBounds<K>,
         G: Clone + RangeBounds<u64>,
@@ -2884,7 +2908,8 @@ where
     <M as WriteIndexFactory<K, V>>::I: 'static + Send + Footprint,
     <<M as WriteIndexFactory<K, V>>::I as Index<K, V>>::R: 'static + Send,
     <<M as WriteIndexFactory<K, V>>::I as Index<K, V>>::W: 'static + Send,
-    <D as DiskIndexFactory<K, V>>::I: 'static + Send + CommitIterator<K, V> + Footprint + Clone,
+    <D as DiskIndexFactory<K, V>>::I:
+        'static + Send + CommitIterator<K, V> + Footprint + Clone,
     <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::R: 'static + Send,
     <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::W: 'static + Send,
 {
@@ -2962,7 +2987,8 @@ where
     <M as WriteIndexFactory<K, V>>::I: 'static + Send + Footprint,
     <<M as WriteIndexFactory<K, V>>::I as Index<K, V>>::R: 'static + Send,
     <<M as WriteIndexFactory<K, V>>::I as Index<K, V>>::W: 'static + Send,
-    <D as DiskIndexFactory<K, V>>::I: 'static + Send + CommitIterator<K, V> + Footprint + Clone,
+    <D as DiskIndexFactory<K, V>>::I:
+        'static + Send + CommitIterator<K, V> + Footprint + Clone,
     <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::R: 'static + Send,
     <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::W: 'static + Send,
 {

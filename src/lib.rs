@@ -85,7 +85,6 @@
 //!
 
 #![feature(drain_filter)]
-#![feature(maybe_uninit_ref)]
 
 #[macro_use]
 pub mod error;

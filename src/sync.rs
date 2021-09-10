@@ -52,16 +52,18 @@ impl CCMu {
 
     pub fn clone(mu: &CCMu) -> CCMu {
         CCMu {
-            inner: mem::MaybeUninit::new(Arc::clone(unsafe { mu.inner.get_ref() })),
+            inner: mem::MaybeUninit::new(Arc::clone(unsafe {
+                mu.inner.as_ptr().as_ref().unwrap()
+            })),
         }
     }
 
     pub fn strong_count(&self) -> usize {
-        Arc::strong_count(unsafe { self.inner.get_ref() })
+        Arc::strong_count(unsafe { self.inner.as_ptr().as_ref().unwrap() })
     }
 
     pub fn as_mut_ptr(&self) -> *mut ffi::c_void {
-        let arc_ref = unsafe { self.inner.get_ref() };
+        let arc_ref = unsafe { self.inner.as_ptr().as_ref().unwrap() };
         let ptr: &ffi::c_void = arc_ref.as_ref().as_ref();
         ptr as *const ffi::c_void as *mut ffi::c_void
     }

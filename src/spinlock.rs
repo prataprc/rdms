@@ -41,7 +41,10 @@
 use std::{
     convert::TryInto,
     fmt, result,
-    sync::atomic::{AtomicU64, Ordering::SeqCst},
+    sync::atomic::{
+        AtomicU64,
+        Ordering::{Acquire, SeqCst},
+    },
     thread,
 };
 
@@ -90,7 +93,7 @@ impl RWSpinlock {
             if (c & Self::LATCH_LOCK_FLAG) == 0 {
                 // latch is not acquired by a writer
                 let n = c + 1;
-                if self.value.compare_and_swap(c, n, SeqCst) == c {
+                if self.value.compare_exchange(c, n, SeqCst, Acquire) == Ok(c) {
                     self.read_locks.fetch_add(1, SeqCst);
                     break Reader { door: self };
                 }
@@ -114,7 +117,7 @@ impl RWSpinlock {
                     panic!("if latch is flipped-off, lock can't be flipped-on !");
                 }
                 let n = c | Self::LATCH_FLAG;
-                if self.value.compare_and_swap(c, n, SeqCst) == c {
+                if self.value.compare_exchange(c, n, SeqCst, Acquire) == Ok(c) {
                     break;
                 }
             }
@@ -128,7 +131,7 @@ impl RWSpinlock {
             let c = self.value.load(SeqCst);
             if (c & Self::READERS_FLAG) == 0 {
                 let n = c | Self::LOCK_FLAG;
-                if self.value.compare_and_swap(c, n, SeqCst) == c {
+                if self.value.compare_exchange(c, n, SeqCst, Acquire) == Ok(c) {
                     self.write_locks.fetch_add(1, SeqCst);
                     break Writer { door: self };
                 }
@@ -173,7 +176,7 @@ impl<'a> Drop for Writer<'a> {
         if (c & RWSpinlock::READERS_FLAG) > 0 {
             panic!("can't have active readers, when lock is held");
         }
-        if self.door.value.compare_and_swap(c, 0, SeqCst) != c {
+        if self.door.value.compare_exchange(c, 0, SeqCst, Acquire) != Ok(c) {
             panic!("cant' have readers/writers to modify when locked")
         }
     }

@@ -49,7 +49,7 @@ use std::{
     convert::{TryFrom, TryInto},
     ffi, fmt, fs,
     hash::Hash,
-    io::{self, Read, Seek, Write},
+    io::{self, Read, Seek},
     marker, mem,
     ops::{Bound, Deref, RangeBounds},
     path, result,
@@ -397,8 +397,12 @@ where
         let (name, dir) = loop {
             match self.inner.get_mut() {
                 Ok(inner) => match inner {
-                    InnerRobt::Build { name, dir, .. } => break (name.clone(), dir.clone()),
-                    InnerRobt::Snapshot { name, dir, .. } => break (name.clone(), dir.clone()),
+                    InnerRobt::Build { name, dir, .. } => {
+                        break (name.clone(), dir.clone())
+                    }
+                    InnerRobt::Snapshot { name, dir, .. } => {
+                        break (name.clone(), dir.clone())
+                    }
                 },
                 Err(err) => error!(target: "robt  ", "drop {}", err),
             }
@@ -426,7 +430,11 @@ where
     <V as Diff>::D: Serialize,
     B: Bloom,
 {
-    pub fn new(dir: &ffi::OsStr, name: &str, mut config: Config) -> Result<Robt<K, V, B>> {
+    pub fn new(
+        dir: &ffi::OsStr,
+        name: &str,
+        mut config: Config,
+    ) -> Result<Robt<K, V, B>> {
         config.name = name.to_string();
 
         let inner = InnerRobt::Build {
@@ -725,7 +733,9 @@ where
                     err_at!(Fatal, msg: format!("unreachable"))
                 }
             }
-            InnerRobt::Build { .. } => err_at!(UnInitialized, msg: format!("Robt.to_metadata()")),
+            InnerRobt::Build { .. } => {
+                err_at!(UnInitialized, msg: format!("Robt.to_metadata()"))
+            }
         }
     }
 
@@ -733,7 +743,9 @@ where
     fn to_seqno(&self) -> Result<u64> {
         match self.as_inner()?.deref() {
             InnerRobt::Snapshot { stats, .. } => Ok(stats.seqno),
-            InnerRobt::Build { .. } => err_at!(UnInitialized, msg: format!("Robt.to_seqno()")),
+            InnerRobt::Build { .. } => {
+                err_at!(UnInitialized, msg: format!("Robt.to_seqno()"))
+            }
         }
     }
 
@@ -752,7 +764,9 @@ where
                 snapshot.set_bitmap(Arc::clone(bitmap));
                 Ok(snapshot)
             }
-            InnerRobt::Build { .. } => err_at!(UnInitialized, msg: format!("Robt.to_reader()")),
+            InnerRobt::Build { .. } => {
+                err_at!(UnInitialized, msg: format!("Robt.to_reader()"))
+            }
         }
     }
 
@@ -760,7 +774,11 @@ where
         Ok(Panic::new("robt"))
     }
 
-    fn commit<C, F>(&mut self, mut scanner: core::CommitIter<K, V, C>, metacb: F) -> Result<()>
+    fn commit<C, F>(
+        &mut self,
+        mut scanner: core::CommitIter<K, V, C>,
+        metacb: F,
+    ) -> Result<()>
     where
         C: CommitIterator<K, V>,
         F: Fn(Vec<u8>) -> Vec<u8>,
@@ -1067,7 +1085,9 @@ where
                 };
                 Ok(Box::new(iter))
             }
-            InnerRobt::Build { .. } => err_at!(UnInitialized, msg: format!("Robt.scan()")),
+            InnerRobt::Build { .. } => {
+                err_at!(UnInitialized, msg: format!("Robt.scan()"))
+            }
         }
     }
 
@@ -1103,11 +1123,17 @@ where
 
                 Ok(iters)
             }
-            InnerRobt::Build { .. } => err_at!(UnInitialized, msg: format!("Robt.scans()")),
+            InnerRobt::Build { .. } => {
+                err_at!(UnInitialized, msg: format!("Robt.scans()"))
+            }
         }
     }
 
-    fn range_scans<N, G>(&mut self, ranges: Vec<N>, within: G) -> Result<Vec<IndexIter<K, V>>>
+    fn range_scans<N, G>(
+        &mut self,
+        ranges: Vec<N>,
+        within: G,
+    ) -> Result<Vec<IndexIter<K, V>>>
     where
         G: Clone + RangeBounds<u64>,
         N: Clone + RangeBounds<K>,
@@ -1128,7 +1154,9 @@ where
 
                 Ok(iters)
             }
-            InnerRobt::Build { .. } => err_at!(UnInitialized, msg: format!("Robt.range_scans()")),
+            InnerRobt::Build { .. } => {
+                err_at!(UnInitialized, msg: format!("Robt.range_scans()"))
+            }
         }
     }
 }
@@ -1226,7 +1254,11 @@ impl Config {
 
     /// Enable delta persistence, and configure value-log-file. To disable
     /// delta persistance, pass `vlog_file` as None.
-    pub fn set_delta(&mut self, vlog_file: Option<ffi::OsString>, ok: bool) -> Result<&mut Self> {
+    pub fn set_delta(
+        &mut self,
+        vlog_file: Option<ffi::OsString>,
+        ok: bool,
+    ) -> Result<&mut Self> {
         match vlog_file {
             Some(vlog_file) => {
                 self.delta_ok = true;
@@ -1240,7 +1272,11 @@ impl Config {
 
     /// Persist values in a separate file, called value-log file. To persist
     /// values along with leaf node, pass `ok` as false.
-    pub fn set_value_log(&mut self, file: Option<ffi::OsString>, ok: bool) -> Result<&mut Self> {
+    pub fn set_value_log(
+        &mut self,
+        file: Option<ffi::OsString>,
+        ok: bool,
+    ) -> Result<&mut Self> {
         match file {
             Some(vlog_file) => {
                 self.value_in_vlog = true;
@@ -1983,7 +2019,12 @@ where
 
     /// Completes the build process, refer to
     /// [build_start][Builder::build_start] for details.
-    pub fn build_finish(mut self, app_meta: Vec<u8>, bitmap: B, root: u64) -> Result<usize> {
+    pub fn build_finish(
+        mut self,
+        app_meta: Vec<u8>,
+        bitmap: B,
+        root: u64,
+    ) -> Result<usize> {
         let (n_bitmap, bitmap) = (bitmap.len()?, bitmap.to_vec());
         let stats: String = {
             self.stats.n_bitmap = n_bitmap;
@@ -2017,7 +2058,10 @@ where
     }
 
     // return root, iter
-    fn build_tree(&mut self, iter: &mut dyn Iterator<Item = Result<Entry<K, V>>>) -> Result<u64> {
+    fn build_tree(
+        &mut self,
+        iter: &mut dyn Iterator<Item = Result<Entry<K, V>>>,
+    ) -> Result<u64> {
         struct Context<K, V>
         where
             K: Clone + Ord + Serialize,
@@ -2274,7 +2318,10 @@ where
     <V as Diff>::D: Default + Serialize,
     I: Iterator<Item = Result<Entry<K, V>>>,
 {
-    fn new(mut x_iter: I, mut y_iter: Box<Iter<'a, K, V, B>>) -> CommitScan<'a, K, V, I, B> {
+    fn new(
+        mut x_iter: I,
+        mut y_iter: Box<Iter<'a, K, V, B>>,
+    ) -> CommitScan<'a, K, V, I, B> {
         let x_entry = x_iter.next();
         let y_entry = y_iter.next();
         CommitScan {
@@ -2616,7 +2663,9 @@ where
             match purge_file(vlog_file.clone(), &mut vec![], &mut vec![]) {
                 "ok" => Ok(()),
                 "locked" => err_at!(InvalidFile, msg: format!("{:?} locked", vlog_file)),
-                "error" => err_at!(Fatal, msg: format!("error unlocking {:?}", vlog_file)),
+                "error" => {
+                    err_at!(Fatal, msg: format!("error unlocking {:?}", vlog_file))
+                }
                 _ => err_at!(Fatal, msg: format!("unreachable")),
             }
         } else {
@@ -3141,7 +3190,11 @@ where
         Ok(iters)
     }
 
-    fn range_scans<N, G>(&mut self, ranges: Vec<N>, within: G) -> Result<Vec<IndexIter<K, V>>>
+    fn range_scans<N, G>(
+        &mut self,
+        ranges: Vec<N>,
+        within: G,
+    ) -> Result<Vec<IndexIter<K, V>>>
     where
         G: Clone + RangeBounds<u64>,
         N: Clone + RangeBounds<K>,

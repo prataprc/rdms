@@ -4,7 +4,7 @@ use std::{
     cmp,
     convert::{TryFrom, TryInto},
     ffi, fmt, fs,
-    io::{self, Read, Seek, Write},
+    io::{self, Read, Seek},
     mem,
     ops::Bound,
     path, result,

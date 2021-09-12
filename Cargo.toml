@@ -22,16 +22,18 @@ maintenance = { status = "actively-developed" }
 travis-ci = { repository = "bnclabs/rdms" }
 
 [dependencies]
-lazy_static = "1.2.0"
+cbordata = { path = "../cbordata", version = "0.5.0" }
+
+# lazy_static = "1.2.0"
 # jsondata = "0.6.2"
-jsondata = { git = "https://github.com/bnclabs/jsondata.git" }
-log = "0.4.8"
-fs2 = "0.4.3"
-memmap = "0.7.0"
-croaring = "0.4.5"
-crc = "^1.0.0"
-toml = "0.5.3"
-sys-info = "0.5.10"
+# jsondata = { git = "https://github.com/bnclabs/jsondata.git" }
+# log = "0.4.8"
+# fs2 = "0.4.3"
+# memmap = "0.7.0"
+# croaring = "0.4.5"
+# crc = "^1.0.0"
+# toml = "0.5.3"
+# sys-info = "0.5.10"
 
 [dev-dependencies]
 rand = "0.6.4"

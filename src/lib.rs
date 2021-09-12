@@ -86,52 +86,61 @@
 
 #![feature(drain_filter)]
 
+use std::result;
+
+/// Type alias for all results returned by [rdms] methods.
+pub type Result<T> = result::Result<T, Error>;
+
 #[macro_use]
 pub mod error;
 
+mod db;
+
 // core modules
-pub mod core;
-mod entry;
-pub mod panic;
-pub mod spinlock;
-pub mod sync;
-mod sync_writer;
-pub mod thread;
-pub mod types;
-#[macro_use]
-mod util;
-mod vlog;
+// pub mod core;
+// mod entry;
+// pub mod panic;
+// pub mod spinlock;
+// pub mod sync;
+// mod sync_writer;
+// pub mod thread;
+// pub mod types;
+//#[macro_use]
+//mod util;
+// mod vlog;
 
 // support modules
-pub mod dlog;
-mod dlog_entry;
-mod dlog_journal;
-pub mod lsm;
-pub mod scans;
+//pub mod dlog;
+//mod dlog_entry;
+//mod dlog_journal;
+//pub mod lsm;
+//pub mod scans;
 
 // write ahead logging.
-pub mod wal;
+//pub mod wal;
 
 // raft
-pub mod raft_log;
+//pub mod raft_log;
 
 // mem index
-pub mod llrb;
-mod llrb_node;
-pub mod mvcc;
-pub mod shllrb;
+//pub mod llrb;
+//mod llrb_node;
+//pub mod mvcc;
+//pub mod shllrb;
 // disk index
-pub mod dgm;
-pub mod nodisk;
-pub mod robt;
-mod robt_entry;
-mod robt_index;
-pub mod shrobt;
+//pub mod dgm;
+//pub mod nodisk;
+//pub mod robt;
+//mod robt_entry;
+//mod robt_index;
+//pub mod shrobt;
 // pub mod backup; TODO
 
 // bloom filters.
-pub mod croaring;
-pub mod nobitmap;
+//pub mod croaring;
+//pub mod nobitmap;
 
-pub mod rdms;
-pub use crate::rdms::Rdms;
+//pub mod rdms;
+//pub use crate::rdms::Rdms;
+
+pub use error::Error;

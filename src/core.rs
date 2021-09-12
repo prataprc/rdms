@@ -34,9 +34,6 @@ use crate::{
     wal::Wal,
 };
 
-/// Type alias for all results returned by [rdms] methods.
-pub type Result<T> = result::Result<T, Error>;
-
 /// Type alias to trait-objects iterating over an index.
 pub type IndexIter<'a, K, V> = Box<dyn Iterator<Item = Result<Entry<K, V>>> + 'a>;
 
@@ -271,7 +268,11 @@ where
     /// decided by the `ranges` argument. And unlike the `shards` argument,
     /// `ranges` argument is treated with precision, number of iterators
     /// returned shall exactly match _range.len()_.
-    fn range_scans<N, G>(&mut self, ranges: Vec<N>, within: G) -> Result<Vec<IndexIter<K, V>>>
+    fn range_scans<N, G>(
+        &mut self,
+        ranges: Vec<N>,
+        within: G,
+    ) -> Result<Vec<IndexIter<K, V>>>
     where
         G: Clone + RangeBounds<u64>,
         N: Clone + RangeBounds<K>;

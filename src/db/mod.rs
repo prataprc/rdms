@@ -1,6 +1,8 @@
 //! Traits and Types required by rest of the rdms-modules.
 
-use std::ops::Bound;
+use std::{fmt, hash::Hash, ops::Bound, result};
+
+use crate::Result;
 
 mod delta;
 mod entry;
@@ -44,54 +46,54 @@ pub trait Diff: Sized + From<<Self as Diff>::Delta> {
     fn merge(&self, delta: &Self::Delta) -> Self;
 }
 
-///// Trait to bulk-add entries into an index.
-//pub trait BuildIndex<K, V, D, B> {
-//    type Err;
-//
-//    /// Build an index form iterator. Optionally a bitmap can be specified to
-//    /// implement a bloom filter. If bitmap filter is not required, pass bitmap
-//    /// as `NoBitmap`. `seqno` can be supplied to set the snapshot's seqno, if
-//    /// supplied as None, snapshot will take is latest-seqno as the high seqno
-//    /// found in the iterated entries.
-//    fn build_index<I>(
-//        &mut self,
-//        iter: I,
-//        bitmap: B,
-//        seqno: Option<u64>,
-//    ) -> Result<(), Self::Err>
-//    where
-//        I: Iterator<Item = Entry<K, V, D>>;
-//}
+/// Trait to bulk-add entries into an index.
+pub trait BuildIndex<K, V, D, B> {
+    type Err;
 
-///// Trait to build and manage keys in a bit-mapped Bloom-filter.
-//pub trait Bloom: Sized + Default {
-//    type Err: fmt::Display;
-//
-//    /// Add key into the index.
-//    fn add_key<Q: ?Sized + Hash>(&mut self, key: &Q);
-//
-//    /// Add key into the index.
-//    fn add_digest32(&mut self, digest: u32);
-//
-//    /// Build keys, added so far via `add_key` and `add_digest32` into the
-//    /// bitmap index. Useful for types that support batch building and
-//    /// immutable bitmap index.
-//    fn build(&mut self) -> Result<(), Error>;
-//
-//    /// Check whether key in present, there can be false positives but
-//    /// no false negatives.
-//    fn contains<Q: ?Sized + Hash>(&self, element: &Q) -> bool;
-//
-//    /// Serialize the bit-map to binary array.
-//    fn to_bytes(&self) -> Result<Vec<u8>, Self::Err>;
-//
-//    /// Deserialize the binary array to bit-map.
-//    fn from_bytes(buf: &[u8]) -> Result<(Self, usize), Self::Err>;
-//
-//    /// Merge two bitmaps.
-//    fn or(&self, other: &Self) -> Result<Self, Self::Err>;
-//}
-//
+    /// Build an index form iterator. Optionally a bitmap can be specified to
+    /// implement a bloom filter. If bitmap filter is not required, pass bitmap
+    /// as `NoBitmap`. `seqno` can be supplied to set the snapshot's seqno, if
+    /// supplied as None, snapshot will take is latest-seqno as the high seqno
+    /// found in the iterated entries.
+    fn build_index<I>(
+        &mut self,
+        iter: I,
+        bitmap: B,
+        seqno: Option<u64>,
+    ) -> result::Result<(), Self::Err>
+    where
+        I: Iterator<Item = Entry<K, V, D>>;
+}
+
+/// Trait to build and manage keys in a bit-mapped Bloom-filter.
+pub trait Bloom: Sized + Default {
+    type Err: fmt::Display;
+
+    /// Add key into the index.
+    fn add_key<Q: ?Sized + Hash>(&mut self, key: &Q);
+
+    /// Add key into the index.
+    fn add_digest32(&mut self, digest: u32);
+
+    /// Build keys, added so far via `add_key` and `add_digest32` into the
+    /// bitmap index. Useful for types that support batch building and
+    /// immutable bitmap index.
+    fn build(&mut self) -> Result<()>;
+
+    /// Check whether key in present, there can be false positives but
+    /// no false negatives.
+    fn contains<Q: ?Sized + Hash>(&self, element: &Q) -> bool;
+
+    /// Serialize the bit-map to binary array.
+    fn to_bytes(&self) -> result::Result<Vec<u8>, Self::Err>;
+
+    /// Deserialize the binary array to bit-map.
+    fn from_bytes(buf: &[u8]) -> result::Result<(Self, usize), Self::Err>;
+
+    /// Merge two bitmaps.
+    fn or(&self, other: &Self) -> result::Result<Self, Self::Err>;
+}
+
 //pub trait Lookup<K, V> {
 //    fn get<Q>(&self, key: &Q) -> Option<V>
 //    where

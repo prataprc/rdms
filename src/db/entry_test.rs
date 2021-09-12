@@ -40,7 +40,7 @@ fn test_entry_values() {
         },
     ];
     assert_eq!(values, refvs);
-    assert_eq!(Entry::from((entry.key, values)), entry);
+    assert_eq!(Entry::from_values(entry.key, values), Ok(entry.clone()));
 
     entry.delete(9);
     let values = entry.to_values();
@@ -118,10 +118,10 @@ fn test_entry_merge() {
 }
 
 #[test]
-fn test_purge_mono() {
+fn test_entry_compact_mono() {
     let seed: u128 = random();
     // let seed: u128 = 55460639888202704213451510247183500784;
-    println!("test_purge_mono {}", seed);
+    println!("test_entry_compact_mono {}", seed);
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
     for _ in 0..100 {
@@ -141,12 +141,12 @@ fn test_purge_mono() {
         }
 
         if entry.is_deleted() {
-            assert_eq!(entry.purge(Cutoff::Mono), None);
+            assert_eq!(entry.compact(Cutoff::Mono), None);
         } else {
             let value = entry.to_value();
             let seqno = entry.to_seqno();
 
-            let entry = entry.purge(Cutoff::Mono).unwrap();
+            let entry = entry.compact(Cutoff::Mono).unwrap();
             assert_eq!(entry.deltas.len(), 0);
             assert_eq!(entry.to_value(), value);
             assert_eq!(entry.to_seqno(), seqno);
@@ -155,12 +155,12 @@ fn test_purge_mono() {
 }
 
 #[test]
-fn test_purge_lsm() {
+fn test_entry_compact_lsm() {
     use std::ops::RangeBounds;
 
     let seed: u128 = random();
     // let seed: u128 = 97177838929013801741121704795542894024;
-    println!("test_purge_lsm {}", seed);
+    println!("test_entry_compact_lsm {}", seed);
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
     for _ in 0..100 {
@@ -196,7 +196,7 @@ fn test_purge_lsm() {
         };
 
         let range = (start, Bound::Excluded(curr_seqno + 1));
-        match entry.clone().purge(Cutoff::Lsm(cutoff)) {
+        match entry.clone().compact(Cutoff::Lsm(cutoff)) {
             None => {
                 let b = entry
                     .to_values()
@@ -210,8 +210,8 @@ fn test_purge_lsm() {
                     entry.to_values()
                 );
             }
-            Some(purged) => {
-                let b = purged
+            Some(compacted) => {
+                let b = compacted
                     .to_values()
                     .iter()
                     .all(|v| range.contains(&v.to_seqno()));
@@ -221,7 +221,7 @@ fn test_purge_lsm() {
                     cutoff,
                     range,
                     entry.to_values(),
-                    purged.to_values()
+                    compacted.to_values()
                 );
             }
         }
@@ -229,10 +229,10 @@ fn test_purge_lsm() {
 }
 
 #[test]
-fn test_purge_tombstone() {
+fn test_entry_compact_tombstone() {
     let seed: u128 = random();
     // let seed: u128 = 97177838929013801741121704795542894024;
-    println!("test_purge_lsm {}", seed);
+    println!("test_entry_compact_tombstone {}", seed);
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
     for _ in 0..100 {
@@ -257,38 +257,38 @@ fn test_purge_tombstone() {
             assert_eq!(
                 entry
                     .clone()
-                    .purge(Cutoff::Tombstone(Bound::Included(curr_seqno))),
+                    .compact(Cutoff::Tombstone(Bound::Included(curr_seqno))),
                 None
             );
             assert_eq!(
                 entry
                     .clone()
-                    .purge(Cutoff::Tombstone(Bound::Excluded(curr_seqno + 1))),
+                    .compact(Cutoff::Tombstone(Bound::Excluded(curr_seqno + 1))),
                 None
             );
             assert_eq!(
                 entry
                     .clone()
-                    .purge(Cutoff::Tombstone(Bound::Excluded(curr_seqno)))
+                    .compact(Cutoff::Tombstone(Bound::Excluded(curr_seqno)))
                     .unwrap(),
                 entry
             );
             assert_eq!(
-                entry.clone().purge(Cutoff::Tombstone(Bound::Unbounded)),
+                entry.clone().compact(Cutoff::Tombstone(Bound::Unbounded)),
                 None
             );
 
             assert_eq!(
                 entry
                     .clone()
-                    .purge(Cutoff::Tombstone(Bound::Included(curr_seqno - 1)))
+                    .compact(Cutoff::Tombstone(Bound::Included(curr_seqno - 1)))
                     .unwrap(),
                 entry
             );
             assert_eq!(
                 entry
                     .clone()
-                    .purge(Cutoff::Tombstone(Bound::Excluded(curr_seqno - 1)))
+                    .compact(Cutoff::Tombstone(Bound::Excluded(curr_seqno - 1)))
                     .unwrap(),
                 entry
             );
@@ -296,21 +296,21 @@ fn test_purge_tombstone() {
             assert_eq!(
                 entry
                     .clone()
-                    .purge(Cutoff::Tombstone(Bound::Included(curr_seqno)))
+                    .compact(Cutoff::Tombstone(Bound::Included(curr_seqno)))
                     .unwrap(),
                 entry
             );
             assert_eq!(
                 entry
                     .clone()
-                    .purge(Cutoff::Tombstone(Bound::Excluded(curr_seqno)))
+                    .compact(Cutoff::Tombstone(Bound::Excluded(curr_seqno)))
                     .unwrap(),
                 entry
             );
             assert_eq!(
                 entry
                     .clone()
-                    .purge(Cutoff::Tombstone(Bound::Unbounded))
+                    .compact(Cutoff::Tombstone(Bound::Unbounded))
                     .unwrap(),
                 entry
             );

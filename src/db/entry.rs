@@ -264,3 +264,7 @@ impl<K, V, D> Entry<K, V, D> {
         Some(self)
     }
 }
+
+#[cfg(test)]
+#[path = "entry_test.rs"]
+mod entry_test;

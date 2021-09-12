@@ -92,9 +92,9 @@ use std::result;
 pub type Result<T> = result::Result<T, Error>;
 
 #[macro_use]
-pub mod error;
+mod error;
 
-mod db;
+pub mod db;
 
 // core modules
 // pub mod core;

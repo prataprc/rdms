@@ -11,6 +11,8 @@ mod entry;
 mod value;
 
 pub use compact::Cutoff;
+#[cfg(test)]
+pub(crate) use delta::Delta;
 pub use diff::{Diff, NoDiff};
 pub use entry::Entry;
 pub use value::Value;

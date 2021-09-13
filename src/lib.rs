@@ -95,6 +95,7 @@ pub type Result<T> = result::Result<T, Error>;
 mod error;
 
 pub mod db;
+pub mod llrb;
 
 // core modules
 // pub mod core;

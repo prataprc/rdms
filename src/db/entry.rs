@@ -1,6 +1,6 @@
 use cbordata::Cborize;
 
-use std::{borrow::Borrow, ops::Bound};
+use std::{borrow::Borrow, fmt, ops::Bound, result};
 
 use crate::{
     db::delta::Delta,
@@ -19,6 +19,34 @@ where
     pub key: K,
     pub value: Value<V>,
     pub deltas: Vec<Delta<<V as Diff>::Delta>>, // from oldest to newest
+}
+
+impl<K, V> fmt::Debug for Entry<K, V>
+where
+    K: fmt::Debug,
+    V: fmt::Debug + Diff,
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
+        write!(f, "{:?}-{:?}", self.key, self.value)
+    }
+}
+
+impl<K, V> PartialEq for Entry<K, V>
+where
+    K: PartialEq,
+    V: PartialEq + Diff,
+    <V as Diff>::Delta: PartialEq,
+{
+    fn eq(&self, other: &Entry<K, V>) -> bool {
+        self.key.eq(&other.key)
+            && self.value.eq(&other.value)
+            && self.deltas.len() == other.deltas.len()
+            && self
+                .deltas
+                .iter()
+                .zip(other.deltas.iter())
+                .all(|(a, b)| a.eq(b))
+    }
 }
 
 impl<K, V> Entry<K, V>
@@ -196,9 +224,9 @@ where
         other.to_values().iter().all(|v| values.contains(v))
     }
 
-    /// Merge all versions from `other`, into `self`. Make sure versions in `other`
+    /// Commit all versions from `other`, into `self`. Make sure versions in `other`
     /// and `self` are unique and exclusive.
-    pub fn merge(&self, other: &Self) -> Self
+    pub fn commit(&self, other: &Self) -> Self
     where
         K: PartialEq + Clone,
         V: Clone,

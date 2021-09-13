@@ -4,7 +4,7 @@ use super::*;
 
 #[test]
 fn test_entry_values() {
-    let mut entry: Entry<u8, u64, u64> = Entry::new(10, 200, 1);
+    let mut entry: Entry<u8, u64> = Entry::new(10, 200, 1);
     entry.insert(300, 2);
     entry.insert(400, 3);
     entry.delete(4);
@@ -50,7 +50,7 @@ fn test_entry_values() {
 
 #[test]
 fn test_entry_contains() {
-    let mut one: Entry<u8, u64, u64> = Entry::new(10, 200, 1);
+    let mut one: Entry<u8, u64> = Entry::new(10, 200, 1);
     one.insert(300, 3);
     one.insert(400, 5);
     one.delete(7);
@@ -63,7 +63,7 @@ fn test_entry_contains() {
     assert!(one.contains(&Entry::new_deleted(10, 7)), "{:?}", one);
     assert!(!one.contains(&Entry::new(10, 200, 2)), "{:?}", one);
 
-    let mut two: Entry<u8, u64, u64> = Entry::new(10, 200, 1);
+    let mut two: Entry<u8, u64> = Entry::new(10, 200, 1);
     two.insert(300, 3);
     two.insert(400, 5);
     two.delete(7);
@@ -79,7 +79,7 @@ fn test_entry_contains() {
 
 #[test]
 fn test_entry_merge() {
-    let mut one: Entry<u8, u64, u64> = Entry::new(10, 200, 1);
+    let mut one: Entry<u8, u64> = Entry::new(10, 200, 1);
     one.insert(300, 3);
     one.insert(400, 5);
     one.delete(7);
@@ -88,7 +88,7 @@ fn test_entry_merge() {
     one.delete(13);
     one.insert(600, 15);
 
-    let mut two: Entry<u8, u64, u64> = Entry::new(10, 1000, 2);
+    let mut two: Entry<u8, u64> = Entry::new(10, 1000, 2);
     two.insert(2000, 4);
     two.delete(6);
     two.insert(3000, 8);
@@ -97,7 +97,7 @@ fn test_entry_merge() {
     two.insert(5000, 14);
     two.delete(16);
 
-    let mut entry: Entry<u8, u64, u64> = Entry::new(10, 200, 1);
+    let mut entry: Entry<u8, u64> = Entry::new(10, 200, 1);
     entry.insert(1000, 2);
     entry.insert(300, 3);
     entry.insert(2000, 4);
@@ -114,7 +114,7 @@ fn test_entry_merge() {
     entry.insert(600, 15);
     entry.delete(16);
 
-    assert_eq!(one.merge(&two), entry);
+    assert_eq!(one.commit(&two), entry);
 }
 
 #[test]
@@ -312,7 +312,8 @@ fn test_entry_compact_tombstone() {
                     .clone()
                     .compact(Cutoff::Tombstone(Bound::Unbounded))
                     .unwrap(),
-                entry
+                entry,
+                ""
             );
         }
     }

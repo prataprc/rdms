@@ -4,25 +4,31 @@ use std::{borrow::Borrow, ops::Bound};
 
 use crate::{
     db::delta::Delta,
-    db::{Cutoff, Diff, NoDiff, Value},
+    db::{Cutoff, Diff, Value},
     Error, Result,
 };
 
 const ENTRY_VER: u32 = 0x00050001;
 
 /// Entry type, describe a single `{key,value}` entry within indexed data-set.
-#[derive(Clone, Debug, Eq, PartialEq, Cborize)]
-pub struct Entry<K, V, D = NoDiff> {
+#[derive(Clone, Cborize)]
+pub struct Entry<K, V>
+where
+    V: Diff,
+{
     pub key: K,
     pub value: Value<V>,
-    pub deltas: Vec<Delta<D>>, // from oldest to newest
+    pub deltas: Vec<Delta<<V as Diff>::Delta>>, // from oldest to newest
 }
 
-impl<K, V, D> Entry<K, V, D> {
+impl<K, V> Entry<K, V>
+where
+    V: Diff,
+{
     pub const ID: u32 = ENTRY_VER;
 
     /// Create a new entry with key, value.
-    pub fn new(key: K, value: V, seqno: u64) -> Entry<K, V, D> {
+    pub fn new(key: K, value: V, seqno: u64) -> Entry<K, V> {
         Entry {
             key,
             value: Value::U { value, seqno },
@@ -31,7 +37,7 @@ impl<K, V, D> Entry<K, V, D> {
     }
 
     /// Create a new entry that is marked as deleted.
-    pub fn new_deleted(key: K, seqno: u64) -> Entry<K, V, D> {
+    pub fn new_deleted(key: K, seqno: u64) -> Entry<K, V> {
         Entry {
             key,
             value: Value::D { seqno },
@@ -44,7 +50,7 @@ impl<K, V, D> Entry<K, V, D> {
     /// version.
     pub fn from_values(key: K, mut values: Vec<Value<V>>) -> Result<Self>
     where
-        V: Clone + Diff<Delta = D>,
+        V: Clone,
         <V as Diff>::Delta: From<V>,
     {
         if values.is_empty() {
@@ -67,7 +73,7 @@ impl<K, V, D> Entry<K, V, D> {
     /// Insert a newer version for value. Older version shall be converted to delta.
     pub fn insert(&mut self, value: V, seqn: u64)
     where
-        V: Clone + Diff<Delta = D>,
+        V: Clone,
     {
         let delta = match self.value.clone() {
             Value::U { value: oldv, seqno } => {
@@ -84,7 +90,7 @@ impl<K, V, D> Entry<K, V, D> {
     /// to delta. Back-to-back deletes are not de-duplicated for the sake of seqno.
     pub fn delete(&mut self, seqn: u64)
     where
-        V: Clone + Diff<Delta = D>,
+        V: Clone,
         <V as Diff>::Delta: From<V>,
     {
         match self.value.clone() {
@@ -107,7 +113,10 @@ impl<K, V, D> Entry<K, V, D> {
     }
 }
 
-impl<K, V, D> Entry<K, V, D> {
+impl<K, V> Entry<K, V>
+where
+    V: Diff,
+{
     pub fn to_seqno(&self) -> u64 {
         match self.value {
             Value::U { seqno, .. } => seqno,
@@ -154,8 +163,7 @@ impl<K, V, D> Entry<K, V, D> {
     /// version `values[n-1]` holds the latest version.
     pub fn to_values(&self) -> Vec<Value<V>>
     where
-        V: Diff<Delta = D> + Clone,
-        D: Clone,
+        V: Clone,
     {
         let mut values = vec![self.value.clone()];
         let mut val: Option<V> = self.to_value();
@@ -182,8 +190,7 @@ impl<K, V, D> Entry<K, V, D> {
     /// Check whether all version of `other` is present in `self`.
     pub fn contains(&self, other: &Self) -> bool
     where
-        V: Clone + PartialEq + Diff<Delta = D>,
-        D: Clone,
+        V: Clone + PartialEq,
     {
         let values = self.to_values();
         other.to_values().iter().all(|v| values.contains(v))
@@ -194,8 +201,7 @@ impl<K, V, D> Entry<K, V, D> {
     pub fn merge(&self, other: &Self) -> Self
     where
         K: PartialEq + Clone,
-        V: Clone + Diff<Delta = D>,
-        D: Clone + From<V>,
+        V: Clone,
     {
         if self.key != other.key {
             return self.clone();

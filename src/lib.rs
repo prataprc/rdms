@@ -86,7 +86,7 @@
 
 #![feature(drain_filter)]
 
-use std::result;
+use std::{ffi, result};
 
 /// Type alias for all results returned by [rdms] methods.
 pub type Result<T> = result::Result<T, Error>;
@@ -144,3 +144,35 @@ pub mod db;
 //pub use crate::rdms::Rdms;
 
 pub use error::Error;
+
+pub enum WriteIndex {
+    // Llrb(Mdb<K, V>),
+}
+
+impl WriteIndex {
+    fn new(&self, name: &str) -> Result<Self> {
+        todo!()
+    }
+
+    fn to_type(&self) -> String {
+        todo!()
+    }
+}
+
+pub enum DiskIndex {
+    // ReadOnlyBT(Robt),
+}
+
+impl DiskIndex {
+    fn new(&self, dir: &ffi::OsStr, name: &str) -> Result<Self> {
+        todo!()
+    }
+
+    fn open(&self, dir: &ffi::OsStr, name: &str) -> Result<Self> {
+        todo!()
+    }
+
+    fn to_type(&self) -> String {
+        todo!()
+    }
+}

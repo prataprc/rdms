@@ -110,7 +110,11 @@ where
 {
     // prepend operation, equivalent to SET / INSERT / UPDATE
     // return the different in footprint for this node
-    pub(crate) fn prepend_version(&mut self, entry: Entry<K, V>, lsm: bool) -> Result<isize> {
+    pub(crate) fn prepend_version(
+        &mut self,
+        entry: Entry<K, V>,
+        lsm: bool,
+    ) -> Result<isize> {
         self.entry.prepend_version(entry, lsm)
     }
 

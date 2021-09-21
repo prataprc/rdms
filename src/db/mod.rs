@@ -1,24 +1,24 @@
-//! Traits and Types required by rest of the rdms-modules.
+//! Traits and Types, related to core-database, and required by rest of this package.
 
 use std::{borrow::Borrow, fmt, hash::Hash, result};
 
 use crate::Result;
 
+// trait-defs: Diff, BuildIndex, Lookup, Footprint, Replay, WalWriter, Bloom
+// type-defs : Entry, Value, Delta, Cutoff, NoDiff
+
 mod compact;
 mod delta;
 mod diff;
 mod entry;
+mod types;
 mod value;
 
 pub use compact::Cutoff;
-#[cfg(test)]
 pub(crate) use delta::Delta;
 pub use diff::{Diff, NoDiff};
 pub use entry::Entry;
 pub use value::Value;
-
-//TODO
-// mod db;
 
 /// Trait to bulk-add entries into an index.
 pub trait BuildIndex<K, V, B> {
@@ -37,7 +37,7 @@ pub trait BuildIndex<K, V, B> {
     ) -> result::Result<(), Self::Err>
     where
         V: Diff,
-        I: Iterator<Item = Entry<K, V>>;
+        I: Iterator<Item = Entry<K, V, <V as Diff>::Delta>>;
 }
 
 /// Trait to access key,value index.
@@ -104,7 +104,12 @@ where
     /// Set {key, value} in index. Return older entry if present.
     ///
     /// *LSM mode*: Add a new version for the key, perserving the old value.
-    fn set_index(&mut self, key: K, value: V, index: u64) -> Result<Option<Entry<K, V>>>;
+    fn set_index(
+        &mut self,
+        key: K,
+        value: V,
+        index: u64,
+    ) -> Result<Option<Entry<K, V, <V as Diff>::Delta>>>;
 
     /// Set {key, value} in index if an older entry exists with the
     /// same `cas` value. To create a fresh entry, pass `cas` as ZERO.
@@ -117,7 +122,7 @@ where
         value: V,
         cas: u64,
         index: u64,
-    ) -> Result<Option<Entry<K, V>>>;
+    ) -> Result<Option<Entry<K, V, <V as Diff>::Delta>>>;
 
     /// Delete key from index. Return old entry if present.
     ///
@@ -127,51 +132,15 @@ where
     /// NOTE: K should be borrowable as &Q and Q must be convertable to
     /// owned K. This is require in lsm mode, where owned K must be
     /// inserted into the tree.
-    fn delete_index<Q>(&mut self, key: &Q, index: u64) -> Result<Option<Entry<K, V>>>
+    fn delete_index<Q>(
+        &mut self,
+        key: &Q,
+        index: u64,
+    ) -> Result<Option<Entry<K, V, <V as Diff>::Delta>>>
     where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized;
 }
-
-// TODO: check whether this can be removed in future.
-/// Trait to create new memory based index instances using pre-defined set of
-/// configuration. This is needed for multi-level index.
-//pub trait WriteIndexFactory<K, V>
-//where
-//    K: Clone + Ord,
-//    V: Clone + Diff,
-//{
-//    type I: Index<K, V> + Footprint;
-//
-//    /// Create a new index instance with predefined configuration,
-//    /// Typically this index will be used to index new set of entries.
-//    fn new(&self, name: &str) -> Result<Self::I>;
-//
-//    /// Index type identification purpose.
-//    fn to_type(&self) -> String;
-//}
-
-// TODO: check whether this can be removed in future.
-/// Trait to create new disk based index instances using pre-defined set
-/// of configuration. This is needed for multi-level index.
-//pub trait DiskIndexFactory<K, V>
-//where
-//    K: Clone + Ord,
-//    V: Clone + Diff,
-//{
-//    type I: Clone + Index<K, V> + CommitIterator<K, V> + Footprint;
-//
-//    /// Create a new index instance with predefined configuration.
-//    /// Typically this index will be used to commit newer snapshots
-//    /// onto disk.
-//    fn new(&self, dir: &ffi::OsStr, name: &str) -> Result<Self::I>;
-//
-//    /// Open an existing index instance with predefined configuration.
-//    fn open(&self, dir: &ffi::OsStr, name: &str) -> Result<Self::I>;
-//
-//    /// Index type for identification purpose.
-//    fn to_type(&self) -> String;
-//}
 
 /// Trait to build and manage keys in a bit-mapped Bloom-filter.
 pub trait Bloom: Sized + Default {
@@ -201,3 +170,43 @@ pub trait Bloom: Sized + Default {
     /// Merge two bitmaps.
     fn or(&self, other: &Self) -> result::Result<Self, Self::Err>;
 }
+
+// TODO: check whether this can be removed in future.
+// Trait to create new memory based index instances using pre-defined set of
+// configuration. This is needed for multi-level index.
+//pub trait WriteIndexFactory<K, V>
+//where
+//    K: Clone + Ord,
+//    V: Clone + Diff,
+//{
+//    type I: Index<K, V> + Footprint;
+//
+//    /// Create a new index instance with predefined configuration,
+//    /// Typically this index will be used to index new set of entries.
+//    fn new(&self, name: &str) -> Result<Self::I>;
+//
+//    /// Index type identification purpose.
+//    fn to_type(&self) -> String;
+//}
+
+// TODO: check whether this can be removed in future.
+// Trait to create new disk based index instances using pre-defined set
+// of configuration. This is needed for multi-level index.
+//pub trait DiskIndexFactory<K, V>
+//where
+//    K: Clone + Ord,
+//    V: Clone + Diff,
+//{
+//    type I: Clone + Index<K, V> + CommitIterator<K, V> + Footprint;
+//
+//    /// Create a new index instance with predefined configuration.
+//    /// Typically this index will be used to commit newer snapshots
+//    /// onto disk.
+//    fn new(&self, dir: &ffi::OsStr, name: &str) -> Result<Self::I>;
+//
+//    /// Open an existing index instance with predefined configuration.
+//    fn open(&self, dir: &ffi::OsStr, name: &str) -> Result<Self::I>;
+//
+//    /// Index type for identification purpose.
+//    fn to_type(&self) -> String;
+//}

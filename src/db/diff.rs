@@ -1,7 +1,12 @@
-use cbordata::{Cborize, FromCbor, IntoCbor};
+//! Module define [Diff] trait and implement the trait for native rust types.
+//!
+//! [NoDiff] can be used for implementing [Diff] trait on user-defined value types
+//! Refer [NoDiff] for detail.
+
+use cbordata::Cborize;
 
 // TODO: give a new type number for high 16-bits.
-const NDIFF_VER: u32 = 0x0001;
+const NDIFF_VER: u32 = 0x00070001;
 
 /// Trait for diff-able values.
 ///
@@ -21,7 +26,7 @@ const NDIFF_VER: u32 = 0x0001;
 /// P = C - D (merge operation, to get old value)
 /// ```
 pub trait Diff: Sized + From<<Self as Diff>::Delta> {
-    type Delta: Clone + From<Self> + FromCbor + IntoCbor;
+    type Delta: Clone + From<Self>;
 
     /// Return the delta between two consecutive versions of a value.
     /// `Delta = New - Old`.
@@ -34,30 +39,13 @@ pub trait Diff: Sized + From<<Self as Diff>::Delta> {
 
 /// Associated type for value-type that don't implement [Diff] trait, i.e
 /// whereever applicable, use NoDiff as delta type.
-#[derive(Clone, Default, Debug, Cborize)]
+#[derive(Clone, Default, Debug, Eq, PartialEq, Cborize)]
 pub struct NoDiff;
 
 impl NoDiff {
     pub const ID: u32 = NDIFF_VER;
 }
 
-macro_rules! impl_diff_basic_types {
-    ($($type:ident),*) => (
-        $(
-            impl Diff for $type {
-                type Delta = $type;
-
-                fn diff(&self, old: &$type) -> Self::Delta {
-                    *old
-                }
-
-                fn merge(&self, delta: &Self::Delta) -> Self {
-                    *delta
-                }
-            }
-        )*
-    );
-}
-
-// TODO: implement Diff for all Rust native types - char, f32, f64, u128, i128 and others
-impl_diff_basic_types![bool, i8, i16, i32, i64, isize, u8, u16, u32, u64, usize];
+#[cfg(test)]
+#[path = "diff_test.rs"]
+mod diff_test;

@@ -1,5 +1,7 @@
 use cbordata::Cborize;
 
+use crate::{db::Footprint, Error, Result};
+
 /// This value must change only when the shape of Value type changes. High 16-bits
 /// identify the type and lower 16-bits identify the version.
 pub const VALUE_VER: u32 = 0x00020001;
@@ -9,6 +11,22 @@ pub const VALUE_VER: u32 = 0x00020001;
 pub enum Value<V> {
     U { value: V, seqno: u64 },
     D { seqno: u64 },
+}
+
+impl<V> Footprint for Value<V>
+where
+    V: Footprint,
+{
+    fn footprint(&self) -> Result<isize> {
+        use std::{convert::TryFrom, mem::size_of};
+
+        let mut size = err_at!(ConversionFail, isize::try_from(size_of::<Value<V>>()))?;
+        size += match self {
+            Value::U { value, .. } => value.footprint()?,
+            Value::D { .. } => 0,
+        };
+        err_at!(ConversionFail, isize::try_from(size))
+    }
 }
 
 impl<V> Value<V> {

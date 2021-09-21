@@ -85,6 +85,7 @@
 //!
 
 #![feature(drain_filter)]
+#![feature(concat_idents)]
 
 use std::{ffi, result};
 

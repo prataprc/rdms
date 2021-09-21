@@ -76,26 +76,25 @@ pub enum Error {
     __ZBlockExhausted(String, String),
 }
 
-/// Short form to compose Error values.
-///
-/// Here are few possible ways:
-///
-/// ```ignore
-/// use crate::Error;
-/// err_at!(ParseError, msg: format!("bad argument"));
-/// ```
-///
-/// ```ignore
-/// use crate::Error;
-/// err_at!(ParseError, std::io::read(buf));
-/// ```
-///
-/// ```ignore
-/// use crate::Error;
-/// err_at!(ParseError, std::fs::read(file_path), format!("read failed"));
-/// ```
-///
-#[macro_export]
+// Short form to compose Error values.
+//
+// Here are few possible ways:
+//
+// ```ignore
+// use crate::Error;
+// err_at!(ParseError, msg: format!("bad argument"));
+// ```
+//
+// ```ignore
+// use crate::Error;
+// err_at!(ParseError, std::io::read(buf));
+// ```
+//
+// ```ignore
+// use crate::Error;
+// err_at!(ParseError, std::fs::read(file_path), format!("read failed"));
+// ```
+//
 macro_rules! err_at {
     ($v:ident, msg: $($arg:expr),+) => {{
         let prefix = format!("{}:{}", file!(), line!());

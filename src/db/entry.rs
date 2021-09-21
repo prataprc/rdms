@@ -3,41 +3,48 @@ use cbordata::Cborize;
 use std::{borrow::Borrow, fmt, ops::Bound, result};
 
 use crate::{
-    db::delta::Delta,
-    db::{Cutoff, Diff, Value},
+    db::{Cutoff, Delta, Diff, Footprint, Value},
     Error, Result,
 };
 
 const ENTRY_VER: u32 = 0x00050001;
 
+// TODO: test case for Cborize
+
+// TODO: deriving Cborize on Entry has a problem, `deltas` field is using an
+// associated type of Diff trait which is declared as constraint no `V`. Now
+// automatically detecting this and deriving FromCbor and IntoCbor for
+// <V as Diff>::Delta seem to be difficult. Hence we add the type parameter `D`
+// to Entry. Is there an alternative ?
+
 /// Entry type, describe a single `{key,value}` entry within indexed data-set.
 #[derive(Clone, Cborize)]
-pub struct Entry<K, V>
+pub struct Entry<K, V, D>
 where
-    V: Diff,
+    V: Diff<Delta = D>,
 {
     pub key: K,
     pub value: Value<V>,
     pub deltas: Vec<Delta<<V as Diff>::Delta>>, // from oldest to newest
 }
 
-impl<K, V> fmt::Debug for Entry<K, V>
+impl<K, V, D> fmt::Debug for Entry<K, V, D>
 where
     K: fmt::Debug,
-    V: fmt::Debug + Diff,
+    V: fmt::Debug + Diff<Delta = D>,
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
         write!(f, "{:?}-{:?}", self.key, self.value)
     }
 }
 
-impl<K, V> PartialEq for Entry<K, V>
+impl<K, V, D> PartialEq for Entry<K, V, D>
 where
     K: PartialEq,
-    V: PartialEq + Diff,
-    <V as Diff>::Delta: PartialEq,
+    V: PartialEq + Diff<Delta = D>,
+    D: PartialEq,
 {
-    fn eq(&self, other: &Entry<K, V>) -> bool {
+    fn eq(&self, other: &Entry<K, V, D>) -> bool {
         self.key.eq(&other.key)
             && self.value.eq(&other.value)
             && self.deltas.len() == other.deltas.len()
@@ -49,14 +56,36 @@ where
     }
 }
 
-impl<K, V> Entry<K, V>
+impl<K, V, D> Footprint for Entry<K, V, D>
 where
-    V: Diff,
+    K: Footprint,
+    V: Diff<Delta = D> + Footprint,
+    D: Footprint,
+{
+    /// Return the previous versions of this entry as Deltas.
+    fn footprint(&self) -> Result<isize> {
+        use std::mem::size_of;
+
+        // TODO: create a test case for footprint.
+        let size = size_of::<Vec<Delta<<V as Diff>::Delta>>>();
+
+        let mut size = self.key.footprint()?;
+        size += self.value.footprint()?;
+        for delta in self.deltas.iter() {
+            size += delta.footprint()?;
+        }
+        Ok(size)
+    }
+}
+
+impl<K, V, D> Entry<K, V, D>
+where
+    V: Diff<Delta = D>,
 {
     pub const ID: u32 = ENTRY_VER;
 
     /// Create a new entry with key, value.
-    pub fn new(key: K, value: V, seqno: u64) -> Entry<K, V> {
+    pub fn new(key: K, value: V, seqno: u64) -> Entry<K, V, D> {
         Entry {
             key,
             value: Value::U { value, seqno },
@@ -65,7 +94,7 @@ where
     }
 
     /// Create a new entry that is marked as deleted.
-    pub fn new_deleted(key: K, seqno: u64) -> Entry<K, V> {
+    pub fn new_deleted(key: K, seqno: u64) -> Entry<K, V, D> {
         Entry {
             key,
             value: Value::D { seqno },
@@ -141,9 +170,9 @@ where
     }
 }
 
-impl<K, V> Entry<K, V>
+impl<K, V, D> Entry<K, V, D>
 where
-    V: Diff,
+    V: Diff<Delta = D>,
 {
     pub fn to_seqno(&self) -> u64 {
         match self.value {
@@ -192,6 +221,7 @@ where
     pub fn to_values(&self) -> Vec<Value<V>>
     where
         V: Clone,
+        <V as Diff>::Delta: Clone,
     {
         let mut values = vec![self.value.clone()];
         let mut val: Option<V> = self.to_value();
@@ -219,6 +249,7 @@ where
     pub fn contains(&self, other: &Self) -> bool
     where
         V: Clone + PartialEq,
+        <V as Diff>::Delta: Clone,
     {
         let values = self.to_values();
         other.to_values().iter().all(|v| values.contains(v))
@@ -230,6 +261,7 @@ where
     where
         K: PartialEq + Clone,
         V: Clone,
+        <V as Diff>::Delta: Clone + From<V>,
     {
         if self.key != other.key {
             return self.clone();

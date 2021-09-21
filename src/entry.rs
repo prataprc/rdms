@@ -695,8 +695,10 @@ where
         Ok(match &self.value {
             Value::U { value, seqno, .. } => match value.to_reference() {
                 Some((fpos, len, _seqno)) => {
-                    self.value =
-                        Value::new_upsert(Box::new(vlog::fetch_value(fpos, len, fd)?), *seqno);
+                    self.value = Value::new_upsert(
+                        Box::new(vlog::fetch_value(fpos, len, fd)?),
+                        *seqno,
+                    );
                 }
                 _ => (),
             },
@@ -711,7 +713,8 @@ where
                     delta: vlog::Delta::Reference { fpos, length, .. },
                     seqno,
                 } => {
-                    *delta = Delta::new_upsert(vlog::fetch_delta(fpos, length, fd)?, seqno);
+                    *delta =
+                        Delta::new_upsert(vlog::fetch_delta(fpos, length, fd)?, seqno);
                 }
                 _ => (),
             }
@@ -857,13 +860,15 @@ where
         (None, InnerDelta::U { delta, seqno }) => {
             // previous entry was a delete.
             let nv: V = From::from(delta.into_native_delta().unwrap());
-            let value = Value::new_upsert(Box::new(vlog::Value::new_native(nv.clone())), seqno);
+            let value =
+                Value::new_upsert(Box::new(vlog::Value::new_native(nv.clone())), seqno);
             (value, Some(nv))
         }
         (Some(curval), InnerDelta::U { delta, seqno }) => {
             // this and previous entry are create/update.
             let nv = curval.merge(&delta.into_native_delta().unwrap());
-            let value = Value::new_upsert(Box::new(vlog::Value::new_native(nv.clone())), seqno);
+            let value =
+                Value::new_upsert(Box::new(vlog::Value::new_native(nv.clone())), seqno);
             (value, Some(nv))
         }
     }

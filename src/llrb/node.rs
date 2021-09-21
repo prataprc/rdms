@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use crate::db::{Diff, Entry};
+use crate::{
+    db::{Diff, Entry, Footprint},
+    Error, Result,
+};
 
 // Node corresponds to a single entry in Llrb instance.
 #[derive(Clone)]
@@ -8,10 +11,25 @@ pub struct Node<K, V>
 where
     V: Diff,
 {
-    pub entry: Arc<Entry<K, V>>,
+    pub entry: Arc<Entry<K, V, <V as Diff>::Delta>>,
     pub black: bool,                    // store: black or red
     pub left: Option<Arc<Node<K, V>>>,  // store: left child
     pub right: Option<Arc<Node<K, V>>>, // store: right child
+}
+
+impl<K, V> Footprint for Node<K, V>
+where
+    K: Footprint,
+    V: Diff + Footprint,
+    <V as Diff>::Delta: Footprint,
+{
+    fn footprint(&self) -> Result<isize> {
+        use std::{convert::TryFrom, mem::size_of};
+
+        let size = size_of::<Node<K, V>>();
+        let overhead = err_at!(ConversionFail, isize::try_from(size))?;
+        Ok(overhead + self.entry.footprint()?)
+    }
 }
 
 impl<K, V> Node<K, V>
@@ -38,7 +56,7 @@ where
         self.entry = Arc::new(entry);
     }
 
-    pub fn commit(&mut self, other: Entry<K, V>)
+    pub fn commit(&mut self, other: Entry<K, V, <V as Diff>::Delta>)
     where
         K: PartialEq + Clone,
         V: Clone,
@@ -105,11 +123,11 @@ where
     }
 }
 
-impl<K, V> From<Entry<K, V>> for Node<K, V>
+impl<K, V> From<Entry<K, V, <V as Diff>::Delta>> for Node<K, V>
 where
     V: Diff,
 {
-    fn from(entry: Entry<K, V>) -> Node<K, V> {
+    fn from(entry: Entry<K, V, <V as Diff>::Delta>) -> Node<K, V> {
         Node {
             entry: Arc::new(entry),
             black: false,

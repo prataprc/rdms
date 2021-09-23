@@ -87,9 +87,9 @@
 #![feature(drain_filter)]
 #![feature(concat_idents)]
 
-use std::{ffi, result};
+use std::result;
 
-/// Type alias for all results returned by [rdms] methods.
+/// Type alias for all results returned by [rdms][crate] package.
 pub type Result<T> = result::Result<T, Error>;
 
 #[macro_use]
@@ -97,6 +97,9 @@ mod error;
 
 pub mod db;
 pub mod llrb;
+mod util;
+
+pub use error::Error;
 
 // core modules
 // pub mod core;
@@ -144,37 +147,3 @@ pub mod llrb;
 
 //pub mod rdms;
 //pub use crate::rdms::Rdms;
-
-pub use error::Error;
-
-pub enum WriteIndex {
-    // Llrb(Mdb<K, V>),
-}
-
-impl WriteIndex {
-    fn new(&self, name: &str) -> Result<Self> {
-        todo!()
-    }
-
-    fn to_type(&self) -> String {
-        todo!()
-    }
-}
-
-pub enum DiskIndex {
-    // ReadOnlyBT(Robt),
-}
-
-impl DiskIndex {
-    fn new(&self, dir: &ffi::OsStr, name: &str) -> Result<Self> {
-        todo!()
-    }
-
-    fn open(&self, dir: &ffi::OsStr, name: &str) -> Result<Self> {
-        todo!()
-    }
-
-    fn to_type(&self) -> String {
-        todo!()
-    }
-}

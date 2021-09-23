@@ -20,28 +20,36 @@ where
     fn footprint(&self) -> Result<isize> {
         use std::{convert::TryFrom, mem::size_of};
 
-        let mut size = err_at!(ConversionFail, isize::try_from(size_of::<Value<V>>()))?;
+        let mut size = {
+            err_at!(FailConvert, isize::try_from(size_of::<Value<V>>()))?
+                - err_at!(FailConvert, isize::try_from(size_of::<V>()))?
+        };
+
         size += match self {
             Value::U { value, .. } => value.footprint()?,
             Value::D { .. } => 0,
         };
-        err_at!(ConversionFail, isize::try_from(size))
+
+        Ok(size)
     }
 }
 
 impl<V> Value<V> {
     pub const ID: u32 = VALUE_VER;
 
-    pub fn set(&mut self, value: V, seqno: u64) {
-        *self = Value::U { value, seqno };
+    #[inline]
+    pub fn new_upsert(value: V, seqno: u64) -> Self {
+        Value::U { value, seqno }
     }
 
-    pub fn delete(&mut self, seqno: u64) {
-        *self = Value::D { seqno };
+    #[inline]
+    pub fn new_delete(seqno: u64) -> Self {
+        Value::D { seqno }
     }
 }
 
 impl<V> Value<V> {
+    #[inline]
     pub fn to_seqno(&self) -> u64 {
         match self {
             Value::U { seqno, .. } => *seqno,
@@ -49,10 +57,29 @@ impl<V> Value<V> {
         }
     }
 
-    pub fn is_deleted(&self) -> bool {
+    #[inline]
+    pub fn to_value(&self) -> Option<V>
+    where
+        V: Clone,
+    {
         match self {
-            Value::U { .. } => false,
-            Value::D { .. } => true,
+            Value::U { value, .. } => Some(value.clone()),
+            Value::D { .. } => None,
+        }
+    }
+
+    #[inline]
+    pub fn unpack(&self) -> (u64, Option<V>)
+    where
+        V: Clone,
+    {
+        match self {
+            Value::U { value, seqno } => (*seqno, Some(value.clone())),
+            Value::D { seqno } => (*seqno, None),
         }
     }
 }
+
+#[cfg(test)]
+#[path = "value_test.rs"]
+mod value_test;

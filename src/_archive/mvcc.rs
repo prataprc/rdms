@@ -693,8 +693,12 @@ where
                     self.compact_loop(root, low, &mut cc, LIMIT)?;
                 self.n_reclaimed += cc.reclaim.len();
                 self.tree_footprint = cc.tree_footprint;
-                self.snapshot
-                    .shift_snapshot(root, snapshot.seqno, snapshot.n_count, cc.reclaim);
+                self.snapshot.shift_snapshot(
+                    root,
+                    snapshot.seqno,
+                    snapshot.n_count,
+                    cc.reclaim,
+                );
 
                 for key in cc.dels.into_iter() {
                     self.delete_index_entry(key)?;
@@ -1532,7 +1536,9 @@ where
                         let (right, low) = (newn.right.take(), Unbounded);
                         let (right, seen, limit) =
                             match mself.compact_loop(right, low, cc, limit - 1)? {
-                                (right, None, limit) => (right, Some(newn.to_key()), limit),
+                                (right, None, limit) => {
+                                    (right, Some(newn.to_key()), limit)
+                                }
                                 res => res,
                             };
                         newn.right = right;
@@ -1555,11 +1561,17 @@ where
                                 newn.left = left;
                                 Self::compact_entry(&mut newn, cc)?;
                                 let (right, low) = (newn.right.take(), Unbounded);
-                                let (right, seen, limit) =
-                                    match mself.compact_loop(right, low, cc, limit - 1)? {
-                                        (right, None, limit) => (right, Some(newn.to_key()), limit),
-                                        res => res,
-                                    };
+                                let (right, seen, limit) = match mself.compact_loop(
+                                    right,
+                                    low,
+                                    cc,
+                                    limit - 1,
+                                )? {
+                                    (right, None, limit) => {
+                                        (right, Some(newn.to_key()), limit)
+                                    }
+                                    res => res,
+                                };
                                 newn.right = right;
                                 Ok((Some(newn), seen, limit))
                             }
@@ -1780,7 +1792,11 @@ where
         self.as_mut().scans(n_shards, within)
     }
 
-    fn range_scans<N, G>(&mut self, ranges: Vec<N>, within: G) -> Result<Vec<IndexIter<K, V>>>
+    fn range_scans<N, G>(
+        &mut self,
+        ranges: Vec<N>,
+        within: G,
+    ) -> Result<Vec<IndexIter<K, V>>>
     where
         N: Clone + RangeBounds<K>,
         G: Clone + RangeBounds<u64>,
@@ -1808,7 +1824,11 @@ where
         (*self).scans(n_shards, within)
     }
 
-    fn range_scans<N, G>(&mut self, ranges: Vec<N>, within: G) -> Result<Vec<IndexIter<K, V>>>
+    fn range_scans<N, G>(
+        &mut self,
+        ranges: Vec<N>,
+        within: G,
+    ) -> Result<Vec<IndexIter<K, V>>>
     where
         N: Clone + RangeBounds<K>,
         G: Clone + RangeBounds<u64>,
@@ -1879,7 +1899,11 @@ where
         Ok(scans)
     }
 
-    fn range_scans<N, G>(&mut self, ranges: Vec<N>, within: G) -> Result<Vec<IndexIter<K, V>>>
+    fn range_scans<N, G>(
+        &mut self,
+        ranges: Vec<N>,
+        within: G,
+    ) -> Result<Vec<IndexIter<K, V>>>
     where
         N: RangeBounds<K>,
         G: Clone + RangeBounds<u64>,
@@ -2607,7 +2631,11 @@ where
         index.scans(n_shards, within)
     }
 
-    fn range_scans<N, G>(&mut self, ranges: Vec<N>, within: G) -> Result<Vec<IndexIter<K, V>>>
+    fn range_scans<N, G>(
+        &mut self,
+        ranges: Vec<N>,
+        within: G,
+    ) -> Result<Vec<IndexIter<K, V>>>
     where
         N: Clone + RangeBounds<K>,
         G: Clone + RangeBounds<u64>,

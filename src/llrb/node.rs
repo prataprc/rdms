@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
-    db::{Diff, Entry, Footprint},
+    db::{Diff, Entry, Footprint, Value},
     Error, Result,
 };
 
@@ -11,7 +11,7 @@ pub struct Node<K, V>
 where
     V: Diff,
 {
-    pub entry: Arc<Entry<K, V, <V as Diff>::Delta>>,
+    pub entry: Arc<Entry<K, V>>,
     pub black: bool,                    // store: black or red
     pub left: Option<Arc<Node<K, V>>>,  // store: left child
     pub right: Option<Arc<Node<K, V>>>, // store: right child
@@ -27,7 +27,7 @@ where
         use std::{convert::TryFrom, mem::size_of};
 
         let size = size_of::<Node<K, V>>();
-        let overhead = err_at!(ConversionFail, isize::try_from(size))?;
+        let overhead = err_at!(FailConvert, isize::try_from(size))?;
         Ok(overhead + self.entry.footprint()?)
     }
 }
@@ -39,40 +39,33 @@ where
     pub fn set(&mut self, value: V, seqno: u64)
     where
         K: Clone,
-        V: Clone,
     {
         let mut entry = self.entry.as_ref().clone();
-        entry.value.set(value, seqno);
+        entry.value = Value::new_upsert(value, seqno);
+        entry.deltas = Vec::default();
         self.entry = Arc::new(entry);
     }
 
     pub fn insert(&mut self, value: V, seqno: u64)
     where
         K: Clone,
-        V: Clone,
     {
-        let mut entry = self.entry.as_ref().clone();
-        entry.insert(value, seqno);
-        self.entry = Arc::new(entry);
-    }
-
-    pub fn commit(&mut self, other: Entry<K, V, <V as Diff>::Delta>)
-    where
-        K: PartialEq + Clone,
-        V: Clone,
-    {
-        self.entry = Arc::new(self.entry.as_ref().commit(&other));
+        self.entry = Arc::new(self.entry.as_ref().insert(value, seqno));
     }
 
     pub fn delete(&mut self, seqno: u64)
     where
         K: Clone,
-        V: Clone,
-        <V as Diff>::Delta: From<V>,
     {
-        let mut entry = self.entry.as_ref().clone();
-        entry.delete(seqno);
-        self.entry = Arc::new(entry);
+        self.entry = Arc::new(self.entry.as_ref().delete(seqno));
+    }
+
+    pub fn commit(&mut self, other: Entry<K, V>) -> Result<()>
+    where
+        K: PartialEq + Clone,
+    {
+        self.entry = Arc::new(self.entry.as_ref().commit(&other)?);
+        Ok(())
     }
 
     #[inline]
@@ -110,24 +103,27 @@ where
         self.black
     }
 
+    #[inline]
     pub fn as_key(&self) -> &K {
         self.entry.as_key()
     }
 
+    #[inline]
     pub fn to_seqno(&self) -> u64 {
         self.entry.to_seqno()
     }
 
+    #[inline]
     pub fn is_deleted(&self) -> bool {
         self.entry.is_deleted()
     }
 }
 
-impl<K, V> From<Entry<K, V, <V as Diff>::Delta>> for Node<K, V>
+impl<K, V> From<Entry<K, V>> for Node<K, V>
 where
     V: Diff,
 {
-    fn from(entry: Entry<K, V, <V as Diff>::Delta>) -> Node<K, V> {
+    fn from(entry: Entry<K, V>) -> Node<K, V> {
         Node {
             entry: Arc::new(entry),
             black: false,

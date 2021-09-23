@@ -36,7 +36,7 @@ macro_rules! impl_footprint_basic_types {
             impl Footprint for $type {
                 fn footprint(&self) -> Result<isize> {
                     use std::mem::size_of;
-                    err_at!(ConversionFail, isize::try_from(size_of::<$type>()))
+                    err_at!(FailConvert, isize::try_from(size_of::<$type>()))
                 }
             }
         )*
@@ -47,13 +47,23 @@ impl_footprint_basic_types![
     bool, i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize, f32, f64, char
 ];
 
-impl<T> Footprint for Vec<T> {
+impl<T> Footprint for Vec<T>
+where
+    T: Footprint,
+{
     fn footprint(&self) -> Result<isize> {
         use std::mem::size_of;
-        Ok(err_at!(
-            ConversionFail,
+
+        let mut size = err_at!(
+            FailConvert,
             isize::try_from(size_of::<Vec<T>>() + self.capacity())
-        )?)
+        )?;
+
+        for item in self.iter() {
+            size += item.footprint()?
+        }
+
+        Ok(size)
     }
 }
 
@@ -61,7 +71,7 @@ impl Footprint for String {
     fn footprint(&self) -> Result<isize> {
         use std::mem::size_of;
         Ok(err_at!(
-            ConversionFail,
+            FailConvert,
             isize::try_from(size_of::<String>() + self.capacity())
         )?)
     }

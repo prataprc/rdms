@@ -1,6 +1,11 @@
+mod depth;
+mod index;
 mod node;
-// mod op;
-// mod index;
+mod op;
+mod stats;
 
+pub use depth::Depth;
+pub use index::Index;
 use node::Node;
-// pub use index::Index;
+pub use op::Write;
+pub use stats::Stats;

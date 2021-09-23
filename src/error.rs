@@ -30,7 +30,7 @@ pub enum Error {
     /// Returned by disk index or dlog that provide durability support.
     InvalidFile(String, String),
     /// Error converting from one type to another.
-    ConversionFail(String, String),
+    FailConvert(String, String),
     /// IO error from std::io
     IoError(String, String),
 
@@ -134,7 +134,7 @@ impl fmt::Display for Error {
             Error::APIMisuse(p, m) => write!(f, "{} APIMisuse:{}", p, m),
             Error::DecodeFail(p, m) => write!(f, "{} DecodeFail:{}", p, m),
             Error::InvalidFile(p, m) => write!(f, "{} InvalidFile:{}", p, m),
-            Error::ConversionFail(p, m) => write!(f, "{} ConversionFail:{}", p, m),
+            Error::FailConvert(p, m) => write!(f, "{} FailConvert:{}", p, m),
             Error::IoError(p, m) => write!(f, "{} IoError:{}", p, m),
             Error::KeyNotFound(p, m) => write!(f, "{} KeyNotFound:{}", p, m),
             Error::EmptyIndex(p, m) => write!(f, "{} EmptyIndex:{}", p, m),
@@ -180,7 +180,7 @@ macro_rules! array_at {
             Ok(val) => Ok(val),
             Err(err) => {
                 let msg = format!("{}:{} {}", file!(), line!(), err);
-                Err(Error::ConversionFail(msg))
+                Err(Error::FailConvert(msg))
             }
         }
     };
@@ -193,7 +193,7 @@ macro_rules! parse_at {
             Ok(val) => Ok(val),
             Err(err) => {
                 let msg = format!("{}:{} parse: {}", file!(), line!(), err);
-                Err(Error::ConversionFail(msg))
+                Err(Error::FailConvert(msg))
             }
         }
     };
@@ -206,7 +206,7 @@ macro_rules! convert_at {
             Ok(val) => Ok(val),
             Err(err) => {
                 let msg = format!("{}:{} {:?} convert: {}", file!(), line!(), $e, err);
-                Err(Error::ConversionFail(msg))
+                Err(Error::FailConvert(msg))
             }
         }
     };

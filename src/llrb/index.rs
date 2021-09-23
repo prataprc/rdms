@@ -1,6 +1,8 @@
 // Module ``mvcc`` implement [Multi-Version-Concurrency-Control][mvcc]
 // variant of [Llrb].
 //
+// TODO: add a note about spin-concurrency
+//
 // [Mvcc] type allow concurrent read and write access at API level,
 // while behind the scenes, all write-operations are serialized into
 // single thread, but the key difference is that [Mvcc] index allow
@@ -27,8 +29,6 @@
 // [mvcc]: https://en.wikipedia.org/wiki/Multiversion_concurrency_control
 // [LSM mode]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
 
-use mkit::{data::Diff, db, spinlock::Spinlock};
-
 use std::{
     borrow::Borrow,
     cmp::{self, Ordering},
@@ -37,7 +37,12 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::{mdb_node::Node, mdb_op::Write, Error, Result};
+use crate::{
+    db::{self, Footprint},
+    llrb::{Node, Stats, Write},
+    util::Spinlock,
+    Error, Result,
+};
 
 pub const MAX_TREE_DEPTH: usize = 100;
 
@@ -57,57 +62,48 @@ macro_rules! compute_n_deleted {
     };
 }
 
-/// Mdb type for thread-safe, concurrent reads and serialized writes.
+// TODO: llrb_common::do_shards()
+// TODO: mvcc::squash()
+// TODO: mvcc::to_metadata()
+// TODO: mvcc::compact()
+
+/// Index type for thread-safe, concurrent reads and serialized writes.
 ///
 /// [mvcc]: https://en.wikipedia.org/wiki/Multiversion_concurrency_control
 /// [llrb]: https://en.wikipedia.org/wiki/Left-leaning_red-black_tree
 #[derive(Clone)]
-pub struct Mdb<K, V, D> {
+pub struct Index<K, V>
+where
+    V: db::Diff,
+{
     name: String,
+    spin: bool,
 
     mu: Arc<Mutex<u32>>,
-    inner: Arc<Spinlock<Arc<Inner<K, V, D>>>>,
+    inner: Arc<Spinlock<Arc<Inner<K, V>>>>,
 }
 
-impl<K, V, D> Mdb<K, V, D> {
-    pub fn new(name: &str) -> Mdb<K, V, D> {
+impl<K, V> Index<K, V>
+where
+    V: db::Diff,
+{
+    pub fn new(name: &str, spin: bool) -> Index<K, V> {
         let inner = Inner {
             root: None,
             seqno: 0,
+
             n_count: 0,
             n_deleted: 0,
+            tree_footprint: 0,
         };
 
-        Mdb {
+        Index {
             name: name.to_string(),
+            spin,
+
             mu: Arc::new(Mutex::new(0)),
             inner: Arc::new(Spinlock::new(Arc::new(inner))),
         }
-    }
-}
-
-impl<K, V, D> Mdb<K, V, D> {
-    /// Return number of entries in this instance.
-    pub fn len(&self) -> usize {
-        let inner = Arc::clone(&self.inner.read());
-        inner.n_count
-    }
-
-    /// Return number of entries marked as deleted.
-    pub fn deleted_count(&self) -> usize {
-        let inner = Arc::clone(&self.inner.read());
-        inner.n_deleted
-    }
-
-    /// Return whether index is empty.
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    /// Return current sequence-no for index.
-    pub fn to_seqno(&self) -> u64 {
-        let inner = Arc::clone(&self.inner.read());
-        inner.seqno
     }
 
     /// Update index to a new sequence-no, future mutations shall start
@@ -115,8 +111,6 @@ impl<K, V, D> Mdb<K, V, D> {
     pub fn set_seqno(&self, seqno: u64) -> u64
     where
         K: Clone,
-        V: Clone,
-        D: Clone,
     {
         let (mut inner, old_seqno) = {
             let inner = Arc::clone(&self.inner.read());
@@ -129,29 +123,99 @@ impl<K, V, D> Mdb<K, V, D> {
         old_seqno
     }
 
-    /// Identify this index instance.
+    pub fn close(self) -> Result<()> {
+        Ok(())
+    }
+
+    pub fn purge(self) -> Result<()> {
+        Ok(())
+    }
+}
+
+impl<K, V> Index<K, V>
+where
+    V: db::Diff,
+{
+    /// Return name of this index instance.
     #[inline]
     pub fn to_name(&self) -> String {
         self.name.clone()
     }
+
+    /// Return whether spin-concurrency is enabled.
+    #[inline]
+    pub fn is_spin(&self) -> bool {
+        self.spin
+    }
+
+    /// Return number of entries in this instance.
+    #[inline]
+    pub fn len(&self) -> usize {
+        let inner = Arc::clone(&self.inner.read());
+        inner.n_count
+    }
+
+    /// Return whether index is empty.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Return number of entries marked as deleted.
+    #[inline]
+    pub fn deleted_count(&self) -> usize {
+        let inner = Arc::clone(&self.inner.read());
+        inner.n_deleted
+    }
+
+    /// Return current sequence-no for index.
+    #[inline]
+    pub fn to_seqno(&self) -> u64 {
+        let inner = Arc::clone(&self.inner.read());
+        inner.seqno
+    }
+
+    /// with this statisics.
+    pub fn to_stats(&self) -> Result<Stats> {
+        use std::mem::size_of;
+
+        let inner = Arc::clone(&self.inner.read());
+
+        let mut stats = Stats::new(&self.name, self.spin);
+        stats.node_size = size_of::<Node<K, V>>();
+        stats.n_count = inner.n_count;
+        stats.n_deleted = inner.n_deleted;
+        stats.tree_footprint = inner.tree_footprint;
+        stats.spin_stats = self.inner.as_ref().to_stats()?;
+        // blacks and depths are available only from validate call.
+        Ok(stats)
+    }
+
+    pub fn footprint(&self) -> Result<isize> {
+        let inner = Arc::clone(&self.inner.read());
+        Ok(inner.tree_footprint)
+    }
 }
 
 /// Result type for all write operations into index.
-pub struct Wr<K, V, D> {
+pub struct Wr<K, V>
+where
+    V: db::Diff,
+{
     /// Mutation sequence number for this write-operation.
     pub seqno: u64,
-    pub old_entry: Option<db::Entry<K, V, D>>,
+    pub old_entry: Option<db::Entry<K, V>>,
 }
 
-impl<K, V, D> Mdb<K, V, D> {
+impl<K, V> Index<K, V>
+where
+    K: Clone + Ord + db::Footprint,
+    V: db::Diff + db::Footprint,
+    <V as db::Diff>::Delta: db::Footprint,
+{
     /// Set `key`, `value` into index. If an older entry exist with same key,
     /// it shall be overwritten.
-    pub fn set(&self, key: K, value: V) -> Result<Wr<K, V, D>>
-    where
-        K: Clone + Ord,
-        V: Clone,
-        D: Clone,
-    {
+    pub fn set(&self, key: K, value: V) -> Result<Wr<K, V>> {
         let _w = self.mu.lock();
 
         let inner = Arc::clone(&self.inner.read());
@@ -166,11 +230,10 @@ impl<K, V, D> Mdb<K, V, D> {
     /// Set `key`, `value` into index. If already an entry in present with
     /// `key`, `cas` should match entry's sequence-number. If index don't
     /// have an entry with `key`, `cas` must be ZERO.
-    pub fn set_cas(&self, key: K, value: V, cas: u64) -> Result<Wr<K, V, D>>
+    pub fn set_cas(&self, key: K, value: V, cas: u64) -> Result<Wr<K, V>>
     where
         K: Clone + Ord,
         V: Clone,
-        D: Clone,
     {
         let _w = self.mu.lock();
 
@@ -184,13 +247,11 @@ impl<K, V, D> Mdb<K, V, D> {
     }
 
     /// Insert `key`, `value` into index. Non destructive version of
-    /// set method. If an older entry exist with same key, use [Diff]
+    /// set method. If an older entry exist with same key, use [db::Diff]
     /// to compute the delta and insert a new value-version.
-    pub fn insert(&self, key: K, value: V) -> Result<Wr<K, V, D>>
+    pub fn insert(&self, key: K, value: V) -> Result<Wr<K, V>>
     where
         K: Clone + Ord,
-        V: Clone + Diff<Delta = D>,
-        D: Clone,
     {
         let _w = self.mu.lock();
 
@@ -204,15 +265,13 @@ impl<K, V, D> Mdb<K, V, D> {
     }
 
     /// Insert `key`, `value` into index. Non destructive version of
-    /// set method. If an older entry exist with same `key`, use [Diff]
+    /// set method. If an older entry exist with same `key`, use [db::Diff]
     /// to compute the delta and insert a new value-version. Also if an
     /// older entry exist with same `key`, `cas` should match entry's
     /// sequence-number.
-    pub fn insert_cas(&self, key: K, value: V, cas: u64) -> Result<Wr<K, V, D>>
+    pub fn insert_cas(&self, key: K, value: V, cas: u64) -> Result<Wr<K, V>>
     where
         K: Clone + Ord,
-        V: Clone + Diff<Delta = D>,
-        D: Clone,
     {
         let _w = self.mu.lock();
 
@@ -226,12 +285,10 @@ impl<K, V, D> Mdb<K, V, D> {
     }
 
     /// Remove the entry, matching the key, from the index.
-    pub fn remove<Q>(&self, key: &Q) -> Result<Wr<K, V, D>>
+    pub fn remove<Q>(&self, key: &Q) -> Result<Wr<K, V>>
     where
-        K: Clone + Ord + Borrow<Q>,
+        K: Borrow<Q>,
         Q: Ord + ToOwned<Owned = K> + ?Sized,
-        V: Clone,
-        D: Clone,
     {
         let _w = self.mu.lock();
 
@@ -246,12 +303,11 @@ impl<K, V, D> Mdb<K, V, D> {
 
     /// Remove the entry, with matching key and matching entry's
     /// sequencey-number with `cas`.
-    pub fn remove_cas<Q>(&self, key: &Q, cas: u64) -> Result<Wr<K, V, D>>
+    pub fn remove_cas<Q>(&self, key: &Q, cas: u64) -> Result<Wr<K, V>>
     where
         K: Clone + Ord + Borrow<Q>,
         Q: Ord + ToOwned<Owned = K> + ?Sized,
         V: Clone,
-        D: Clone,
     {
         let _w = self.mu.lock();
 
@@ -265,13 +321,10 @@ impl<K, V, D> Mdb<K, V, D> {
     }
 
     /// Non destructive version of remove method. Mark entry as deleted.
-    pub fn delete<Q>(&self, key: &Q) -> Result<Wr<K, V, D>>
+    pub fn delete<Q>(&self, key: &Q) -> Result<Wr<K, V>>
     where
-        K: Clone + Ord + Borrow<Q>,
+        K: Borrow<Q>,
         Q: Ord + ToOwned<Owned = K> + ?Sized,
-        V: Clone + Diff<Delta = D>,
-        D: Clone,
-        <V as Diff>::Delta: From<V>,
     {
         let _w = self.mu.lock();
 
@@ -285,13 +338,10 @@ impl<K, V, D> Mdb<K, V, D> {
     }
 
     /// Non destructive version of remove method. Mark entry as deleted.
-    pub fn delete_cas<Q>(&self, key: &Q, cas: u64) -> Result<Wr<K, V, D>>
+    pub fn delete_cas<Q>(&self, key: &Q, cas: u64) -> Result<Wr<K, V>>
     where
-        K: Clone + Ord + Borrow<Q>,
+        K: Borrow<Q>,
         Q: Ord + ToOwned<Owned = K> + ?Sized,
-        V: Clone + Diff<Delta = D>,
-        D: Clone,
-        <V as Diff>::Delta: From<V>,
     {
         let _w = self.mu.lock();
 
@@ -305,12 +355,9 @@ impl<K, V, D> Mdb<K, V, D> {
     }
 
     /// Apply op on top of this index. For more detail refer to [Write] type.
-    pub fn write(&self, op: Write<K, V>) -> Result<Wr<K, V, D>>
+    pub fn write(&self, op: Write<K, V>) -> Result<Wr<K, V>>
     where
         K: Clone + Ord,
-        V: Clone + Diff<Delta = D>,
-        D: Clone,
-        <V as Diff>::Delta: From<V>,
     {
         let _w = self.mu.lock();
 
@@ -342,16 +389,13 @@ impl<K, V, D> Mdb<K, V, D> {
         Ok(Wr { seqno, old_entry })
     }
 
-    /// Commit a latest batch of mutations into this snapshot, there by
-    /// creating a new snapshot. It is pre-requisite that the new batch
-    /// of mutation and its seqno must all be newer than this index
-    /// snapshot's latest seqno.
+    /// Commit a latest batch of mutations into this snapshot, there by creating a
+    /// new snapshot. It is pre-requisite that the new batch of mutation and its
+    /// seqno must all be newer than this index snapshot's latest seqno.
     pub fn commit<I>(&self, iter: I) -> Result<usize>
     where
         K: Clone + PartialEq + Ord,
-        V: Clone + Diff<Delta = D>,
-        D: Clone + From<V>,
-        I: Iterator<Item = db::Entry<K, V, D>>,
+        I: Iterator<Item = db::Entry<K, V>>,
     {
         let mut inner = self.inner.write();
         let (new_inner, n) = {
@@ -365,14 +409,15 @@ impl<K, V, D> Mdb<K, V, D> {
     }
 }
 
-impl<K, V, D> Mdb<K, V, D> {
+impl<K, V> Index<K, V>
+where
+    V: db::Diff,
+{
     /// Get entry from index for `key`. If key is not found return
     /// [Error::KeyNotFound]
-    pub fn get<Q>(&self, key: &Q) -> Result<db::Entry<K, V, D>>
+    pub fn get<Q>(&self, key: &Q) -> Result<db::Entry<K, V>>
     where
         K: Clone + Borrow<Q>,
-        V: Clone,
-        D: Clone,
         Q: Ord + ?Sized,
     {
         let inner = Arc::clone(&self.inner.read());
@@ -380,13 +425,13 @@ impl<K, V, D> Mdb<K, V, D> {
     }
 
     /// For full table scan.
-    pub fn iter(&self) -> Result<Iter<K, V, D>> {
+    pub fn iter(&self) -> Result<Iter<K, V>> {
         let inner = Arc::clone(&self.inner.read());
         Ok(inner.iter())
     }
 
     /// Iterate over entries within the specifed `range`.
-    pub fn range<R, Q>(&self, range: R) -> Result<Range<K, V, D, R, Q>>
+    pub fn range<R, Q>(&self, range: R) -> Result<Range<K, V, R, Q>>
     where
         K: Borrow<Q>,
         R: RangeBounds<Q>,
@@ -399,7 +444,7 @@ impl<K, V, D> Mdb<K, V, D> {
     /// Reverse iterate over entries withing specified `range`. While
     /// `range` method iterate entries from start_bound to end_bound
     /// `reverse` method iterate entries from end_bound to start_bound.
-    pub fn reverse<R, Q>(&self, range: R) -> Result<Reverse<K, V, D, R, Q>>
+    pub fn reverse<R, Q>(&self, range: R) -> Result<Reverse<K, V, R, Q>>
     where
         K: Borrow<Q>,
         R: RangeBounds<Q>,
@@ -409,7 +454,7 @@ impl<K, V, D> Mdb<K, V, D> {
         Ok(inner.reverse(range))
     }
 
-    /// Validate Mdb tree with following rules:
+    /// Validate Index tree with following rules:
     ///
     /// * Root node is always black in color.
     /// * Verify the sort order between a node and its left/right child.
@@ -427,27 +472,41 @@ impl<K, V, D> Mdb<K, V, D> {
 }
 
 #[derive(Clone)]
-struct Inner<K, V, D> {
-    root: Option<Arc<Node<K, V, D>>>,
+struct Inner<K, V>
+where
+    V: db::Diff,
+{
+    root: Option<Arc<Node<K, V>>>,
     seqno: u64,
+
     n_count: usize,
     n_deleted: usize,
+    tree_footprint: isize, // approximate measure
 }
 
-enum Ir<K, V, D> {
-    Root {
-        inner: Inner<K, V, D>,
-        old: Option<db::Entry<K, V, D>>,
-    },
+enum Ir<K, V>
+where
+    V: db::Diff,
+{
+    // returned by recursive call.
     Res {
-        root: Option<Arc<Node<K, V, D>>>,
-        old: Option<Arc<db::Entry<K, V, D>>>,
+        root: Option<Arc<Node<K, V>>>,
+        old: Option<Arc<db::Entry<K, V>>>,
+        footprint: isize, // difference in footprint
+    },
+    // returned by root of the recursion.
+    Root {
+        inner: Inner<K, V>,
+        old: Option<db::Entry<K, V>>,
     },
 }
 
-impl<K, V, D> Ir<K, V, D> {
+impl<K, V> Ir<K, V>
+where
+    V: db::Diff,
+{
     #[allow(clippy::type_complexity)]
-    fn into_root(self) -> (Inner<K, V, D>, Option<db::Entry<K, V, D>>) {
+    fn into_root(self) -> (Inner<K, V>, Option<db::Entry<K, V>>) {
         match self {
             Ir::Root { inner, old } => (inner, old),
             _ => unreachable!(),
@@ -455,39 +514,46 @@ impl<K, V, D> Ir<K, V, D> {
     }
 
     #[allow(clippy::type_complexity)]
-    fn into_res(self) -> (Option<Arc<Node<K, V, D>>>, Option<Arc<db::Entry<K, V, D>>>) {
+    fn into_res(self) -> (Option<Arc<Node<K, V>>>, Option<Arc<db::Entry<K, V>>>, isize) {
         match self {
-            Ir::Res { root, old } => (root, old),
+            Ir::Res {
+                root,
+                old,
+                footprint,
+            } => (root, old, footprint),
             _ => unreachable!(),
         }
     }
 }
 
-impl<K, V, D> Inner<K, V, D> {
-    fn set(&self, op: (K, V, Option<u64>, Option<u64>)) -> Result<Ir<K, V, D>>
-    where
-        K: Clone + Ord,
-        V: Clone,
-        D: Clone,
-    {
+impl<K, V> Inner<K, V>
+where
+    K: Clone + Ord + db::Footprint,
+    V: db::Diff + db::Footprint,
+    <V as db::Diff>::Delta: db::Footprint,
+{
+    fn set(&self, op: (K, V, Option<u64>, Option<u64>)) -> Result<Ir<K, V>> {
         let (key, value, cas, seqno) = op;
         let seqno = seqno.unwrap_or_else(|| self.seqno.saturating_add(1));
         let root = self.root.as_ref().map(Borrow::borrow);
 
         let op = (key, value, cas, seqno);
-        let (mut root, old) = self.do_set(root, op)?.into_res();
+        let (mut root, old, footprint) = self.do_set(root, op)?.into_res();
 
         root.as_mut()
             .map(|root| Arc::get_mut(root).map(Node::set_black));
 
         let n_count = compute_n_count!(self.n_count, old.as_ref());
         let n_deleted = compute_n_deleted!(self.n_deleted, old.as_ref());
+        let tree_footprint = self.tree_footprint + footprint;
 
         let inner = Inner {
             root,
             seqno: cmp::max(self.seqno, seqno),
+
             n_count,
             n_deleted,
+            tree_footprint,
         };
 
         let old = old.as_ref().map(|old| old.as_ref().clone());
@@ -495,30 +561,28 @@ impl<K, V, D> Inner<K, V, D> {
         Ok(Ir::Root { inner, old })
     }
 
-    fn insert(&self, op: (K, V, Option<u64>, Option<u64>)) -> Result<Ir<K, V, D>>
-    where
-        K: Clone + Ord,
-        V: Clone + Diff<Delta = D>,
-        D: Clone,
-    {
+    fn insert(&self, op: (K, V, Option<u64>, Option<u64>)) -> Result<Ir<K, V>> {
         let (key, value, cas, seqno) = op;
         let seqno = seqno.unwrap_or_else(|| self.seqno.saturating_add(1));
         let root = self.root.as_ref().map(Borrow::borrow);
 
         let op = (key, value, cas, seqno);
-        let (mut root, old) = self.do_insert(root, op)?.into_res();
+        let (mut root, old, footprint) = self.do_insert(root, op)?.into_res();
 
         root.as_mut()
             .map(|root| Arc::get_mut(root).map(Node::set_black));
 
         let n_count = compute_n_count!(self.n_count, old.as_ref());
         let n_deleted = compute_n_deleted!(self.n_deleted, old.as_ref());
+        let tree_footprint = self.tree_footprint + footprint;
 
         let inner = Inner {
             root,
             seqno: cmp::max(self.seqno, seqno),
+
             n_count,
             n_deleted,
+            tree_footprint,
         };
 
         let old = old.as_ref().map(|old| old.as_ref().clone());
@@ -526,33 +590,40 @@ impl<K, V, D> Inner<K, V, D> {
         Ok(Ir::Root { inner, old })
     }
 
-    fn remove<Q>(&self, op: (&Q, Option<u64>, Option<u64>)) -> Result<Ir<K, V, D>>
+    fn remove<Q>(&self, op: (&Q, Option<u64>, Option<u64>)) -> Result<Ir<K, V>>
     where
-        K: Clone + Borrow<Q>,
+        K: Borrow<Q>,
         Q: Ord + ToOwned<Owned = K> + ?Sized,
-        V: Clone,
-        D: Clone,
     {
         let (key, cas, seqno) = op;
         let seqno = seqno.unwrap_or_else(|| self.seqno.saturating_add(1));
         let root = self.root.as_ref().map(Borrow::borrow);
 
-        let (mut root, old) = self.do_remove(root, (key, cas, seqno))?.into_res();
+        let (mut root, old, footprint) =
+            self.do_remove(root, (key, cas, seqno))?.into_res();
 
         root.as_mut()
             .map(|root| Arc::get_mut(root).map(Node::set_black));
 
-        let (seqno, n_count) = if old.is_some() {
-            (seqno, self.n_count - 1)
+        let (seqno, n_count, n_deleted) = if old.is_some() {
+            let n_deleted = if old.as_ref().unwrap().is_deleted() {
+                self.n_deleted.saturating_sub(1)
+            } else {
+                self.n_deleted
+            };
+            (seqno, self.n_count.saturating_sub(1), n_deleted)
         } else {
-            (self.seqno, self.n_count)
+            (self.seqno, self.n_count, self.n_deleted)
         };
+        let tree_footprint = self.tree_footprint + footprint;
 
         let inner = Inner {
             root,
             seqno: cmp::max(self.seqno, seqno),
+
             n_count,
-            n_deleted: self.n_deleted,
+            n_deleted,
+            tree_footprint,
         };
 
         let old = old.as_ref().map(|old| old.as_ref().clone());
@@ -560,19 +631,17 @@ impl<K, V, D> Inner<K, V, D> {
         Ok(Ir::Root { inner, old })
     }
 
-    fn delete<Q>(&self, op: (&Q, Option<u64>, Option<u64>)) -> Result<Ir<K, V, D>>
+    fn delete<Q>(&self, op: (&Q, Option<u64>, Option<u64>)) -> Result<Ir<K, V>>
     where
-        K: Clone + Borrow<Q>,
+        K: Borrow<Q>,
         Q: Ord + ToOwned<Owned = K> + ?Sized,
-        V: Clone + Diff<Delta = D>,
-        D: Clone,
-        <V as Diff>::Delta: From<V>,
     {
         let (key, cas, seqno) = op;
         let seqno = seqno.unwrap_or_else(|| self.seqno.saturating_add(1));
         let root = self.root.as_ref().map(Borrow::borrow);
 
-        let (mut root, old) = self.do_delete(root, (key, cas, seqno))?.into_res();
+        let (mut root, old, footprint) =
+            self.do_delete(root, (key, cas, seqno))?.into_res();
 
         root.as_mut()
             .map(|root| Arc::get_mut(root).map(Node::set_black));
@@ -582,12 +651,15 @@ impl<K, V, D> Inner<K, V, D> {
             Some(_) => (self.n_count, self.n_deleted),
             None => (self.n_count + 1, self.n_deleted + 1),
         };
+        let tree_footprint = self.tree_footprint + footprint;
 
         let inner = Inner {
             root,
             seqno: cmp::max(self.seqno, seqno),
+
             n_count,
             n_deleted,
+            tree_footprint,
         };
 
         let old = old.as_ref().map(|old| old.as_ref().clone());
@@ -595,23 +667,22 @@ impl<K, V, D> Inner<K, V, D> {
         Ok(Ir::Root { inner, old })
     }
 
-    fn commit<I>(&self, iter: I) -> Result<(Ir<K, V, D>, usize)>
+    fn commit<I>(&self, iter: I) -> Result<(Ir<K, V>, usize)>
     where
         K: Clone + PartialEq + Ord,
-        V: Clone + Diff<Delta = D>,
-        D: Clone + From<V>,
-        I: Iterator<Item = db::Entry<K, V, D>>,
+        I: Iterator<Item = db::Entry<K, V>>,
     {
         let mut n_entries = 0;
         let mut commit_seqno = self.seqno;
         let mut root = self.root.as_ref().map(|root| Arc::clone(root));
         let mut n_count = self.n_count;
         let mut n_deleted = self.n_deleted;
+        let mut tree_footprint = self.tree_footprint;
 
         for entry in iter {
-            if entry.to_seqno() <= self.seqno {
+            if entry.oldest_seqno() <= self.seqno {
                 err_at!(
-                    Invalid,
+                    InvalidInput,
                     msg: "commit entry {} older than index snapshot {}",
                     entry.to_seqno(),
                     self.seqno
@@ -622,9 +693,10 @@ impl<K, V, D> Inner<K, V, D> {
             commit_seqno = cmp::max(entry.to_seqno(), commit_seqno);
             root = {
                 let is_deleted = entry.is_deleted();
-                let (root, old) = self
+                let (root, old, footprint) = self
                     .do_commit(root.as_ref().map(Borrow::borrow), entry)?
                     .into_res();
+                tree_footprint += footprint;
                 match (is_deleted, old) {
                     (true, Some(old)) if !old.is_deleted() => {
                         n_deleted = n_deleted.saturating_add(1)
@@ -648,8 +720,10 @@ impl<K, V, D> Inner<K, V, D> {
         let inner = Inner {
             root,
             seqno: commit_seqno,
+
             n_count,
             n_deleted,
+            tree_footprint,
         };
 
         Ok((Ir::Root { inner, old: None }, n_entries))
@@ -657,44 +731,45 @@ impl<K, V, D> Inner<K, V, D> {
 
     fn do_set(
         &self,
-        node: Option<&Node<K, V, D>>,
+        node: Option<&Node<K, V>>,
         op: (K, V, Option<u64>, u64),
-    ) -> Result<Ir<K, V, D>>
-    where
-        K: Clone + Ord,
-        V: Clone,
-        D: Clone,
-    {
-        let mut node: Node<K, V, D> = match (node, op.2) {
+    ) -> Result<Ir<K, V>> {
+        let mut node: Node<K, V> = match (node, op.2 /*cas*/) {
             (Some(node), _) => node.clone(),
             (None, Some(0)) | (None, None) => {
                 let (key, value, _, seqno) = op;
-                let node = db::Entry::new(key, value, seqno).into();
+                let node: Node<K, V> = db::Entry::new(key, value, seqno).into();
+                let footprint = node.footprint()?;
                 let (root, old) = (Some(Arc::new(node)), None);
-                return Ok(Ir::Res { root, old });
+                return Ok(Ir::Res {
+                    root,
+                    old,
+                    footprint,
+                });
             }
             (None, Some(_)) => err_at!(InvalidCAS, msg: "invalid cas for missing set")?,
         };
 
         let cas = op.2;
-        let (node, old) = match node.as_key().cmp(&op.0) {
+        let (node, old, footprint) = match node.as_key().cmp(&op.0 /*key*/) {
             Ordering::Greater => {
                 let left = node.left.as_ref().map(Borrow::borrow);
-                let (root, old) = self.do_set(left, op)?.into_res();
+                let (root, old, footprint) = self.do_set(left, op)?.into_res();
                 node.left = root;
-                (walkuprot_23(node), old)
+                (walkuprot_23(node), old, footprint)
             }
             Ordering::Less => {
                 let right = node.right.as_ref().map(Borrow::borrow);
-                let (root, old) = self.do_set(right, op)?.into_res();
+                let (root, old, footprint) = self.do_set(right, op)?.into_res();
                 node.right = root;
-                (walkuprot_23(node), old)
+                (walkuprot_23(node), old, footprint)
             }
             Ordering::Equal if cas.is_none() || cas.unwrap() == node.to_seqno() => {
                 let (_, value, _, seqno) = op;
-                let old = node.entry.clone();
+                let (oldfp, old) = (node.footprint()?, node.entry.clone());
                 node.set(value, seqno);
-                (node, Some(old))
+                let footprint = oldfp - node.footprint()?;
+                (node, Some(old), footprint)
             }
             Ordering::Equal => {
                 err_at!(InvalidCAS, msg: "{:?} != {}", cas, node.to_seqno())?
@@ -702,49 +777,54 @@ impl<K, V, D> Inner<K, V, D> {
         };
         let root = Some(Arc::new(node));
 
-        Ok(Ir::Res { root, old })
+        Ok(Ir::Res {
+            root,
+            old,
+            footprint,
+        })
     }
 
     fn do_insert(
         &self,
-        node: Option<&Node<K, V, D>>,
+        node: Option<&Node<K, V>>,
         op: (K, V, Option<u64>, u64),
-    ) -> Result<Ir<K, V, D>>
-    where
-        K: Clone + Ord,
-        V: Clone + Diff<Delta = D>,
-        D: Clone,
-    {
-        let mut node: Node<K, V, D> = match (node, op.2) {
+    ) -> Result<Ir<K, V>> {
+        let mut node: Node<K, V> = match (node, op.2 /*cas*/) {
             (Some(node), _) => node.clone(),
             (None, Some(0)) | (None, None) => {
                 let (key, value, _, seqno) = op;
-                let node = db::Entry::new(key, value, seqno).into();
+                let node: Node<K, V> = db::Entry::new(key, value, seqno).into();
+                let footprint = node.footprint()?;
                 let (root, old) = (Some(Arc::new(node)), None);
-                return Ok(Ir::Res { root, old });
+                return Ok(Ir::Res {
+                    root,
+                    old,
+                    footprint,
+                });
             }
             (None, Some(_)) => err_at!(InvalidCAS, msg: "invalid cas for missing set")?,
         };
 
         let cas = op.2;
-        let (node, old) = match node.as_key().cmp(&op.0) {
+        let (node, old, footprint) = match node.as_key().cmp(&op.0 /*key*/) {
             Ordering::Greater => {
                 let left = node.left.as_ref().map(Borrow::borrow);
-                let (root, old) = self.do_insert(left, op)?.into_res();
+                let (root, old, footprint) = self.do_insert(left, op)?.into_res();
                 node.left = root;
-                (walkuprot_23(node), old)
+                (walkuprot_23(node), old, footprint)
             }
             Ordering::Less => {
                 let right = node.right.as_ref().map(Borrow::borrow);
-                let (root, old) = self.do_insert(right, op)?.into_res();
+                let (root, old, footprint) = self.do_insert(right, op)?.into_res();
                 node.right = root;
-                (walkuprot_23(node), old)
+                (walkuprot_23(node), old, footprint)
             }
             Ordering::Equal if cas.is_none() || cas.unwrap() == node.to_seqno() => {
                 let (_, value, _, seqno) = op;
-                let old = node.entry.clone();
+                let (oldfp, old) = (node.footprint()?, node.entry.clone());
                 node.insert(value, seqno);
-                (node, Some(old))
+                let footprint = oldfp - node.footprint()?;
+                (node, Some(old), footprint)
             }
             Ordering::Equal => {
                 err_at!(InvalidCAS, msg: "{:?} != {}", cas, node.to_seqno())?
@@ -752,42 +832,49 @@ impl<K, V, D> Inner<K, V, D> {
         };
         let root = Some(Arc::new(node));
 
-        Ok(Ir::Res { root, old })
+        Ok(Ir::Res {
+            root,
+            old,
+            footprint,
+        })
     }
 
     fn do_remove<Q>(
         &self,
-        node: Option<&Node<K, V, D>>,
+        node: Option<&Node<K, V>>,
         op: (&Q, Option<u64>, u64),
-    ) -> Result<Ir<K, V, D>>
+    ) -> Result<Ir<K, V>>
     where
-        K: Clone + Borrow<Q>,
+        K: Borrow<Q>,
         Q: Ord + ToOwned<Owned = K> + ?Sized,
-        V: Clone,
-        D: Clone,
     {
         let (key, cas, _) = op;
 
-        let mut node: Node<K, V, D> = match (node, cas) {
+        let mut node: Node<K, V> = match (node, cas) {
             (Some(node), _) => node.clone(),
             (None, Some(0)) | (None, None) => {
-                let (root, old) = (None, None);
-                return Ok(Ir::Res { root, old });
+                let (root, old, footprint) = (None, None, 0);
+                return Ok(Ir::Res {
+                    root,
+                    old,
+                    footprint,
+                });
             }
             (None, Some(_)) => err_at!(InvalidCAS, msg: "invalid cas for missing set")?,
         };
 
-        let (root, old) = match node.as_key().borrow().cmp(key) {
-            Ordering::Greater if node.left.is_none() => (Some(node), None),
+        let (root, old, footprint) = match node.as_key().borrow().cmp(key) {
+            Ordering::Greater if node.left.is_none() => (Some(node), None, 0),
             Ordering::Greater => {
                 let left = node.as_left_ref();
                 if !is_red(left) && !is_red(left.unwrap().as_left_ref()) {
                     node = move_red_left(node)
                 }
 
-                let (left, old) = self.do_remove(node.as_left_ref(), op)?.into_res();
+                let (left, old, footprint) =
+                    self.do_remove(node.as_left_ref(), op)?.into_res();
                 node.left = left;
-                (Some(fixup(node)), old)
+                (Some(fixup(node)), old, footprint)
             }
             _ => {
                 if is_red(node.as_left_ref()) {
@@ -801,7 +888,7 @@ impl<K, V, D> Inner<K, V, D> {
                 }
 
                 if !node.as_key().borrow().lt(key) && node.right.is_none() {
-                    (None, Some(node.entry.clone()))
+                    (None, Some(node.entry.clone()), node.footprint()?)
                 } else {
                     node = match node.as_right_ref() {
                         r @ Some(_)
@@ -814,6 +901,7 @@ impl<K, V, D> Inner<K, V, D> {
 
                     if !node.as_key().borrow().lt(key) {
                         let [right, sub_node] = self.do_remove_min(node.as_right_ref());
+                        let footprint = node.footprint()?;
                         node.right = right.map(Arc::new);
                         let mut sub_node = match sub_node {
                             Some(sub_node) => sub_node,
@@ -822,65 +910,73 @@ impl<K, V, D> Inner<K, V, D> {
                         sub_node.left = node.left;
                         sub_node.right = node.right;
                         sub_node.black = node.black;
-                        (Some(fixup(sub_node)), Some(node.entry.clone()))
+                        (Some(fixup(sub_node)), Some(node.entry.clone()), footprint)
                     } else {
                         let right = node.as_right_ref();
-                        let (right, old) = self.do_remove(right, op)?.into_res();
+                        let (right, old, footprint) =
+                            self.do_remove(right, op)?.into_res();
                         node.right = right;
-                        (Some(fixup(node)), old)
+                        (Some(fixup(node)), old, footprint)
                     }
                 }
             }
         };
         let root = root.map(Arc::new);
 
-        Ok(Ir::Res { root, old })
+        Ok(Ir::Res {
+            root,
+            old,
+            footprint,
+        })
     }
 
     fn do_delete<Q>(
         &self,
-        node: Option<&Node<K, V, D>>,
+        node: Option<&Node<K, V>>,
         op: (&Q, Option<u64>, u64),
-    ) -> Result<Ir<K, V, D>>
+    ) -> Result<Ir<K, V>>
     where
         K: Clone + Borrow<Q>,
         Q: Ord + ToOwned<Owned = K> + ?Sized,
-        V: Clone + Diff<Delta = D>,
-        D: Clone,
-        <V as Diff>::Delta: From<V>,
     {
         let (key, cas, seqno) = op;
 
-        let mut node: Node<K, V, D> = match (node, cas) {
+        let mut node: Node<K, V> = match (node, cas) {
             (Some(node), _) => node.clone(),
             (None, Some(0)) | (None, None) => {
                 let key: K = key.to_owned();
-                let (node, old) = (db::Entry::new_deleted(key, seqno).into(), None);
-                let root = Some(Arc::new(node));
-                return Ok(Ir::Res { root, old });
+                let node: Node<K, V> = db::Entry::new_delete(key, seqno).into();
+                let footprint = node.footprint()?;
+                let (root, old) = (Some(Arc::new(node)), None);
+                return Ok(Ir::Res {
+                    root,
+                    old,
+                    footprint,
+                });
             }
             (None, Some(_)) => err_at!(InvalidCAS, msg: "invalid cas for missing set")?,
         };
 
         let cas_ok = cas.is_none() || cas.unwrap() == node.to_seqno();
 
-        let (root, old) = match node.as_key().borrow().cmp(key) {
+        let (root, old, footprint) = match node.as_key().borrow().cmp(key) {
             Ordering::Greater => {
                 let left = node.as_left_ref();
-                let (root, old) = self.do_delete(left, op)?.into_res();
+                let (root, old, footprint) = self.do_delete(left, op)?.into_res();
                 node.left = root;
-                (walkuprot_23(node), old)
+                (walkuprot_23(node), old, footprint)
             }
             Ordering::Less => {
                 let right = node.as_right_ref();
-                let (root, old) = self.do_delete(right, op)?.into_res();
+                let (root, old, footprint) = self.do_delete(right, op)?.into_res();
                 node.right = root;
-                (walkuprot_23(node), old)
+                (walkuprot_23(node), old, footprint)
             }
             Ordering::Equal if cas_ok => {
-                let old = node.entry.clone();
+                let (oldfp, old) = (node.footprint()?, node.entry.clone());
                 node.delete(seqno);
-                (walkuprot_23(node), Some(old))
+                let footprint = oldfp - node.footprint()?;
+                (walkuprot_23(node), Some(old), footprint)
             }
             Ordering::Equal => {
                 err_at!(InvalidCAS, msg: "{} != {:?}", node.to_seqno(), cas)?
@@ -888,15 +984,14 @@ impl<K, V, D> Inner<K, V, D> {
         };
         let root = Some(Arc::new(root));
 
-        Ok(Ir::Res { root, old })
+        Ok(Ir::Res {
+            root,
+            old,
+            footprint,
+        })
     }
 
-    fn do_remove_min(&self, node: Option<&Node<K, V, D>>) -> [Option<Node<K, V, D>>; 2]
-    where
-        K: Clone,
-        V: Clone,
-        D: Clone,
-    {
+    fn do_remove_min(&self, node: Option<&Node<K, V>>) -> [Option<Node<K, V>>; 2] {
         let mut node = match node {
             Some(node) => node.clone(),
             None => return [None, None],
@@ -918,60 +1013,70 @@ impl<K, V, D> Inner<K, V, D> {
 
     fn do_commit(
         &self,
-        node: Option<&Node<K, V, D>>,
-        entry: db::Entry<K, V, D>,
-    ) -> Result<Ir<K, V, D>>
+        node: Option<&Node<K, V>>,
+        entry: db::Entry<K, V>,
+    ) -> Result<Ir<K, V>>
     where
         K: Clone + PartialEq + Ord,
-        V: Clone + Diff<Delta = D>,
-        D: Clone + From<V>,
     {
-        let mut node: Node<K, V, D> = match node {
+        let mut node: Node<K, V> = match node {
             Some(node) => node.clone(),
             None => {
-                let (root, old) = (Some(Arc::new(entry.into())), None);
-                return Ok(Ir::Res { root, old });
+                let node: Node<K, V> = entry.into();
+                let footprint = node.footprint()?;
+                let (root, old) = (Some(Arc::new(node)), None);
+                return Ok(Ir::Res {
+                    root,
+                    old,
+                    footprint,
+                });
             }
         };
 
-        let (node, old) = match node.as_key().cmp(entry.as_key()) {
+        let (node, old, footprint) = match node.as_key().cmp(entry.as_key()) {
             Ordering::Greater => {
                 let left = node.left.as_ref().map(Borrow::borrow);
-                let (root, old) = self.do_commit(left, entry)?.into_res();
+                let (root, old, footprint) = self.do_commit(left, entry)?.into_res();
                 node.left = root;
-                (walkuprot_23(node), old)
+                (walkuprot_23(node), old, footprint)
             }
             Ordering::Less => {
                 let right = node.right.as_ref().map(Borrow::borrow);
-                let (root, old) = self.do_commit(right, entry)?.into_res();
+                let (root, old, footprint) = self.do_commit(right, entry)?.into_res();
                 node.right = root;
-                (walkuprot_23(node), old)
+                (walkuprot_23(node), old, footprint)
             }
             Ordering::Equal => {
-                let old = node.entry.clone();
-                node.commit(entry);
-                (node, Some(old))
+                let (oldfp, old) = (node.footprint()?, node.entry.clone());
+                node.commit(entry)?;
+                let footprint = oldfp - node.footprint()?;
+                (node, Some(old), footprint)
             }
         };
         let root = Some(Arc::new(node));
 
-        Ok(Ir::Res { root, old })
+        Ok(Ir::Res {
+            root,
+            old,
+            footprint,
+        })
     }
 }
 
-impl<K, V, D> Inner<K, V, D> {
-    fn get<Q>(&self, key: &Q) -> Result<db::Entry<K, V, D>>
+impl<K, V> Inner<K, V>
+where
+    V: db::Diff,
+{
+    fn get<Q>(&self, key: &Q) -> Result<db::Entry<K, V>>
     where
         K: Clone + Borrow<Q>,
-        V: Clone,
-        D: Clone,
         Q: Ord + ?Sized,
     {
         let root = self.root.as_ref().map(Borrow::borrow);
         get(root, key)
     }
 
-    fn iter(&self) -> Iter<K, V, D> {
+    fn iter(&self) -> Iter<K, V> {
         let root = self.root.as_ref().map(Arc::clone);
         let mut paths = Vec::default();
         build_iter(IFlag::Left, root, &mut paths);
@@ -979,7 +1084,7 @@ impl<K, V, D> Inner<K, V, D> {
         Iter { paths, frwrd: true }
     }
 
-    fn range<R, Q>(&self, range: R) -> Range<K, V, D, R, Q>
+    fn range<R, Q>(&self, range: R) -> Range<K, V, R, Q>
     where
         K: Borrow<Q>,
         R: RangeBounds<Q>,
@@ -1003,7 +1108,7 @@ impl<K, V, D> Inner<K, V, D> {
         }
     }
 
-    fn reverse<R, Q>(&self, range: R) -> Reverse<K, V, D, R, Q>
+    fn reverse<R, Q>(&self, range: R) -> Reverse<K, V, R, Q>
     where
         K: Borrow<Q>,
         R: RangeBounds<Q>,
@@ -1055,20 +1160,25 @@ impl<K, V, D> Inner<K, V, D> {
 }
 
 #[inline]
-fn is_red<K, V, D>(node: Option<&Node<K, V, D>>) -> bool {
+fn is_red<K, V>(node: Option<&Node<K, V>>) -> bool
+where
+    V: db::Diff,
+{
     node.map_or(false, |node| !node.is_black())
 }
 
 #[inline]
-fn is_black<K, V, D>(node: Option<&Node<K, V, D>>) -> bool {
+fn is_black<K, V>(node: Option<&Node<K, V>>) -> bool
+where
+    V: db::Diff,
+{
     node.map_or(true, Node::is_black)
 }
 
-fn walkuprot_23<K, V, D>(mut node: Node<K, V, D>) -> Node<K, V, D>
+fn walkuprot_23<K, V>(mut node: Node<K, V>) -> Node<K, V>
 where
     K: Clone,
-    V: Clone,
-    D: Clone,
+    V: db::Diff,
 {
     if is_red(node.as_right_ref()) && !is_red(node.as_left_ref()) {
         node = rotate_left(node)
@@ -1093,13 +1203,12 @@ where
 //                    / \            /  \
 //                 r-l  r-r       left  r-l
 //
-fn rotate_left<K, V, D>(mut node: Node<K, V, D>) -> Node<K, V, D>
+fn rotate_left<K, V>(mut node: Node<K, V>) -> Node<K, V>
 where
     K: Clone,
-    V: Clone,
-    D: Clone,
+    V: db::Diff,
 {
-    let old_right: &Node<K, V, D> = node.right.as_ref().map(|r| r.borrow()).unwrap();
+    let old_right: &Node<K, V> = node.right.as_ref().map(|r| r.borrow()).unwrap();
     if is_black(Some(old_right)) {
         panic!("rotateleft(): rotate black link ? call-the-programmer");
     }
@@ -1124,13 +1233,12 @@ where
 //         / \                                / \
 //      l-l  l-r                            l-r  right
 //
-fn rotate_right<K, V, D>(mut node: Node<K, V, D>) -> Node<K, V, D>
+fn rotate_right<K, V>(mut node: Node<K, V>) -> Node<K, V>
 where
     K: Clone,
-    V: Clone,
-    D: Clone,
+    V: db::Diff,
 {
-    let old_left: &Node<K, V, D> = node.left.as_ref().map(|l| l.borrow()).unwrap();
+    let old_left: &Node<K, V> = node.left.as_ref().map(|l| l.borrow()).unwrap();
     if is_black(Some(old_left)) {
         panic!("rotateright(): rotate black link ? call-the-programmer")
     }
@@ -1153,18 +1261,17 @@ where
 //     /      \              /      \
 //   left    right         left    right
 //
-fn flip<K, V, D>(node: &mut Node<K, V, D>)
+fn flip<K, V>(node: &mut Node<K, V>)
 where
     K: Clone,
-    V: Clone,
-    D: Clone,
+    V: db::Diff,
 {
     let mut left = {
-        let left: &Node<K, V, D> = node.left.as_ref().map(|l| l.borrow()).unwrap();
+        let left: &Node<K, V> = node.left.as_ref().map(|l| l.borrow()).unwrap();
         left.clone()
     };
     let mut right = {
-        let right: &Node<K, V, D> = node.right.as_ref().map(|r| r.borrow()).unwrap();
+        let right: &Node<K, V> = node.right.as_ref().map(|r| r.borrow()).unwrap();
         right.clone()
     };
 
@@ -1176,11 +1283,10 @@ where
     node.right = Some(Arc::new(right));
 }
 
-fn fixup<K, V, D>(mut node: Node<K, V, D>) -> Node<K, V, D>
+fn fixup<K, V>(mut node: Node<K, V>) -> Node<K, V>
 where
     K: Clone,
-    V: Clone,
-    D: Clone,
+    V: db::Diff,
 {
     if is_red(node.as_right_ref()) {
         node = rotate_left(node)
@@ -1197,18 +1303,17 @@ where
     node
 }
 
-fn move_red_left<K, V, D>(mut node: Node<K, V, D>) -> Node<K, V, D>
+fn move_red_left<K, V>(mut node: Node<K, V>) -> Node<K, V>
 where
     K: Clone,
-    V: Clone,
-    D: Clone,
+    V: db::Diff,
 {
     flip(&mut node);
 
     if is_red(node.right.as_ref().unwrap().as_left_ref()) {
         let right = node.right.take().unwrap();
         let newr = {
-            let rr: &Node<K, V, D> = right.borrow();
+            let rr: &Node<K, V> = right.borrow();
             rr.clone()
         };
         node.right = Some(Arc::new(rotate_right(newr)));
@@ -1218,11 +1323,10 @@ where
     node
 }
 
-fn move_red_right<K, V, D>(mut node: Node<K, V, D>) -> Node<K, V, D>
+fn move_red_right<K, V>(mut node: Node<K, V>) -> Node<K, V>
 where
     K: Clone,
-    V: Clone,
-    D: Clone,
+    V: db::Diff,
 {
     flip(&mut node);
 
@@ -1234,12 +1338,11 @@ where
 }
 
 // Get the latest version for key.
-fn get<K, V, D, Q>(node: Option<&Node<K, V, D>>, key: &Q) -> Result<db::Entry<K, V, D>>
+fn get<K, V, Q>(node: Option<&Node<K, V>>, key: &Q) -> Result<db::Entry<K, V>>
 where
     K: Clone + Borrow<Q>,
+    V: db::Diff,
     Q: Ord + ?Sized,
-    V: Clone,
-    D: Clone,
 {
     match node {
         Some(nref) => match nref.as_key().borrow().cmp(key) {
@@ -1251,19 +1354,20 @@ where
     }
 }
 
-fn validate_tree<K, V, D>(
-    node: Option<&Node<K, V, D>>,
+fn validate_tree<K, V>(
+    node: Option<&Node<K, V>>,
     fromred: bool,
     mut n_blacks: usize,
     depth: usize,
 ) -> Result<(usize, usize, usize)>
 where
     K: Ord + fmt::Debug,
+    V: db::Diff,
 {
     let red = is_red(node);
 
     let node = match node {
-        Some(_) if fromred && red => err_at!(Fatal, msg: "Mdb has consecutive reds")?,
+        Some(_) if fromred && red => err_at!(Fatal, msg: "Index has consecutive reds")?,
         Some(node) => node,
         None => return Ok((n_blacks, 0, 0)),
     };
@@ -1281,13 +1385,13 @@ where
         if let Some(left) = node.as_left_ref() {
             if left.as_key().ge(node.as_key()) {
                 let (lk, nk) = (left.as_key(), node.as_key());
-                err_at!(Fatal, msg: "Mdb left:{:?}, parent:{:?}", lk, nk)?;
+                err_at!(Fatal, msg: "Index left:{:?}, parent:{:?}", lk, nk)?;
             }
         }
         if let Some(right) = node.as_right_ref() {
             if right.as_key().le(node.as_key()) {
                 let (rk, nk) = (right.as_key(), node.as_key());
-                err_at!(Fatal, msg: "Mdb right:{:?}, parent:{:?}", rk, nk)?;
+                err_at!(Fatal, msg: "Index right:{:?}, parent:{:?}", rk, nk)?;
             }
         }
         (node.as_left_ref(), node.as_right_ref())
@@ -1297,7 +1401,7 @@ where
     let (rb, rd, rc) = validate_tree(right, red, n_blacks, depth + 1)?;
 
     if lb != rb {
-        err_at!(Fatal, msg: "Mdb unbalanced blacks l:{}, r:{}", lb, rb)?;
+        err_at!(Fatal, msg: "Index unbalanced blacks l:{}, r:{}", lb, rb)?;
     }
 
     let mut n_deleted = ld + rd;
@@ -1310,18 +1414,20 @@ where
 //
 // A full table scan using this type is optimal when used with concurrent
 // read threads, but not with concurrent write threads.
-pub struct Iter<K, V, D> {
-    paths: Vec<Fragment<K, V, D>>,
+pub struct Iter<K, V>
+where
+    V: db::Diff,
+{
+    paths: Vec<Fragment<K, V>>,
     frwrd: bool,
 }
 
-impl<K, V, D> Iterator for Iter<K, V, D>
+impl<K, V> Iterator for Iter<K, V>
 where
     K: Clone,
-    V: Clone,
-    D: Clone,
+    V: db::Diff,
 {
-    type Item = db::Entry<K, V, D>;
+    type Item = db::Entry<K, V>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -1362,25 +1468,25 @@ where
 }
 
 // Iterator type, to do range scan between a _lower-bound_ and _higher-bound_.
-pub struct Range<K, V, D, R, Q>
+pub struct Range<K, V, R, Q>
 where
     Q: ?Sized,
+    V: db::Diff,
 {
     range: R,
-    iter: Iter<K, V, D>,
+    iter: Iter<K, V>,
     fin: bool,
     high: marker::PhantomData<Q>,
 }
 
-impl<K, V, D, R, Q> Iterator for Range<K, V, D, R, Q>
+impl<K, V, R, Q> Iterator for Range<K, V, R, Q>
 where
     K: Clone + Borrow<Q>,
-    V: Clone,
-    D: Clone,
+    V: db::Diff,
     Q: Ord + ?Sized,
     R: RangeBounds<Q>,
 {
-    type Item = db::Entry<K, V, D>;
+    type Item = db::Entry<K, V>;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self.fin {
@@ -1403,25 +1509,25 @@ where
 }
 
 // Iterator type, to do range scan between a _higher-bound_ and _lower-bound_.
-pub struct Reverse<K, V, D, R, Q>
+pub struct Reverse<K, V, R, Q>
 where
     Q: ?Sized,
+    V: db::Diff,
 {
     range: R,
-    iter: Iter<K, V, D>,
+    iter: Iter<K, V>,
     fin: bool,
     low: marker::PhantomData<Q>,
 }
 
-impl<K, V, D, R, Q> Iterator for Reverse<K, V, D, R, Q>
+impl<K, V, R, Q> Iterator for Reverse<K, V, R, Q>
 where
     K: Clone + Borrow<Q>,
-    V: Clone,
-    D: Clone,
-    R: RangeBounds<Q>,
     Q: Ord + ?Sized,
+    V: db::Diff,
+    R: RangeBounds<Q>,
 {
-    type Item = db::Entry<K, V, D>;
+    type Item = db::Entry<K, V>;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self.fin {
@@ -1445,11 +1551,14 @@ where
 
 // Continuous iteration without walking through the whole tree from root.
 // Achieved by maintaining a FIFO queue of tree-path to the previous
-// iterated node. Each node in the FIFO queue is a tuple of mdb-node and
+// iterated node. Each node in the FIFO queue is a tuple of Index-node and
 // its current state (IFlag), together this tuple is called as a Fragment.
-struct Fragment<K, V, D> {
+struct Fragment<K, V>
+where
+    V: db::Diff,
+{
     flag: IFlag,
-    node: Arc<Node<K, V, D>>,
+    node: Arc<Node<K, V>>,
 }
 #[derive(Copy, Clone)]
 enum IFlag {
@@ -1458,11 +1567,13 @@ enum IFlag {
     Right,  // right paths is being iterated.
 }
 
-fn build_iter<K, V, D>(
+fn build_iter<K, V>(
     flag: IFlag,
-    node: Option<Arc<Node<K, V, D>>>,
-    paths: &mut Vec<Fragment<K, V, D>>,
-) {
+    node: Option<Arc<Node<K, V>>>,
+    paths: &mut Vec<Fragment<K, V>>,
+) where
+    V: db::Diff,
+{
     if let Some(node) = node {
         let item = Fragment {
             flag,
@@ -1478,14 +1589,15 @@ fn build_iter<K, V, D>(
     }
 }
 
-fn find_start<K, V, D, Q>(
-    node: Option<Arc<Node<K, V, D>>>,
+fn find_start<K, V, Q>(
+    node: Option<Arc<Node<K, V>>>,
     low: &Q,
     incl: bool,
-    paths: &mut Vec<Fragment<K, V, D>>,
+    paths: &mut Vec<Fragment<K, V>>,
 ) where
     K: Borrow<Q>,
     Q: Ord + ?Sized,
+    V: db::Diff,
 {
     if let Some(node) = node {
         let left = node.left.as_ref().map(Arc::clone);
@@ -1509,14 +1621,15 @@ fn find_start<K, V, D, Q>(
     }
 }
 
-fn find_end<K, V, D, Q>(
-    node: Option<Arc<Node<K, V, D>>>,
+fn find_end<K, V, Q>(
+    node: Option<Arc<Node<K, V>>>,
     high: &Q,
     incl: bool,
-    paths: &mut Vec<Fragment<K, V, D>>,
+    paths: &mut Vec<Fragment<K, V>>,
 ) where
     K: Borrow<Q>,
     Q: Ord + ?Sized,
+    V: db::Diff,
 {
     if let Some(node) = node {
         let left = node.left.as_ref().map(Arc::clone);
@@ -1540,6 +1653,7 @@ fn find_end<K, V, D, Q>(
     }
 }
 
-#[cfg(test)]
-#[path = "mdb_test.rs"]
-mod mdb_test;
+//TODO
+//#[cfg(test)]
+//#[path = "index_test.rs"]
+//mod index_test;

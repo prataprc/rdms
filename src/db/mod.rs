@@ -18,7 +18,7 @@ pub use compact::Cutoff;
 pub(crate) use delta::Delta;
 pub use diff::{Diff, NoDiff};
 pub use entry::Entry;
-pub use value::Value;
+pub(crate) use value::Value;
 
 /// Trait to bulk-add entries into an index.
 pub trait BuildIndex<K, V, B> {
@@ -72,7 +72,7 @@ pub trait Footprint {
     fn footprint(&self) -> Result<isize>;
 }
 
-/// Trait define methods to integrate index with [Wal] (Write-Ahead-Log).
+/// Trait define methods to integrate index with Wal (Write-Ahead-Log).
 ///
 /// All the methods defined by this trait will be dispatched when
 /// reloading an index from on-disk Write-Ahead-Log.
@@ -94,8 +94,8 @@ where
 // TODO: check whether WalWriter and Replay trait can be consolidated.
 /// Trait define methods to integrate index with Wal (Write-Ahead-Log).
 ///
-/// After writing into the [Wal], write operation shall be applied on
-/// the [Index] [write-handle][Index::W].
+/// After writing into the `Wal`, write operation shall be applied on
+/// the `Index`.
 pub trait WalWriter<K, V>
 where
     K: Clone + Ord,
@@ -169,6 +169,12 @@ pub trait Bloom: Sized + Default {
 
     /// Merge two bitmaps.
     fn or(&self, other: &Self) -> result::Result<Self, Self::Err>;
+}
+
+/// Trait to serialize an implementing type to JSON encoded string.
+pub trait ToJson {
+    /// Call this method to get the JSON encoded string.
+    fn to_json(&self) -> String;
 }
 
 // TODO: check whether this can be removed in future.

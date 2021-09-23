@@ -1,11 +1,11 @@
 use arbitrary::Arbitrary;
 
 #[allow(unused_imports)]
-use crate::Mdb;
+use crate::llrb;
 
-/// Write operations allowed on [Mdb] index.
+/// Write operations allowed on [llrb::Index] index.
 ///
-/// Passed as argument to [Mdb::write] method.
+/// Passed as argument to [llrb::Index::write] method.
 ///
 /// * Optional `cas`, when supplied should match with key's current
 ///   sequence-number. If key is missing from index, `cas` must be supplied
@@ -16,27 +16,27 @@ use crate::Mdb;
 ///   Write-Ahead-Logs.
 #[derive(Clone, Arbitrary)]
 pub enum Write<K, V> {
-    /// Refer to Mdb::set.
+    /// Refer to llrb::Index::set.
     Set {
         key: K,
         value: V,
         cas: Option<u64>,
         seqno: Option<u64>,
     },
-    /// Refer to Mdb::insert.
+    /// Refer to llrb::Index::insert.
     Ins {
         key: K,
         value: V,
         cas: Option<u64>,
         seqno: Option<u64>,
     },
-    /// Refer to Mdb::delete.
+    /// Refer to llrb::Index::delete.
     Del {
         key: K,
         cas: Option<u64>,
         seqno: Option<u64>,
     },
-    /// Refer to Mdb::remove.
+    /// Refer to llrb::Index::remove.
     Rem {
         key: K,
         cas: Option<u64>,

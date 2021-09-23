@@ -25,7 +25,7 @@ const NDIFF_VER: u32 = 0x00070001;
 /// D = C - P (diff operation)
 /// P = C - D (merge operation, to get old value)
 /// ```
-pub trait Diff: Sized + From<<Self as Diff>::Delta> {
+pub trait Diff: Sized + Clone + From<<Self as Diff>::Delta> {
     type Delta: Clone + From<Self>;
 
     /// Return the delta between two consecutive versions of a value.

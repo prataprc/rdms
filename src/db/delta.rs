@@ -19,12 +19,16 @@ where
     fn footprint(&self) -> Result<isize> {
         use std::{convert::TryFrom, mem::size_of};
 
-        let mut size = err_at!(ConversionFail, isize::try_from(size_of::<Delta<D>>()))?;
+        let mut size = {
+            err_at!(FailConvert, isize::try_from(size_of::<Delta<D>>()))?
+                - err_at!(FailConvert, isize::try_from(size_of::<D>()))?
+        };
 
         size += match self {
             Delta::U { delta, .. } => delta.footprint()?,
             Delta::D { .. } => 0,
         };
+
         Ok(size)
     }
 }
@@ -33,12 +37,12 @@ impl<D> Delta<D> {
     pub const ID: u32 = DELTA_VER;
 
     #[inline]
-    fn new_upsert(delta: D, seqno: u64) -> Delta<D> {
+    pub fn new_upsert(delta: D, seqno: u64) -> Delta<D> {
         Delta::U { delta, seqno }
     }
 
     #[inline]
-    fn new_delete(seqno: u64) -> Delta<D> {
+    pub fn new_delete(seqno: u64) -> Delta<D> {
         Delta::D { seqno }
     }
 }

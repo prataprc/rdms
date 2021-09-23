@@ -10,11 +10,11 @@ use std::ops::Bound;
 /// _deduplication_
 ///
 /// This is basically applicable for snapshots that don't have to preserve
-/// any of the older versions and compact away entries marked as deleted.
+/// any of the older versions, and also, compact away entries marked as deleted.
 ///
 /// _lsm-compaction_
 ///
-/// Discard all versions of an entry older than the specified seqno.
+/// Discard all versions of value/entry older than the specified seqno.
 ///
 /// This is applicable for database index that store their index as multi-level
 /// snapshots, similar to [leveldb][leveldb]. Most of the lsm-based-storage will
@@ -30,6 +30,11 @@ use std::ops::Bound;
 /// deleted and whose deleted seqno is older than specified seqno shall be
 /// compacted away.
 ///
+/// _seqno ZERO_
+///
+/// If `seqno` is specified as ZERO for cutoff, then compaction operation is treated
+/// as no-op.
+///
 /// [leveldb]: https://en.wikipedia.org/wiki/LevelDB
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Cutoff {
@@ -43,16 +48,19 @@ pub enum Cutoff {
 
 impl Cutoff {
     /// Create a cutoff for deduplication, refer to [Cutoff] type for details.
+    #[inline]
     pub fn new_mono() -> Cutoff {
         Cutoff::Mono
     }
 
     /// Create a cutoff for tombstone-compaction, refer to [Cutoff] for details.
+    #[inline]
     pub fn new_tombstone(b: Bound<u64>) -> Cutoff {
         Cutoff::Tombstone(b)
     }
 
     /// Create a cutoff for lsm-compaction, refer to [Cutoff] for details.
+    #[inline]
     pub fn new_lsm(b: Bound<u64>) -> Cutoff {
         Cutoff::Lsm(b)
     }
@@ -68,6 +76,7 @@ impl Cutoff {
     //}
 
     /// Return the cutoff bound in sequence number.
+    #[inline]
     pub fn to_bound(&self) -> Bound<u64> {
         match self {
             Cutoff::Mono => Bound::Excluded(std::u64::MIN),
@@ -78,6 +87,7 @@ impl Cutoff {
 
     /// Return true, if this cutoff when applied to compaction does nothing to index.
     // TODO: previously it was is_empty(), after full refactor of rdms.
+    #[inline]
     pub fn is_noop(&self) -> bool {
         match self {
             Cutoff::Mono => false,

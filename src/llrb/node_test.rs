@@ -1,12 +1,13 @@
 use super::*;
 
 #[test]
-fn test_node() {
+fn test_llrb_node() {
     let entry = Entry::new(10, 200, 1);
     let mut node: Node<u32, u32> = entry.into();
-    assert_eq!(node.is_black(), false);
+    assert_eq!(node.footprint().unwrap(), 80);
     assert_eq!(node.as_left_ref().is_none(), true);
     assert_eq!(node.as_right_ref().is_none(), true);
+    assert_eq!(node.is_black(), false);
     assert_eq!(*node.as_key(), 10);
     assert_eq!(node.to_seqno(), 1);
     assert_eq!(node.is_deleted(), false);
@@ -30,14 +31,14 @@ fn test_node() {
     assert_eq!(entry, node.entry.as_ref().clone());
 
     node.delete(4);
-    entry.delete(4);
+    entry = entry.delete(4);
     assert_eq!(entry, node.entry.as_ref().clone());
 
     node.delete(5);
-    entry.delete(5);
+    entry = entry.delete(5);
     assert_eq!(entry, node.entry.as_ref().clone());
 
     node.insert(500, 6);
-    entry.insert(500, 6);
+    entry = entry.insert(500, 6);
     assert_eq!(entry, node.entry.as_ref().clone());
 }

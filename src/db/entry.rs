@@ -38,7 +38,7 @@ where
     D: fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
-        write!(f, "{:?}-{:?}-{:?}", self.key, self.value, self.deltas)
+        write!(f, "{:?},{:?}-{:?}", self.key, self.value, self.deltas)
     }
 }
 

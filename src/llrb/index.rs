@@ -1,21 +1,21 @@
-// Module ``mvcc`` implement [Multi-Version-Concurrency-Control][mvcc]
+// Module ``llrb`` implement [Multi-Version-Concurrency-Control][mvcc]
 // variant of [Llrb].
 //
 // TODO: add a note about spin-concurrency
 //
-// [Mvcc] type allow concurrent read and write access at API level,
+// [Index] type allow concurrent read and write access at API level,
 // while behind the scenes, all write-operations are serialized into
-// single thread, but the key difference is that [Mvcc] index allow
+// single thread, but the key difference is that [Index] index allow
 // concurrent-reads without using locks. To serialize concurrent writes
-// [Mvcc] uses a spin-lock implementation that can be configured to
+// [Index] uses a spin-lock implementation that can be configured to
 // _yield_ or _spin_ while waiting for the lock.
 //
-// **[LSM mode]**: Mvcc index can support log-structured-merge while
+// **[LSM mode]**: Index can support log-structured-merge while
 // mutating the tree. In simple terms, this means that nothing shall be
 // over-written in the tree and all the mutations for the same key shall
 // be preserved until they are purged.
 //
-// **Possible ways to configure Mvcc**:
+// **Possible ways to configure Index**:
 //
 // *spinlatch*, relevant only in multi-threaded context. Calling
 // _set_spinlatch()_ with _true_ will have the calling thread to spin
@@ -68,9 +68,6 @@ macro_rules! compute_n_deleted {
 // TODO: mvcc::compact()
 
 /// Index type for thread-safe, concurrent reads and serialized writes.
-///
-/// [mvcc]: https://en.wikipedia.org/wiki/Multiversion_concurrency_control
-/// [llrb]: https://en.wikipedia.org/wiki/Left-leaning_red-black_tree
 #[derive(Clone)]
 pub struct Index<K, V>
 where
@@ -1653,7 +1650,6 @@ fn find_end<K, V, Q>(
     }
 }
 
-//TODO
-//#[cfg(test)]
-//#[path = "index_test.rs"]
-//mod index_test;
+#[cfg(test)]
+#[path = "index_test.rs"]
+mod index_test;

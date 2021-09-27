@@ -17,6 +17,10 @@ edition = "2018"
 name = "rdms"
 path = "src/lib.rs"
 
+[[bin]]
+name = "rdms-perf"
+required-features = ["rdms-perf"]
+
 [badges]
 maintenance = { status = "actively-developed" }
 travis-ci = { repository = "bnclabs/rdms" }
@@ -24,6 +28,8 @@ travis-ci = { repository = "bnclabs/rdms" }
 [dependencies]
 cbordata = { path = "../cbordata", version = "0.5.0" }
 arbitrary = { version = "1.0.2", features = ["derive"] }
+structopt = { version = "0.3.20", default-features = false, optional = true }
+rand = { version = "0.7.3", features = ["small_rng"], optional = true }
 
 # lazy_static = "1.2.0"
 # jsondata = "0.6.2"
@@ -38,3 +44,6 @@ arbitrary = { version = "1.0.2", features = ["derive"] }
 
 [dev-dependencies]
 rand = "0.6.4"
+
+[features]
+rdms-perf = ["structopt", "rand"]

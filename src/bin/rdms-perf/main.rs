@@ -1,5 +1,7 @@
-use rand::prelude::random;
+use rand::{prelude::random, rngs::SmallRng, Rng};
 use structopt::StructOpt;
+
+use std::{convert::TryFrom, result};
 
 mod llrb;
 
@@ -9,54 +11,10 @@ pub struct Opt {
     #[structopt(long = "seed", default_value = "0")]
     seed: u128,
 
-    #[structopt(long = "key_type", default_value = "u64")]
-    key_type: String,
+    #[structopt(long = "profile", default_value = "")]
+    profile: String,
 
-    #[structopt(long = "spin")]
-    spin: bool,
-
-    #[structopt(long = "loads", default_value = "1000000")] // default 1M
-    loads: usize,
-
-    #[structopt(long = "sets", default_value = "0")] // default 1M
-    sets: usize,
-
-    #[structopt(long = "ins", default_value = "0")] // default 1M
-    ins: usize,
-
-    #[structopt(long = "rems", default_value = "0")] // default 1M
-    rems: usize,
-
-    #[structopt(long = "dels", default_value = "0")] // default 1M
-    dels: usize,
-
-    #[structopt(long = "cas")]
-    cas: bool,
-
-    #[structopt(long = "gets", default_value = "0")] // default 1M
-    gets: usize,
-
-    #[structopt(long = "writers", default_value = "1")]
-    writers: usize,
-
-    #[structopt(long = "readers", default_value = "1")]
-    readers: usize,
-
-    // can be one of llrb
     command: String,
-}
-
-impl Opt {
-    fn reset_writeops(&mut self) {
-        self.sets = 0;
-        self.ins = 0;
-        self.rems = 0;
-        self.dels = 0;
-    }
-
-    fn reset_readops(&mut self) {
-        self.gets = 0;
-    }
 }
 
 fn main() {
@@ -65,8 +23,128 @@ fn main() {
         opts.seed = random();
     }
 
-    match (opts.command.as_str(), opts.key_type.as_str()) {
-        ("llrb", "u64") => llrb::perf::<u64>(opts).unwrap(),
-        (command, _) => println!("rdms-perf: error invalid command {}", command),
+    match opts.command.as_str() {
+        "llrb" => llrb::perf(opts).unwrap(),
+        command => println!("rdms-perf: error invalid command {}", command),
     }
+}
+
+trait Generate<K> {
+    fn gen(&self, rng: &mut SmallRng) -> K;
+}
+
+#[derive(Clone)]
+enum Key {
+    U64,
+    String(usize),
+}
+
+impl Default for Key {
+    fn default() -> Key {
+        Key::U64
+    }
+}
+
+impl TryFrom<String> for Key {
+    type Error = String;
+
+    fn try_from(s: String) -> result::Result<Key, String> {
+        match s.to_lowercase().as_str() {
+            "u64" => Ok(Key::U64),
+            "string" => Ok(Key::String(16)),
+            s => Err(format!("invalid key-type:{:?}", s)),
+        }
+    }
+}
+
+impl Generate<u64> for Key {
+    fn gen(&self, rng: &mut SmallRng) -> u64 {
+        match self {
+            Key::U64 => rng.gen::<u64>(),
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl Generate<String> for Key {
+    fn gen(&self, rng: &mut SmallRng) -> String {
+        let val = rng.gen::<u64>();
+        match self {
+            Key::String(size) => format!("{:0width$}", val, width = size),
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl Key {
+    fn to_type(&self) -> &'static str {
+        match self {
+            Key::U64 => "u64",
+            Key::String(_) => "string",
+        }
+    }
+}
+
+#[derive(Clone)]
+enum Value {
+    U64,
+    String(usize),
+}
+
+impl Default for Value {
+    fn default() -> Value {
+        Value::U64
+    }
+}
+
+impl TryFrom<String> for Value {
+    type Error = String;
+
+    fn try_from(s: String) -> result::Result<Value, String> {
+        match s.to_lowercase().as_str() {
+            "u64" => Ok(Value::U64),
+            "string" => Ok(Value::String(16)),
+            s => Err(format!("invalid key-type:{:?}", s)),
+        }
+    }
+}
+
+impl Generate<u64> for Value {
+    fn gen(&self, rng: &mut SmallRng) -> u64 {
+        match self {
+            Value::U64 => rng.gen::<u64>(),
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl Generate<String> for Value {
+    fn gen(&self, rng: &mut SmallRng) -> String {
+        let val = rng.gen::<u64>();
+        match self {
+            Value::String(size) => format!("{:0width$}", val, width = size),
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl Value {
+    fn to_type(&self) -> &'static str {
+        match self {
+            Value::U64 => "u64",
+            Value::String(_) => "string",
+        }
+    }
+}
+
+#[macro_export]
+macro_rules! get_property {
+    ($value:ident, $name:expr, $meth:ident, $def:expr) => {
+        $value
+            .as_table()
+            .unwrap()
+            .get($name)
+            .map(|v| v.$meth().unwrap_or($def))
+            .unwrap_or($def)
+    };
 }

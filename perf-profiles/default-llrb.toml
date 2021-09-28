@@ -1,0 +1,15 @@
+key_type = "u64"
+value_type = "u64"
+key_size = 16
+value_size = 16
+spin = false
+cas = false
+loads = 1_000_000
+sets = 1_000_000
+ins = 0
+rems = 100_000
+dels = 0
+gets = 10_000_000
+writers = 1
+readers = 1
+

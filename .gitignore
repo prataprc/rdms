@@ -6,3 +6,4 @@ Cargo.lock
 .vimsession
 .vim_session
 core
+perf-data/

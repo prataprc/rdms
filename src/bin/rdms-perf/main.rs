@@ -3,6 +3,7 @@ use structopt::StructOpt;
 
 use std::{convert::TryFrom, result};
 
+mod btree_map;
 mod llrb;
 
 /// Command line options.
@@ -25,8 +26,19 @@ fn main() {
 
     match opts.command.as_str() {
         "llrb" => llrb::perf(opts).unwrap(),
+        "btree" | "btree_map" | "btree-map" => btree_map::perf(opts).unwrap(),
         command => println!("rdms-perf: error invalid command {}", command),
     }
+}
+
+fn load_profile(opts: &Opt) -> result::Result<toml::Value, String> {
+    use std::{fs, str::from_utf8};
+
+    let ppath = opts.profile.clone();
+    let s = from_utf8(&fs::read(ppath).expect("invalid profile file path"))
+        .expect("invalid profile-text encoding, must be in toml")
+        .to_string();
+    Ok(s.parse().expect("invalid profile format"))
 }
 
 trait Generate<K> {

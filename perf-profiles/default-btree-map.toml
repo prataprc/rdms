@@ -1,0 +1,8 @@
+key_type = "u64"
+value_type = "u64"
+key_size = 16
+value_size = 16
+loads = 10_000_000
+sets = 0
+rems = 0
+gets = 10_000_000

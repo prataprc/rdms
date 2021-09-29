@@ -154,7 +154,7 @@ where
         handle.join().unwrap().unwrap()
     }
 
-    print!("rdms-llrb: iterating ... ");
+    print!("rdms-perf: iterating ... ");
     let (elapsed, n) = {
         let start = time::Instant::now();
         let n: usize = index.iter().unwrap().map(|_| 1_usize).sum();
@@ -163,7 +163,7 @@ where
     };
     println!("{} items, took {:?}", n, elapsed);
 
-    print!("rdms-llrb: ranging ... ");
+    print!("rdms-perf: ranging ... ");
     let (elapsed, n) = {
         let start = time::Instant::now();
         let n: usize = index.range(..).unwrap().map(|_| 1_usize).sum();
@@ -172,7 +172,7 @@ where
     };
     println!("{} items, took {:?}", n, elapsed);
 
-    print!("rdms-llrb: reverse iter ... ");
+    print!("rdms-perf: reverse iter ... ");
     let (elapsed, n) = {
         let start = time::Instant::now();
         let n: usize = index.reverse(..).unwrap().map(|_| 1_usize).sum();
@@ -181,13 +181,13 @@ where
     };
     println!("{} items, took {:?}", n, elapsed);
 
-    println!("rdms-llrb: index latest-seqno:{}", index.to_seqno());
-    println!("rdms-llrb: index deleted_count:{}", index.deleted_count());
+    println!("rdms-perf: index latest-seqno:{}", index.to_seqno());
+    println!("rdms-perf: index deleted_count:{}", index.deleted_count());
 
-    println!("rdms-llrb: stats {}", index.to_stats().unwrap().to_json());
+    println!("rdms-perf: stats {}", index.to_stats().unwrap().to_json());
 
     if p.validate {
-        print!("rdms-llrb: validating {} items in index ... ", index.len());
+        print!("rdms-perf: validating {} items in index ... ", index.len());
         index.validate().unwrap();
         println!("ok");
     }
@@ -215,7 +215,7 @@ where
     }
 
     println!(
-        "rdms-llrb: loaded {} items in {:?}",
+        "rdms-perf: loaded {} items in {:?}",
         p.loads,
         start.elapsed()
     );
@@ -295,7 +295,7 @@ where
 
     println!(
         concat!(
-            "rdms-llrb: incremental-{} for (sets:{} ins:{} rems:{} dels:{} gets:{}) ",
+            "rdms-perf: incremental-{} for (sets:{} ins:{} rems:{} dels:{} gets:{}) ",
             "operations took {:?}",
         ),
         j,

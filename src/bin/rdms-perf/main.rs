@@ -5,6 +5,7 @@ use std::{convert::TryFrom, result};
 
 mod btree_map;
 mod llrb;
+mod lmdb;
 
 /// Command line options.
 #[derive(Clone, StructOpt)]
@@ -27,6 +28,7 @@ fn main() {
     match opts.command.as_str() {
         "llrb" => llrb::perf(opts).unwrap(),
         "btree" | "btree_map" | "btree-map" => btree_map::perf(opts).unwrap(),
+        "lmdb" => lmdb::perf(opts).unwrap(),
         command => println!("rdms-perf: error invalid command {}", command),
     }
 }

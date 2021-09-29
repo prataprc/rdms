@@ -101,7 +101,7 @@ where
     initial_load(&mut rng, p.clone(), &mut index)?;
     incr_load(opts.seed, p.clone(), &mut index)?;
 
-    print!("rdms-llrb: iterating ... ");
+    print!("rdms-perf: iterating ... ");
     let (elapsed, n) = {
         let start = time::Instant::now();
         let n: usize = index.iter().map(|_| 1_usize).sum();
@@ -110,7 +110,7 @@ where
     };
     println!("{} items, took {:?}", n, elapsed);
 
-    print!("rdms-llrb: ranging ... ");
+    print!("rdms-perf: ranging ... ");
     let (elapsed, n) = {
         let start = time::Instant::now();
         let n: usize = index.range(..).map(|_| 1_usize).sum();
@@ -119,7 +119,7 @@ where
     };
     println!("{} items, took {:?}", n, elapsed);
 
-    print!("rdms-llrb: reverse iter ... ");
+    print!("rdms-perf: reverse iter ... ");
     let (elapsed, n) = {
         let start = time::Instant::now();
         let n: usize = index.range(..).rev().map(|_| 1_usize).sum();
@@ -150,7 +150,7 @@ where
     }
 
     println!(
-        "rdms-llrb: loaded {} items in {:?}",
+        "rdms-perf: loaded {} items in {:?}",
         p.loads,
         start.elapsed()
     );

@@ -26,6 +26,7 @@ pub struct Profile {
     gets: usize,
     writers: usize,
     readers: usize,
+    validate: bool,
 }
 
 impl Default for Profile {
@@ -43,6 +44,7 @@ impl Default for Profile {
             gets: 1_000_000,
             writers: 1,
             readers: 1,
+            validate: true,
         }
     }
 }
@@ -72,30 +74,20 @@ impl Profile {
             }?
         };
 
-        let spin = get_property!(v, "spin", as_bool, p.spin);
-        let cas = get_property!(v, "cas", as_bool, p.cas);
-        let loads = get_property!(v, "loads", as_integer, p.loads as i64) as usize;
-        let sets = get_property!(v, "sets", as_integer, p.sets as i64) as usize;
-        let ins = get_property!(v, "ins", as_integer, p.ins as i64) as usize;
-        let rems = get_property!(v, "rems", as_integer, p.rems as i64) as usize;
-        let dels = get_property!(v, "dels", as_integer, p.dels as i64) as usize;
-        let gets = get_property!(v, "gets", as_integer, p.gets as i64) as usize;
-        let writers = get_property!(v, "writers", as_integer, p.writers as i64) as usize;
-        let readers = get_property!(v, "readers", as_integer, p.loads as i64) as usize;
-
         let p = Profile {
             key,
             value,
-            spin,
-            cas,
-            loads,
-            sets,
-            ins,
-            rems,
-            dels,
-            gets,
-            writers,
-            readers,
+            spin: get_property!(v, "spin", as_bool, p.spin),
+            cas: get_property!(v, "cas", as_bool, p.cas),
+            loads: get_property!(v, "loads", as_integer, p.loads as i64) as usize,
+            sets: get_property!(v, "sets", as_integer, p.sets as i64) as usize,
+            ins: get_property!(v, "ins", as_integer, p.ins as i64) as usize,
+            rems: get_property!(v, "rems", as_integer, p.rems as i64) as usize,
+            dels: get_property!(v, "dels", as_integer, p.dels as i64) as usize,
+            gets: get_property!(v, "gets", as_integer, p.gets as i64) as usize,
+            writers: get_property!(v, "writers", as_integer, p.writers as i64) as usize,
+            readers: get_property!(v, "readers", as_integer, p.loads as i64) as usize,
+            validate: get_property!(v, "validate", as_bool, p.validate),
         };
 
         Ok(p)
@@ -170,37 +162,43 @@ where
         handle.join().unwrap()
     }
 
+    print!("rdms-llrb: iterating ... ");
     let (elapsed, n) = {
         let start = time::Instant::now();
         let n: usize = index.iter().unwrap().map(|_| 1_usize).sum();
         assert!(n == index.len(), "{} != {}", n, index.len());
         (start.elapsed(), n)
     };
-    println!("rdms-llrb: iterating {} items, took {:?}", n, elapsed);
+    println!("{} items, took {:?}", n, elapsed);
 
+    print!("rdms-llrb: ranging ... ");
     let (elapsed, n) = {
         let start = time::Instant::now();
         let n: usize = index.range(..).unwrap().map(|_| 1_usize).sum();
         assert!(n == index.len(), "{} != {}", n, index.len());
         (start.elapsed(), n)
     };
-    println!("rdms-llrb: ranging {} items, took {:?}", n, elapsed);
+    println!("{} items, took {:?}", n, elapsed);
 
+    print!("rdms-llrb: reverse iter ... ");
     let (elapsed, n) = {
         let start = time::Instant::now();
         let n: usize = index.reverse(..).unwrap().map(|_| 1_usize).sum();
         assert!(n == index.len(), "{} != {}", n, index.len());
         (start.elapsed(), n)
     };
-    println!("rdms-llrb: rev iterating {} items, took {:?}", n, elapsed);
+    println!("{} items, took {:?}", n, elapsed);
 
     println!("rdms-llrb: index latest-seqno:{}", index.to_seqno());
     println!("rdms-llrb: index deleted_count:{}", index.deleted_count());
 
-    println!("rdms-llrb: validating {} items in index", index.len());
-    index.validate().unwrap();
-
     println!("rdms-llrb: stats {}", index.to_stats().unwrap().to_json());
+
+    if p.validate {
+        print!("rdms-llrb: validating {} items in index ... ", index.len());
+        index.validate().unwrap();
+        println!("ok");
+    }
 
     index.purge().unwrap();
 

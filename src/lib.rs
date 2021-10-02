@@ -94,10 +94,11 @@ pub type Result<T> = result::Result<T, Error>;
 
 #[macro_use]
 mod error;
-
 pub mod db;
 pub mod llrb;
-mod util;
+pub mod robt;
+#[macro_use]
+pub mod util;
 
 pub use error::Error;
 

@@ -1,3 +1,5 @@
+* README: create document links in a separate section, linking to docs/ directory.
+* implement logging using log facade.
 * benches: Fix benches/ and add it as part of perf.sh
 * rdms-perf: add performance suite for dgm, robt, wral, shllrb, shrobt, croaring
 * rdms-perf: add latency measurements.

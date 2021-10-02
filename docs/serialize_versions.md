@@ -1,0 +1,15 @@
+src/db
+======
+
+* `VALUE_VER` `0x00020001_u32`
+* `DELTA_VER` `0x00030001_u32`
+* `ENTRY_VER` `0x00050001_u32`
+* `NDIFF_VER` `0x00070001_u32`
+
+src/robt
+========
+
+* `STATS_VER` `0x000b0001_u32`
+* `VALUE_VER` `0x000d0001_u32`
+* `DELTA_VER` `0x00110001_u32`
+* `ENTRY_VER` `0x00130001_u32`

@@ -18,9 +18,9 @@ const ENTRY_VER: u32 = 0x00050001;
 // automatically detecting this and deriving FromCbor and IntoCbor for
 // <V as Diff>::Delta seem to be difficult.
 //
-// We are using a sleek idea, we add the type parameter `D` to Entry but default
-// it to <V as Diff>::Delta, so that rest of the package and outside crates can
-// simple use Entry<K, V>.
+// To solve this, we are using a sleek idea. We add the type parameter `D` to Entry
+// but default it to <V as Diff>::Delta, so that rest of the package and outside
+// crates can simple use Entry<K, V>.
 #[derive(Clone, Cborize)]
 pub struct Entry<K, V, D = <V as Diff>::Delta>
 where

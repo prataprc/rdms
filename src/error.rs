@@ -17,6 +17,8 @@ pub enum Error {
     TimeFail(String, String),
     /// Inter-Process-Communication error from std::mpsc
     IPCFail(String, String),
+    /// Inter-Process-Communication error from std::mpsc
+    ThreadFail(String, String),
     /// System level failure.
     SystemFail(String, String),
     /// Invalid input from application, like function arguments,
@@ -25,14 +27,14 @@ pub enum Error {
     /// API is being misused, as in there are not invoked in
     /// suggested order/manner.
     APIMisuse(String, String),
-    /// De-serialization failed.
-    DecodeFail(String, String),
+    /// Cbor serialization/de-serialization failed.
+    FailCbor(String, String),
     /// Returned by disk index or dlog that provide durability support.
     InvalidFile(String, String),
     /// Error converting from one type to another.
     FailConvert(String, String),
     /// IO error from std::io
-    IoError(String, String),
+    IOError(String, String),
 
     /// Supplied key is not found in the index.
     KeyNotFound(String, String),
@@ -57,7 +59,7 @@ pub enum Error {
     /// Value-diff size, after serializing, exceeds limit.
     DiffSizeExceeded(String, String),
     /// Return list of files that needs to be purged.
-    PurgeFiles(String, String),
+    PurgeFile(String, String),
 
     #[doc(hidden)]
     // internal error, given key is less than the entire data set.
@@ -95,6 +97,7 @@ pub enum Error {
 // err_at!(ParseError, std::fs::read(file_path), format!("read failed"));
 // ```
 //
+#[macro_export]
 macro_rules! err_at {
     ($v:ident, msg: $($arg:expr),+) => {{
         let prefix = format!("{}:{}", file!(), line!());
@@ -129,20 +132,21 @@ impl fmt::Display for Error {
             Error::UnInitialized(p, m) => write!(f, "{} UnInitialized:{}", p, m),
             Error::TimeFail(p, m) => write!(f, "{} TimeFail:{}", p, m),
             Error::IPCFail(p, m) => write!(f, "{} IPCFail:{}", p, m),
+            Error::ThreadFail(p, m) => write!(f, "{} ThreadFail:{}", p, m),
             Error::SystemFail(p, m) => write!(f, "{} SystemFail:{}", p, m),
             Error::InvalidInput(p, m) => write!(f, "{} InvalidInput:{}", p, m),
             Error::APIMisuse(p, m) => write!(f, "{} APIMisuse:{}", p, m),
-            Error::DecodeFail(p, m) => write!(f, "{} DecodeFail:{}", p, m),
             Error::InvalidFile(p, m) => write!(f, "{} InvalidFile:{}", p, m),
             Error::FailConvert(p, m) => write!(f, "{} FailConvert:{}", p, m),
-            Error::IoError(p, m) => write!(f, "{} IoError:{}", p, m),
+            Error::IOError(p, m) => write!(f, "{} IoError:{}", p, m),
             Error::KeyNotFound(p, m) => write!(f, "{} KeyNotFound:{}", p, m),
             Error::EmptyIndex(p, m) => write!(f, "{} EmptyIndex:{}", p, m),
             Error::InvalidCAS(p, m) => write!(f, "{} InvalidCAS:{}", p, m),
             Error::KeySizeExceeded(p, m) => write!(f, "{} KeySizeExceeded:{}", p, m),
             Error::ValueSizeExceeded(p, m) => write!(f, "{} ValueSizeExceeded:{}", p, m),
             Error::DiffSizeExceeded(p, m) => write!(f, "{} DiffSizeExceeded:{}", p, m),
-            Error::PurgeFiles(p, m) => write!(f, "{} PurgeFiles:{}", p, m),
+            Error::PurgeFile(p, m) => write!(f, "{} PurgeFile:{}", p, m),
+            Error::FailCbor(p, m) => write!(f, "{} FailCbor:{}", p, m),
             Error::__LessThan(p, m) => write!(f, "{} __LessThan:{}", p, m),
             Error::__ZBlockOverflow(p, m) => write!(f, "{} __ZBlockOverflow:{}", p, m),
             Error::__MBlockOverflow(p, m) => write!(f, "{} __MBlockOverflow:{}", p, m),

@@ -1,5 +1,7 @@
 //! Utility functions.
 
+use cbordata::{Cbor, FromCbor, IntoCbor};
+
 use std::{
     borrow::Borrow,
     convert::TryFrom,
@@ -11,8 +13,10 @@ use std::{
 use crate::{db, Error, Result};
 
 pub mod spinlock;
+pub mod thread;
 
 pub use spinlock::Spinlock;
+pub use thread::Thread;
 
 #[macro_export]
 macro_rules! check_remaining {
@@ -28,45 +32,72 @@ macro_rules! check_remaining {
 }
 
 #[macro_export]
-macro_rules! write_file {
-    ($fd:expr, $buffer:expr, $file:expr, $msg:expr) => {{
-        let n = err_at!(IoError, $fd.write($buffer))?;
-        if $buffer.len() == n {
-            Ok(n)
-        } else {
-            err_at!(Fatal, msg: "{}, {:?}, {}/{}", $msg, $file, $buffer.len(), n)
+macro_rules! read_file {
+    ($fd:expr, $seek:expr, $n:expr, $msg:expr) => {{
+        use std::convert::TryFrom;
+
+        match $fd.seek($seek) {
+            Ok(_) => {
+                let mut buf = vec![0; usize::try_from($n).unwrap()];
+                match $fd.read(&mut buf) {
+                    Ok(n) if buf.len() == n => Ok(buf),
+                    Ok(n) => {
+                        let m = buf.len();
+                        err_at!(Fatal, msg: concat!($msg, " {}/{} at {:?}"), m, n, $seek)
+                    }
+                    Err(err) => err_at!(IOError, Err(err)),
+                }
+            }
+            Err(err) => err_at!(IOError, Err(err)),
         }
     }};
 }
 
 #[macro_export]
-macro_rules! read_file {
-    ($fd:expr, $fpos:expr, $n:expr, $msg:expr) => {
-        match $fd.seek(io::SeekFrom::Start($fpos)) {
-            Ok(_) => {
-                let mut buf = {
-                    let mut buf = Vec::with_capacity($n as usize);
-                    buf.resize(buf.capacity(), 0);
-                    buf
-                };
-                match $fd.read(&mut buf) {
-                    Ok(n) if buf.len() == n => Ok(buf),
-                    Ok(n) => {
-                        let m = buf.len();
-                        err_at!(Fatal, msg: "{}, {}/{} at {}", $msg, m, n, $fpos)
-                    }
-                    Err(err) => err_at!(IoError, Err(err)),
-                }
-            }
-            Err(err) => err_at!(IoError, Err(err)),
+macro_rules! write_file {
+    ($fd:expr, $buffer:expr, $file:expr, $msg:expr) => {{
+        use std::io::Write;
+
+        match err_at!(IOError, $fd.write($buffer))? {
+            n if $buffer.len() == n => Ok(n),
+            n => err_at!(
+                Fatal, msg: "partial-wr {}, {:?}, {}/{}", $msg, $file, $buffer.len(), n
+            ),
         }
-    };
+    }};
+}
+
+/// Helper function to serialize value `T` implementing IntoCbor, into byte-string.
+pub fn into_cbor_bytes<T>(val: T) -> Result<Vec<u8>>
+where
+    T: IntoCbor,
+{
+    let mut data: Vec<u8> = vec![];
+    let n = err_at!(
+        FailCbor,
+        err_at!(FailCbor, val.into_cbor())?.encode(&mut data)
+    )?;
+    if n != data.len() {
+        err_at!(Fatal, msg: "cbor encoding len mistmatch {} {}", n, data.len())
+    } else {
+        Ok(data)
+    }
+}
+
+/// Helper function to deserialize value `T` implementing FromCbor, from byte-string.
+/// Return (value, bytes-consumed)
+pub fn from_cbor_bytes<T>(mut data: &[u8]) -> Result<(T, usize)>
+where
+    T: FromCbor,
+{
+    let (val, n) = err_at!(FailCbor, Cbor::decode(&mut data))?;
+    Ok((err_at!(FailCbor, T::from_cbor(val))?, n))
 }
 
 // create a file in append mode for writing.
-pub fn create_file_a(file: ffi::OsString) -> Result<fs::File> {
+pub fn create_file_a(file: &ffi::OsStr) -> Result<fs::File> {
     let os_file = {
-        let os_file = path::Path::new(&file);
+        let os_file = path::Path::new(file);
         fs::remove_file(os_file).ok(); // NOTE: ignore remove errors.
         os_file
     };
@@ -76,28 +107,28 @@ pub fn create_file_a(file: ffi::OsString) -> Result<fs::File> {
             Some(parent) => Ok(parent),
             None => err_at!(InvalidFile, msg: "{:?}", file),
         }?;
-        err_at!(IoError, fs::create_dir_all(parent))?;
+        err_at!(IOError, fs::create_dir_all(parent))?;
     };
 
     let mut opts = fs::OpenOptions::new();
     Ok(err_at!(
-        IoError,
+        IOError,
         opts.append(true).create_new(true).open(os_file)
     )?)
 }
 
 // open existing file in append mode for writing.
-pub fn open_file_w(file: &ffi::OsString) -> Result<fs::File> {
+pub fn open_file_a(file: &ffi::OsStr) -> Result<fs::File> {
     let os_file = path::Path::new(file);
     let mut opts = fs::OpenOptions::new();
-    Ok(err_at!(IoError, opts.append(true).open(os_file))?)
+    Ok(err_at!(IOError, opts.append(true).open(os_file))?)
 }
 
 // open file for reading.
 pub fn open_file_r(file: &ffi::OsStr) -> Result<fs::File> {
     let os_file = path::Path::new(file);
     Ok(err_at!(
-        IoError,
+        IOError,
         fs::OpenOptions::new().read(true).open(os_file)
     )?)
 }

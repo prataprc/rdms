@@ -22,7 +22,7 @@ pub(crate) use value::Value;
 
 /// Trait to bulk-add entries into an index.
 pub trait BuildIndex<K, V, B> {
-    type Err;
+    type Error;
 
     /// Build an index form iterator. Optionally a bitmap can be specified to
     /// implement a bloom filter. If bitmap filter is not required, pass bitmap
@@ -34,7 +34,7 @@ pub trait BuildIndex<K, V, B> {
         iter: I,
         bitmap: B,
         seqno: Option<u64>,
-    ) -> result::Result<(), Self::Err>
+    ) -> result::Result<(), Self::Error>
     where
         V: Diff,
         I: Iterator<Item = Entry<K, V, <V as Diff>::Delta>>;

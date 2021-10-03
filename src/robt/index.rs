@@ -152,8 +152,6 @@ where
     <V as db::Diff>::Delta: IntoCbor,
     B: db::Bloom,
 {
-    type Error = Error;
-
     fn build_index<I>(&mut self, iter: I, bitmap: B, seqno: Option<u64>) -> Result<()>
     where
         I: Iterator<Item = db::Entry<K, V>>,

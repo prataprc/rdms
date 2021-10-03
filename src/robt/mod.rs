@@ -1,9 +1,9 @@
-//! Package implement an immutable read-only BTree index.
+//! Module implement an immutable read-only BTree index.
 //!
 //! Use [Builder] type to build a new index. And subsequently load the index using
 //! the [Index] type. Index can be concurrently accessed by cloning the `Index`
 //! instance. Note that a single Index instance cannot be shared among threads.
-//! Once an index is built using the `Builder` type it is not possible to modify
+//! Once an index is built using the [Builder] type it is not possible to modify
 //! them. While strict immutability might seem like an inconvenience, they have
 //! certain advantages,
 //!
@@ -110,8 +110,8 @@
 //! in a common crate. Note that an index entry is parametrized over
 //! key-type, value-type, and delta-type. Here delta-type `D` can be
 //! `NoDiff` if application is not interested in preserving older-versions
-//! or should be same as `<V as Diff>::D`. Refer to [Diff] mechanics for
-//! more detail.
+//! or should be same as `<V as Diff>::D`. Refer to [Diff] mechanics
+//! for more detail.
 //!
 //! Now coming back to the leaf-node, all entries are stored in the
 //! leaf-node. And to facilitate archival of older versions `deltas`
@@ -146,7 +146,7 @@
 //! In most cases, `delta-type` and `bitmap-type` are not needed. To build
 //! and use simple `{key,value}` index [Builder] and [Index] type in the
 //! crate-root can be used. To use fully parameterized variant, use
-//! [db::Builder] and [db::Index] types.
+//! [Builder] and [Index] types.
 //!
 //! **Index Entry**
 //!
@@ -154,7 +154,7 @@
 //! database-features like compaction, log-structured-merge we need to
 //! preserve more information about each entry. While the internal shape of
 //! entry is not exposed (for future compatibility), `robt` uses
-//! [mkit::db::Entry] as the default index-entry.
+//! [db::Entry] as the default index-entry.
 //!
 //! **Compaction**
 //!
@@ -201,6 +201,9 @@
 //! [cbor]: https://en.wikipedia.org/wiki/CBOR
 //! [LSM]: https://en.wikipedia.org/wiki/Log-structured_merge-tree
 //! [leveldb]: https://en.wikipedia.org/wiki/LevelDB
+
+#[allow(unused_imports)]
+use crate::db::{self, Diff};
 
 mod build;
 mod config;

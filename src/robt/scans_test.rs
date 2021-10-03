@@ -1,7 +1,10 @@
 use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
 
 use super::*;
-use crate::util;
+use crate::{
+    db::{self, Bloom},
+    llrb,
+};
 
 #[test]
 fn test_build_scan() {
@@ -13,7 +16,7 @@ fn test_build_scan() {
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
     let inserts = 1_000_000;
-    let mdb = util::load_index(seed, 0, inserts, 0, 1_000, None);
+    let mdb = llrb::load_index(seed, 0, inserts, 0, 1_000, None);
 
     let start_seqno = rng.gen::<u64>() % ((mdb.len() as u64) * 2);
     let mut iter = BuildScan::new(mdb.iter().unwrap(), start_seqno);
@@ -38,7 +41,7 @@ fn test_build_scan() {
 
 #[test]
 fn test_nobitmap_scan() {
-    use mkit::nobitmap::NoBitmap;
+    use crate::bitmaps::NoBitmap;
 
     let seed: u128 = random();
     // let seed: u128 = 284595450980088120127817086088032225381;
@@ -46,13 +49,13 @@ fn test_nobitmap_scan() {
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
     let inserts = 1_000_000;
-    let mdb = util::load_index(seed, 0, inserts, 0, 1_000, None);
+    let mdb = llrb::load_index(seed, 0, inserts, 0, 1_000, None);
 
     // with NoBitmap
     let mut iter = BitmappedScan::new(mdb.iter().unwrap(), NoBitmap);
     let len: usize = iter.by_ref().map(|_| 1).sum();
     let (mut bitmap, mut iter) = iter.unwrap().unwrap();
-    bitmap.build();
+    bitmap.build().unwrap();
     assert_eq!(len, mdb.len());
     assert_eq!(iter.next(), None);
     assert_eq!(bitmap.to_bytes().unwrap().len(), 0);
@@ -73,18 +76,18 @@ fn test_xorfilter_scan() {
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
     let inserts = 1_000_000;
-    let mdb = util::load_index(seed, 0, inserts, 0, 1_000, None);
+    let mdb = llrb::load_index(seed, 0, inserts, 0, 1_000, None);
 
     // with xorfilter
     let mut iter = BitmappedScan::new(mdb.iter().unwrap(), Xor8::new());
     let len: usize = iter.by_ref().map(|_| 1).sum();
     let (mut bitmap, mut iter) = iter.unwrap().unwrap();
-    bitmap.build();
+    bitmap.build().unwrap();
     assert_eq!(len, mdb.len());
     assert_eq!(iter.next(), None);
     let bitma = {
-        let bytes = <Xor8 as Bloom>::to_bytes(&bitmap).unwrap();
-        <Xor8 as Bloom>::from_bytes(&bytes).unwrap().0
+        let bytes = <Xor8 as db::Bloom>::to_bytes(&bitmap).unwrap();
+        <Xor8 as db::Bloom>::from_bytes(&bytes).unwrap().0
     };
     let mut found_keys = 0;
     for _i in 0..1_000_000 {

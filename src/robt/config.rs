@@ -165,7 +165,7 @@ pub struct Stats {
     /// Comes from [Config] type.
     pub value_in_vlog: bool,
 
-    /// Optional value log file if either [Config::value_in_log] or [Config::delta_ok]
+    /// Optional value log file if either [Config::value_in_vlog] or [Config::delta_ok]
     /// is true.
     pub vlog_file: Option<ffi::OsString>,
 

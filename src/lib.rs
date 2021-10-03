@@ -99,6 +99,7 @@ pub mod llrb;
 pub mod robt;
 #[macro_use]
 pub mod util;
+pub mod bitmaps;
 
 pub use error::Error;
 
@@ -144,7 +145,6 @@ pub use error::Error;
 
 // bloom filters.
 //pub mod croaring;
-//pub mod nobitmap;
 
 //pub mod rdms;
 //pub use crate::rdms::Rdms;

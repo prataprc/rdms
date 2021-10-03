@@ -1,6 +1,6 @@
 //! Traits and Types, related to core-database, and required by rest of this package.
 
-use std::{borrow::Borrow, fmt, hash::Hash, result};
+use std::{borrow::Borrow, hash::Hash};
 
 use crate::Result;
 
@@ -22,19 +22,12 @@ pub(crate) use value::Value;
 
 /// Trait to bulk-add entries into an index.
 pub trait BuildIndex<K, V, B> {
-    type Error;
-
     /// Build an index form iterator. Optionally a bitmap can be specified to
     /// implement a bloom filter. If bitmap filter is not required, pass bitmap
     /// as `NoBitmap`. `seqno` can be supplied to set the snapshot's seqno, if
     /// supplied as None, snapshot will take is latest-seqno as the high seqno
     /// found in the iterated entries.
-    fn build_index<I>(
-        &mut self,
-        iter: I,
-        bitmap: B,
-        seqno: Option<u64>,
-    ) -> result::Result<(), Self::Error>
+    fn build_index<I>(&mut self, iter: I, bitmap: B, seqno: Option<u64>) -> Result<()>
     where
         V: Diff,
         I: Iterator<Item = Entry<K, V, <V as Diff>::Delta>>;
@@ -143,8 +136,8 @@ where
 }
 
 /// Trait to build and manage keys in a bit-mapped Bloom-filter.
-pub trait Bloom: Sized + Default {
-    type Err: fmt::Display;
+pub trait Bloom: Sized {
+    fn len(&self) -> Result<usize>;
 
     /// Add key into the index.
     fn add_key<Q: ?Sized + Hash>(&mut self, key: &Q);
@@ -162,13 +155,13 @@ pub trait Bloom: Sized + Default {
     fn contains<Q: ?Sized + Hash>(&self, element: &Q) -> bool;
 
     /// Serialize the bit-map to binary array.
-    fn to_bytes(&self) -> result::Result<Vec<u8>, Self::Err>;
+    fn to_bytes(&self) -> Result<Vec<u8>>;
 
     /// Deserialize the binary array to bit-map.
-    fn from_bytes(buf: &[u8]) -> result::Result<(Self, usize), Self::Err>;
+    fn from_bytes(buf: &[u8]) -> Result<(Self, usize)>;
 
     /// Merge two bitmaps.
-    fn or(&self, other: &Self) -> result::Result<Self, Self::Err>;
+    fn or(&self, other: &Self) -> Result<Self>;
 }
 
 /// Trait to serialize an implementing type to JSON encoded string.

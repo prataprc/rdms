@@ -1,4 +1,4 @@
-//! Utility functions.
+//! Module implement common utility functions and types.
 
 use cbordata::{Cbor, FromCbor, IntoCbor};
 

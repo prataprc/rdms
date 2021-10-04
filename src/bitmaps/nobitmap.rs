@@ -4,7 +4,7 @@ use std::hash::Hash;
 
 use crate::{db, Result};
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct NoBitmap;
 
 impl db::Bloom for NoBitmap {

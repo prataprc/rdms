@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn test_vlog_value() {
+fn test_robt_vlog_value() {
     let dbval = {
         let (value, seqno) = (10, 1);
         db::Value::U { value, seqno }
@@ -29,7 +29,7 @@ fn test_vlog_value() {
 }
 
 #[test]
-fn test_vlog_delta() {
+fn test_robt_vlog_delta() {
     let dbdelta = {
         let (delta, seqno) = (10, 1);
         db::Delta::U { delta, seqno }

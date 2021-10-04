@@ -7,7 +7,7 @@ use crate::{
 };
 
 #[test]
-fn test_build_scan() {
+fn test_robt_build_scan() {
     use std::time::Duration;
 
     let seed: u128 = random();
@@ -16,7 +16,7 @@ fn test_build_scan() {
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
     let inserts = 1_000_000;
-    let mdb = llrb::load_index(seed, 0, inserts, 0, 1_000, None);
+    let mdb = llrb::load_index::<u16>(seed, 0, inserts, 0, 1_000, None);
 
     let start_seqno = rng.gen::<u64>() % ((mdb.len() as u64) * 2);
     let mut iter = BuildScan::new(mdb.iter().unwrap(), start_seqno);
@@ -40,7 +40,7 @@ fn test_build_scan() {
 }
 
 #[test]
-fn test_nobitmap_scan() {
+fn test_robt_nobitmap_scan() {
     use crate::bitmaps::NoBitmap;
 
     let seed: u128 = random();
@@ -49,7 +49,7 @@ fn test_nobitmap_scan() {
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
     let inserts = 1_000_000;
-    let mdb = llrb::load_index(seed, 0, inserts, 0, 1_000, None);
+    let mdb = llrb::load_index::<u16>(seed, 0, inserts, 0, 1_000, None);
 
     // with NoBitmap
     let mut iter = BitmappedScan::new(mdb.iter().unwrap(), NoBitmap);
@@ -67,7 +67,7 @@ fn test_nobitmap_scan() {
 }
 
 #[test]
-fn test_xorfilter_scan() {
+fn test_robt_xorfilter_scan() {
     use xorfilter::Xor8;
 
     let seed: u128 = random();
@@ -76,7 +76,7 @@ fn test_xorfilter_scan() {
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
     let inserts = 1_000_000;
-    let mdb = llrb::load_index(seed, 0, inserts, 0, 1_000, None);
+    let mdb = llrb::load_index::<u16>(seed, 0, inserts, 0, 1_000, None);
 
     // with xorfilter
     let mut iter = BitmappedScan::new(mdb.iter().unwrap(), Xor8::new());

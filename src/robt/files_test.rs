@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn test_index_file() {
+fn test_robt_index_file() {
     let name = "test-index-file".to_string();
     let out = AsRef::<ffi::OsStr>::as_ref("test-index-file-robt.indx").to_os_string();
 
@@ -12,7 +12,7 @@ fn test_index_file() {
 }
 
 #[test]
-fn test_vlog_file() {
+fn test_robt_vlog_file() {
     let name = "test-vlog-file".to_string();
     let out = AsRef::<ffi::OsStr>::as_ref("test-vlog-file-robt.vlog").to_os_string();
 

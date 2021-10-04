@@ -26,8 +26,8 @@ maintenance = { status = "actively-developed" }
 travis-ci = { repository = "bnclabs/rdms" }
 
 [dependencies]
-cbordata = { path = "../cbordata", version = "0.5.0" }
-arbitrary = { version = "1.0.2", features = ["derive"] }
+cbordata = { path = "../cbordata", version = "0.5.3" }
+arbitrary = { version = "1", features = ["derive"] }
 toml = "0.5.3"
 lazy_static = "1.2.0"
 fs2 = "0.4.3"

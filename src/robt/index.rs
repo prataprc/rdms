@@ -485,10 +485,15 @@ where
 
     /// Purge this index from disk.
     pub fn purge(self) -> Result<()> {
-        purge_file(to_index_location(&self.dir, &self.name))?;
+        let is_vlog = self.stats.value_in_vlog || self.stats.delta_ok;
+        let index_loc = to_index_location(&self.dir, &self.name);
+        let vlog_loc = to_vlog_location(&self.dir, &self.name);
 
-        if self.stats.value_in_vlog || self.stats.delta_ok {
-            purge_file(to_vlog_location(&self.dir, &self.name))?;
+        mem::drop(self);
+
+        purge_file(index_loc)?;
+        if is_vlog {
+            purge_file(vlog_loc)?;
         }
 
         Ok(())
@@ -552,7 +557,8 @@ where
     }
 
     pub fn to_index_location(&self) -> ffi::OsString {
-        let config: Config = self.stats.clone().into();
+        let mut config: Config = self.stats.clone().into();
+        config.dir = self.dir.clone();
         config.to_index_location()
     }
 
@@ -731,6 +737,7 @@ fn purge_file(file: ffi::OsString) -> Result<()> {
     use fs2::FileExt;
 
     let fd = util::open_file_r(&file)?;
+    // println!("purge file try_lock_exclusive <");
     match fd.try_lock_exclusive() {
         Ok(_) => {
             err_at!(IOError, fs::remove_file(&file), "remove file {:?}", file)?;
@@ -747,6 +754,6 @@ fn purge_file(file: ffi::OsString) -> Result<()> {
     }
 }
 
-//#[cfg(test)]
-//#[path = "robt_test.rs"]
-//mod robt_test;
+#[cfg(test)]
+#[path = "index_test.rs"]
+mod index_test;

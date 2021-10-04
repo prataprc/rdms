@@ -93,9 +93,11 @@ fn thread_flush(
     rx: util::thread::Rx<Vec<u8>, u64>,
     mut fpos: u64,
 ) -> Result<u64> {
+    // println!("thread_flush lock_shared <");
     err_at!(IOError, fd.lock_shared(), "fail read lock for {:?}", loc)?;
 
     for (data, res_tx) in rx {
+        // println!("flush {:?} fpos:{} len:{}", loc, fpos, data.len());
         write_file!(fd, &data, &loc, "flushing file")?;
 
         fpos += u64::try_from(data.len()).unwrap();
@@ -104,6 +106,7 @@ fn thread_flush(
 
     err_at!(IOError, fd.sync_all(), "fail sync_all {:?}", loc)?;
     err_at!(IOError, fd.unlock(), "fail read unlock {:?}", loc)?;
+    // println!("thread_flush unlock >");
 
     Ok(fpos)
 }

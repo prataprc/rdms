@@ -96,6 +96,7 @@ where
 
         let brk = iter_result!(util::into_cbor_bytes(cbor::SimpleValue::Break));
         mblock.extend_from_slice(&brk);
+        // println!("mmblock len:{} n:{}", mblock.len(), n);
         mblock.resize(self.m_blocksize, 0);
 
         if n > 1 {
@@ -178,6 +179,7 @@ where
 
         let brk = iter_result!(util::into_cbor_bytes(cbor::SimpleValue::Break));
         mblock.extend_from_slice(&brk);
+        // println!("mzblock len:{} start..:{:?}", mblock.len(), &mblock[..32]);
         mblock.resize(self.m_blocksize, 0);
 
         let fpos = self.iflush.borrow().to_fpos().unwrap_or(0);
@@ -271,6 +273,7 @@ where
 
         let brk = iter_result!(util::into_cbor_bytes(cbor::SimpleValue::Break));
         zblock.extend_from_slice(&brk);
+        // println!("zblock {}", zblock.len());
         zblock.resize(self.z_blocksize, 0);
 
         let fpos = self.iflush.borrow().to_fpos().unwrap_or(0);

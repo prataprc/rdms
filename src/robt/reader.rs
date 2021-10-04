@@ -48,10 +48,12 @@ where
     V: db::Diff,
 {
     fn drop(&mut self) {
+        // println!("reader unlock >");
         if let Err(err) = self.index.unlock() {
             panic!("fail to unlock reader lock for index: {}", err)
         }
         if let Some(vlog) = self.vlog.as_ref() {
+            // println!("reader unlock >");
             if let Err(err) = vlog.unlock() {
                 panic!("fail to unlock reader lock for vlog: {}", err)
             }
@@ -74,11 +76,15 @@ where
         let root: Vec<robt::Entry<K, V>> = {
             let fpos = io::SeekFrom::Start(root);
             let block = read_file!(&mut index, fpos, stats.m_blocksize, "read block")?;
+            // println!("read root fpos:{:?} len:{}", fpos, block.len());
             util::from_cbor_bytes(&block)?.0
         };
+        // println!("read root:{}", root.len());
 
+        // println!("reader.from_root lock_shared <");
         err_at!(IOError, index.lock_shared())?;
         if let Some(vlog) = vlog.as_ref() {
+            // println!("reader.from_root lock_shared <");
             err_at!(IOError, vlog.lock_shared())?
         }
 
@@ -159,6 +165,7 @@ where
             (stack, bound)
         } else {
             let stack = self.fwd_stack(range.start_bound(), self.root.clone())?;
+            // println!("iter stack:{:?}", stack.len());
             let bound: Bound<K> = match range.end_bound() {
                 Bound::Unbounded => Bound::Unbounded,
                 Bound::Included(q) => Bound::Included(q.to_owned()),
@@ -209,6 +216,7 @@ where
         V: Clone,
         Q: Ord,
     {
+        // println!("fwd_stack block_len:{}", block.len());
         let (entry, rem) = match block.first().map(|e| e.is_zblock()) {
             Some(false) => match block.binary_search_by(|e| fcmp(e.borrow_key(), sk)) {
                 Ok(off) => (block[off].clone(), block[off + 1..].to_vec()),
@@ -227,17 +235,20 @@ where
 
         let fd = &mut self.index;
         let m_blocksize = self.m_blocksize;
-        let z_blocksize = self.m_blocksize;
+        let z_blocksize = self.z_blocksize;
 
         let block = match entry {
             robt::Entry::MM { fpos, .. } => {
+                // println!("mm-entry fpos:{}", fpos);
                 read_file!(fd, io::SeekFrom::Start(fpos), m_blocksize, "read mm-block")?
             }
             robt::Entry::MZ { fpos, .. } => {
+                // println!("mz-entry fpos:{}", fpos);
                 read_file!(fd, io::SeekFrom::Start(fpos), z_blocksize, "read mz-block")?
             }
             _ => unreachable!(),
         };
+        // println!("read-block len:{} start..:{:?}", block.len(), &block[..32]);
 
         let block = util::from_cbor_bytes::<Vec<robt::Entry<K, V>>>(&block)?.0;
         let mut stack = self.fwd_stack(sk, block)?;
@@ -414,6 +425,7 @@ where
 
         let fd = &mut self.reader.index;
         let m_blocksize = self.reader.m_blocksize;
+        let z_blocksize = self.reader.z_blocksize;
 
         match self.stack.pop() {
             Some(block) if block.is_empty() => self.next(),
@@ -426,7 +438,7 @@ where
                         err => Some(err),
                     }
                 }
-                robt::Entry::MM { fpos, .. } | robt::Entry::MZ { fpos, .. } => {
+                robt::Entry::MM { fpos, .. } => {
                     self.stack.push(block);
 
                     let mut entries =
@@ -434,6 +446,22 @@ where
                             let fpos = io::SeekFrom::Start(fpos);
                             let block =
                                 read_file!(fd, fpos, m_blocksize, "read mm-block")?;
+                            Ok(util::from_cbor_bytes(&block)?.0)
+                        }());
+                    if self.reverse {
+                        entries.reverse();
+                    }
+                    self.stack.push(entries);
+                    self.next()
+                }
+                robt::Entry::MZ { fpos, .. } => {
+                    self.stack.push(block);
+
+                    let mut entries =
+                        iter_result!(|| -> Result<Vec<robt::Entry<K, V>>> {
+                            let fpos = io::SeekFrom::Start(fpos);
+                            let block =
+                                read_file!(fd, fpos, z_blocksize, "read mm-block")?;
                             Ok(util::from_cbor_bytes(&block)?.0)
                         }());
                     if self.reverse {

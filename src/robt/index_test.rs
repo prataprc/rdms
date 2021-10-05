@@ -5,7 +5,7 @@ use xorfilter::{BuildHasherDefault, Xor8};
 use std::{fs, mem, thread};
 
 use super::*;
-use crate::{bitmaps::NoBitmap, llrb};
+use crate::{bitmaps::NoBitmap, db, llrb};
 
 // open open_file set_bitmap compact print validate try_clone purge close
 // get get_versions iter iter_versions reverse reverse_versions len
@@ -18,17 +18,14 @@ fn test_robt_build_read() {
     let seed: u128 = [
         random(),
         315408295460649044406651951935429140111,
-        315408295460649044406651951935429140111,
         254380117901283245685140957742548176144,
-    ][random::<usize>() % 2];
-    let seed: u128 = 109332097090788254409904627378619335666;
+        109332097090788254409904627378619335666,
+    ][random::<usize>() % 4];
+    let seed: u128 = 315408295460649044406651951935429140111;
     println!("test_robt_read {}", seed);
 
     do_robt_build_read::<u16, NoBitmap>(seed, NoBitmap);
-
     // do_robt_read(seed, Xor8::<BuildHasherDefault>::new());
-
-    // compact
 }
 
 fn do_robt_build_read<K, B>(seed: u128, bitmap: B)
@@ -53,7 +50,7 @@ where
     let dir = std::env::temp_dir().join("test_robt_read");
     fs::remove_dir(&dir).ok();
     let name = "do-robt-read";
-    let config = Config {
+    let mut config = Config {
         dir: dir.as_os_str().to_os_string(),
         name: name.to_string(),
         z_blocksize: [1024, 4096, 8192, 16384, 1048576][rng.gen::<usize>() % 5],
@@ -62,12 +59,40 @@ where
         delta_ok: rng.gen::<bool>(),
         value_in_vlog: rng.gen::<bool>(),
         flush_queue_size: [32, 64, 1024][rng.gen::<usize>() % 3],
+        vlog_location: None,
     };
     println!("do-robt-read index file {:?}", config.to_index_location());
     println!("do-robt-read config:{:?}", config);
 
     let mdb = do_initial::<K, B>(seed, bitmap.clone(), &config, None);
-    // do_incremental(seed, bitmap.clone(), &mdb, &config);
+
+    let (index, vlog) = {
+        let file = config.to_index_location();
+        (
+            open_index::<K, B>(&config.dir, &config.name, &file, seed),
+            config.to_vlog_location(),
+        )
+    };
+
+    config.name = name.to_owned() + "-incr";
+    vlog.clone().map(|f| config.set_vlog_location(f));
+    do_incremental::<K, B>(seed, &mdb, &index, &config, vlog);
+
+    let index = {
+        let file = config.to_index_location();
+        open_index::<K, B>(&config.dir, &config.name, &file, seed)
+    };
+
+    config.name = name.to_owned() + "-compact1";
+    let cutoff: db::Cutoff = {
+        let bytes = rng.gen::<[u8; 32]>();
+        let mut uns = Unstructured::new(&bytes);
+        uns.arbitrary().unwrap()
+    };
+    let bitmap = index.to_bitmap();
+    println!("compact cutoff:{:?}", cutoff);
+    let mut index = index.compact(config.clone(), bitmap, cutoff).unwrap();
+    validate_compact(&mut index, cutoff, &mdb);
 
     let file = config.to_index_location();
     let mut index = open_index::<K, B>(&config.dir, &config.name, &file, seed);
@@ -104,6 +129,7 @@ where
 
     let appmd = "test_robt_read-metadata".as_bytes().to_vec();
     let mdb = llrb::load_index(seed, n_sets, n_inserts, n_rems, n_dels, seqno);
+    let seqno = Some(mdb.to_seqno());
 
     let mut build = Builder::initial(config.clone(), appmd.to_vec()).unwrap();
     build
@@ -127,8 +153,13 @@ where
     mdb
 }
 
-fn do_incremental<K, B>(seed: u128, _: B, mdb: &llrb::Index<K, u64>, config: &Config)
-where
+fn do_incremental<K, B>(
+    seed: u128,
+    mdb: &llrb::Index<K, u64>,
+    index: &Index<K, u64, B>,
+    config: &Config,
+    vlog: Option<ffi::OsString>,
+) where
     for<'a> K: 'static
         + Sync
         + Send
@@ -147,27 +178,23 @@ where
     let n_inserts = 100_000;
     let n_dels = 10_000;
     let n_rems = 10_000;
-    let n_readers = 8;
+    let n_readers = 1;
 
-    let (bitmap, vlog) = {
-        let dir = config.dir.as_os_str();
-        let file = config.to_index_location();
-        let index = open_index::<K, B>(dir, &config.name, &file, seed);
-        (index.to_bitmap(), index.to_vlog_location())
-    };
-
+    let bitmap = index.to_bitmap();
     let appmd = "test_robt_read-metadata-snap".as_bytes().to_vec();
-    let seqno = Some(mdb.to_seqno());
-    let snap = llrb::load_index(seed, n_sets, n_inserts, n_rems, n_dels, seqno);
-    let seqno = Some(snap.to_seqno());
-    mdb.commit(snap.iter().unwrap()).unwrap();
-    mdb.set_seqno(snap.to_seqno());
+    let snap = {
+        let seqno = Some(mdb.to_seqno());
+        llrb::load_index(seed, n_sets, n_inserts, n_rems, n_dels, seqno)
+    };
 
     let mut build = Builder::incremental(config.clone(), vlog, appmd.to_vec()).unwrap();
     build
-        .build_index(mdb.iter().unwrap(), bitmap, seqno)
+        .build_index(snap.iter().unwrap(), bitmap, Some(snap.to_seqno()))
         .unwrap();
     mem::drop(build);
+
+    mdb.commit(snap.iter().unwrap()).unwrap();
+    mdb.set_seqno(snap.to_seqno());
 
     let mut handles = vec![];
     for i in 0..n_readers {
@@ -204,13 +231,13 @@ fn read_thread<K, B>(
     };
 
     let mut counts = [0_usize; 19];
-    let ops = 10_000;
+    let ops = 200;
     for _i in 0..ops {
         let bytes = rng.gen::<[u8; 32]>();
         let mut uns = Unstructured::new(&bytes);
 
         let op: Op<K> = uns.arbitrary().unwrap();
-        // println!("{}-op {} -- {:?}", id, _i, op);
+        println!("{}-op {} -- {:?}", id, _i, op);
         match op.clone() {
             Op::M(meta_op) => {
                 use MetaOp::*;
@@ -245,13 +272,11 @@ fn read_thread<K, B>(
                         counts[6] += 1;
                         assert_eq!(index.to_index_location(), config.to_index_location());
                     }
-                    ToVlogLocation => {
+                    ToVlogLocation if config.value_in_vlog || config.delta_ok => {
                         counts[7] += 1;
-                        assert_eq!(
-                            index.to_vlog_location(),
-                            Some(config.to_vlog_location())
-                        );
+                        assert_eq!(index.to_vlog_location(), config.to_vlog_location());
                     }
+                    ToVlogLocation => (),
                     ToRoot => {
                         counts[8] += 1;
                         assert!(index.to_root() > 0, "{}", index.to_root());
@@ -276,92 +301,91 @@ fn read_thread<K, B>(
                     }
                 }
             }
-            //Op::Get(key) => {
-            //    counts[13] += 1;
-            //    match (index.get(&key), mdb.get(&key)) {
-            //        (Ok(e1), Ok(mut e2)) => {
-            //            e2.deltas = vec![];
-            //            assert_eq!(e1, e2);
-            //        }
-            //        (Err(KeyNotFound(_, _)), Err(Error::KeyNotFound(_, _))) => (),
-            //        (Err(err1), Err(err2)) => panic!("{} != {}", err1, err2),
-            //        (Ok(e), Err(err)) => panic!("{:?} != {}", e, err),
-            //        (Err(err), Ok(e)) => panic!("{} != {:?}", err, e),
-            //    }
-            //}
-            //Op::GetVersions(key) => {
-            //    counts[14] += 1;
-            //    match (index.get_versions(&key), mdb.get(&key)) {
-            //        (Ok(e1), Ok(mut e2)) if !config.delta_ok => {
-            //            e2.deltas = vec![];
-            //            assert_eq!(e1, e2);
-            //        }
-            //        (Ok(e1), Ok(e2)) => assert_eq!(e1, e2),
-            //        (Err(KeyNotFound(_, _)), Err(Error::KeyNotFound(_, _))) => (),
-            //        (Err(err1), Err(err2)) => panic!("{} != {}", err1, err2),
-            //        (Ok(e), Err(err)) => panic!("{:?} != {}", e, err),
-            //        (Err(err), Ok(e)) => panic!("{} != {:?}", err, e),
-            //    }
-            //}
-            //Op::Iter(iter_op) => {
-            //    use IterOp::*;
+            Op::Get(key) => {
+                counts[13] += 1;
+                match (index.get(&key), mdb.get(&key)) {
+                    (Ok(e1), Ok(mut e2)) => {
+                        e2.deltas = vec![];
+                        assert_eq!(e1, e2);
+                    }
+                    (Err(KeyNotFound(_, _)), Err(Error::KeyNotFound(_, _))) => (),
+                    (Err(err1), Err(err2)) => panic!("{} != {}", err1, err2),
+                    (Ok(e), Err(err)) => panic!("{:?} != {}", e, err),
+                    (Err(err), Ok(e)) => panic!("{} != {:?}", err, e),
+                }
+            }
+            Op::GetVersions(key) => {
+                counts[14] += 1;
+                match (index.get_versions(&key), mdb.get(&key)) {
+                    (Ok(e1), Ok(mut e2)) if !config.delta_ok => {
+                        e2.deltas = vec![];
+                        assert_eq!(e1, e2);
+                    }
+                    (Ok(e1), Ok(e2)) => assert_eq!(e1, e2),
+                    (Err(KeyNotFound(_, _)), Err(Error::KeyNotFound(_, _))) => (),
+                    (Err(err1), Err(err2)) => panic!("{} != {}", err1, err2),
+                    (Ok(e), Err(err)) => panic!("{:?} != {}", e, err),
+                    (Err(err), Ok(e)) => panic!("{} != {:?}", err, e),
+                }
+            }
+            Op::Iter(iter_op) => {
+                use IterOp::*;
 
-            //    match iter_op {
-            //        Iter((l, h)) => {
-            //            counts[15] += 1;
-            //            let r = (Bound::from(l), Bound::from(h));
-            //            let mut iter1 = mdb.range(r.clone()).unwrap();
-            //            let mut iter2 = index.iter(r).unwrap();
-            //            while let Some(mut e1) = iter1.next() {
-            //                e1.deltas = vec![];
-            //                assert_eq!(e1, iter2.next().unwrap().unwrap())
-            //            }
-            //            assert!(iter1.next().is_none());
-            //            assert!(iter2.next().is_none());
-            //        }
-            //        Reverse((l, h)) => {
-            //            counts[16] += 1;
-            //            let r = (Bound::from(l), Bound::from(h));
-            //            let mut iter1 = mdb.reverse(r.clone()).unwrap();
-            //            let mut iter2 = index.reverse(r).unwrap();
-            //            while let Some(mut e1) = iter1.next() {
-            //                e1.deltas = vec![];
-            //                assert_eq!(e1, iter2.next().unwrap().unwrap())
-            //            }
-            //            assert!(iter1.next().is_none());
-            //            assert!(iter2.next().is_none());
-            //        }
-            //        IterVersions((l, h)) => {
-            //            counts[17] += 1;
-            //            let r = (Bound::from(l), Bound::from(h));
-            //            let mut iter1 = mdb.range(r.clone()).unwrap();
-            //            let mut iter2 = index.iter_versions(r).unwrap();
-            //            while let Some(mut e1) = iter1.next() {
-            //                if !config.delta_ok {
-            //                    e1.deltas = vec![];
-            //                }
-            //                assert_eq!(e1, iter2.next().unwrap().unwrap())
-            //            }
-            //            assert!(iter1.next().is_none());
-            //            assert!(iter2.next().is_none());
-            //        }
-            //        ReverseVersions((l, h)) => {
-            //            counts[18] += 1;
-            //            let r = (Bound::from(l), Bound::from(h));
-            //            let mut iter1 = mdb.reverse(r.clone()).unwrap();
-            //            let mut iter2 = index.reverse_versions(r).unwrap();
-            //            while let Some(mut e1) = iter1.next() {
-            //                if !config.delta_ok {
-            //                    e1.deltas = vec![];
-            //                }
-            //                assert_eq!(e1, iter2.next().unwrap().unwrap())
-            //            }
-            //            assert!(iter1.next().is_none());
-            //            assert!(iter2.next().is_none());
-            //        }
-            //    }
-            //}
-            _ => (), // TODO: remove this
+                match iter_op {
+                    Iter((l, h)) => {
+                        counts[15] += 1;
+                        let r = (Bound::from(l), Bound::from(h));
+                        let mut iter1 = mdb.range(r.clone()).unwrap();
+                        let mut iter2 = index.iter(r).unwrap();
+                        while let Some(mut e1) = iter1.next() {
+                            e1.deltas = vec![];
+                            assert_eq!(e1, iter2.next().unwrap().unwrap())
+                        }
+                        assert!(iter1.next().is_none());
+                        assert!(iter2.next().is_none());
+                    }
+                    Reverse((l, h)) => {
+                        counts[16] += 1;
+                        let r = (Bound::from(l), Bound::from(h));
+                        let mut iter1 = mdb.reverse(r.clone()).unwrap();
+                        let mut iter2 = index.reverse(r).unwrap();
+                        while let Some(mut e1) = iter1.next() {
+                            e1.deltas = vec![];
+                            assert_eq!(e1, iter2.next().unwrap().unwrap())
+                        }
+                        assert!(iter1.next().is_none());
+                        assert!(iter2.next().is_none());
+                    }
+                    IterVersions((l, h)) => {
+                        counts[17] += 1;
+                        let r = (Bound::from(l), Bound::from(h));
+                        let mut iter1 = mdb.range(r.clone()).unwrap();
+                        let mut iter2 = index.iter_versions(r).unwrap();
+                        while let Some(mut e1) = iter1.next() {
+                            if !config.delta_ok {
+                                e1.deltas = vec![];
+                            }
+                            assert_eq!(e1, iter2.next().unwrap().unwrap())
+                        }
+                        assert!(iter1.next().is_none());
+                        assert!(iter2.next().is_none());
+                    }
+                    ReverseVersions((l, h)) => {
+                        counts[18] += 1;
+                        let r = (Bound::from(l), Bound::from(h));
+                        let mut iter1 = mdb.reverse(r.clone()).unwrap();
+                        let mut iter2 = index.reverse_versions(r).unwrap();
+                        while let Some(mut e1) = iter1.next() {
+                            if !config.delta_ok {
+                                e1.deltas = vec![];
+                            }
+                            assert_eq!(e1, iter2.next().unwrap().unwrap())
+                        }
+                        assert!(iter1.next().is_none());
+                        assert!(iter2.next().is_none());
+                    }
+                }
+            }
         };
     }
     println!("{}-counts {:?}", id, counts);
@@ -401,7 +425,7 @@ fn validate_stats<K>(
     assert_eq!(stats.value_in_vlog, config.value_in_vlog);
 
     if config.value_in_vlog || config.delta_ok {
-        assert_eq!(config.to_vlog_location(), stats.vlog_file.clone().unwrap());
+        assert_eq!(stats.vlog_location.clone(), config.to_vlog_location());
     }
 
     assert_eq!(stats.n_count, mdb.len() as u64);
@@ -431,6 +455,33 @@ where
     match rng.gen::<bool>() {
         true => index.try_clone().unwrap(),
         false => index,
+    }
+}
+
+fn validate_compact<K, B>(
+    index: &mut Index<K, u64, B>,
+    cutoff: db::Cutoff,
+    mdb: &llrb::Index<K, u64>,
+) where
+    K: Clone + PartialEq + Ord + FromCbor + fmt::Debug,
+    B: db::Bloom,
+{
+    let ref_entries: Vec<db::Entry<K, u64>> = mdb
+        .iter()
+        .unwrap()
+        .filter_map(|e| e.compact(cutoff))
+        .collect();
+    let entries: Vec<db::Entry<K, u64>> =
+        index.iter(..).unwrap().map(|e| e.unwrap()).collect();
+    assert_eq!(
+        ref_entries.len(),
+        entries.len(),
+        "{} {}",
+        ref_entries.len(),
+        entries.len()
+    );
+    for (i, (re, ee)) in ref_entries.into_iter().zip(entries.into_iter()).enumerate() {
+        assert_eq!(re, ee, "i:{}", i);
     }
 }
 

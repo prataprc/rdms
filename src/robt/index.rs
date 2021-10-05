@@ -80,7 +80,7 @@ where
         };
 
         let mut stats: Stats = config.clone().into();
-        stats.vlog_file = vflush.as_ref().borrow().to_location();
+        stats.vlog_location = vflush.as_ref().borrow().to_location();
 
         let val = Builder {
             config,
@@ -126,7 +126,7 @@ where
         };
 
         let mut stats: Stats = config.clone().into();
-        stats.vlog_file = vflush.as_ref().borrow().to_location();
+        stats.vlog_location = vflush.as_ref().borrow().to_location();
 
         let val = Builder {
             config,
@@ -374,8 +374,8 @@ where
 
         let vlog = match stats.value_in_vlog || stats.delta_ok {
             true => {
-                let vlog_file = stats.vlog_file.as_ref();
-                let file_name = match vlog_file.map(|f| path::Path::new(f).file_name()) {
+                let vloc = stats.vlog_location.as_ref();
+                let file_name = match vloc.map(|f| path::Path::new(f).file_name()) {
                     Some(Some(file_name)) => file_name.to_os_string(),
                     _ => ffi::OsString::from(VlogFileName::from(name.to_string())),
                 };
@@ -417,8 +417,8 @@ where
 
         let vlog = match self.stats.value_in_vlog || self.stats.delta_ok {
             true => {
-                let vlog_file = self.stats.vlog_file.as_ref();
-                let fnm = match vlog_file.map(|f| path::Path::new(f).file_name()) {
+                let vloc = self.stats.vlog_location.as_ref();
+                let fnm = match vloc.map(|f| path::Path::new(f).file_name()) {
                     Some(Some(fnm)) => fnm.to_os_string(),
                     _ => ffi::OsString::from(VlogFileName::from(self.name.to_string())),
                 };
@@ -470,7 +470,7 @@ where
             Builder::<K, V>::initial(config.clone(), app_meta)?
         };
         let r = (Bound::<K>::Unbounded, Bound::<K>::Unbounded);
-        let iter = CompactScan::new(self.iter(r)?.map(|e| e.unwrap()), cutoff);
+        let iter = CompactScan::new(self.iter_versions(r)?.map(|e| e.unwrap()), cutoff);
 
         builder.build_index(iter, bitmap, None)?;
 
@@ -563,14 +563,12 @@ where
     }
 
     pub fn to_vlog_location(&self) -> Option<ffi::OsString> {
-        match &self.stats.vlog_file {
-            Some(vlog_file) => {
-                let loc: path::PathBuf = [
-                    self.dir.clone(),
-                    path::Path::new(vlog_file).file_name()?.into(),
-                ]
-                .iter()
-                .collect();
+        match &self.stats.vlog_location {
+            Some(loc) => {
+                let loc: path::PathBuf =
+                    [self.dir.clone(), path::Path::new(loc).file_name()?.into()]
+                        .iter()
+                        .collect();
                 Some(loc.into())
             }
             None => None,
@@ -704,7 +702,7 @@ where
         println!("  m_blocksize  : {}", stats.m_blocksize);
         println!("  v_blocksize  : {}", stats.v_blocksize);
         println!("  delta_ok     : {}", stats.delta_ok);
-        println!("  vlog_file    : {:?}", stats.vlog_file);
+        println!("  vlog_location: {:?}", stats.vlog_location);
         println!("  value_in_vlog: {}", stats.value_in_vlog);
         println!("  n_count      : {}", stats.n_count);
         println!("  n_deleted    : {}", stats.n_deleted);

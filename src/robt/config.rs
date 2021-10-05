@@ -76,6 +76,7 @@ pub struct Config {
     ///
     /// Default: [FLUSH_QUEUE_SIZE]
     pub flush_queue_size: usize,
+    pub(crate) vlog_location: Option<ffi::OsString>,
 }
 
 impl From<Stats> for Config {
@@ -89,6 +90,7 @@ impl From<Stats> for Config {
             delta_ok: val.delta_ok,
             value_in_vlog: val.value_in_vlog,
             flush_queue_size: FLUSH_QUEUE_SIZE,
+            vlog_location: val.vlog_location,
         }
     }
 }
@@ -106,6 +108,7 @@ impl Config {
             delta_ok: true,
             value_in_vlog: false,
             flush_queue_size: FLUSH_QUEUE_SIZE,
+            vlog_location: None,
         }
     }
 
@@ -131,6 +134,12 @@ impl Config {
         self
     }
 
+    /// Supply a vlog file, instead of using default, possibly from older snapshot.
+    pub fn set_vlog_location(&mut self, location: ffi::OsString) -> &mut Self {
+        self.vlog_location = Some(location);
+        self
+    }
+
     /// Set flush queue size, increasing the queue size will improve batch
     /// flushing.
     pub fn set_flush_queue_size(&mut self, size: usize) -> &mut Self {
@@ -144,8 +153,16 @@ impl Config {
         to_index_location(&self.dir, &self.name)
     }
 
-    pub fn to_vlog_location(&self) -> ffi::OsString {
-        to_vlog_location(&self.dir, &self.name)
+    pub fn to_vlog_location(&self) -> Option<ffi::OsString> {
+        if self.value_in_vlog || self.delta_ok {
+            let loc = match &self.vlog_location {
+                Some(loc) => loc.clone(),
+                None => to_vlog_location(&self.dir, &self.name),
+            };
+            Some(loc)
+        } else {
+            None
+        }
     }
 }
 
@@ -167,7 +184,7 @@ pub struct Stats {
 
     /// Optional value log file if either [Config::value_in_vlog] or [Config::delta_ok]
     /// is true.
-    pub vlog_file: Option<ffi::OsString>,
+    pub vlog_location: Option<ffi::OsString>,
 
     /// Number of entries indexed.
     pub n_count: u64,
@@ -190,11 +207,6 @@ impl Stats {
 
 impl From<Config> for Stats {
     fn from(config: Config) -> Stats {
-        let vlog_file = if config.value_in_vlog || config.delta_ok {
-            Some(config.to_vlog_location())
-        } else {
-            None
-        };
         Stats {
             // comes from Config type
             name: config.name.clone(),
@@ -202,7 +214,7 @@ impl From<Config> for Stats {
             m_blocksize: config.m_blocksize,
             v_blocksize: config.v_blocksize,
             delta_ok: config.delta_ok,
-            vlog_file,
+            vlog_location: config.to_vlog_location(),
             value_in_vlog: config.value_in_vlog,
             // comes from index build
             n_count: u64::default(),

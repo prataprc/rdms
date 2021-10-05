@@ -1,3 +1,5 @@
+use arbitrary::{Arbitrary, Unstructured};
+
 use std::ops::Bound;
 
 /// Cutoff is enumerated type to describe compaction behaviour.
@@ -44,6 +46,30 @@ pub enum Cutoff {
     Lsm(Bound<u64>),
     /// Tombstone compaction behaviour.
     Tombstone(Bound<u64>),
+}
+
+impl<'a> Arbitrary<'a> for Cutoff {
+    fn arbitrary(u: &mut Unstructured) -> arbitrary::Result<Self> {
+        let variant = u.arbitrary::<u8>()? % 3;
+        let bound = u.arbitrary::<u8>()? % 3;
+        let seqno = {
+            let ss: Vec<u64> = (0..16).map(|x| 1 << (x * 2)).collect();
+            ss[u.arbitrary::<usize>()? % ss.len()]
+        };
+
+        let bound = match bound {
+            0 => Bound::Unbounded,
+            1 => Bound::Included(seqno),
+            2 => Bound::Excluded(seqno),
+            _ => unreachable!(),
+        };
+        match variant {
+            0 => Ok(Cutoff::Mono),
+            1 => Ok(Cutoff::Lsm(bound)),
+            2 => Ok(Cutoff::Tombstone(bound)),
+            _ => unreachable!(),
+        }
+    }
 }
 
 impl Cutoff {

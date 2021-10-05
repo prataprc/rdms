@@ -62,7 +62,7 @@ pub type Rx<Q, R = ()> = mpsc::Receiver<(Q, Option<mpsc::Sender<R>>)>;
 ///   [Rx] channel.
 /// * Call `close_wait()` on the [Thread] instance.
 pub struct Thread<Q, R = (), T = ()> {
-    name: String,
+    _name: String,
     inner: Option<Inner<Q, R, T>>,
 }
 
@@ -104,7 +104,7 @@ impl<Q, R, T> Thread<Q, R, T> {
         let handle = thread::spawn(main_loop(rx));
 
         let th = Thread {
-            name: name.to_string(),
+            _name: name.to_string(),
             inner: Some(Inner {
                 handle,
                 _req: PhantomData,
@@ -131,7 +131,7 @@ impl<Q, R, T> Thread<Q, R, T> {
         let handle = thread::spawn(main_loop(rx));
 
         let th = Thread {
-            name: name.to_string(),
+            _name: name.to_string(),
             inner: Some(Inner {
                 handle,
                 _req: PhantomData,

@@ -6,6 +6,7 @@
 use std::{error, fmt, result};
 
 /// Error enumerates over all possible errors cases in `rdms` package.
+#[derive(Clone)]
 pub enum Error {
     /// Fatal failure, caller can treat this as sever as a panic!()
     Fatal(String, String),

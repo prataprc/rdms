@@ -7,7 +7,6 @@ use std::{
     convert::TryFrom,
     fmt, fs,
     io::{self, Read, Seek},
-    marker,
     ops::{Bound, RangeBounds},
 };
 
@@ -329,9 +328,6 @@ where
     versions: bool,
     entry: Option<db::Entry<K, V>>,
     bound: Bound<K>,
-
-    _key: marker::PhantomData<K>,
-    _val: marker::PhantomData<V>,
 }
 
 impl<'a, K, V> Iter<'a, K, V>
@@ -352,9 +348,6 @@ where
             versions,
             entry: None,
             bound,
-
-            _key: marker::PhantomData,
-            _val: marker::PhantomData,
         }
     }
 

@@ -72,6 +72,20 @@ impl<V> Value<V> {
 
         Ok(value)
     }
+
+    pub fn to_seqno(&self) -> Option<u64> {
+        match self {
+            Value::N { value } => Some(value.to_seqno()),
+            Value::R { .. } => None,
+        }
+    }
+
+    pub fn is_deleted(&self) -> Option<bool> {
+        match self {
+            Value::N { value } => Some(value.is_deleted()),
+            Value::R { .. } => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Cborize)]

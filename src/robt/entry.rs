@@ -254,6 +254,20 @@ where
         }
     }
 
+    pub fn to_seqno(&self) -> Option<u64> {
+        match self {
+            Entry::ZZ { value, .. } => value.to_seqno(),
+            Entry::MZ { .. } | Entry::MM { .. } => None,
+        }
+    }
+
+    pub fn is_deleted(&self) -> Option<bool> {
+        match self {
+            Entry::ZZ { value, .. } => value.is_deleted(),
+            Entry::MZ { .. } | Entry::MM { .. } => None,
+        }
+    }
+
     pub fn borrow_key<Q>(&self) -> &Q
     where
         K: Borrow<Q>,

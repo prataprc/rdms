@@ -16,14 +16,13 @@ use std::{
 };
 
 use crate::{
-    db::{self, BuildIndex},
-    read_file,
+    db, read_file,
     robt::{
         build,
         reader::{Iter, Reader},
         scans::{BitmappedScan, BuildScan, CompactScan},
-        to_index_location, to_vlog_location, Config, Flusher, IndexFileName, Stats,
-        VlogFileName, ROOT_MARKER,
+        to_index_location, to_vlog_location, Config, Entry, Flusher, IndexFileName,
+        Stats, VlogFileName, ROOT_MARKER,
     },
     util, Error, Result,
 };
@@ -145,24 +144,45 @@ where
     }
 }
 
-impl<K, V, B> db::BuildIndex<K, V, B> for Builder<K, V>
+impl<K, V> Builder<K, V>
 where
     K: Clone + Hash + IntoCbor,
     V: Clone + db::Diff + IntoCbor,
     <V as db::Diff>::Delta: IntoCbor,
-    B: db::Bloom,
 {
-    fn build_index<I>(&mut self, iter: I, bitmap: B, seqno: Option<u64>) -> Result<()>
+    fn build_index<B, I, E>(
+        &mut self,
+        iter: I,
+        bitmap: B,
+        seqno: Option<u64>,
+    ) -> Result<()>
     where
-        I: Iterator<Item = db::Entry<K, V>>,
+        B: db::Bloom,
+        I: Iterator<Item = Result<E>>,
+        E: TryInto<Entry<K, V>>,
+        <E as TryInto<Entry<K, V>>>::Error: fmt::Display,
     {
-        let bitmap_iter = BitmappedScan::<K, V, B, I>::new(iter, bitmap);
-        let build_iter = BuildScan::new(bitmap_iter, 0 /*seqno*/);
-        let build_iter = self.build_from_iter(build_iter)?;
+        let build_iter = BuildScan::new(iter, 0 /*seqno*/);
+        let bitmap_iter = BitmappedScan::<K, V, B, _>::new(build_iter, bitmap);
 
-        let (bitmap, _build_iter) = build_iter.unwrap()?;
+        self.stats.n_abytes = self.vflush.as_ref().borrow().to_fpos().unwrap_or(0);
 
-        self.build_flush(err_at!(Fatal, bitmap.to_bytes())?, seqno)?;
+        let (bitmap_iter, root) = self.build_tree(bitmap_iter)?;
+        let (bitmap, build_iter) = bitmap_iter.unwrap()?;
+
+        let (build_time, build_seqno, n_count, n_deleted, epoch, _iter) =
+            build_iter.unwrap()?;
+
+        self.root = root;
+        self.stats.build_time = build_time;
+        self.stats.seqno = seqno
+            .map(|seqno| cmp::max(seqno, build_seqno))
+            .unwrap_or(build_seqno);
+        self.stats.n_count = n_count;
+        self.stats.n_deleted = n_deleted.try_into().unwrap();
+        self.stats.epoch = epoch;
+
+        self.build_flush(err_at!(Fatal, bitmap.to_bytes())?)?;
 
         Ok(())
     }
@@ -174,40 +194,17 @@ where
     V: Clone + db::Diff + IntoCbor,
     <V as db::Diff>::Delta: IntoCbor,
 {
-    fn build_from_iter<I>(&mut self, build_iter: BuildScan<K, V, I>) -> Result<I>
+    fn build_tree<I>(&self, iter: I) -> Result<(I, u64)>
     where
-        I: Iterator<Item = db::Entry<K, V>>,
+        I: Iterator<Item = Result<Entry<K, V>>>,
     {
-        self.stats.n_abytes = self.vflush.as_ref().borrow().to_fpos().unwrap_or(0);
-
-        let (build_iter, root) = self.build_tree(build_iter)?;
-        let (build_time, seqno, n_count, n_deleted, epoch, build_iter) =
-            build_iter.unwrap()?;
-
-        self.root = root;
-        self.stats.build_time = build_time;
-        self.stats.seqno = seqno;
-        self.stats.n_count = n_count;
-        self.stats.n_deleted = n_deleted.try_into().unwrap();
-        self.stats.epoch = epoch;
-
-        Ok(build_iter)
-    }
-
-    fn build_tree<I>(
-        &self,
-        build_iter: BuildScan<K, V, I>,
-    ) -> Result<(BuildScan<K, V, I>, u64)>
-    where
-        I: Iterator<Item = db::Entry<K, V>>,
-    {
-        let build_iter = Rc::new(RefCell::new(build_iter));
+        let iter = Rc::new(RefCell::new(iter));
 
         let zz = build::BuildZZ::new(
             &self.config,
             Rc::clone(&self.iflush),
             Rc::clone(&self.vflush),
-            Rc::clone(&build_iter),
+            Rc::clone(&iter),
         );
         let mz = build::BuildMZ::new(&self.config, Rc::clone(&self.iflush), zz);
         let mut build = (0..MAX_DEPTH).fold(build::BuildIter::from(mz), |build, _| {
@@ -221,11 +218,11 @@ where
         };
         mem::drop(build);
 
-        Ok((Rc::try_unwrap(build_iter).ok().unwrap().into_inner(), root))
+        Ok((Rc::try_unwrap(iter).ok().unwrap().into_inner(), root))
     }
 
-    fn build_flush(&mut self, bitmap: Vec<u8>, seqno: Option<u64>) -> Result<(u64, u64)> {
-        let block = self.meta_blocks(bitmap, seqno)?;
+    fn build_flush(&mut self, bitmap: Vec<u8>) -> Result<(u64, u64)> {
+        let block = self.meta_blocks(bitmap)?;
 
         self.iflush.borrow_mut().flush(block)?;
 
@@ -235,8 +232,7 @@ where
         Ok((len1, len2))
     }
 
-    fn meta_blocks(&mut self, bitmap: Vec<u8>, seqno: Option<u64>) -> Result<Vec<u8>> {
-        self.stats.seqno = seqno.unwrap_or(self.stats.seqno);
+    fn meta_blocks(&mut self, bitmap: Vec<u8>) -> Result<Vec<u8>> {
         let stats = util::into_cbor_bytes(self.stats.clone())?;
 
         let metas = vec![
@@ -470,7 +466,7 @@ where
             Builder::<K, V>::initial(config.clone(), app_meta)?
         };
         let r = (Bound::<K>::Unbounded, Bound::<K>::Unbounded);
-        let iter = CompactScan::new(self.iter_versions(r)?.map(|e| e.unwrap()), cutoff);
+        let iter = CompactScan::new(self.iter_versions(r)?, cutoff);
 
         builder.build_index(iter, bitmap, None)?;
 
@@ -638,6 +634,18 @@ where
         let (reverse, versions) = (true, true);
         self.reader.iter(range, reverse, versions)
     }
+
+    // TODO
+    //pub fn lsm_merge<I, E>(&mut self, iter: I, version: bool) -> Result<IterLsm<K, V>>
+    //where
+    //    K: Clone + Ord + Borrow<Q>,
+    //    V: Clone,
+    //    I: Iterator<Item = E>,
+    //    E: Into<Entry<K, V>>,
+    //{
+    //    let (reverse, versions) = (false, false);
+    //    self.reader.iter(range, reverse, versions)
+    //}
 
     pub fn validate(&mut self) -> Result<Stats>
     where

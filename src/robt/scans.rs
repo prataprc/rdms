@@ -1,51 +1,54 @@
-use std::{cmp, convert::TryFrom, hash, marker, time};
+use std::{
+    cmp,
+    convert::{TryFrom, TryInto},
+    fmt, hash, marker, time,
+};
 
-use crate::{db, Error, Result};
+use crate::{db, robt::Entry, Error, Result};
 
 // BuildScan, BitmappedScan, CompactScan
 
 // Iterator wrapper, to wrap full-table scanners and count seqno,
 // index-items, deleted items and epoch.
-pub struct BuildScan<K, V, I>
+pub struct BuildScan<K, V, I, E>
 where
     V: db::Diff,
+    I: Iterator<Item = Result<E>>,
+    E: TryInto<Entry<K, V>>,
 {
     iter: I,
-    entry: Option<db::Entry<K, V>>,
 
     start: time::SystemTime,
     seqno: u64,
     n_count: u64,
     n_deleted: u64,
+
+    _key: marker::PhantomData<K>,
+    _val: marker::PhantomData<V>,
 }
 
-impl<K, V, I> BuildScan<K, V, I>
+impl<K, V, I, E> BuildScan<K, V, I, E>
 where
     V: db::Diff,
+    I: Iterator<Item = Result<E>>,
+    E: TryInto<Entry<K, V>>,
 {
-    pub fn new(iter: I, seqno: u64) -> BuildScan<K, V, I> {
+    pub fn new(iter: I, seqno: u64) -> BuildScan<K, V, I, E> {
         BuildScan {
             iter,
-            entry: None,
 
             start: time::SystemTime::now(),
             seqno,
             n_count: u64::default(),
             n_deleted: u64::default(),
-        }
-    }
 
-    pub fn push(&mut self, entry: db::Entry<K, V>) {
-        self.entry = match &self.entry {
-            None => Some(entry),
-            Some(_) => unreachable!(),
+            _key: marker::PhantomData,
+            _val: marker::PhantomData,
         }
     }
 
     // return (build_time, seqno, count, deleted, epoch, iter)
     pub fn unwrap(self) -> Result<(u64, u64, u64, u64, u64, I)> {
-        debug_assert!(self.entry.is_none());
-
         let build_time = {
             let elapsed = err_at!(Fatal, self.start.elapsed())?;
             err_at!(FailConvert, u64::try_from(elapsed.as_nanos()))?
@@ -68,26 +71,30 @@ where
     }
 }
 
-impl<K, V, I> Iterator for BuildScan<K, V, I>
+impl<K, V, I, E> Iterator for BuildScan<K, V, I, E>
 where
     V: db::Diff,
-    I: Iterator<Item = db::Entry<K, V>>,
+    I: Iterator<Item = Result<E>>,
+    E: TryInto<Entry<K, V>>,
+    <E as TryInto<Entry<K, V>>>::Error: fmt::Display,
 {
-    type Item = db::Entry<K, V>;
+    type Item = Result<Entry<K, V>>;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        match self.entry.take() {
-            Some(entry) => Some(entry),
-            None => {
-                let entry = self.iter.next()?;
-                self.seqno = cmp::max(self.seqno, entry.to_seqno());
-                self.n_count += 1;
-                if entry.is_deleted() {
-                    self.n_deleted += 1;
+        match self.iter.next()? {
+            Ok(e) => match e.try_into() {
+                Ok(entry) => {
+                    self.seqno = cmp::max(self.seqno, entry.to_seqno().unwrap());
+                    self.n_count += 1;
+                    if entry.is_deleted().unwrap() {
+                        self.n_deleted += 1;
+                    }
+                    Some(Ok(entry))
                 }
-                Some(entry)
-            }
+                Err(err) => Some(err_at!(FailConvert, Err(err))),
+            },
+            Err(err) => Some(Err(err)),
         }
     }
 }
@@ -99,6 +106,7 @@ where
 pub struct BitmappedScan<K, V, B, I>
 where
     V: db::Diff,
+    I: Iterator<Item = Result<Entry<K, V>>>,
 {
     iter: I,
     bitmap: B,
@@ -110,6 +118,7 @@ impl<K, V, B, I> BitmappedScan<K, V, B, I>
 where
     V: db::Diff,
     B: db::Bloom,
+    I: Iterator<Item = Result<Entry<K, V>>>,
 {
     pub fn new(iter: I, bitmap: B) -> BitmappedScan<K, V, B, I> {
         BitmappedScan {
@@ -130,15 +139,19 @@ where
     K: hash::Hash,
     V: db::Diff,
     B: db::Bloom,
-    I: Iterator<Item = db::Entry<K, V>>,
+    I: Iterator<Item = Result<Entry<K, V>>>,
 {
-    type Item = db::Entry<K, V>;
+    type Item = Result<Entry<K, V>>;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        let entry = self.iter.next()?;
-        self.bitmap.add_key(entry.as_key());
-        Some(entry)
+        match self.iter.next()? {
+            Ok(entry) => {
+                self.bitmap.add_key(entry.as_key());
+                Some(Ok(entry))
+            }
+            Err(err) => Some(Err(err)),
+        }
     }
 }
 
@@ -174,15 +187,19 @@ impl<K, V, I> Iterator for CompactScan<K, V, I>
 where
     K: Clone,
     V: db::Diff,
-    I: Iterator<Item = db::Entry<K, V>>,
+    I: Iterator<Item = Result<db::Entry<K, V>>>,
 {
-    type Item = db::Entry<K, V>;
+    type Item = Result<db::Entry<K, V>>;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            if let Some(entry) = self.iter.next()?.compact(self.cutoff) {
-                break Some(entry);
+            match self.iter.next()? {
+                Ok(entry) => match entry.compact(self.cutoff) {
+                    Some(entry) => break Some(Ok(entry)),
+                    None => (),
+                },
+                Err(err) => break Some(Err(err)),
             }
         }
     }

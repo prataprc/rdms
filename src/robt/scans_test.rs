@@ -19,14 +19,12 @@ fn test_robt_build_scan() {
     let mdb = llrb::load_index::<u16>(seed, 0, inserts, 0, 1_000, None);
 
     let start_seqno = rng.gen::<u64>() % ((mdb.len() as u64) * 2);
-    let mut iter = BuildScan::new(mdb.iter().unwrap(), start_seqno);
+    let mut iter = BuildScan::new(mdb.iter().unwrap().map(|e| Ok(e)), start_seqno);
     let mut count = 0;
     while let Some(entry) = iter.next() {
         count += 1;
-        if count % 10 == 0 {
-            iter.push(entry)
-        }
     }
+    assert_eq!(count, mdb.len() as u64, "{} {}", count, mdb.len());
 
     let (build_time, seqno, count, _deleted, epoch, mut iter) = iter.unwrap().unwrap();
     println!(
@@ -35,7 +33,7 @@ fn test_robt_build_scan() {
     );
     println!("BuildScan epoch {:?}", Duration::from_nanos(epoch));
     assert_eq!(seqno, cmp::max(start_seqno, mdb.to_seqno()));
-    assert_eq!(count, mdb.len() as u64);
+    assert_eq!(count, mdb.len() as u64, "{} {}", count, mdb.len());
     assert_eq!(iter.next(), None);
 }
 
@@ -52,7 +50,8 @@ fn test_robt_nobitmap_scan() {
     let mdb = llrb::load_index::<u16>(seed, 0, inserts, 0, 1_000, None);
 
     // with NoBitmap
-    let mut iter = BitmappedScan::new(mdb.iter().unwrap(), NoBitmap);
+    let mut iter =
+        BitmappedScan::new(mdb.iter().unwrap().map(|e| Ok(e.into())), NoBitmap);
     let len: usize = iter.by_ref().map(|_| 1).sum();
     let (mut bitmap, mut iter) = iter.unwrap().unwrap();
     bitmap.build().unwrap();
@@ -79,7 +78,8 @@ fn test_robt_xorfilter_scan() {
     let mdb = llrb::load_index::<u16>(seed, 0, inserts, 0, 1_000, None);
 
     // with xorfilter
-    let mut iter = BitmappedScan::new(mdb.iter().unwrap(), Xor8::new());
+    let mut iter =
+        BitmappedScan::new(mdb.iter().unwrap().map(|e| Ok(e.into())), Xor8::new());
     let len: usize = iter.by_ref().map(|_| 1).sum();
     let (mut bitmap, mut iter) = iter.unwrap().unwrap();
     bitmap.build().unwrap();

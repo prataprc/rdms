@@ -1,10 +1,10 @@
 use cbordata::{self as cbor, Cbor, IntoCbor};
 
-use std::{cell::RefCell, convert::TryFrom, rc::Rc};
+use std::{cell::RefCell, convert::TryFrom, marker, rc::Rc};
 
 use crate::{
     db,
-    robt::{self, scans::BuildScan, Config, Flusher},
+    robt::{self, Config, Entry, Flusher},
     util, Error, Result,
 };
 
@@ -23,16 +23,20 @@ macro_rules! iter_result {
 pub struct BuildMM<K, V, I>
 where
     V: db::Diff,
+    I: Iterator<Item = Result<Entry<K, V>>>,
 {
     m_blocksize: usize,
     iflush: Rc<RefCell<Flusher>>,
     iter: Box<BuildIter<K, V, I>>,
     entry: Option<(K, u64)>,
+
+    _val: marker::PhantomData<V>,
 }
 
 impl<K, V, I> BuildMM<K, V, I>
 where
     V: db::Diff,
+    I: Iterator<Item = Result<Entry<K, V>>>,
 {
     pub fn new(
         config: &Config,
@@ -44,6 +48,8 @@ where
             iflush,
             iter: Box::new(iter),
             entry: None,
+
+            _val: marker::PhantomData,
         }
     }
 }
@@ -53,7 +59,7 @@ where
     K: Clone + IntoCbor,
     V: Clone + IntoCbor + db::Diff,
     <V as db::Diff>::Delta: IntoCbor,
-    I: Iterator<Item = db::Entry<K, V>>,
+    I: Iterator<Item = Result<Entry<K, V>>>,
 {
     type Item = Result<(K, u64)>;
 
@@ -111,16 +117,20 @@ where
 pub struct BuildMZ<K, V, I>
 where
     V: db::Diff,
+    I: Iterator<Item = Result<Entry<K, V>>>,
 {
     m_blocksize: usize,
     iflush: Rc<RefCell<Flusher>>,
     iter: BuildZZ<K, V, I>,
     entry: Option<(K, u64)>,
+
+    _val: marker::PhantomData<V>,
 }
 
 impl<K, V, I> BuildMZ<K, V, I>
 where
     V: db::Diff,
+    I: Iterator<Item = Result<Entry<K, V>>>,
 {
     pub fn new(
         config: &Config,
@@ -132,6 +142,8 @@ where
             iflush,
             iter,
             entry: None,
+
+            _val: marker::PhantomData,
         }
     }
 }
@@ -141,7 +153,7 @@ where
     K: Clone + IntoCbor,
     V: Clone + IntoCbor + db::Diff,
     <V as db::Diff>::Delta: IntoCbor,
-    I: Iterator<Item = db::Entry<K, V>>,
+    I: Iterator<Item = Result<Entry<K, V>>>,
 {
     type Item = Result<(K, u64)>;
 
@@ -192,6 +204,7 @@ where
 pub struct BuildZZ<K, V, I>
 where
     V: db::Diff,
+    I: Iterator<Item = Result<Entry<K, V>>>,
 {
     z_blocksize: usize,
     v_blocksize: usize,
@@ -199,18 +212,23 @@ where
     delta_ok: bool,
     iflush: Rc<RefCell<Flusher>>,
     vflush: Rc<RefCell<Flusher>>,
-    iter: Rc<RefCell<BuildScan<K, V, I>>>,
+    entry: Option<Result<Entry<K, V>>>,
+    iter: Rc<RefCell<I>>,
+
+    _key: marker::PhantomData<K>,
+    _val: marker::PhantomData<V>,
 }
 
 impl<K, V, I> BuildZZ<K, V, I>
 where
     V: db::Diff,
+    I: Iterator<Item = Result<Entry<K, V>>>,
 {
     pub fn new(
         config: &Config,
         iflush: Rc<RefCell<Flusher>>,
         vflush: Rc<RefCell<Flusher>>,
-        iter: Rc<RefCell<BuildScan<K, V, I>>>,
+        iter: Rc<RefCell<I>>,
     ) -> Self {
         BuildZZ {
             z_blocksize: config.z_blocksize,
@@ -219,7 +237,11 @@ where
             delta_ok: config.delta_ok,
             iflush,
             vflush,
+            entry: None,
             iter,
+
+            _key: marker::PhantomData,
+            _val: marker::PhantomData,
         }
     }
 }
@@ -229,7 +251,7 @@ where
     K: Clone + IntoCbor,
     V: Clone + IntoCbor + db::Diff,
     <V as db::Diff>::Delta: IntoCbor,
-    I: Iterator<Item = db::Entry<K, V>>,
+    I: Iterator<Item = Result<Entry<K, V>>>,
 {
     type Item = Result<(K, u64)>;
 
@@ -246,12 +268,16 @@ where
         let mut vfpos = self.vflush.borrow().to_fpos().unwrap_or(0);
 
         loop {
-            match iter.next() {
-                Some(mut entry) => {
+            let entry = match self.entry.take() {
+                Some(entry) => Some(entry),
+                None => iter.next(),
+            };
+            match entry {
+                Some(Ok(mut entry)) => {
                     if !self.delta_ok {
-                        entry = entry.drain_deltas()
+                        entry.drain_deltas()
                     }
-                    first_key.get_or_insert_with(|| entry.key.clone());
+                    first_key.get_or_insert_with(|| entry.as_key().clone());
                     let (e, vbytes) = {
                         let e = robt::Entry::<K, V>::from(entry.clone());
                         iter_result!(e.into_reference(vfpos, self.value_in_vlog))
@@ -259,13 +285,14 @@ where
                     let ibytes = iter_result!(util::into_cbor_bytes(e));
 
                     if (zblock.len() + ibytes.len()) > block_size {
-                        iter.push(entry);
+                        self.entry = Some(Ok(entry));
                         break;
                     }
                     zblock.extend_from_slice(&ibytes);
                     vblock.extend_from_slice(&vbytes);
                     vfpos += u64::try_from(vbytes.len()).unwrap();
                 }
+                Some(Err(err)) => return Some(Err(err)),
                 None if first_key.is_some() => break,
                 None => return None,
             }
@@ -287,6 +314,7 @@ where
 pub enum BuildIter<K, V, I>
 where
     V: db::Diff,
+    I: Iterator<Item = Result<Entry<K, V>>>,
 {
     MM(BuildMM<K, V, I>),
     MZ(BuildMZ<K, V, I>),
@@ -295,6 +323,7 @@ where
 impl<K, V, I> From<BuildMZ<K, V, I>> for BuildIter<K, V, I>
 where
     V: db::Diff,
+    I: Iterator<Item = Result<Entry<K, V>>>,
 {
     fn from(val: BuildMZ<K, V, I>) -> Self {
         BuildIter::MZ(val)
@@ -304,6 +333,7 @@ where
 impl<K, V, I> From<BuildMM<K, V, I>> for BuildIter<K, V, I>
 where
     V: db::Diff,
+    I: Iterator<Item = Result<Entry<K, V>>>,
 {
     fn from(val: BuildMM<K, V, I>) -> Self {
         BuildIter::MM(val)
@@ -315,7 +345,7 @@ where
     K: Clone + IntoCbor,
     V: Clone + IntoCbor + db::Diff,
     <V as db::Diff>::Delta: IntoCbor,
-    I: Iterator<Item = db::Entry<K, V>>,
+    I: Iterator<Item = Result<Entry<K, V>>>,
 {
     type Item = Result<(K, u64)>;
 

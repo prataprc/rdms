@@ -293,10 +293,7 @@ where
 {
     /// Return the seqno for the latest version of this entry.
     pub fn to_seqno(&self) -> u64 {
-        match self.value {
-            Value::U { seqno, .. } => seqno,
-            Value::D { seqno } => seqno,
-        }
+        self.value.to_seqno()
     }
 
     /// Return the entry key.
@@ -330,10 +327,7 @@ where
 
     /// Return whether entry is marked as deleted
     pub fn is_deleted(&self) -> bool {
-        match self.value {
-            Value::U { .. } => false,
-            Value::D { .. } => true,
-        }
+        self.value.is_deleted()
     }
 
     /// Return a list of all the versions of values, `values[0]` hold the oldest

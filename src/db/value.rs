@@ -58,6 +58,14 @@ impl<V> Value<V> {
     }
 
     #[inline]
+    pub fn is_deleted(&self) -> bool {
+        match self {
+            Value::U { .. } => false,
+            Value::D { .. } => true,
+        }
+    }
+
+    #[inline]
     pub fn to_value(&self) -> Option<V>
     where
         V: Clone,

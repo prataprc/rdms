@@ -66,33 +66,33 @@ where
 
     let mdb = do_initial::<K, B>(seed, bitmap.clone(), &config, None);
 
-    //let (index, vlog) = {
-    //    let file = config.to_index_location();
-    //    (
-    //        open_index::<K, B>(&config.dir, &config.name, &file, seed),
-    //        config.to_vlog_location(),
-    //    )
-    //};
+    let (mut index, vlog) = {
+        let file = config.to_index_location();
+        (
+            open_index::<K, B>(&config.dir, &config.name, &file, seed),
+            config.to_vlog_location(),
+        )
+    };
 
-    //config.name = name.to_owned() + "-incr";
-    //vlog.clone().map(|f| config.set_vlog_location(f));
-    //do_incremental::<K, B>(seed, &mdb, &index, &config, vlog);
+    config.name = name.to_owned() + "-incr";
+    vlog.clone().map(|f| config.set_vlog_location(Some(f)));
+    do_incremental::<K, B>(seed, bitmap.clone(), &mdb, &mut index, &config, vlog);
 
-    //let index = {
-    //    let file = config.to_index_location();
-    //    open_index::<K, B>(&config.dir, &config.name, &file, seed)
-    //};
+    let index = {
+        let file = config.to_index_location();
+        open_index::<K, B>(&config.dir, &config.name, &file, seed)
+    };
 
-    //config.name = name.to_owned() + "-compact1";
-    //let cutoff: db::Cutoff = {
-    //    let bytes = rng.gen::<[u8; 32]>();
-    //    let mut uns = Unstructured::new(&bytes);
-    //    uns.arbitrary().unwrap()
-    //};
-    //let bitmap = index.to_bitmap();
-    //println!("compact cutoff:{:?}", cutoff);
-    //let mut index = index.compact(config.clone(), bitmap, cutoff).unwrap();
-    //validate_compact(&mut index, cutoff, &mdb);
+    config.name = name.to_owned() + "-compact1";
+    config.set_vlog_location(None);
+    let cutoff: db::Cutoff = {
+        let bytes = rng.gen::<[u8; 32]>();
+        let mut uns = Unstructured::new(&bytes);
+        uns.arbitrary().unwrap()
+    };
+    println!("compact cutoff:{:?}", cutoff);
+    let mut index = index.compact(config.clone(), bitmap, cutoff).unwrap();
+    validate_compact(&mut index, cutoff, &mdb);
 
     let file = config.to_index_location();
     let mut index = open_index::<K, B>(&config.dir, &config.name, &file, seed);
@@ -155,8 +155,9 @@ where
 
 fn do_incremental<K, B>(
     seed: u128,
+    bitmap: B,
     mdb: &llrb::Index<K, u64>,
-    index: &Index<K, u64, B>,
+    index: &mut Index<K, u64, B>,
     config: &Config,
     vlog: Option<ffi::OsString>,
 ) where
@@ -180,7 +181,6 @@ fn do_incremental<K, B>(
     let n_rems = 10_000;
     let n_readers = 1;
 
-    let bitmap = index.to_bitmap();
     let appmd = "test_robt_read-metadata-snap".as_bytes().to_vec();
     let snap = {
         let seqno = Some(mdb.to_seqno());
@@ -190,7 +190,9 @@ fn do_incremental<K, B>(
     let mut build = Builder::incremental(config.clone(), vlog, appmd.to_vec()).unwrap();
     build
         .build_index(
-            snap.iter().unwrap().map(|e| Ok(e)),
+            index
+                .lsm_merge(snap.iter().unwrap().map(|e| Ok(e)), true /*versions*/)
+                .unwrap(),
             bitmap,
             Some(snap.to_seqno()),
         )

@@ -2,7 +2,7 @@ use cbordata::{self as cbor, Cbor, Cborize, FromCbor, IntoCbor};
 
 use std::{
     borrow::Borrow,
-    convert::TryFrom,
+    convert::{TryFrom, TryInto},
     fmt,
     io::{self, Read, Seek},
 };
@@ -186,6 +186,31 @@ where
         };
 
         Ok(entry)
+    }
+
+    pub fn commit(self, new: Self) -> Self
+    where
+        K: Clone,
+        V: Clone,
+        <V as db::Diff>::Delta: Clone + From<V>,
+    {
+        let (key, ovalue, odeltas) = match self {
+            Entry::ZZ { key, value, deltas } => (key, value, deltas),
+            _ => unreachable!(),
+        };
+        let new: db::Entry<K, V> = new.try_into().unwrap();
+        let mut entry = db::Entry {
+            key,
+            value: ovalue.try_into().unwrap(),
+            deltas: odeltas.into_iter().map(|d| d.try_into().unwrap()).collect(),
+        };
+        for value in new.to_values() {
+            entry = match value {
+                db::Value::U { value, seqno } => entry.insert(value, seqno),
+                db::Value::D { seqno } => entry.delete(seqno),
+            }
+        }
+        entry.into()
     }
 
     pub fn print(&self, prefix: &str, reader: &mut Reader<K, V>) -> Result<()>

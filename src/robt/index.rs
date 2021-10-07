@@ -19,7 +19,8 @@ use crate::{
     db, read_file,
     robt::{
         build,
-        reader::{Iter, Reader},
+        lsm::YIter,
+        reader::{Iter, IterLsm, Reader},
         scans::{BitmappedScan, BuildScan, CompactScan},
         to_index_location, to_vlog_location, Config, Entry, Flusher, IndexFileName,
         Stats, VlogFileName, ROOT_MARKER,
@@ -473,8 +474,7 @@ where
         Index::open(&config.dir, &config.name)
     }
 
-    /// Close this index, releasing OS resources. To purge, call `purge()`
-    /// method.
+    /// Close this index, releasing OS resources. To purge, call `purge()` method.
     pub fn close(self) -> Result<()> {
         Ok(())
     }
@@ -635,17 +635,24 @@ where
         self.reader.iter(range, reverse, versions)
     }
 
-    // TODO
-    //pub fn lsm_merge<I, E>(&mut self, iter: I, version: bool) -> Result<IterLsm<K, V>>
-    //where
-    //    K: Clone + Ord + Borrow<Q>,
-    //    V: Clone,
-    //    I: Iterator<Item = E>,
-    //    E: Into<Entry<K, V>>,
-    //{
-    //    let (reverse, versions) = (false, false);
-    //    self.reader.iter(range, reverse, versions)
-    //}
+    pub fn lsm_merge<I, E>(
+        &mut self,
+        snapshot: I,
+        versions: bool,
+    ) -> Result<YIter<K, V, I, E>>
+    where
+        K: Clone + Ord + FromCbor,
+        V: db::Diff + FromCbor,
+        <V as db::Diff>::Delta: FromCbor,
+        I: Iterator<Item = Result<E>>,
+        E: Into<Entry<K, V>>,
+    {
+        let start_bound = Bound::<&K>::Unbounded;
+        let stack = self.reader.fwd_stack(start_bound, self.reader.as_root())?;
+        let iter = YIter::new(snapshot, IterLsm::new(&mut self.reader, stack, versions));
+
+        Ok(iter)
+    }
 
     pub fn validate(&mut self) -> Result<Stats>
     where

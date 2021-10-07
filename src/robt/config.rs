@@ -135,8 +135,8 @@ impl Config {
     }
 
     /// Supply a vlog file, instead of using default, possibly from older snapshot.
-    pub fn set_vlog_location(&mut self, location: ffi::OsString) -> &mut Self {
-        self.vlog_location = Some(location);
+    pub fn set_vlog_location(&mut self, location: Option<ffi::OsString>) -> &mut Self {
+        self.vlog_location = location;
         self
     }
 

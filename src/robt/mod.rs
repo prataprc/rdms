@@ -211,6 +211,7 @@ mod entry;
 mod files;
 mod flush;
 mod index;
+mod lsm;
 mod marker;
 mod reader;
 mod scans;

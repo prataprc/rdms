@@ -8,6 +8,7 @@ use std::{
     fmt, fs,
     io::{self, Read, Seek},
     ops::{Bound, RangeBounds},
+    rc::Rc,
 };
 
 use crate::{
@@ -36,7 +37,7 @@ where
 {
     pub m_blocksize: usize,
     pub z_blocksize: usize,
-    pub root: Vec<robt::Entry<K, V>>,
+    pub root: Rc<Vec<robt::Entry<K, V>>>,
 
     pub index: fs::File,
     pub vlog: Option<fs::File>,
@@ -90,11 +91,15 @@ where
         Ok(Reader {
             m_blocksize: stats.m_blocksize,
             z_blocksize: stats.z_blocksize,
-            root,
+            root: Rc::new(root),
 
             index,
             vlog,
         })
+    }
+
+    pub fn as_root(&self) -> Rc<Vec<robt::Entry<K, V>>> {
+        Rc::clone(&self.root)
     }
 
     pub fn get<Q>(&mut self, ukey: &Q, versions: bool) -> Result<robt::Entry<K, V>>
@@ -107,7 +112,7 @@ where
         let z_blocksize = self.z_blocksize;
         let fd = &mut self.index;
 
-        let mut es = self.root.clone();
+        let mut es = Rc::clone(&self.root);
         loop {
             let off = match es.binary_search_by(|e| e.borrow_key().cmp(ukey)) {
                 Ok(off) => off,
@@ -118,12 +123,12 @@ where
                 robt::Entry::MM { fpos, .. } => {
                     let fpos = io::SeekFrom::Start(fpos);
                     let block = read_file!(fd, fpos, m_blocksize, "read mm-block")?;
-                    util::from_cbor_bytes::<Vec<robt::Entry<K, V>>>(&block)?.0
+                    Rc::new(util::from_cbor_bytes::<Vec<robt::Entry<K, V>>>(&block)?.0)
                 }
                 robt::Entry::MZ { fpos, .. } => {
                     let fpos = io::SeekFrom::Start(fpos);
                     let block = read_file!(fd, fpos, z_blocksize, "read mz-block")?;
-                    util::from_cbor_bytes::<Vec<robt::Entry<K, V>>>(&block)?.0
+                    Rc::new(util::from_cbor_bytes::<Vec<robt::Entry<K, V>>>(&block)?.0)
                 }
                 robt::Entry::ZZ { key, value, deltas } if key.borrow() == ukey => {
                     let deltas = if versions { deltas } else { Vec::default() };
@@ -155,7 +160,7 @@ where
         R: RangeBounds<Q>,
     {
         let (stack, bound) = if reverse {
-            let stack = self.rwd_stack(range.end_bound(), self.root.clone())?;
+            let stack = self.rwd_stack(range.end_bound(), Rc::clone(&self.root))?;
             let bound: Bound<K> = match range.start_bound() {
                 Bound::Unbounded => Bound::Unbounded,
                 Bound::Included(q) => Bound::Included(q.to_owned()),
@@ -163,7 +168,7 @@ where
             };
             (stack, bound)
         } else {
-            let stack = self.fwd_stack(range.start_bound(), self.root.clone())?;
+            let stack = self.fwd_stack(range.start_bound(), Rc::clone(&self.root))?;
             // println!("iter stack:{:?}", stack.len());
             let bound: Bound<K> = match range.end_bound() {
                 Bound::Unbounded => Bound::Unbounded,
@@ -205,10 +210,10 @@ where
         Ok(iter)
     }
 
-    fn fwd_stack<Q>(
+    pub fn fwd_stack<Q>(
         &mut self,
         sk: Bound<&Q>,
-        block: Vec<robt::Entry<K, V>>,
+        block: Rc<Vec<robt::Entry<K, V>>>,
     ) -> Result<Vec<Vec<robt::Entry<K, V>>>>
     where
         K: Clone + Borrow<Q>,
@@ -249,7 +254,7 @@ where
         };
         // println!("read-block len:{} start..:{:?}", block.len(), &block[..32]);
 
-        let block = util::from_cbor_bytes::<Vec<robt::Entry<K, V>>>(&block)?.0;
+        let block = Rc::new(util::from_cbor_bytes::<Vec<robt::Entry<K, V>>>(&block)?.0);
         let mut stack = self.fwd_stack(sk, block)?;
         stack.insert(0, rem);
         Ok(stack)
@@ -258,7 +263,7 @@ where
     fn rwd_stack<Q>(
         &mut self,
         ek: Bound<&Q>,
-        block: Vec<robt::Entry<K, V>>,
+        block: Rc<Vec<robt::Entry<K, V>>>,
     ) -> Result<Vec<Vec<robt::Entry<K, V>>>>
     where
         K: Clone + Borrow<Q>,
@@ -299,7 +304,7 @@ where
             _ => unreachable!(),
         };
 
-        let block = util::from_cbor_bytes::<Vec<robt::Entry<K, V>>>(&block)?.0;
+        let block = Rc::new(util::from_cbor_bytes::<Vec<robt::Entry<K, V>>>(&block)?.0);
         let mut stack = self.rwd_stack(ek, block)?;
         stack.insert(0, rem);
         Ok(stack)
@@ -311,7 +316,7 @@ where
         V: Clone + fmt::Debug,
         <V as db::Diff>::Delta: fmt::Debug,
     {
-        for entry in self.root.clone().into_iter() {
+        for entry in self.root.to_vec().into_iter() {
             entry.print("", self)?;
         }
         Ok(())
@@ -460,6 +465,100 @@ where
                     if self.reverse {
                         entries.reverse();
                     }
+                    self.stack.push(entries);
+                    self.next()
+                }
+            },
+            None => None,
+        }
+    }
+}
+
+pub struct IterLsm<'a, K, V>
+where
+    V: db::Diff,
+{
+    reader: &'a mut Reader<K, V>,
+    stack: Vec<Vec<robt::Entry<K, V>>>,
+    versions: bool,
+}
+
+impl<'a, K, V> IterLsm<'a, K, V>
+where
+    V: db::Diff,
+{
+    pub fn new(
+        r: &'a mut Reader<K, V>,
+        stack: Vec<Vec<robt::Entry<K, V>>>,
+        versions: bool,
+    ) -> Self {
+        IterLsm {
+            reader: r,
+            stack,
+            versions,
+        }
+    }
+
+    fn fetchzz(&mut self, mut entry: robt::Entry<K, V>) -> Result<robt::Entry<K, V>>
+    where
+        V: FromCbor,
+        <V as db::Diff>::Delta: FromCbor,
+    {
+        match &mut self.reader.vlog {
+            Some(fd) if self.versions => entry.into_native(fd, self.versions),
+            Some(fd) => {
+                entry.drain_deltas();
+                entry.into_native(fd, self.versions)
+            }
+            None => {
+                entry.drain_deltas();
+                Ok(entry)
+            }
+        }
+    }
+}
+
+impl<'a, K, V> Iterator for IterLsm<'a, K, V>
+where
+    K: Ord + FromCbor,
+    V: db::Diff + FromCbor,
+    <V as db::Diff>::Delta: FromCbor,
+{
+    type Item = Result<robt::Entry<K, V>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let fd = &mut self.reader.index;
+        let m_blocksize = self.reader.m_blocksize;
+        let z_blocksize = self.reader.z_blocksize;
+
+        match self.stack.pop() {
+            Some(block) if block.is_empty() => self.next(),
+            Some(mut block) => match block.remove(0) {
+                entry @ robt::Entry::ZZ { .. } => {
+                    self.stack.push(block);
+                    Some(Ok(iter_result!(self.fetchzz(entry))))
+                }
+                robt::Entry::MM { fpos, .. } => {
+                    self.stack.push(block);
+
+                    let entries = iter_result!(|| -> Result<Vec<robt::Entry<K, V>>> {
+                        let fpos = io::SeekFrom::Start(fpos);
+                        let block = read_file!(fd, fpos, m_blocksize, "read mm-block")?;
+                        Ok(util::from_cbor_bytes(&block)?.0)
+                    }());
+
+                    self.stack.push(entries);
+                    self.next()
+                }
+                robt::Entry::MZ { fpos, .. } => {
+                    self.stack.push(block);
+
+                    let entries = iter_result!(|| -> Result<Vec<robt::Entry<K, V>>> {
+                        let fpos = io::SeekFrom::Start(fpos);
+                        let block = read_file!(fd, fpos, z_blocksize, "read mm-block")?;
+                        Ok(util::from_cbor_bytes(&block)?.0)
+                    }());
+
                     self.stack.push(entries);
                     self.next()
                 }

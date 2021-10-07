@@ -21,7 +21,7 @@ fn test_robt_build_scan() {
     let start_seqno = rng.gen::<u64>() % ((mdb.len() as u64) * 2);
     let mut iter = BuildScan::new(mdb.iter().unwrap().map(|e| Ok(e)), start_seqno);
     let mut count = 0;
-    while let Some(entry) = iter.next() {
+    while let Some(_) = iter.next() {
         count += 1;
     }
     assert_eq!(count, mdb.len() as u64, "{} {}", count, mdb.len());

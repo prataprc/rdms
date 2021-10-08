@@ -21,14 +21,16 @@ fn test_robt_build_read() {
         254380117901283245685140957742548176144,
         109332097090788254409904627378619335666,
     ][random::<usize>() % 4];
-    let seed: u128 = 315408295460649044406651951935429140111;
+    // let seed: u128 = 315408295460649044406651951935429140111;
     println!("test_robt_read {}", seed);
 
-    do_robt_build_read::<u16, NoBitmap>(seed, NoBitmap);
-    // do_robt_read(seed, Xor8::<BuildHasherDefault>::new());
+    do_robt_build_read::<u16, _>("u16,nobitmap", seed, NoBitmap);
+    do_robt_build_read::<u64, _>("u64,nobitmap", seed, NoBitmap);
+    do_robt_build_read::<u16, _>("u16,xor8", seed, Xor8::<BuildHasherDefault>::new());
+    do_robt_build_read::<u64, _>("u64,xor8", seed, Xor8::<BuildHasherDefault>::new());
 }
 
-fn do_robt_build_read<K, B>(seed: u128, bitmap: B)
+fn do_robt_build_read<K, B>(prefix: &str, seed: u128, bitmap: B)
 where
     for<'a> K: 'static
         + Sync
@@ -61,10 +63,14 @@ where
         flush_queue_size: [32, 64, 1024][rng.gen::<usize>() % 3],
         vlog_location: None,
     };
-    println!("do-robt-read index file {:?}", config.to_index_location());
-    println!("do-robt-read config:{:?}", config);
+    println!(
+        "do_robt_build_read-{} index file {:?}",
+        prefix,
+        config.to_index_location()
+    );
+    println!("do_robt_build_read-{} config:{:?}", prefix, config);
 
-    let mdb = do_initial::<K, B>(seed, bitmap.clone(), &config, None);
+    let mdb = do_initial::<K, B>(prefix, seed, bitmap.clone(), &config, None);
 
     let (mut index, vlog) = {
         let file = config.to_index_location();
@@ -76,9 +82,17 @@ where
 
     config.name = name.to_owned() + "-incr";
     vlog.clone().map(|f| config.set_vlog_location(Some(f)));
-    do_incremental::<K, B>(seed, bitmap.clone(), &mdb, &mut index, &config, vlog);
+    do_incremental::<K, B>(
+        prefix,
+        seed,
+        bitmap.clone(),
+        &mdb,
+        &mut index,
+        &config,
+        vlog,
+    );
 
-    let index = {
+    index = {
         let file = config.to_index_location();
         open_index::<K, B>(&config.dir, &config.name, &file, seed)
     };
@@ -90,17 +104,18 @@ where
         let mut uns = Unstructured::new(&bytes);
         uns.arbitrary().unwrap()
     };
-    println!("compact cutoff:{:?}", cutoff);
-    let mut index = index.compact(config.clone(), bitmap, cutoff).unwrap();
+    println!("do_robt_build_read-{}, compact cutoff:{:?}", prefix, cutoff);
+    index = index.compact(config.clone(), bitmap, cutoff).unwrap();
     validate_compact(&mut index, cutoff, &mdb);
 
     let file = config.to_index_location();
-    let mut index = open_index::<K, B>(&config.dir, &config.name, &file, seed);
+    index = open_index::<K, B>(&config.dir, &config.name, &file, seed);
     index.validate().unwrap();
     index.purge().unwrap();
 }
 
 fn do_initial<K, B>(
+    prefix: &str,
     seed: u128,
     bitmap: B,
     config: &Config,
@@ -139,10 +154,11 @@ where
 
     let mut handles = vec![];
     for i in 0..n_readers {
+        let prefix = prefix.to_string();
         let (cnf, mdb, appmd) = (config.clone(), mdb.clone(), appmd.to_vec());
         let seed = seed + ((i as u128) * 10);
         handles.push(thread::spawn(move || {
-            read_thread::<K, B>(i, seed, cnf, mdb, appmd)
+            read_thread::<K, B>(prefix, i, seed, cnf, mdb, appmd)
         }));
     }
 
@@ -154,6 +170,7 @@ where
 }
 
 fn do_incremental<K, B>(
+    prefix: &str,
     seed: u128,
     bitmap: B,
     mdb: &llrb::Index<K, u64>,
@@ -204,10 +221,11 @@ fn do_incremental<K, B>(
 
     let mut handles = vec![];
     for i in 0..n_readers {
+        let prefix = prefix.to_string();
         let (cnf, mdb, appmd) = (config.clone(), mdb.clone(), appmd.to_vec());
         let seed = seed + ((i as u128) * 10);
         handles.push(thread::spawn(move || {
-            read_thread::<K, B>(i, seed, cnf, mdb, appmd)
+            read_thread::<K, B>(prefix, i, seed, cnf, mdb, appmd)
         }));
     }
 
@@ -217,6 +235,7 @@ fn do_incremental<K, B>(
 }
 
 fn read_thread<K, B>(
+    prefix: String,
     id: usize,
     seed: u128,
     config: Config,
@@ -243,7 +262,7 @@ fn read_thread<K, B>(
         let mut uns = Unstructured::new(&bytes);
 
         let op: Op<K> = uns.arbitrary().unwrap();
-        println!("{}-op {} -- {:?}", id, _i, op);
+        // println!("{} {}-op {} -- {:?}", prefix, id, _i, op);
         match op.clone() {
             Op::M(meta_op) => {
                 use MetaOp::*;
@@ -394,28 +413,10 @@ fn read_thread<K, B>(
             }
         };
     }
-    println!("{}-counts {:?}", id, counts);
+    println!("{} {}-counts {:?}", prefix, id, counts);
 
     index.close().unwrap();
 }
-
-//#[test]
-//fn test_compact_mono() {
-//    let seed: u128 = random();
-//    println!("test_compact_mono {}", seed);
-//}
-//
-//#[test]
-//fn test_compact_lsm() {
-//    let seed: u128 = random();
-//    println!("test_compact {}", seed);
-//}
-//
-//#[test]
-//fn test_compact_tombstone() {
-//    let seed: u128 = random();
-//    println!("test_compact {}", seed);
-//}
 
 fn validate_stats<K>(
     stats: &Stats,
@@ -477,8 +478,11 @@ fn validate_compact<K, B>(
         .unwrap()
         .filter_map(|e| e.compact(cutoff))
         .collect();
-    let entries: Vec<db::Entry<K, u64>> =
-        index.iter(..).unwrap().map(|e| e.unwrap()).collect();
+    let entries: Vec<db::Entry<K, u64>> = index
+        .iter_versions(..)
+        .unwrap()
+        .map(|e| e.unwrap())
+        .collect();
     assert_eq!(
         ref_entries.len(),
         entries.len(),

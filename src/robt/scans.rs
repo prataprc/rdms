@@ -4,7 +4,7 @@ use std::{
     fmt, hash, marker, time,
 };
 
-use crate::{db, robt::Entry, Error, Result};
+use crate::{db, robt, Error, Result};
 
 // BuildScan, BitmappedScan, CompactScan
 
@@ -14,7 +14,7 @@ pub struct BuildScan<K, V, I, E>
 where
     V: db::Diff,
     I: Iterator<Item = Result<E>>,
-    E: TryInto<Entry<K, V>>,
+    E: TryInto<robt::Entry<K, V>>,
 {
     iter: I,
 
@@ -31,7 +31,7 @@ impl<K, V, I, E> BuildScan<K, V, I, E>
 where
     V: db::Diff,
     I: Iterator<Item = Result<E>>,
-    E: TryInto<Entry<K, V>>,
+    E: TryInto<robt::Entry<K, V>>,
 {
     pub fn new(iter: I, seqno: u64) -> BuildScan<K, V, I, E> {
         BuildScan {
@@ -75,10 +75,10 @@ impl<K, V, I, E> Iterator for BuildScan<K, V, I, E>
 where
     V: db::Diff,
     I: Iterator<Item = Result<E>>,
-    E: TryInto<Entry<K, V>>,
-    <E as TryInto<Entry<K, V>>>::Error: fmt::Display,
+    E: TryInto<robt::Entry<K, V>>,
+    <E as TryInto<robt::Entry<K, V>>>::Error: fmt::Display,
 {
-    type Item = Result<Entry<K, V>>;
+    type Item = Result<robt::Entry<K, V>>;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
@@ -106,7 +106,7 @@ where
 pub struct BitmappedScan<K, V, B, I>
 where
     V: db::Diff,
-    I: Iterator<Item = Result<Entry<K, V>>>,
+    I: Iterator<Item = Result<robt::Entry<K, V>>>,
 {
     iter: I,
     bitmap: B,
@@ -118,7 +118,7 @@ impl<K, V, B, I> BitmappedScan<K, V, B, I>
 where
     V: db::Diff,
     B: db::Bloom,
-    I: Iterator<Item = Result<Entry<K, V>>>,
+    I: Iterator<Item = Result<robt::Entry<K, V>>>,
 {
     pub fn new(iter: I, bitmap: B) -> BitmappedScan<K, V, B, I> {
         BitmappedScan {
@@ -139,9 +139,9 @@ where
     K: hash::Hash,
     V: db::Diff,
     B: db::Bloom,
-    I: Iterator<Item = Result<Entry<K, V>>>,
+    I: Iterator<Item = Result<robt::Entry<K, V>>>,
 {
-    type Item = Result<Entry<K, V>>;
+    type Item = Result<robt::Entry<K, V>>;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
@@ -196,7 +196,9 @@ where
         loop {
             match self.iter.next()? {
                 Ok(entry) => match entry.compact(self.cutoff) {
-                    Some(entry) => break Some(Ok(entry)),
+                    Some(entry) => {
+                        break Some(Ok(entry));
+                    }
                     None => (),
                 },
                 Err(err) => break Some(Err(err)),

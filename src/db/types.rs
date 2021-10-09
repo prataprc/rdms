@@ -77,8 +77,8 @@ impl Footprint for String {
     }
 }
 
-#[derive(Clone)]
-pub struct Binary(Vec<u8>);
+#[derive(Clone, Debug, PartialEq, PartialOrd, Eq, Ord)]
+pub struct Binary(pub Vec<u8>);
 
 impl Diff for Binary {
     type Delta = Self;

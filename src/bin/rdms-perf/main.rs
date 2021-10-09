@@ -1,11 +1,12 @@
-use rand::{prelude::random, rngs::SmallRng, Rng};
+use rand::{prelude::random, rngs::SmallRng};
 use structopt::StructOpt;
 
-use std::{convert::TryFrom, result};
+use std::result;
 
 mod btree_map;
 mod llrb;
 mod lmdb;
+// mod robt;
 
 /// Command line options.
 #[derive(Clone, StructOpt)]
@@ -29,6 +30,7 @@ fn main() {
         "llrb" => llrb::perf(opts).unwrap(),
         "btree" | "btree_map" | "btree-map" => btree_map::perf(opts).unwrap(),
         "lmdb" => lmdb::perf(opts).unwrap(),
+        //"robt" => robt::perf(opts).unwrap(),
         command => println!("rdms-perf: error invalid command {}", command),
     }
 }
@@ -43,112 +45,10 @@ fn load_profile(opts: &Opt) -> result::Result<toml::Value, String> {
     Ok(s.parse().expect("invalid profile format"))
 }
 
-trait Generate<K> {
-    fn gen(&self, rng: &mut SmallRng) -> K;
-}
+trait Generate<T> {
+    fn gen_key(&self, rng: &mut SmallRng) -> T;
 
-#[derive(Clone)]
-enum Key {
-    U64,
-    String(usize),
-}
-
-impl Default for Key {
-    fn default() -> Key {
-        Key::U64
-    }
-}
-
-impl TryFrom<String> for Key {
-    type Error = String;
-
-    fn try_from(s: String) -> result::Result<Key, String> {
-        match s.to_lowercase().as_str() {
-            "u64" => Ok(Key::U64),
-            "string" => Ok(Key::String(16)),
-            s => Err(format!("invalid key-type:{:?}", s)),
-        }
-    }
-}
-
-impl Generate<u64> for Key {
-    fn gen(&self, rng: &mut SmallRng) -> u64 {
-        match self {
-            Key::U64 => rng.gen::<u64>(),
-            _ => unreachable!(),
-        }
-    }
-}
-
-impl Generate<String> for Key {
-    fn gen(&self, rng: &mut SmallRng) -> String {
-        let val = rng.gen::<u64>();
-        match self {
-            Key::String(size) => format!("{:0width$}", val, width = size),
-            _ => unreachable!(),
-        }
-    }
-}
-
-impl Key {
-    fn to_type(&self) -> &'static str {
-        match self {
-            Key::U64 => "u64",
-            Key::String(_) => "string",
-        }
-    }
-}
-
-#[derive(Clone)]
-enum Value {
-    U64,
-    String(usize),
-}
-
-impl Default for Value {
-    fn default() -> Value {
-        Value::U64
-    }
-}
-
-impl TryFrom<String> for Value {
-    type Error = String;
-
-    fn try_from(s: String) -> result::Result<Value, String> {
-        match s.to_lowercase().as_str() {
-            "u64" => Ok(Value::U64),
-            "string" => Ok(Value::String(16)),
-            s => Err(format!("invalid key-type:{:?}", s)),
-        }
-    }
-}
-
-impl Generate<u64> for Value {
-    fn gen(&self, rng: &mut SmallRng) -> u64 {
-        match self {
-            Value::U64 => rng.gen::<u64>(),
-            _ => unreachable!(),
-        }
-    }
-}
-
-impl Generate<String> for Value {
-    fn gen(&self, rng: &mut SmallRng) -> String {
-        let val = rng.gen::<u64>();
-        match self {
-            Value::String(size) => format!("{:0width$}", val, width = size),
-            _ => unreachable!(),
-        }
-    }
-}
-
-impl Value {
-    fn to_type(&self) -> &'static str {
-        match self {
-            Value::U64 => "u64",
-            Value::String(_) => "string",
-        }
-    }
+    fn gen_value(&self, rng: &mut SmallRng) -> T;
 }
 
 #[macro_export]

@@ -4,69 +4,47 @@ use std::{fmt, result, thread, time};
 
 use rdms::{
     db::{self, ToJson},
-    llrb::Index,
+    llrb::Index as Mdb,
+    robt::Index,
 };
 
-use crate::{get_property, load_profile, Generate, Opt};
+use crate::{get_property, load_profile, Generate, Key, Opt, Value};
+
+// to_name, to_index_location, to_vlog_location, len, to_root, to_seqno, to_app_metadata
+// to_stats, to_bitmap, is_compacted, validate
 
 const DEFAULT_KEY_SIZE: i64 = 16;
 const DEFAULT_VAL_SIZE: i64 = 16;
 
 #[derive(Clone)]
 pub struct Profile {
-    key: (String, usize),   // u64, binary
-    value: (String, usize), // u64, binary
-    spin: bool,
-    cas: bool,
+    key: Key,
+    value: Value,
+    bitmap: String,
+    incr: bool,
+    compact: bool,
+    versions: bool
     loads: usize,
-    sets: usize,
-    ins: usize,
-    rems: usize,
-    dels: usize,
     gets: usize,
-    writers: usize,
+    iter: usize,
+    reverse: usize,
     readers: usize,
     validate: bool,
-}
-
-impl Generate<u64> for Profile {
-    fn gen_key(&self, rng: &mut SmallRng) -> u64 {
-        rng.gen::<u64>()
-    }
-
-    fn gen_value(&self, rng: &mut SmallRng) -> u64 {
-        rng.gen::<u64>()
-    }
-}
-
-impl Generate<db::Binary> for Profile {
-    fn gen_key(&self, rng: &mut SmallRng) -> db::Binary {
-        let key = rng.gen::<u64>();
-        let size = self.key.1;
-        db::Binary(format!("{:0width$}", key, width = size).as_bytes().to_vec())
-    }
-
-    fn gen_value(&self, rng: &mut SmallRng) -> db::Binary {
-        let val = rng.gen::<u64>();
-        let size = self.value.1;
-        db::Binary(format!("{:0width$}", val, width = size).as_bytes().to_vec())
-    }
 }
 
 impl Default for Profile {
     fn default() -> Profile {
         Profile {
-            key: ("u64".to_string(), 0),
-            value: ("u64".to_string(), 0),
-            spin: false,
-            cas: false,
+            key: (String, usize),
+            value: (String, usize),
+            bitmap: "nobitmap",
+            incr: false,
+            compact: false,
+            versiosn: false,
             loads: 1_000_000,
-            sets: 1_000_000,
-            ins: 0,
-            rems: 100_000,
-            dels: 0,
             gets: 1_000_000,
-            writers: 1,
+            iter: false,
+            reverse: false,
             readers: 1,
             validate: true,
         }
@@ -77,19 +55,30 @@ impl Profile {
     fn from_toml(v: toml::Value) -> result::Result<Profile, String> {
         let p: Profile = Default::default();
 
-        let key = (
-            get_property!(v, "key_type", as_str, &p.key.0).to_string(),
-            get_property!(v, "key_size", as_integer, DEFAULT_KEY_SIZE) as usize,
-        );
-        let value = (
-            get_property!(v, "value_type", as_str, &p.value.0).to_string(),
-            get_property!(v, "value_size", as_integer, DEFAULT_VAL_SIZE) as usize,
-        );
+        let key = {
+            match get_property!(v, "key_type", as_str, p.key.to_type()) {
+                "u64" => Ok(Key::U64),
+                "string" => {
+                    let s = get_property!(v, "key_size", as_integer, DEFAULT_KEY_SIZE);
+                    Ok(Key::String(s as usize))
+                }
+                typ => Err(format!("invalid type {}", typ)),
+            }?
+        };
+        let value = {
+            match get_property!(v, "value_type", as_str, p.value.to_type()) {
+                "u64" => Ok(Value::U64),
+                "string" => {
+                    let s = get_property!(v, "value_size", as_integer, DEFAULT_VAL_SIZE);
+                    Ok(Value::String(s as usize))
+                }
+                typ => Err(format!("invalid type {}", typ)),
+            }?
+        };
 
         let p = Profile {
             key,
             value,
-            spin: get_property!(v, "spin", as_bool, p.spin),
             cas: get_property!(v, "cas", as_bool, p.cas),
             loads: get_property!(v, "loads", as_integer, p.loads as i64) as usize,
             sets: get_property!(v, "sets", as_integer, p.sets as i64) as usize,
@@ -121,12 +110,13 @@ pub fn perf(opts: Opt) -> result::Result<(), String> {
     let profile: Profile =
         Profile::from_toml(load_profile(&opts)?).expect("invalid profile properties");
 
-    let (kt, vt) = (&profile.key.0, &profile.value.0);
-
-    match (kt.as_str(), vt.as_str()) {
-        ("u64", "u64") => load_and_spawn::<u64, u64>(opts, profile),
-        ("u64", "binary") => load_and_spawn::<u64, db::Binary>(opts, profile),
-        ("binary", "binary") => load_and_spawn::<db::Binary, db::Binary>(opts, profile),
+    match (&profile.key, &profile.value) {
+        (Key::U64, Value::U64) => load_and_spawn::<u64, u64>(opts, profile),
+        //(Key::U64, Value::String(_)) => load_and_spawn::<u64, String>(opts, profile),
+        //(Key::String(_), Value::U64) => load_and_spawn::<String, u64>(opts, profile),
+        //(Key::String(_), Value::String(_)) => {
+        //    load_and_spawn::<String, String>(opts, profile)
+        //}
         (_, _) => unreachable!(),
     }
 }
@@ -136,7 +126,8 @@ where
     K: 'static + Send + Sync + Clone + Ord + db::Footprint + fmt::Debug,
     V: 'static + Send + Sync + db::Diff + db::Footprint,
     <V as db::Diff>::Delta: Send + Sync + db::Footprint,
-    Profile: Generate<K> + Generate<V>,
+    Key: Generate<K>,
+    Value: Generate<V>,
 {
     let mut rng = SmallRng::from_seed(opts.seed.to_le_bytes());
 
@@ -216,11 +207,12 @@ where
     K: 'static + Send + Sync + Clone + Ord + db::Footprint,
     V: 'static + Send + Sync + db::Diff + db::Footprint,
     <V as db::Diff>::Delta: Send + Sync + db::Footprint,
-    Profile: Generate<K> + Generate<V>,
+    Key: Generate<K>,
+    Value: Generate<V>,
 {
     let start = time::Instant::now();
     for _i in 0..p.loads {
-        index.set(p.gen_key(rng), p.gen_value(rng)).unwrap();
+        index.set(p.key.gen(rng), p.value.gen(rng)).unwrap();
     }
 
     println!(
@@ -242,7 +234,8 @@ where
     K: 'static + Send + Sync + Clone + Ord + db::Footprint,
     V: 'static + Send + Sync + db::Diff + db::Footprint,
     <V as db::Diff>::Delta: Send + Sync + db::Footprint,
-    Profile: Generate<K> + Generate<V>,
+    Key: Generate<K>,
+    Value: Generate<V>,
 {
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
@@ -252,27 +245,27 @@ where
         (p.sets, p.ins, p.rems, p.dels, p.gets);
 
     while (sets + ins + rems + dels + gets) > 0 {
-        let key: K = p.gen_key(&mut rng);
+        let key: K = p.key.gen(&mut rng);
         match rng.gen::<usize>() % (sets + ins + rems + dels + gets) {
             op if p.cas && op < sets => {
                 let cas = rng.gen::<u64>() % (total as u64);
-                let val: V = p.gen_value(&mut rng);
+                let val: V = p.value.gen(&mut rng);
                 index.set_cas(key, val, cas).unwrap();
                 sets -= 1;
             }
             op if op < p.sets => {
-                let val: V = p.gen_value(&mut rng);
+                let val: V = p.value.gen(&mut rng);
                 index.set(key, val).unwrap();
                 sets -= 1;
             }
             op if p.cas && op < (p.sets + p.ins) => {
                 let cas = rng.gen::<u64>() % (total as u64);
-                let val: V = p.gen_value(&mut rng);
+                let val: V = p.value.gen(&mut rng);
                 index.insert_cas(key, val, cas).unwrap();
                 ins -= 1;
             }
             op if op < (p.sets + p.ins) => {
-                let val: V = p.gen_value(&mut rng);
+                let val: V = p.value.gen(&mut rng);
                 index.insert(key, val).unwrap();
                 ins -= 1;
             }

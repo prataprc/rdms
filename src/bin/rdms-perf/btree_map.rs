@@ -6,7 +6,7 @@ use std::{
     time::{self, SystemTime},
 };
 
-use crate::{get_property, load_profile, Generate, Key, Opt, Value};
+use crate::{get_property, load_profile, Generate, Opt};
 use rdms::db;
 
 const DEFAULT_KEY_SIZE: i64 = 16;
@@ -14,19 +14,43 @@ const DEFAULT_VAL_SIZE: i64 = 16;
 
 #[derive(Clone)]
 pub struct Profile {
-    key: Key,
-    value: Value,
+    key: (String, usize),   // u64, binary
+    value: (String, usize), // u64, binary
     loads: usize,
     sets: usize,
     rems: usize,
     gets: usize,
 }
 
+impl Generate<u64> for Profile {
+    fn gen_key(&self, rng: &mut SmallRng) -> u64 {
+        rng.gen::<u64>()
+    }
+
+    fn gen_value(&self, rng: &mut SmallRng) -> u64 {
+        rng.gen::<u64>()
+    }
+}
+
+impl Generate<db::Binary> for Profile {
+    fn gen_key(&self, rng: &mut SmallRng) -> db::Binary {
+        let key = rng.gen::<u64>();
+        let size = self.key.1;
+        db::Binary(format!("{:0width$}", key, width = size).as_bytes().to_vec())
+    }
+
+    fn gen_value(&self, rng: &mut SmallRng) -> db::Binary {
+        let val = rng.gen::<u64>();
+        let size = self.value.1;
+        db::Binary(format!("{:0width$}", val, width = size).as_bytes().to_vec())
+    }
+}
+
 impl Default for Profile {
     fn default() -> Profile {
         Profile {
-            key: Key::default(),
-            value: Value::default(),
+            key: ("u64".to_string(), 0),
+            value: ("u64".to_string(), 0),
             loads: 1_000_000,
             sets: 1_000_000,
             rems: 100_000,
@@ -39,26 +63,14 @@ impl Profile {
     fn from_toml(v: toml::Value) -> result::Result<Profile, String> {
         let p: Profile = Default::default();
 
-        let key = {
-            match get_property!(v, "key_type", as_str, p.key.to_type()) {
-                "u64" => Ok(Key::U64),
-                "string" => {
-                    let s = get_property!(v, "key_size", as_integer, DEFAULT_KEY_SIZE);
-                    Ok(Key::String(s as usize))
-                }
-                typ => Err(format!("invalid type {}", typ)),
-            }?
-        };
-        let value = {
-            match get_property!(v, "value_type", as_str, p.value.to_type()) {
-                "u64" => Ok(Value::U64),
-                "string" => {
-                    let s = get_property!(v, "value_size", as_integer, DEFAULT_VAL_SIZE);
-                    Ok(Value::String(s as usize))
-                }
-                typ => Err(format!("invalid type {}", typ)),
-            }?
-        };
+        let key = (
+            get_property!(v, "key_type", as_str, &p.key.0).to_string(),
+            get_property!(v, "key_size", as_integer, DEFAULT_KEY_SIZE) as usize,
+        );
+        let value = (
+            get_property!(v, "value_type", as_str, &p.value.0).to_string(),
+            get_property!(v, "value_size", as_integer, DEFAULT_VAL_SIZE) as usize,
+        );
 
         let p = Profile {
             key,
@@ -77,13 +89,12 @@ pub fn perf(opts: Opt) -> result::Result<(), String> {
     let profile: Profile =
         Profile::from_toml(load_profile(&opts)?).expect("invalid profile properties");
 
-    match (&profile.key, &profile.value) {
-        (Key::U64, Value::U64) => load_and_spawn::<u64, u64>(opts, profile),
-        //(Key::U64, Value::String(_)) => load_and_spawn::<u64, String>(opts, profile),
-        //(Key::String(_), Value::U64) => load_and_spawn::<String, u64>(opts, profile),
-        //(Key::String(_), Value::String(_)) => {
-        //    load_and_spawn::<String, String>(opts, profile)
-        //}
+    let (kt, vt) = (&profile.key.0, &profile.value.0);
+
+    match (kt.as_str(), vt.as_str()) {
+        ("u64", "u64") => load_and_spawn::<u64, u64>(opts, profile),
+        ("u64", "binary") => load_and_spawn::<u64, db::Binary>(opts, profile),
+        ("binary", "binary") => load_and_spawn::<db::Binary, db::Binary>(opts, profile),
         (_, _) => unreachable!(),
     }
 }
@@ -93,8 +104,7 @@ where
     K: 'static + Send + Sync + Clone + Ord + db::Footprint + fmt::Debug,
     V: 'static + Send + Sync + db::Diff + db::Footprint,
     <V as db::Diff>::Delta: Send + Sync + db::Footprint,
-    Key: Generate<K>,
-    Value: Generate<V>,
+    Profile: Generate<K> + Generate<V>,
 {
     let mut rng = SmallRng::from_seed(opts.seed.to_le_bytes());
     let mut index: BTreeMap<K, V> = BTreeMap::new();
@@ -140,13 +150,12 @@ where
     K: 'static + Send + Sync + Clone + Ord + db::Footprint,
     V: 'static + Send + Sync + db::Diff + db::Footprint,
     <V as db::Diff>::Delta: Send + Sync + db::Footprint,
-    Key: Generate<K>,
-    Value: Generate<V>,
+    Profile: Generate<K> + Generate<V>,
 {
     let start = SystemTime::now();
 
     for _i in 0..p.loads {
-        index.insert(p.key.gen(rng), p.value.gen(rng));
+        index.insert(p.gen_key(rng), p.gen_value(rng));
     }
 
     println!(
@@ -167,8 +176,7 @@ where
     K: 'static + Send + Sync + Clone + Ord + db::Footprint,
     V: 'static + Send + Sync + db::Diff + db::Footprint,
     <V as db::Diff>::Delta: Send + Sync + db::Footprint,
-    Key: Generate<K>,
-    Value: Generate<V>,
+    Profile: Generate<K> + Generate<V>,
 {
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
@@ -176,10 +184,10 @@ where
     let (mut sets, mut rems, mut gets) = (p.sets, p.rems, p.gets);
 
     while (sets + rems + gets) > 0 {
-        let key: K = p.key.gen(&mut rng);
+        let key: K = p.gen_key(&mut rng);
         match rng.gen::<usize>() % (sets + rems + gets) {
             op if op < sets => {
-                index.insert(key, p.value.gen(&mut rng));
+                index.insert(key, p.gen_value(&mut rng));
                 sets -= 1;
             }
             op if op < (sets + rems) => {

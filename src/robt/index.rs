@@ -151,7 +151,7 @@ where
     V: Clone + db::Diff + IntoCbor,
     <V as db::Diff>::Delta: IntoCbor,
 {
-    fn build_index<B, I, E>(
+    pub fn build_index<B, I, E>(
         &mut self,
         iter: I,
         bitmap: B,

@@ -1,17 +1,11 @@
 use arbitrary::{self, unstructured::Unstructured, Arbitrary};
 use rand::{self, prelude::random, rngs::SmallRng, Rng, SeedableRng};
-use xorfilter::{BuildHasherDefault, Xor8};
+use xorfilter::{BuildHasherDefault, Fuse8, Xor8};
 
 use std::{fs, mem, thread};
 
 use super::*;
 use crate::{bitmaps::NoBitmap, db, llrb};
-
-// open open_file set_bitmap compact print validate try_clone purge close
-// get get_versions iter iter_versions reverse reverse_versions len
-// is_compacted is_empty
-// as_bitmap to_app_metadata to_bitmap to_index_location to_name to_root to_seqno to_stats
-// to_vlog_location
 
 #[test]
 fn test_robt_build_read() {
@@ -28,6 +22,8 @@ fn test_robt_build_read() {
     do_robt_build_read::<u64, _>("u64,nobitmap", seed, NoBitmap);
     do_robt_build_read::<u16, _>("u16,xor8", seed, Xor8::<BuildHasherDefault>::new());
     do_robt_build_read::<u64, _>("u64,xor8", seed, Xor8::<BuildHasherDefault>::new());
+    do_robt_build_read::<u16, _>("u16,fuse8", seed, Fuse8::<BuildHasherDefault>::new());
+    do_robt_build_read::<u64, _>("u64,fuse8", seed, Fuse8::<BuildHasherDefault>::new());
 }
 
 fn do_robt_build_read<K, B>(prefix: &str, seed: u128, bitmap: B)

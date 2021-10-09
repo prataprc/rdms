@@ -77,6 +77,29 @@ impl Footprint for String {
     }
 }
 
+#[derive(Clone)]
+pub struct Binary(Vec<u8>);
+
+impl Diff for Binary {
+    type Delta = Self;
+
+    fn diff(&self, old: &Self) -> Self::Delta {
+        Binary(old.0.to_vec())
+    }
+
+    fn merge(&self, delta: &Self::Delta) -> Self {
+        Binary(delta.0.to_vec())
+    }
+}
+
+impl Footprint for Binary {
+    fn footprint(&self) -> Result<isize> {
+        use std::mem::size_of;
+        let size = size_of::<Binary>() + self.0.capacity();
+        err_at!(FailConvert, isize::try_from(size))
+    }
+}
+
 #[cfg(test)]
 #[path = "types_test.rs"]
 mod types_test;

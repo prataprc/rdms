@@ -1,4 +1,5 @@
 use rand::{rngs::SmallRng, Rng, SeedableRng};
+use serde::Deserialize;
 
 use std::{
     collections::BTreeMap,
@@ -6,16 +7,18 @@ use std::{
     time::{self, SystemTime},
 };
 
-use crate::{get_property, load_profile, Generate, Opt};
+use crate::{load_profile, Generate, Opt};
 use rdms::db;
 
-const DEFAULT_KEY_SIZE: i64 = 16;
-const DEFAULT_VAL_SIZE: i64 = 16;
+const DEFAULT_KEY_SIZE: usize = 16;
+const DEFAULT_VAL_SIZE: usize = 16;
 
-#[derive(Clone)]
+#[derive(Clone, Deserialize)]
 pub struct Profile {
-    key: (String, usize),   // u64, binary
-    value: (String, usize), // u64, binary
+    key_type: String, // u64, binary
+    key_size: usize,
+    value_type: String, // u64, binary
+    value_size: usize,
     loads: usize,
     sets: usize,
     rems: usize,
@@ -34,14 +37,12 @@ impl Generate<u64> for Profile {
 
 impl Generate<db::Binary> for Profile {
     fn gen_key(&self, rng: &mut SmallRng) -> db::Binary {
-        let key = rng.gen::<u64>();
-        let size = self.key.1;
+        let (key, size) = (rng.gen::<u64>(), self.key_size);
         db::Binary(format!("{:0width$}", key, width = size).as_bytes().to_vec())
     }
 
     fn gen_value(&self, rng: &mut SmallRng) -> db::Binary {
-        let val = rng.gen::<u64>();
-        let size = self.value.1;
+        let (val, size) = (rng.gen::<u64>(), self.value_size);
         db::Binary(format!("{:0width$}", val, width = size).as_bytes().to_vec())
     }
 }
@@ -49,8 +50,10 @@ impl Generate<db::Binary> for Profile {
 impl Default for Profile {
     fn default() -> Profile {
         Profile {
-            key: ("u64".to_string(), 0),
-            value: ("u64".to_string(), 0),
+            key_type: "u64".to_string(),
+            key_size: DEFAULT_KEY_SIZE,
+            value_type: "u64".to_string(),
+            value_size: DEFAULT_VAL_SIZE,
             loads: 1_000_000,
             sets: 1_000_000,
             rems: 100_000,
@@ -59,37 +62,11 @@ impl Default for Profile {
     }
 }
 
-impl Profile {
-    fn from_toml(v: toml::Value) -> result::Result<Profile, String> {
-        let p: Profile = Default::default();
-
-        let key = (
-            get_property!(v, "key_type", as_str, &p.key.0).to_string(),
-            get_property!(v, "key_size", as_integer, DEFAULT_KEY_SIZE) as usize,
-        );
-        let value = (
-            get_property!(v, "value_type", as_str, &p.value.0).to_string(),
-            get_property!(v, "value_size", as_integer, DEFAULT_VAL_SIZE) as usize,
-        );
-
-        let p = Profile {
-            key,
-            value,
-            loads: get_property!(v, "loads", as_integer, p.loads as i64) as usize,
-            sets: get_property!(v, "sets", as_integer, p.sets as i64) as usize,
-            rems: get_property!(v, "rems", as_integer, p.rems as i64) as usize,
-            gets: get_property!(v, "gets", as_integer, p.gets as i64) as usize,
-        };
-
-        Ok(p)
-    }
-}
-
 pub fn perf(opts: Opt) -> result::Result<(), String> {
     let profile: Profile =
-        Profile::from_toml(load_profile(&opts)?).expect("invalid profile properties");
+        toml::from_str(&load_profile(&opts)?).map_err(|e| e.to_string())?;
 
-    let (kt, vt) = (&profile.key.0, &profile.value.0);
+    let (kt, vt) = (&profile.key_type, &profile.value_type);
 
     match (kt.as_str(), vt.as_str()) {
         ("u64", "u64") => load_and_spawn::<u64, u64>(opts, profile),

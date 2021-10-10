@@ -1,0 +1,40 @@
+key_type = "u64"
+value_type = "u64"
+key_size = 16
+value_size = 16
+bitmap = "nobitmap"
+
+[initial]
+sets = 1_000_000
+ins = 1_000_000
+rems = 100_000
+dels = 0
+
+[initial.robt]
+name =  "rdms-robt-perf"
+dir = ""
+z_blocksize = 4096
+m_blocksize = 4096
+v_blocksize = 4096
+delta_ok = true
+value_in_vlog = true
+flush_queue_size = 64
+
+[[incrs]]
+name = "rdms-robt-perf-incr1"
+sets = 1_000_000
+ins = 1_000_000
+rems = 100_000
+dels = 0
+compact = true
+compact_name = "rdms-robt-perf-compact1"
+
+[load]
+gets = 1_000_000
+get_versions = 0
+iter = 1,
+iter_versions = 0,
+reverse = 1,
+reverse_versions = 0,
+readers = 1
+validate = true

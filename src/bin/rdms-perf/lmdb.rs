@@ -1,14 +1,15 @@
 use lmdb::{self, Cursor, Transaction};
 use rand::{rngs::SmallRng, Rng, SeedableRng};
+use serde::Deserialize;
 
 use std::{io, result, sync::Arc, thread, time};
 
-use crate::{get_property, load_profile, Opt};
+use crate::{load_profile, Opt};
 
-const DEFAULT_KEY_SIZE: i64 = 16;
-const DEFAULT_VAL_SIZE: i64 = 16;
+const DEFAULT_KEY_SIZE: usize = 16;
+const DEFAULT_VAL_SIZE: usize = 16;
 
-#[derive(Clone)]
+#[derive(Clone, Deserialize)]
 pub struct Profile {
     name: String,
     dir: String,
@@ -28,8 +29,8 @@ impl Default for Profile {
         Profile {
             name: "perf-lmdb".to_string(),
             dir: String::default(),
-            key_size: DEFAULT_KEY_SIZE as usize,
-            val_size: DEFAULT_VAL_SIZE as usize,
+            key_size: DEFAULT_KEY_SIZE,
+            val_size: DEFAULT_VAL_SIZE,
             load_batch: 100_000,
             loads: 1_000_000,
             sets: 1_000_000,
@@ -42,41 +43,19 @@ impl Default for Profile {
 }
 
 impl Profile {
-    fn from_toml(v: toml::Value) -> result::Result<Profile, String> {
-        let p: Profile = Default::default();
-        let ks = get_property!(v, "key_size", as_integer, p.key_size as i64) as usize;
-        let vs = get_property!(v, "value_size", as_integer, p.val_size as i64) as usize;
-
-        let p = Profile {
-            name: get_property!(v, "name", as_str, p.name.as_str()).to_string(),
-            dir: get_property!(v, "dir", as_str, p.dir.as_str()).to_string(),
-            key_size: ks,
-            val_size: vs,
-            load_batch: get_property!(v, "cas", as_integer, p.load_batch as i64) as usize,
-            loads: get_property!(v, "loads", as_integer, p.loads as i64) as usize,
-            sets: get_property!(v, "sets", as_integer, p.sets as i64) as usize,
-            rems: get_property!(v, "rems", as_integer, p.rems as i64) as usize,
-            gets: get_property!(v, "gets", as_integer, p.gets as i64) as usize,
-            writers: get_property!(v, "writers", as_integer, p.writers as i64) as usize,
-            readers: get_property!(v, "readers", as_integer, p.loads as i64) as usize,
-        };
-
-        Ok(p)
-    }
-
-    fn reset_writeops(&mut self) {
+    fn reset_write_ops(&mut self) {
         self.sets = 0;
         self.rems = 0;
     }
 
-    fn reset_readops(&mut self) {
+    fn reset_read_ops(&mut self) {
         self.gets = 0;
     }
 }
 
 pub fn perf(opts: Opt) -> result::Result<(), String> {
     let profile: Profile =
-        Profile::from_toml(load_profile(&opts)?).expect("invalid profile properties");
+        toml::from_str(&load_profile(&opts)?).map_err(|e| e.to_string())?;
     load_and_spawn(opts, profile)
 }
 
@@ -90,12 +69,12 @@ fn load_and_spawn(opts: Opt, p: Profile) -> Result<(), String> {
     let mut handles = vec![];
     for j in 0..p.writers {
         let (seed, mut pp, envv) = (opts.seed, p.clone(), Arc::clone(&env));
-        pp.reset_readops();
+        pp.reset_read_ops();
         handles.push(thread::spawn(move || incr_load(j, seed, pp, envv, db)));
     }
     for j in 0..p.readers {
         let (seed, mut pp, envv) = (opts.seed, p.clone(), Arc::clone(&env));
-        pp.reset_writeops();
+        pp.reset_write_ops();
         handles.push(thread::spawn(move || incr_load(j, seed, pp, envv, db)));
     }
     for handle in handles.into_iter() {

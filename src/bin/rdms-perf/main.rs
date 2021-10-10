@@ -6,7 +6,7 @@ use std::result;
 mod btree_map;
 mod llrb;
 mod lmdb;
-// mod robt;
+mod robt;
 
 /// Command line options.
 #[derive(Clone, StructOpt)]
@@ -27,38 +27,27 @@ fn main() {
     }
 
     match opts.command.as_str() {
-        "llrb" => llrb::perf(opts).unwrap(),
         "btree" | "btree_map" | "btree-map" => btree_map::perf(opts).unwrap(),
+        "llrb" => llrb::perf(opts).unwrap(),
         "lmdb" => lmdb::perf(opts).unwrap(),
         //"robt" => robt::perf(opts).unwrap(),
         command => println!("rdms-perf: error invalid command {}", command),
     }
 }
 
-fn load_profile(opts: &Opt) -> result::Result<toml::Value, String> {
+fn load_profile(opts: &Opt) -> result::Result<String, String> {
     use std::{fs, str::from_utf8};
 
     let ppath = opts.profile.clone();
     let s = from_utf8(&fs::read(ppath).expect("invalid profile file path"))
         .expect("invalid profile-text encoding, must be in toml")
         .to_string();
-    Ok(s.parse().expect("invalid profile format"))
+    Ok(s)
+    // Ok(s.parse().expect("invalid profile format"))
 }
 
 trait Generate<T> {
     fn gen_key(&self, rng: &mut SmallRng) -> T;
 
     fn gen_value(&self, rng: &mut SmallRng) -> T;
-}
-
-#[macro_export]
-macro_rules! get_property {
-    ($value:ident, $name:expr, $meth:ident, $def:expr) => {
-        $value
-            .as_table()
-            .unwrap()
-            .get($name)
-            .map(|v| v.$meth().unwrap_or($def))
-            .unwrap_or($def)
-    };
 }

@@ -36,6 +36,8 @@ fs2 = "0.4.3"
 structopt = { version = "0.3.20", default-features = false, optional = true }
 rand = { version = "0.7.3", features = ["small_rng"], optional = true }
 lmdb = { version = "0.8.0", optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+
 
 # jsondata = "0.6.2"
 # jsondata = { git = "https://github.com/bnclabs/jsondata.git" }
@@ -49,4 +51,4 @@ lmdb = { version = "0.8.0", optional = true }
 rand = "0.6.4"
 
 [features]
-rdms-perf = ["structopt", "rand", "lmdb"]
+rdms-perf = ["structopt", "rand", "lmdb", "serde"]

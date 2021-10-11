@@ -38,12 +38,14 @@ impl Generate<u64> for Profile {
 impl Generate<db::Binary> for Profile {
     fn gen_key(&self, rng: &mut SmallRng) -> db::Binary {
         let (key, size) = (rng.gen::<u64>(), self.key_size);
-        db::Binary(format!("{:0width$}", key, width = size).as_bytes().to_vec())
+        let val = format!("{:0width$}", key, width = size).as_bytes().to_vec();
+        db::Binary { val }
     }
 
     fn gen_value(&self, rng: &mut SmallRng) -> db::Binary {
         let (val, size) = (rng.gen::<u64>(), self.value_size);
-        db::Binary(format!("{:0width$}", val, width = size).as_bytes().to_vec())
+        let val = format!("{:0width$}", val, width = size).as_bytes().to_vec();
+        db::Binary { val }
     }
 }
 

@@ -32,9 +32,9 @@ compact_name = "rdms-robt-perf-compact1"
 [load]
 gets = 1_000_000
 get_versions = 0
-iter = 1,
-iter_versions = 0,
-reverse = 1,
-reverse_versions = 0,
+iter = true
+iter_versions = false
+reverse = true
+reverse_versions = false
 readers = 1
 validate = true

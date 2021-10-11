@@ -1,12 +1,13 @@
+use cbordata::{FromCbor, IntoCbor};
 use rand::{rngs::SmallRng, Rng, SeedableRng};
 use serde::Deserialize;
 
-use std::{fmt, result, thread, time};
+use std::{ffi, fmt, hash::Hash, result, thread, time};
 
 use rdms::{
     db::{self, ToJson},
-    llrb::Index as Mdb,
-    robt::Index,
+    llrb::{self, Index as Mdb},
+    robt, Result,
 };
 
 use crate::{load_profile, Generate, Opt};
@@ -106,10 +107,10 @@ impl Default for Incremental {
 struct Load {
     gets: usize,
     get_versions: usize,
-    iter: usize,
-    iter_versions: usize,
-    reverse: usize,
-    reverse_versions: usize,
+    iter: bool,
+    iter_versions: bool,
+    reverse: bool,
+    reverse_versions: bool,
     readers: usize,
     validate: bool,
 }
@@ -119,10 +120,10 @@ impl Default for Load {
         Load {
             gets: 1_000_000,
             get_versions: 0,
-            iter: 1,
-            iter_versions: 0,
-            reverse: 1,
-            reverse_versions: 0,
+            iter: true,
+            iter_versions: false,
+            reverse: true,
+            reverse_versions: false,
             readers: 1,
             validate: true,
         }
@@ -142,12 +143,14 @@ impl Generate<u64> for Profile {
 impl Generate<db::Binary> for Profile {
     fn gen_key(&self, rng: &mut SmallRng) -> db::Binary {
         let (key, size) = (rng.gen::<u64>(), self.key_size);
-        db::Binary(format!("{:0width$}", key, width = size).as_bytes().to_vec())
+        let val = format!("{:0width$}", key, width = size).as_bytes().to_vec();
+        db::Binary { val }
     }
 
     fn gen_value(&self, rng: &mut SmallRng) -> db::Binary {
         let (val, size) = (rng.gen::<u64>(), self.value_size);
-        db::Binary(format!("{:0width$}", val, width = size).as_bytes().to_vec())
+        let val = format!("{:0width$}", val, width = size).as_bytes().to_vec();
+        db::Binary { val }
     }
 }
 
@@ -163,6 +166,23 @@ impl Default for Profile {
             incrs: vec![Incremental::default()],
             load: Load::default(),
         }
+    }
+}
+
+impl Profile {
+    fn to_initial_config(&self) -> robt::Config {
+        let mut config = robt::Config::new(
+            self.initial.robt.dir.as_ref(),
+            &self.initial.robt.name.as_ref(),
+        );
+        config.z_blocksize = self.initial.robt.z_blocksize;
+        config.m_blocksize = self.initial.robt.m_blocksize;
+        config.v_blocksize = self.initial.robt.v_blocksize;
+        config.delta_ok = self.initial.robt.delta_ok;
+        config.value_in_vlog = self.initial.robt.value_in_vlog;
+        config.flush_queue_size = self.initial.robt.flush_queue_size;
+
+        config
     }
 }
 
@@ -257,24 +277,125 @@ pub fn perf(opts: Opt) -> result::Result<(), String> {
 //    Ok(())
 //}
 
-//fn initial_index<K, B>(p: &Profile, config: Config) -> Result<Config, String> {
-//    let appmd = "rdms-robt-perf-initial".as_bytes().to_vec();
-//    let mdb = llrb::load_index(seed, p.sets, p.ins, p.rems, p.dels, None);
-//    let seqno = Some(mdb.to_seqno());
-//
-//    let elapsed = {
-//        let start = time::Instance::now(),
-//
-//        let mut build = Builder::initial(config.clone(), appmd.to_vec()).unwrap();
-//        build
-//            .build_index(mdb.iter().unwrap().map(|e| Ok(e)), bitmap, seqno)
-//            .unwrap();
-//        start.elapsed()
-//    };
-//
-//    println!("Took {} to build {} items", elapsed, mdb.len())
-//    Ok(config)
-//}
+fn initial_index<K, V, B>(
+    seed: u128,
+    p: &Profile,
+    bitmap: B,
+) -> result::Result<(), String>
+where
+    K: Clone + Ord + Hash + db::Footprint + fmt::Debug + IntoCbor,
+    V: Clone + db::Footprint + fmt::Debug + IntoCbor + db::Diff + IntoCbor,
+    <V as db::Diff>::Delta: db::Footprint + IntoCbor + FromCbor,
+    B: db::Bloom,
+    rand::distributions::Standard: rand::distributions::Distribution<K>,
+    rand::distributions::Standard: rand::distributions::Distribution<V>,
+{
+    let appmd = "rdms-robt-perf-initial".as_bytes().to_vec();
+    let p_init = p.initial.clone();
+    let mdb = llrb::load_index(
+        seed,
+        p_init.sets,
+        p_init.ins,
+        p_init.rems,
+        p_init.dels,
+        None,
+    );
+    let seqno = Some(mdb.to_seqno());
+
+    let elapsed = {
+        let start = time::Instant::now();
+        let config = p.to_initial_config();
+
+        let mut build: robt::Builder<K, V> =
+            robt::Builder::initial(config, appmd.to_vec()).unwrap();
+        build
+            .build_index(
+                mdb.iter().unwrap().map(|e: db::Entry<K, V>| Ok(e)),
+                bitmap,
+                seqno,
+            )
+            .unwrap();
+        start.elapsed()
+    };
+
+    println!("Took {:?} for initial build {} items", elapsed, mdb.len());
+    Ok(())
+}
+
+fn incr_index<K, V, B>(seed: u128, p: &Profile, bitmap: B) -> result::Result<(), String>
+where
+    K: Clone + Ord + Hash + db::Footprint + fmt::Debug + IntoCbor + FromCbor,
+    V: Clone + db::Diff + db::Footprint + fmt::Debug + IntoCbor + FromCbor,
+    <V as db::Diff>::Delta: db::Footprint + IntoCbor + FromCbor,
+    B: Clone + db::Bloom,
+    rand::distributions::Standard: rand::distributions::Distribution<K>,
+    rand::distributions::Standard: rand::distributions::Distribution<V>,
+{
+    let mut index = {
+        let dir: &ffi::OsStr = p.initial.robt.dir.as_ref();
+        robt::Index::open(dir, &p.initial.robt.name).unwrap()
+    };
+    let config = p.to_initial_config();
+
+    for (i, p_incr) in p.incrs.iter().enumerate() {
+        let mut config = config.clone();
+        config.name = p_incr.name.clone();
+
+        let appmd = format!("rdms-robt-perf-incremental-{}", i)
+            .as_bytes()
+            .to_vec();
+        let seqno = Some(index.to_seqno());
+
+        let mdb = llrb::load_index(
+            seed,
+            p_incr.sets,
+            p_incr.ins,
+            p_incr.rems,
+            p_incr.dels,
+            seqno,
+        );
+
+        let elapsed = {
+            let start = time::Instant::now();
+            let mut build = index
+                .try_clone()
+                .unwrap()
+                .incremental(&config.dir, &config.name, appmd)
+                .unwrap();
+            build
+                .build_index(
+                    mdb.iter().unwrap().map(|e: db::Entry<K, V>| Ok(e)),
+                    bitmap.clone(),
+                    seqno,
+                )
+                .unwrap();
+            start.elapsed()
+        };
+        println!(
+            "Took {:?} for incremental build {} items",
+            elapsed,
+            index.len()
+        );
+
+        index = if p_incr.compact {
+            config.name = p_incr.compact_name.clone();
+            let start = time::Instant::now();
+            let cindex = index
+                .compact(config, bitmap.clone(), db::Cutoff::Mono)
+                .unwrap();
+            let elapsed = start.elapsed();
+            println!(
+                "Took {:?} for compact build {} items",
+                elapsed,
+                cindex.len()
+            );
+            cindex
+        } else {
+            index
+        }
+    }
+    Ok(())
+}
 
 //{
 //    let mut handles = vec![];
@@ -320,89 +441,79 @@ pub fn perf(opts: Opt) -> result::Result<(), String> {
 //    Ok(())
 //}
 
-//fn incr_load<K, V>(
-//    j: usize,
-//    seed: u128,
-//    p: Profile,
-//    index: Index<K, V>,
-//) -> result::Result<(), String>
-//where
-//    K: 'static + Send + Sync + Clone + Ord + db::Footprint,
-//    V: 'static + Send + Sync + db::Diff + db::Footprint,
-//    <V as db::Diff>::Delta: Send + Sync + db::Footprint,
-//    Key: Generate<K>,
-//    Value: Generate<V>,
-//{
-//    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
-//
-//    let start = time::Instant::now();
-//    let total = p.sets + p.ins + p.rems + p.dels + p.gets;
-//    let (mut sets, mut ins, mut rems, mut dels, mut gets) =
-//        (p.sets, p.ins, p.rems, p.dels, p.gets);
-//
-//    while (sets + ins + rems + dels + gets) > 0 {
-//        let key: K = p.key.gen(&mut rng);
-//        match rng.gen::<usize>() % (sets + ins + rems + dels + gets) {
-//            op if p.cas && op < sets => {
-//                let cas = rng.gen::<u64>() % (total as u64);
-//                let val: V = p.value.gen(&mut rng);
-//                index.set_cas(key, val, cas).unwrap();
-//                sets -= 1;
-//            }
-//            op if op < p.sets => {
-//                let val: V = p.value.gen(&mut rng);
-//                index.set(key, val).unwrap();
-//                sets -= 1;
-//            }
-//            op if p.cas && op < (p.sets + p.ins) => {
-//                let cas = rng.gen::<u64>() % (total as u64);
-//                let val: V = p.value.gen(&mut rng);
-//                index.insert_cas(key, val, cas).unwrap();
-//                ins -= 1;
-//            }
-//            op if op < (p.sets + p.ins) => {
-//                let val: V = p.value.gen(&mut rng);
-//                index.insert(key, val).unwrap();
-//                ins -= 1;
-//            }
-//            op if p.cas && op < (p.sets + p.ins + p.rems) => {
-//                let cas = rng.gen::<u64>() % (total as u64);
-//                index.remove_cas(&key, cas).unwrap();
-//                rems -= 1;
-//            }
-//            op if op < (p.sets + p.ins + p.rems) => {
-//                index.remove(&key).unwrap();
-//                rems -= 1;
-//            }
-//            op if p.cas && op < (p.sets + p.ins + p.rems + p.dels) => {
-//                let cas = rng.gen::<u64>() % (total as u64);
-//                index.delete_cas(&key, cas).unwrap();
-//                dels -= 1;
-//            }
-//            op if op < (p.sets + p.ins + p.rems + p.dels) => {
-//                index.delete(&key).unwrap();
-//                dels -= 1;
-//            }
-//            _op => {
-//                index.get(&key).ok();
-//                gets -= 1;
-//            }
-//        }
-//    }
-//
-//    println!(
-//        concat!(
-//            "rdms-perf: incremental-{} for (sets:{} ins:{} rems:{} dels:{} gets:{}) ",
-//            "operations took {:?}",
-//        ),
-//        j,
-//        p.sets,
-//        p.ins,
-//        p.rems,
-//        p.dels,
-//        p.gets,
-//        start.elapsed()
-//    );
-//
-//    Ok(())
-//}
+fn read_load<K, V, B>(
+    j: usize,
+    seed: u128,
+    p: Profile,
+    mut index: robt::Index<K, V, B>,
+) -> result::Result<(), String>
+where
+    K: 'static + Send + Sync + Clone + Ord + db::Footprint + FromCbor,
+    V: 'static + Send + Sync + db::Diff + db::Footprint + FromCbor,
+    <V as db::Diff>::Delta: Send + Sync + db::Footprint + FromCbor,
+    B: db::Bloom,
+    Profile: Generate<K>,
+{
+    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+
+    let start = time::Instant::now();
+    let total = p.load.gets + p.load.get_versions;
+    let (mut gets, mut getvers) = (p.load.gets, p.load.get_versions);
+
+    while (gets + getvers) > 0 {
+        let key: K = p.gen_key(&mut rng);
+        match rng.gen::<usize>() % (gets + getvers) {
+            op if op < gets => {
+                index.get(&key).ok();
+                gets -= 1;
+            }
+            _op => {
+                index.get_versions(&key).ok();
+            }
+        }
+    }
+
+    println!(
+        "rdms-perf: read-load-{} for (gets:{} get_versions:{}) operations took {:?}",
+        j,
+        p.load.gets,
+        p.load.get_versions,
+        start.elapsed()
+    );
+
+    if p.load.iter {
+        do_iter(j, "iter", index.iter(..).unwrap())
+    }
+    if p.load.iter_versions {
+        do_iter(j, "iter_versions", index.iter_versions(..).unwrap())
+    }
+    if p.load.reverse {
+        do_iter(j, "reverse", index.reverse(..).unwrap())
+    }
+    if p.load.reverse_versions {
+        do_iter(j, "reverse_versions", index.reverse(..).unwrap())
+    }
+
+    Ok(())
+}
+
+fn do_iter<I, K, V>(j: usize, prefix: &str, iter: I)
+where
+    V: db::Diff,
+    I: Iterator<Item = Result<db::Entry<K, V>>>,
+{
+    let start = time::Instant::now();
+    let len: usize = iter
+        .map(|e| {
+            e.unwrap();
+            1
+        })
+        .sum();
+    println!(
+        "rdms-perf: read-load-{} took {:?} to {} {} items",
+        j,
+        start.elapsed(),
+        prefix,
+        len
+    );
+}

@@ -5,6 +5,7 @@ src/db
 * `db::Delta<D>`    `0x00030001_u32`
 * `db::Entry<K, V>` `0x00050001_u32`
 * `db::NoDiff`      `0x00070001_u32`
+* `db::Binary`      `0x00170001_u32`
 
 src/robt
 ========

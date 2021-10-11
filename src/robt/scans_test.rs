@@ -16,7 +16,7 @@ fn test_robt_build_scan() {
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
     let inserts = 1_000_000;
-    let mdb = llrb::load_index::<u16>(seed, 0, inserts, 0, 1_000, None);
+    let mdb = llrb::load_index::<u16, u64>(seed, 0, inserts, 0, 1_000, None);
 
     let start_seqno = rng.gen::<u64>() % ((mdb.len() as u64) * 2);
     let mut iter = BuildScan::new(mdb.iter().unwrap().map(|e| Ok(e)), start_seqno);
@@ -47,7 +47,7 @@ fn test_robt_nobitmap_scan() {
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
     let inserts = 1_000_000;
-    let mdb = llrb::load_index::<u16>(seed, 0, inserts, 0, 1_000, None);
+    let mdb = llrb::load_index::<u16, u64>(seed, 0, inserts, 0, 1_000, None);
 
     // with NoBitmap
     let mut iter =
@@ -75,7 +75,7 @@ fn test_robt_xorfilter_scan() {
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
     let inserts = 1_000_000;
-    let mdb = llrb::load_index::<u16>(seed, 0, inserts, 0, 1_000, None);
+    let mdb = llrb::load_index::<u16, u64>(seed, 0, inserts, 0, 1_000, None);
 
     // with xorfilter
     let mut iter =

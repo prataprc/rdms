@@ -1,11 +1,61 @@
 use arbitrary::{self, unstructured::Unstructured, Arbitrary};
 use rand::{self, prelude::random, rngs::SmallRng, Rng, SeedableRng};
-use xorfilter::{BuildHasherDefault, Fuse8, Xor8};
+use xorfilter::{BuildHasherDefault, Xor8};
 
 use std::{fs, mem, thread};
 
 use super::*;
 use crate::{bitmaps::NoBitmap, db, llrb};
+
+trait Key:
+    Sync
+    + Send
+    + Clone
+    + Ord
+    + PartialEq
+    + Hash
+    + db::Footprint
+    + IntoCbor
+    + FromCbor
+    + ToString
+    + fmt::Debug
+{
+}
+trait Value:
+    Sync
+    + Send
+    + Clone
+    + PartialEq
+    + db::Diff
+    + db::Footprint
+    + IntoCbor
+    + FromCbor
+    + ToString
+    + fmt::Debug
+{
+}
+trait Delta:
+    Sync
+    + Send
+    + Clone
+    + PartialEq
+    + db::Footprint
+    + IntoCbor
+    + FromCbor
+    + ToString
+    + fmt::Debug
+{
+}
+
+impl Key for u16 {}
+impl Value for u16 {}
+impl Delta for u16 {}
+impl Key for u64 {}
+impl Value for u64 {}
+impl Delta for u64 {}
+impl Key for db::Binary {}
+impl Value for db::Binary {}
+impl Delta for db::Binary {}
 
 #[test]
 fn test_robt_build_read() {
@@ -18,29 +68,28 @@ fn test_robt_build_read() {
     // let seed: u128 = 315408295460649044406651951935429140111;
     println!("test_robt_read {}", seed);
 
-    do_robt_build_read::<u16, _>("u16,nobitmap", seed, NoBitmap);
-    do_robt_build_read::<u64, _>("u64,nobitmap", seed, NoBitmap);
-    do_robt_build_read::<u16, _>("u16,xor8", seed, Xor8::<BuildHasherDefault>::new());
-    do_robt_build_read::<u64, _>("u64,xor8", seed, Xor8::<BuildHasherDefault>::new());
-    do_robt_build_read::<u16, _>("u16,fuse8", seed, Fuse8::<BuildHasherDefault>::new());
-    do_robt_build_read::<u64, _>("u64,fuse8", seed, Fuse8::<BuildHasherDefault>::new());
+    //do_robt_build_read::<u16, u64, _>("u16,nobitmap", seed, NoBitmap);
+    do_robt_build_read::<db::Binary, db::Binary, _>("binary,nobitmap", seed, NoBitmap);
+    do_robt_build_read::<u16, u64, _>(
+        "u16,xor8",
+        seed,
+        Xor8::<BuildHasherDefault>::new(),
+    );
+    do_robt_build_read::<db::Binary, db::Binary, _>(
+        "binary,xor8",
+        seed,
+        Xor8::<BuildHasherDefault>::new(),
+    );
 }
 
-fn do_robt_build_read<K, B>(prefix: &str, seed: u128, bitmap: B)
+fn do_robt_build_read<K, V, B>(prefix: &str, seed: u128, bitmap: B)
 where
-    for<'a> K: 'static
-        + Sync
-        + Send
-        + Clone
-        + Ord
-        + Hash
-        + db::Footprint
-        + IntoCbor
-        + FromCbor
-        + Arbitrary<'a>
-        + fmt::Debug,
+    for<'a> K: 'static + Key + Arbitrary<'a>,
+    V: 'static + Value,
+    <V as db::Diff>::Delta: 'static + Delta,
     B: 'static + Sync + Send + Clone + db::Bloom,
     rand::distributions::Standard: rand::distributions::Distribution<K>,
+    rand::distributions::Standard: rand::distributions::Distribution<V>,
 {
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
@@ -51,9 +100,9 @@ where
     let mut config = Config {
         dir: dir.as_os_str().to_os_string(),
         name: name.to_string(),
-        z_blocksize: [1024, 4096, 8192, 16384, 1048576][rng.gen::<usize>() % 5],
-        m_blocksize: [1024, 4096, 8192, 16384, 1048576][rng.gen::<usize>() % 5],
-        v_blocksize: [1024, 4096, 8192, 16384, 1048576][rng.gen::<usize>() % 5],
+        z_blocksize: [4096, 8192, 16384, 1048576][rng.gen::<usize>() % 4],
+        m_blocksize: [4096, 8192, 16384, 1048576][rng.gen::<usize>() % 4],
+        v_blocksize: [4096, 8192, 16384, 1048576][rng.gen::<usize>() % 4],
         delta_ok: rng.gen::<bool>(),
         value_in_vlog: rng.gen::<bool>(),
         flush_queue_size: [32, 64, 1024][rng.gen::<usize>() % 3],
@@ -66,32 +115,27 @@ where
     );
     println!("do_robt_build_read-{} config:{:?}", prefix, config);
 
-    let mdb = do_initial::<K, B>(prefix, seed, bitmap.clone(), &config, None);
+    let mdb = do_initial::<K, V, B>(prefix, seed, bitmap.clone(), &config, None);
 
-    let (mut index, vlog) = {
+    println!("do_robt_build_read-{} done initial build ...", prefix);
+
+    let mut index = {
         let file = config.to_index_location();
-        (
-            open_index::<K, B>(&config.dir, &config.name, &file, seed),
-            config.to_vlog_location(),
-        )
+        open_index::<K, V, B>(&config.dir, &config.name, &file, seed)
     };
+    validate_bitmap(&mut index);
 
     config.name = name.to_owned() + "-incr";
-    vlog.clone().map(|f| config.set_vlog_location(Some(f)));
-    do_incremental::<K, B>(
-        prefix,
-        seed,
-        bitmap.clone(),
-        &mdb,
-        &mut index,
-        &config,
-        vlog,
-    );
+    config.set_vlog_location(None);
+    do_incremental::<K, V, B>(prefix, seed, bitmap.clone(), &mdb, index, &config);
 
-    index = {
+    println!("do_robt_build_read-{} done incremental build ...", prefix);
+
+    let mut index = {
         let file = config.to_index_location();
-        open_index::<K, B>(&config.dir, &config.name, &file, seed)
+        open_index::<K, V, B>(&config.dir, &config.name, &file, seed)
     };
+    validate_bitmap(&mut index);
 
     config.name = name.to_owned() + "-compact1";
     config.set_vlog_location(None);
@@ -103,34 +147,28 @@ where
     println!("do_robt_build_read-{}, compact cutoff:{:?}", prefix, cutoff);
     index = index.compact(config.clone(), bitmap, cutoff).unwrap();
     validate_compact(&mut index, cutoff, &mdb);
+    validate_bitmap(&mut index);
 
     let file = config.to_index_location();
-    index = open_index::<K, B>(&config.dir, &config.name, &file, seed);
+    index = open_index::<K, V, B>(&config.dir, &config.name, &file, seed);
     index.validate().unwrap();
     index.purge().unwrap();
 }
 
-fn do_initial<K, B>(
+fn do_initial<K, V, B>(
     prefix: &str,
     seed: u128,
     bitmap: B,
     config: &Config,
     seqno: Option<u64>,
-) -> llrb::Index<K, u64>
+) -> llrb::Index<K, V>
 where
-    for<'a> K: 'static
-        + Sync
-        + Send
-        + Clone
-        + Ord
-        + Hash
-        + db::Footprint
-        + IntoCbor
-        + FromCbor
-        + Arbitrary<'a>
-        + fmt::Debug,
+    for<'a> K: 'static + Key + Arbitrary<'a>,
+    V: 'static + Value,
+    <V as db::Diff>::Delta: 'static + Delta,
     B: 'static + Sync + Send + Clone + db::Bloom,
     rand::distributions::Standard: rand::distributions::Distribution<K>,
+    rand::distributions::Standard: rand::distributions::Distribution<V>,
 {
     let n_sets = 100_000;
     let n_inserts = 100_000;
@@ -154,7 +192,7 @@ where
         let (cnf, mdb, appmd) = (config.clone(), mdb.clone(), appmd.to_vec());
         let seed = seed + ((i as u128) * 10);
         handles.push(thread::spawn(move || {
-            read_thread::<K, B>(prefix, i, seed, cnf, mdb, appmd)
+            read_thread::<K, V, B>(prefix, i, seed, cnf, mdb, appmd)
         }));
     }
 
@@ -165,28 +203,20 @@ where
     mdb
 }
 
-fn do_incremental<K, B>(
+fn do_incremental<K, V, B>(
     prefix: &str,
     seed: u128,
     bitmap: B,
-    mdb: &llrb::Index<K, u64>,
-    index: &mut Index<K, u64, B>,
+    mdb: &llrb::Index<K, V>,
+    mut index: Index<K, V, B>,
     config: &Config,
-    vlog: Option<ffi::OsString>,
 ) where
-    for<'a> K: 'static
-        + Sync
-        + Send
-        + Clone
-        + Ord
-        + Hash
-        + db::Footprint
-        + IntoCbor
-        + FromCbor
-        + Arbitrary<'a>
-        + fmt::Debug,
+    for<'a> K: 'static + Key + Arbitrary<'a>,
+    V: 'static + Value,
+    <V as db::Diff>::Delta: 'static + Delta,
     B: 'static + Sync + Send + Clone + db::Bloom,
     rand::distributions::Standard: rand::distributions::Distribution<K>,
+    rand::distributions::Standard: rand::distributions::Distribution<V>,
 {
     let n_sets = 100_000;
     let n_inserts = 100_000;
@@ -197,10 +227,14 @@ fn do_incremental<K, B>(
     let appmd = "test_robt_read-metadata-snap".as_bytes().to_vec();
     let snap = {
         let seqno = Some(mdb.to_seqno());
-        llrb::load_index(seed, n_sets, n_inserts, n_rems, n_dels, seqno)
+        llrb::load_index::<K, V>(seed, n_sets, n_inserts, n_rems, n_dels, seqno)
     };
 
-    let mut build = Builder::incremental(config.clone(), vlog, appmd.to_vec()).unwrap();
+    let mut build = index
+        .try_clone()
+        .unwrap()
+        .incremental(&config.dir, &config.name, appmd.to_vec())
+        .unwrap();
     build
         .build_index(
             index
@@ -218,10 +252,10 @@ fn do_incremental<K, B>(
     let mut handles = vec![];
     for i in 0..n_readers {
         let prefix = prefix.to_string();
-        let (cnf, mdb, appmd) = (config.clone(), mdb.clone(), appmd.to_vec());
+        let (config, mdb, appmd) = (config.clone(), mdb.clone(), appmd.to_vec());
         let seed = seed + ((i as u128) * 10);
         handles.push(thread::spawn(move || {
-            read_thread::<K, B>(prefix, i, seed, cnf, mdb, appmd)
+            read_thread::<K, V, B>(prefix, i, seed, config, mdb, appmd)
         }));
     }
 
@@ -230,16 +264,20 @@ fn do_incremental<K, B>(
     }
 }
 
-fn read_thread<K, B>(
+fn read_thread<K, V, B>(
     prefix: String,
     id: usize,
     seed: u128,
     config: Config,
-    mdb: llrb::Index<K, u64>,
+    mdb: llrb::Index<K, V>,
     app_meta_data: Vec<u8>,
 ) where
-    for<'a> K: Clone + Ord + FromCbor + Arbitrary<'a> + fmt::Debug,
-    B: Clone + db::Bloom,
+    for<'a> K: 'static + Key + Arbitrary<'a>,
+    V: 'static + Value,
+    <V as db::Diff>::Delta: 'static + Delta,
+    B: 'static + Sync + Send + Clone + db::Bloom,
+    rand::distributions::Standard: rand::distributions::Distribution<K>,
+    rand::distributions::Standard: rand::distributions::Distribution<V>,
 {
     use Error::KeyNotFound;
 
@@ -248,7 +286,7 @@ fn read_thread<K, B>(
     let mut index = {
         let dir = config.dir.as_os_str();
         let file = config.to_index_location();
-        open_index::<K, B>(dir, &config.name, &file, seed)
+        open_index::<K, V, B>(dir, &config.name, &file, seed)
     };
 
     let mut counts = [0_usize; 19];
@@ -295,9 +333,12 @@ fn read_thread<K, B>(
                     }
                     ToVlogLocation if config.value_in_vlog || config.delta_ok => {
                         counts[7] += 1;
-                        assert_eq!(index.to_vlog_location(), config.to_vlog_location());
+                        assert!(index.to_vlog_location().is_some())
                     }
-                    ToVlogLocation => (),
+                    ToVlogLocation => {
+                        counts[7] += 1;
+                        assert!(index.to_vlog_location().is_none())
+                    }
                     ToRoot => {
                         counts[8] += 1;
                         assert!(index.to_root() > 0, "{}", index.to_root());
@@ -386,7 +427,22 @@ fn read_thread<K, B>(
                             if !config.delta_ok {
                                 e1.deltas = vec![];
                             }
-                            assert_eq!(e1, iter2.next().unwrap().unwrap())
+                            match iter2.next() {
+                                Some(Ok(e2)) => {
+                                    assert_eq!(
+                                        e1,
+                                        e2,
+                                        "{} {}",
+                                        e1.as_key().to_string(),
+                                        e2.as_key().to_string()
+                                    )
+                                }
+                                Some(Err(e)) => panic!("err for e2 key:{}", e),
+                                None => panic!(
+                                    "missing for e2 key:{}",
+                                    e1.as_key().to_string()
+                                ),
+                            }
                         }
                         assert!(iter1.next().is_none());
                         assert!(iter2.next().is_none());
@@ -414,12 +470,14 @@ fn read_thread<K, B>(
     index.close().unwrap();
 }
 
-fn validate_stats<K>(
+fn validate_stats<K, V>(
     stats: &Stats,
     config: &Config,
-    mdb: &llrb::Index<K, u64>,
+    mdb: &llrb::Index<K, V>,
     n_abytes: u64,
-) {
+) where
+    V: db::Diff,
+{
     assert_eq!(stats.name, config.name);
     assert_eq!(stats.z_blocksize, config.z_blocksize);
     assert_eq!(stats.m_blocksize, config.m_blocksize);
@@ -428,7 +486,9 @@ fn validate_stats<K>(
     assert_eq!(stats.value_in_vlog, config.value_in_vlog);
 
     if config.value_in_vlog || config.delta_ok {
-        assert_eq!(stats.vlog_location.clone(), config.to_vlog_location());
+        assert!(stats.vlog_location.is_some())
+    } else {
+        assert!(stats.vlog_location.is_none())
     }
 
     assert_eq!(stats.n_count, mdb.len() as u64);
@@ -437,14 +497,16 @@ fn validate_stats<K>(
     assert_eq!(stats.n_abytes, n_abytes);
 }
 
-fn open_index<K, B>(
+fn open_index<K, V, B>(
     dir: &ffi::OsStr,
     name: &str,
     file: &ffi::OsStr,
     seed: u128,
-) -> Index<K, u64, B>
+) -> Index<K, V, B>
 where
     K: Clone + FromCbor,
+    V: db::Diff + FromCbor,
+    <V as db::Diff>::Delta: FromCbor,
     B: db::Bloom,
 {
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
@@ -461,20 +523,24 @@ where
     }
 }
 
-fn validate_compact<K, B>(
-    index: &mut Index<K, u64, B>,
+fn validate_compact<K, V, B>(
+    index: &mut Index<K, V, B>,
     cutoff: db::Cutoff,
-    mdb: &llrb::Index<K, u64>,
+    mdb: &llrb::Index<K, V>,
 ) where
-    K: Clone + PartialEq + Ord + FromCbor + fmt::Debug,
-    B: db::Bloom,
+    for<'a> K: 'static + Key + Arbitrary<'a>,
+    V: 'static + Value,
+    <V as db::Diff>::Delta: 'static + Delta,
+    B: 'static + Sync + Send + Clone + db::Bloom,
+    rand::distributions::Standard: rand::distributions::Distribution<K>,
+    rand::distributions::Standard: rand::distributions::Distribution<V>,
 {
-    let ref_entries: Vec<db::Entry<K, u64>> = mdb
+    let ref_entries: Vec<db::Entry<K, V>> = mdb
         .iter()
         .unwrap()
         .filter_map(|e| e.compact(cutoff))
         .collect();
-    let entries: Vec<db::Entry<K, u64>> = index
+    let entries: Vec<db::Entry<K, V>> = index
         .iter_versions(..)
         .unwrap()
         .map(|e| e.unwrap())
@@ -488,6 +554,22 @@ fn validate_compact<K, B>(
     );
     for (i, (re, ee)) in ref_entries.into_iter().zip(entries.into_iter()).enumerate() {
         assert_eq!(re, ee, "i:{}", i);
+    }
+}
+
+fn validate_bitmap<K, V, B>(index: &mut Index<K, V, B>)
+where
+    for<'a> K: 'static + Key + Arbitrary<'a>,
+    V: 'static + Value,
+    <V as db::Diff>::Delta: 'static + Delta,
+    B: 'static + Sync + Send + Clone + db::Bloom,
+    rand::distributions::Standard: rand::distributions::Distribution<K>,
+    rand::distributions::Standard: rand::distributions::Distribution<V>,
+{
+    let bitmap = index.to_bitmap();
+    for entry in index.iter(..).unwrap() {
+        let entry = entry.unwrap();
+        assert!(bitmap.contains(entry.as_key()), "{:?}", entry.as_key());
     }
 }
 
@@ -528,6 +610,19 @@ enum Limit<T> {
     Unbounded,
     Included(T),
     Excluded(T),
+}
+
+impl<T> ToString for Limit<T>
+where
+    T: ToString,
+{
+    fn to_string(&self) -> String {
+        match self {
+            Limit::Unbounded => "limit::unbounded".to_string(),
+            Limit::Included(v) => format!("limit::included({})", v.to_string()),
+            Limit::Excluded(v) => format!("limit::excluded({})", v.to_string()),
+        }
+    }
 }
 
 impl<T> From<Limit<T>> for Bound<T> {

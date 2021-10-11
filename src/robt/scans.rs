@@ -129,7 +129,8 @@ where
         }
     }
 
-    pub fn unwrap(self) -> Result<(B, I)> {
+    pub fn unwrap(mut self) -> Result<(B, I)> {
+        self.bitmap.build()?;
         Ok((self.bitmap, self.iter))
     }
 }

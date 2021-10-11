@@ -66,7 +66,10 @@ where
     /// Build a fresh index, using configuration and snapshot specific meta-data.
     ///
     /// Subsequently call [Builder::build_index] to start building the index.
-    pub fn initial(config: Config, meta: Vec<u8>) -> Result<Self> {
+    pub fn initial(mut config: Config, meta: Vec<u8>) -> Result<Self> {
+        // set to fresh vlog location, don't carry forward.
+        config.set_vlog_location(None);
+
         let queue_size = config.flush_queue_size;
         let iflush = {
             let loc = to_index_location(&config.dir, &config.name);
@@ -107,21 +110,14 @@ where
     /// into supplied `vlog` file in append only fashion.
     ///
     /// Subsequently call [Builder::build_index] to start building the index.
-    pub fn incremental(
-        config: Config,
-        vlog: Option<ffi::OsString>,
-        meta: Vec<u8>,
-    ) -> Result<Self> {
+    fn incremental(config: Config, meta: Vec<u8>) -> Result<Self> {
         let queue_size = config.flush_queue_size;
         let iflush = {
             let loc = to_index_location(&config.dir, &config.name);
             Rc::new(RefCell::new(Flusher::new(&loc, true, queue_size)?))
         };
-        let vflush = match vlog {
-            Some(vlog) if config.value_in_vlog || config.delta_ok => {
-                Rc::new(RefCell::new(Flusher::new(&vlog, true, queue_size)?))
-            }
-            Some(_) => err_at!(InvalidInput, msg: "vlog not required")?,
+        let vflush = match config.to_vlog_location() {
+            Some(vlog) => Rc::new(RefCell::new(Flusher::new(&vlog, true, queue_size)?)),
             None => Rc::new(RefCell::new(Flusher::empty())),
         };
 
@@ -448,12 +444,31 @@ where
         Ok(val)
     }
 
+    /// Consume this index and return a builder that can be used to incrementally
+    /// build a new snapshot ontop of this index-snapthos.
+    pub fn incremental(
+        self,
+        dir: &ffi::OsStr,
+        name: &str,
+        meta: Vec<u8>,
+    ) -> Result<Builder<K, V>>
+    where
+        K: IntoCbor,
+        V: IntoCbor,
+        <V as db::Diff>::Delta: IntoCbor,
+    {
+        let mut config: Config = self.stats.into();
+        config.dir = dir.to_os_string();
+        config.name = name.to_string();
+        Builder::incremental(config, meta)
+    }
+
     /// Compact this index into a new index specified by [Config].
     /// The `bitmap` argument carry same meaning as that of `build_index`
     /// method. Refer to package documentation to know more about `Cutoff`.
     pub fn compact(
         mut self,
-        config: Config,
+        mut config: Config,
         bitmap: B,
         cutoff: db::Cutoff,
     ) -> Result<Self>
@@ -462,6 +477,9 @@ where
         V: Clone + IntoCbor,
         <V as db::Diff>::Delta: IntoCbor,
     {
+        // set to fresh vlog location, don't carry forward.
+        config.set_vlog_location(None);
+
         let mut builder = {
             let app_meta = self.to_app_metadata();
             Builder::<K, V>::initial(config.clone(), app_meta)?

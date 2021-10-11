@@ -12,5 +12,5 @@ use node::Node;
 pub use op::Write;
 pub use stats::Stats;
 
-#[cfg(test)]
-pub(crate) use index::load_index;
+#[cfg(any(test, feature = "rdms-perf"))]
+pub use index::load_index;

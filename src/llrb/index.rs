@@ -1650,21 +1650,24 @@ fn find_end<K, V, Q>(
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "rdms-perf"))]
 use rand::{self, rngs::SmallRng, Rng, SeedableRng};
 
-#[cfg(test)]
-pub fn load_index<K>(
+#[cfg(any(test, feature = "rdms-perf"))]
+pub fn load_index<K, V>(
     seed: u128,
-    sets: u64,
-    inserts: u64,
-    rems: u64,
-    dels: u64,
+    sets: usize,
+    inserts: usize,
+    rems: usize,
+    dels: usize,
     seqno: Option<u64>,
-) -> Index<K, u64>
+) -> Index<K, V>
 where
     K: Clone + Ord + db::Footprint + fmt::Debug,
+    V: Clone + db::Diff + db::Footprint + fmt::Debug,
+    <V as db::Diff>::Delta: db::Footprint,
     rand::distributions::Standard: rand::distributions::Distribution<K>,
+    rand::distributions::Standard: rand::distributions::Distribution<V>,
 {
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
     let index = Index::new("testing", false /*spin*/);
@@ -1673,14 +1676,14 @@ where
     let (mut se, mut it, mut ds, mut rs) = (sets, inserts, dels, rems);
     while (se + it + ds + rs) > 0 {
         let key: K = rng.gen();
-        let value: u64 = rng.gen::<u64>();
+        let value: V = rng.gen::<V>();
         //println!(
         //    "load index {} key:{:?} seqno:{}",
         //    (se + it + ds + rs),
         //    key,
         //    index.to_seqno() + 1,
         //);
-        match rng.gen::<u64>() % (se + it + ds + rs) {
+        match rng.gen::<usize>() % (se + it + ds + rs) {
             k if k < se => {
                 index.set(key, value).ok();
                 se -= 1;

@@ -12,7 +12,7 @@ dels = 0
 
 [initial.robt]
 name =  "rdms-robt-perf"
-dir = ""
+dir = "/tmp/rdms-perf"
 z_blocksize = 4096
 m_blocksize = 4096
 v_blocksize = 4096

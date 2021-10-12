@@ -1,14 +1,11 @@
 use cbordata::{FromCbor, IntoCbor};
 use rand::{rngs::SmallRng, Rng, SeedableRng};
 use serde::Deserialize;
+use xorfilter::{BuildHasherDefault, Xor8};
 
-use std::{ffi, fmt, hash::Hash, result, thread, time};
+use std::{ffi, fmt, hash::Hash, iter::FromIterator, path, result, thread, time};
 
-use rdms::{
-    db::{self, ToJson},
-    llrb::{self, Index as Mdb},
-    robt, Result,
-};
+use rdms::{bitmaps::NoBitmap, db, llrb, robt, Result};
 
 use crate::{load_profile, Generate, Opt};
 
@@ -17,6 +14,59 @@ use crate::{load_profile, Generate, Opt};
 
 const DEFAULT_KEY_SIZE: usize = 16;
 const DEFAULT_VAL_SIZE: usize = 16;
+
+trait Key:
+    Sync
+    + Send
+    + Clone
+    + Ord
+    + PartialEq
+    + Hash
+    + db::Footprint
+    + IntoCbor
+    + FromCbor
+    + ToString
+    + fmt::Debug
+{
+}
+trait Value:
+    Sync
+    + Send
+    + Clone
+    + PartialEq
+    + db::Diff
+    + db::Footprint
+    + IntoCbor
+    + FromCbor
+    + ToString
+    + fmt::Debug
+{
+}
+trait Delta:
+    Sync
+    + Send
+    + Clone
+    + PartialEq
+    + db::Footprint
+    + IntoCbor
+    + FromCbor
+    + ToString
+    + fmt::Debug
+{
+}
+trait BloomFilter: Sync + Send + Clone + db::Bloom {}
+
+impl Key for u16 {}
+impl Value for u16 {}
+impl Delta for u16 {}
+impl Key for u64 {}
+impl Value for u64 {}
+impl Delta for u64 {}
+impl Key for db::Binary {}
+impl Value for db::Binary {}
+impl Delta for db::Binary {}
+impl BloomFilter for NoBitmap {}
+impl BloomFilter for Xor8 {}
 
 #[derive(Clone, Deserialize)]
 pub struct Profile {
@@ -187,95 +237,139 @@ impl Profile {
 }
 
 pub fn perf(opts: Opt) -> result::Result<(), String> {
-    let profile: Profile =
+    let mut profile: Profile =
         toml::from_str(&load_profile(&opts)?).map_err(|e| e.to_string())?;
+    profile.initial.robt.dir = path::PathBuf::from_iter(
+        vec![std::env::temp_dir(), "rdms-perf-robt".into()].into_iter(),
+    )
+    .to_str()
+    .unwrap()
+    .to_string();
 
     let (kt, vt) = (&profile.key_type, &profile.value_type);
 
-    match (kt.as_str(), vt.as_str()) {
-        //("u64", "u64") => load_and_spawn::<u64, u64>(opts, profile),
-        //("u64", "binary") => load_and_spawn::<u64, db::Binary>(opts, profile),
-        //("binary", "binary") => load_and_spawn::<db::Binary, db::Binary>(opts, profile),
-        (_, _) => unreachable!(),
+    match (kt.as_str(), vt.as_str(), profile.bitmap.as_str()) {
+        ("u64", "u64", "nobitmap") => {
+            load_and_spawn::<u64, u64, _>(opts, profile, NoBitmap)
+        }
+        ("u64", "binary", "nobitmap") => {
+            load_and_spawn::<u64, db::Binary, _>(opts, profile, NoBitmap)
+        }
+        ("binary", "binary", "nobitmap") => {
+            load_and_spawn::<db::Binary, db::Binary, _>(opts, profile, NoBitmap)
+        }
+        ("u64", "u64", "xor8") => load_and_spawn::<u64, u64, Xor8>(
+            opts,
+            profile,
+            Xor8::<BuildHasherDefault>::new(),
+        ),
+        ("u64", "binary", "xor8") => load_and_spawn::<u64, db::Binary, Xor8>(
+            opts,
+            profile,
+            Xor8::<BuildHasherDefault>::new(),
+        ),
+        ("binary", "binary", "xor8") => load_and_spawn::<db::Binary, db::Binary, Xor8>(
+            opts,
+            profile,
+            Xor8::<BuildHasherDefault>::new(),
+        ),
+        (_, _, _) => unreachable!(),
     }
 }
 
-//fn load_and_spawn<K, V>(opts: Opt, p: Profile) -> result::Result<(), String>
-//where
-//    K: 'static + Send + Sync + Clone + Ord + db::Footprint + fmt::Debug,
-//    V: 'static + Send + Sync + db::Diff + db::Footprint,
-//    <V as db::Diff>::Delta: Send + Sync + db::Footprint,
-//    Key: Generate<K>,
-//    Value: Generate<V>,
-//{
-//    let mut rng = SmallRng::from_seed(opts.seed.to_le_bytes());
-//
-//    let index = Index::<K, V>::new("rdms-llrb-perf", p.spin);
-//
-//    initial_load(&mut rng, p.clone(), index.clone())?;
-//
-//    let mut handles = vec![];
-//    for j in 0..p.writers {
-//        let (mut p, index) = (p.clone(), index.clone());
-//        p.reset_readops();
-//        let seed = opts.seed + ((j as u128) * 100);
-//        let h = thread::spawn(move || incr_load(j, seed, p, index));
-//        handles.push(h);
-//    }
-//    for j in p.writers..(p.writers + p.readers) {
-//        let (mut p, index) = (p.clone(), index.clone());
-//        p.reset_writeops();
-//        let seed = opts.seed + ((j as u128) * 100);
-//        let h = thread::spawn(move || incr_load(j, seed, p, index));
-//        handles.push(h);
-//    }
-//
-//    for handle in handles.into_iter() {
-//        handle.join().unwrap().unwrap()
-//    }
-//
-//    print!("rdms-perf: iterating ... ");
-//    let (elapsed, n) = {
-//        let start = time::Instant::now();
-//        let n: usize = index.iter().unwrap().map(|_| 1_usize).sum();
-//        assert!(n == index.len(), "{} != {}", n, index.len());
-//        (start.elapsed(), n)
-//    };
-//    println!("{} items, took {:?}", n, elapsed);
-//
-//    print!("rdms-perf: ranging ... ");
-//    let (elapsed, n) = {
-//        let start = time::Instant::now();
-//        let n: usize = index.range(..).unwrap().map(|_| 1_usize).sum();
-//        assert!(n == index.len(), "{} != {}", n, index.len());
-//        (start.elapsed(), n)
-//    };
-//    println!("{} items, took {:?}", n, elapsed);
-//
-//    print!("rdms-perf: reverse iter ... ");
-//    let (elapsed, n) = {
-//        let start = time::Instant::now();
-//        let n: usize = index.reverse(..).unwrap().map(|_| 1_usize).sum();
-//        assert!(n == index.len(), "{} != {}", n, index.len());
-//        (start.elapsed(), n)
-//    };
-//    println!("{} items, took {:?}", n, elapsed);
-//
-//    println!("rdms-perf: index latest-seqno:{}", index.to_seqno());
-//    println!("rdms-perf: index deleted_count:{}", index.deleted_count());
-//
-//    println!("rdms-perf: stats {}", index.to_stats().unwrap().to_json());
-//
-//    if p.validate {
-//        print!("rdms-perf: validating {} items in index ... ", index.len());
-//        index.validate().unwrap();
-//        println!("ok");
-//    }
-//
-//    index.purge().unwrap();
-//
-//    Ok(())
-//}
+fn load_and_spawn<K, V, B>(opts: Opt, p: Profile, bitmap: B) -> result::Result<(), String>
+where
+    K: 'static + Key,
+    V: 'static + Value,
+    <V as db::Diff>::Delta: 'static + Delta,
+    B: 'static + BloomFilter,
+    rand::distributions::Standard: rand::distributions::Distribution<K>,
+    rand::distributions::Standard: rand::distributions::Distribution<V>,
+    Profile: Generate<K>,
+{
+    initial_index::<K, V, B>(opts.seed, &p, bitmap.clone())?;
+    let mut index = incr_index(opts.seed, &p, bitmap.clone())?;
+
+    println!("rdms-perf: load-spawn populated with {} items", index.len());
+
+    let mut handles = vec![];
+    for j in 0..p.load.readers {
+        let (p, index) = (p.clone(), index.try_clone().unwrap());
+        let seed = opts.seed + ((j as u128) * 100);
+        let h = thread::spawn(move || read_load(j, seed, p, index));
+        handles.push(h);
+    }
+
+    for handle in handles.into_iter() {
+        handle.join().unwrap().unwrap()
+    }
+
+    if p.load.iter {
+        let (elapsed, n) = {
+            let start = time::Instant::now();
+            let n: usize = index
+                .iter(..)
+                .unwrap()
+                .map(|_: Result<db::Entry<K, V>>| 1_usize)
+                .sum();
+            assert!(n == index.len(), "{} != {}", n, index.len());
+            (start.elapsed(), n)
+        };
+        println!(
+            "rdms-perf: load-spawn iter took {:?} for {} items",
+            elapsed, n
+        );
+    }
+    if p.load.iter_versions {
+        let (elapsed, n) = {
+            let start = time::Instant::now();
+            let n: usize = index.iter_versions(..).unwrap().map(|_| 1_usize).sum();
+            assert!(n == index.len(), "{} != {}", n, index.len());
+            (start.elapsed(), n)
+        };
+        println!(
+            "rdms-perf: load-spawn iter_versions took {:?} for {} items",
+            elapsed, n
+        );
+    }
+    if p.load.reverse {
+        let (elapsed, n) = {
+            let start = time::Instant::now();
+            let n: usize = index.reverse(..).unwrap().map(|_| 1_usize).sum();
+            assert!(n == index.len(), "{} != {}", n, index.len());
+            (start.elapsed(), n)
+        };
+        println!(
+            "rdms-perf: load-spawn reverse took {:?} for {} items",
+            elapsed, n
+        );
+    }
+    if p.load.reverse_versions {
+        let (elapsed, n) = {
+            let start = time::Instant::now();
+            let n: usize = index.reverse_versions(..).unwrap().map(|_| 1_usize).sum();
+            assert!(n == index.len(), "{} != {}", n, index.len());
+            (start.elapsed(), n)
+        };
+        println!(
+            "rdms-perf: load-spawn reverse_versions took {:?} for {} items",
+            elapsed, n
+        );
+    }
+
+    println!("rdms-perf: index latest-seqno:{}", index.to_seqno());
+    println!("rdms-perf: stats {:?}", index.to_stats());
+
+    if p.load.validate {
+        print!("rdms-perf: validating {} items in index ... ", index.len());
+        index.validate().unwrap();
+        println!("ok");
+    }
+
+    index.purge().unwrap();
+
+    Ok(())
+}
 
 fn initial_index<K, V, B>(
     seed: u128,
@@ -283,10 +377,10 @@ fn initial_index<K, V, B>(
     bitmap: B,
 ) -> result::Result<(), String>
 where
-    K: Clone + Ord + Hash + db::Footprint + fmt::Debug + IntoCbor,
-    V: Clone + db::Footprint + fmt::Debug + IntoCbor + db::Diff + IntoCbor,
-    <V as db::Diff>::Delta: db::Footprint + IntoCbor + FromCbor,
-    B: db::Bloom,
+    K: 'static + Key,
+    V: 'static + Value,
+    <V as db::Diff>::Delta: 'static + Delta,
+    B: BloomFilter,
     rand::distributions::Standard: rand::distributions::Distribution<K>,
     rand::distributions::Standard: rand::distributions::Distribution<V>,
 {
@@ -322,15 +416,20 @@ where
     Ok(())
 }
 
-fn incr_index<K, V, B>(seed: u128, p: &Profile, bitmap: B) -> result::Result<(), String>
+fn incr_index<K, V, B>(
+    mut seed: u128,
+    p: &Profile,
+    bitmap: B,
+) -> result::Result<robt::Index<K, V, B>, String>
 where
-    K: Clone + Ord + Hash + db::Footprint + fmt::Debug + IntoCbor + FromCbor,
-    V: Clone + db::Diff + db::Footprint + fmt::Debug + IntoCbor + FromCbor,
-    <V as db::Diff>::Delta: db::Footprint + IntoCbor + FromCbor,
-    B: Clone + db::Bloom,
+    K: 'static + Key,
+    V: 'static + Value,
+    <V as db::Diff>::Delta: 'static + Delta,
+    B: BloomFilter,
     rand::distributions::Standard: rand::distributions::Distribution<K>,
     rand::distributions::Standard: rand::distributions::Distribution<V>,
 {
+    seed += 1000;
     let mut index = {
         let dir: &ffi::OsStr = p.initial.robt.dir.as_ref();
         robt::Index::open(dir, &p.initial.robt.name).unwrap()
@@ -357,12 +456,8 @@ where
 
         let elapsed = {
             let start = time::Instant::now();
-            let mut build = index
-                .try_clone()
-                .unwrap()
-                .incremental(&config.dir, &config.name, appmd)
-                .unwrap();
-            build
+            let mut build = index.incremental(&config.dir, &config.name, appmd).unwrap();
+            index = build
                 .build_index(
                     mdb.iter().unwrap().map(|e: db::Entry<K, V>| Ok(e)),
                     bitmap.clone(),
@@ -394,52 +489,9 @@ where
             index
         }
     }
-    Ok(())
+
+    Ok(index)
 }
-
-//{
-//    let mut handles = vec![];
-//    for i in 0..n_readers {
-//        let prefix = prefix.to_string();
-//        let (cnf, mdb, appmd) = (config.clone(), mdb.clone(), appmd.to_vec());
-//        let seed = seed + ((i as u128) * 10);
-//        handles.push(thread::spawn(move || {
-//            read_thread::<K, B>(prefix, i, seed, cnf, mdb, appmd)
-//        }));
-//    }
-//
-//    for handle in handles.into_iter() {
-//        handle.join().unwrap();
-//    }
-//
-//    mdb
-//}
-
-//fn initial_load<K, V>(
-//    rng: &mut SmallRng,
-//    p: Profile,
-//    index: Index<K, V>,
-//) -> result::Result<(), String>
-//where
-//    K: 'static + Send + Sync + Clone + Ord + db::Footprint,
-//    V: 'static + Send + Sync + db::Diff + db::Footprint,
-//    <V as db::Diff>::Delta: Send + Sync + db::Footprint,
-//    Key: Generate<K>,
-//    Value: Generate<V>,
-//{
-//    let start = time::Instant::now();
-//    for _i in 0..p.loads {
-//        index.set(p.key.gen(rng), p.value.gen(rng)).unwrap();
-//    }
-//
-//    println!(
-//        "rdms-perf: loaded {} items in {:?}",
-//        p.loads,
-//        start.elapsed()
-//    );
-//
-//    Ok(())
-//}
 
 fn read_load<K, V, B>(
     j: usize,
@@ -448,16 +500,17 @@ fn read_load<K, V, B>(
     mut index: robt::Index<K, V, B>,
 ) -> result::Result<(), String>
 where
-    K: 'static + Send + Sync + Clone + Ord + db::Footprint + FromCbor,
-    V: 'static + Send + Sync + db::Diff + db::Footprint + FromCbor,
-    <V as db::Diff>::Delta: Send + Sync + db::Footprint + FromCbor,
-    B: db::Bloom,
+    K: 'static + Key,
+    V: 'static + Value,
+    <V as db::Diff>::Delta: 'static + Delta,
+    B: BloomFilter,
+    rand::distributions::Standard: rand::distributions::Distribution<K>,
+    rand::distributions::Standard: rand::distributions::Distribution<V>,
     Profile: Generate<K>,
 {
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
     let start = time::Instant::now();
-    let total = p.load.gets + p.load.get_versions;
     let (mut gets, mut getvers) = (p.load.gets, p.load.get_versions);
 
     while (gets + getvers) > 0 {
@@ -469,6 +522,7 @@ where
             }
             _op => {
                 index.get_versions(&key).ok();
+                getvers -= 1;
             }
         }
     }

@@ -30,7 +30,7 @@ fn main() {
         "btree" | "btree_map" | "btree-map" => btree_map::perf(opts).unwrap(),
         "llrb" => llrb::perf(opts).unwrap(),
         "lmdb" => lmdb::perf(opts).unwrap(),
-        //"robt" => robt::perf(opts).unwrap(),
+        "robt" => robt::perf(opts).unwrap(),
         command => println!("rdms-perf: error invalid command {}", command),
     }
 }

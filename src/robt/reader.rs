@@ -68,16 +68,20 @@ where
     <V as db::Diff>::Delta: FromCbor,
 {
     pub fn from_root(
-        root: u64,
+        root: Option<u64>,
         stats: &Stats,
         mut index: fs::File,
         vlog: Option<fs::File>,
     ) -> Result<Self> {
-        let root: Vec<robt::Entry<K, V>> = {
-            let fpos = io::SeekFrom::Start(root);
-            let block = read_file!(&mut index, fpos, stats.m_blocksize, "read block")?;
-            // println!("read root fpos:{:?} len:{}", fpos, block.len());
-            util::from_cbor_bytes(&block)?.0
+        let m_blocksize = stats.m_blocksize;
+        let root: Vec<robt::Entry<K, V>> = match root {
+            None => vec![],
+            Some(root) => {
+                let fpos = io::SeekFrom::Start(root);
+                let block = read_file!(&mut index, fpos, m_blocksize, "read block")?;
+                // println!("read root fpos:{:?} len:{}", fpos, block.len());
+                util::from_cbor_bytes(&block)?.0
+            }
         };
         // println!("read root:{}", root.len());
 

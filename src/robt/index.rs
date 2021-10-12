@@ -51,7 +51,7 @@ where
     // final result to be persisted
     app_meta: Vec<u8>,
     stats: Stats,
-    root: u64,
+    root: Option<u64>,
 
     _key: marker::PhantomData<K>,
     _val: marker::PhantomData<V>,
@@ -92,7 +92,7 @@ where
 
             app_meta: meta,
             stats,
-            root: u64::default(),
+            root: None,
 
             _key: marker::PhantomData,
             _val: marker::PhantomData,
@@ -131,7 +131,7 @@ where
 
             app_meta: meta,
             stats,
-            root: u64::default(),
+            root: None,
 
             _key: marker::PhantomData,
             _val: marker::PhantomData,
@@ -191,7 +191,7 @@ where
     V: Clone + db::Diff + IntoCbor,
     <V as db::Diff>::Delta: IntoCbor,
 {
-    fn build_tree<I>(&self, iter: I) -> Result<(I, u64)>
+    fn build_tree<I>(&self, iter: I) -> Result<(I, Option<u64>)>
     where
         I: Iterator<Item = Result<Entry<K, V>>>,
     {
@@ -209,9 +209,9 @@ where
         });
 
         let root = match build.next() {
-            Some(Ok((_, root))) => root,
+            Some(Ok((_, root))) => Some(root),
             Some(Err(err)) => return Err(err),
-            None => err_at!(InvalidInput, msg: "empty iterator")?,
+            None => None,
         };
         mem::drop(build);
 
@@ -275,8 +275,9 @@ pub enum MetaItem {
     Stats(Vec<u8>),
     /// Bloom-filter.
     Bitmap(Vec<u8>),
-    /// File-position where the root block for the Btree starts.
-    Root(u64),
+    /// File-position where the root block for the Btree starts. For empty index
+    /// root shall be None.
+    Root(Option<u64>),
     /// Finger print for robt.
     Marker(Vec<u8>),
 }
@@ -547,9 +548,9 @@ where
         self.bitmap.as_ref().clone()
     }
 
-    pub fn to_root(&self) -> u64 {
+    pub fn to_root(&self) -> Option<u64> {
         match &self.metas[3] {
-            MetaItem::Root(root) => *root,
+            MetaItem::Root(root) => root.clone(),
             _ => unreachable!(),
         }
     }
@@ -727,7 +728,7 @@ where
     {
         println!("name              : {}", self.to_name());
         println!("app_meta_data     : {}", self.to_app_metadata().len());
-        println!("root block at     : {}", self.to_root());
+        println!("root block at     : {:?}", self.to_root());
         println!("sequence num. at  : {}", self.to_seqno());
         let stats = self.to_stats();
         println!("stats         :");

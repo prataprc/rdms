@@ -59,16 +59,19 @@ impl Delta for db::Binary {}
 
 #[test]
 fn test_robt_build_read() {
+    // TODO: passing the same seed down the functions shall repeat the randomness.
     let seed: u128 = [
         random(),
         315408295460649044406651951935429140111,
+        109332097090788254409904627378619335666,
         254380117901283245685140957742548176144,
         109332097090788254409904627378619335666,
+        322996969452464517534523408982432480328,
     ][random::<usize>() % 4];
-    // let seed: u128 = 315408295460649044406651951935429140111;
+    // let seed: u128 = 322996969452464517534523408982432480328;
     println!("test_robt_read {}", seed);
 
-    //do_robt_build_read::<u16, u64, _>("u16,nobitmap", seed, NoBitmap);
+    do_robt_build_read::<u16, u64, _>("u16,nobitmap", seed, NoBitmap);
     do_robt_build_read::<db::Binary, db::Binary, _>("binary,nobitmap", seed, NoBitmap);
     do_robt_build_read::<u16, u64, _>(
         "u16,xor8",
@@ -115,7 +118,7 @@ where
     );
     println!("do_robt_build_read-{} config:{:?}", prefix, config);
 
-    let mdb = do_initial::<K, V, B>(prefix, seed, bitmap.clone(), &config, None);
+    let mut mdb = do_initial::<K, V, B>(prefix, seed, bitmap.clone(), &config, None);
 
     println!("do_robt_build_read-{} done initial build ...", prefix);
 
@@ -127,7 +130,7 @@ where
 
     config.name = name.to_owned() + "-incr";
     config.set_vlog_location(None);
-    do_incremental::<K, V, B>(prefix, seed, bitmap.clone(), &mdb, index, &config);
+    mdb = do_incremental::<K, V, B>(prefix, seed, bitmap.clone(), mdb, index, &config);
 
     println!("do_robt_build_read-{} done incremental build ...", prefix);
 
@@ -170,11 +173,18 @@ where
     rand::distributions::Standard: rand::distributions::Distribution<K>,
     rand::distributions::Standard: rand::distributions::Distribution<V>,
 {
-    let n_sets = 100_000;
-    let n_inserts = 100_000;
-    let n_dels = 10_000;
-    let n_rems = 10_000;
+    let mut n_sets = 100_000;
+    let mut n_inserts = 100_000;
+    let mut n_rems = 10_000;
+    let mut n_dels = 10_000;
     let n_readers = 1;
+
+    if config.delta_ok == false && config.value_in_vlog == false {
+        n_sets += n_inserts;
+        n_rems += n_dels;
+        n_inserts = 0;
+        n_dels = 0;
+    }
 
     let appmd = "test_robt_read-metadata".as_bytes().to_vec();
     let mdb = llrb::load_index(seed, n_sets, n_inserts, n_rems, n_dels, seqno);
@@ -207,10 +217,11 @@ fn do_incremental<K, V, B>(
     prefix: &str,
     seed: u128,
     bitmap: B,
-    mdb: &llrb::Index<K, V>,
+    mdb: llrb::Index<K, V>,
     mut index: Index<K, V, B>,
     config: &Config,
-) where
+) -> llrb::Index<K, V>
+where
     for<'a> K: 'static + Key + Arbitrary<'a>,
     V: 'static + Value,
     <V as db::Diff>::Delta: 'static + Delta,
@@ -218,11 +229,19 @@ fn do_incremental<K, V, B>(
     rand::distributions::Standard: rand::distributions::Distribution<K>,
     rand::distributions::Standard: rand::distributions::Distribution<V>,
 {
-    let n_sets = 100_000;
-    let n_inserts = 100_000;
-    let n_dels = 10_000;
-    let n_rems = 10_000;
+    let mut n_sets = 100_000;
+    let mut n_inserts = 100_000;
+    let mut n_dels = 10_000;
+    let mut n_rems = 10_000;
     let n_readers = 1;
+
+    let delta = config.delta_ok || config.value_in_vlog;
+    if !delta {
+        n_sets += n_inserts;
+        n_rems += n_dels;
+        n_inserts = 0;
+        n_dels = 0;
+    }
 
     let appmd = "test_robt_read-metadata-snap".as_bytes().to_vec();
     let snap = {
@@ -246,7 +265,7 @@ fn do_incremental<K, V, B>(
         .unwrap();
     mem::drop(build);
 
-    mdb.commit(snap.iter().unwrap()).unwrap();
+    mdb.commit(snap.iter().unwrap(), delta).unwrap();
     mdb.set_seqno(snap.to_seqno());
 
     let mut handles = vec![];
@@ -262,6 +281,8 @@ fn do_incremental<K, V, B>(
     for handle in handles.into_iter() {
         handle.join().unwrap();
     }
+
+    mdb
 }
 
 fn read_thread<K, V, B>(
@@ -341,7 +362,7 @@ fn read_thread<K, V, B>(
                     }
                     ToRoot => {
                         counts[8] += 1;
-                        assert!(index.to_root() > 0, "{}", index.to_root());
+                        assert!(index.to_root().is_some(), "{:?}", index.to_root());
                     }
                     ToSeqno => {
                         counts[9] += 1;

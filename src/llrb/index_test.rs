@@ -117,7 +117,9 @@ where
         btmap.insert(e.to_key(), e);
     }
     println!("{} {} {}", prefix, index1.len(), index2.len());
-    let n = index1.commit(index2.iter().unwrap()).unwrap();
+    let n = index1
+        .commit(index2.iter().unwrap(), true /*delta*/)
+        .unwrap();
 
     assert_eq!(n, index2.len());
     assert_eq!(index1.len(), btmap.len());

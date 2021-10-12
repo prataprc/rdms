@@ -389,14 +389,14 @@ where
     /// Commit a latest batch of mutations into this snapshot, there by creating a
     /// new snapshot. It is pre-requisite that the new batch of mutation and its
     /// seqno must all be newer than this index snapshot's latest seqno.
-    pub fn commit<I>(&self, iter: I) -> Result<usize>
+    pub fn commit<I>(&self, iter: I, delta: bool) -> Result<usize>
     where
         K: Clone + PartialEq + Ord,
         I: Iterator<Item = db::Entry<K, V>>,
     {
         let mut inner = self.inner.write();
         let (new_inner, n) = {
-            let (ir, n) = inner.commit(iter)?;
+            let (ir, n) = inner.commit(iter, delta)?;
             let (new_inner, _) = ir.into_root();
             (new_inner, n)
         };
@@ -664,7 +664,7 @@ where
         Ok(Ir::Root { inner, old })
     }
 
-    fn commit<I>(&self, iter: I) -> Result<(Ir<K, V>, usize)>
+    fn commit<I>(&self, iter: I, delta: bool) -> Result<(Ir<K, V>, usize)>
     where
         K: Clone + PartialEq + Ord,
         I: Iterator<Item = db::Entry<K, V>>,
@@ -691,7 +691,7 @@ where
             root = {
                 let is_deleted = entry.is_deleted();
                 let (root, old, footprint) = self
-                    .do_commit(root.as_ref().map(Borrow::borrow), entry)?
+                    .do_commit(root.as_ref().map(Borrow::borrow), entry, delta)?
                     .into_res();
                 tree_footprint += footprint;
                 match (is_deleted, old) {
@@ -1012,6 +1012,7 @@ where
         &self,
         node: Option<&Node<K, V>>,
         entry: db::Entry<K, V>,
+        delta: bool,
     ) -> Result<Ir<K, V>>
     where
         K: Clone + PartialEq + Ord,
@@ -1033,19 +1034,30 @@ where
         let (node, old, footprint) = match node.as_key().cmp(entry.as_key()) {
             Ordering::Greater => {
                 let left = node.left.as_ref().map(Borrow::borrow);
-                let (root, old, footprint) = self.do_commit(left, entry)?.into_res();
+                let (root, old, footprint) =
+                    self.do_commit(left, entry, delta)?.into_res();
                 node.left = root;
                 (walkuprot_23(node), old, footprint)
             }
             Ordering::Less => {
                 let right = node.right.as_ref().map(Borrow::borrow);
-                let (root, old, footprint) = self.do_commit(right, entry)?.into_res();
+                let (root, old, footprint) =
+                    self.do_commit(right, entry, delta)?.into_res();
                 node.right = root;
                 (walkuprot_23(node), old, footprint)
             }
-            Ordering::Equal => {
+            Ordering::Equal if delta => {
                 let (oldfp, old) = (node.footprint()?, node.entry.clone());
                 node.commit(entry)?;
+                let footprint = oldfp - node.footprint()?;
+                (node, Some(old), footprint)
+            }
+            Ordering::Equal => {
+                let (oldfp, old) = (node.footprint()?, node.entry.clone());
+                match entry.value {
+                    db::Value::U { value, seqno } => node.set(value, seqno),
+                    db::Value::D { seqno } => node.delete(seqno),
+                }
                 let footprint = oldfp - node.footprint()?;
                 (node, Some(old), footprint)
             }

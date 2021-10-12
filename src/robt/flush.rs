@@ -14,6 +14,15 @@ pub enum Flusher {
     None,
 }
 
+impl Drop for Flusher {
+    fn drop(&mut self) {
+        match self {
+            Flusher::None => (),
+            Flusher::File { tx, .. } => mem::drop(tx.take()),
+        }
+    }
+}
+
 impl Flusher {
     // Create a new flusher thread, there are two flushers for `robt` index, one
     // for the index-file and the other is for value-file, if enabled.

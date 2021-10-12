@@ -143,16 +143,16 @@ where
 
 impl<K, V> Builder<K, V>
 where
-    K: Clone + Hash + IntoCbor,
-    V: Clone + db::Diff + IntoCbor,
-    <V as db::Diff>::Delta: IntoCbor,
+    K: Clone + Hash + IntoCbor + FromCbor,
+    V: Clone + db::Diff + IntoCbor + FromCbor,
+    <V as db::Diff>::Delta: IntoCbor + FromCbor,
 {
     pub fn build_index<B, I, E>(
         &mut self,
         iter: I,
         bitmap: B,
         seqno: Option<u64>,
-    ) -> Result<()>
+    ) -> Result<Index<K, V, B>>
     where
         B: db::Bloom,
         I: Iterator<Item = Result<E>>,
@@ -181,7 +181,7 @@ where
 
         self.build_flush(err_at!(Fatal, bitmap.to_bytes())?)?;
 
-        Ok(())
+        Index::open(&self.config.dir, &self.config.name)
     }
 }
 

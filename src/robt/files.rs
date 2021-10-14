@@ -2,7 +2,9 @@ use std::{convert::TryFrom, ffi, fmt, path, result};
 
 use crate::{Error, Result};
 
-/// Index file name formated as - `format!("{}-robt.indx", name)`
+/// An Index file is uniquely locatable by providing the `dir` and name.
+/// where `dir` is the directory in which the index file is located and `name`
+/// is the unique name for the index. `format!("{}-robt.indx", name)`
 #[derive(Clone)]
 pub struct IndexFileName(pub ffi::OsString);
 
@@ -49,7 +51,9 @@ impl fmt::Display for IndexFileName {
     }
 }
 
-/// Value log file name formated as - `format!("{}-robt.vlog", name)`
+/// A Value log file is uniquely locatable by providing the `dir` and name.
+/// where `dir` is the directory in which the index/vlog file is located and
+/// `name` is the unique name for the index/vlog. `format!("{}-robt.vlog", name)`
 #[derive(Clone)]
 pub struct VlogFileName(pub ffi::OsString);
 

@@ -16,7 +16,13 @@ src/robt
 * `robt::Stats`         `0x000b0001_u32`
 * `robt::MetaItem`      `robt/metaitem/0.0.1`
 
-bitmaps
-=======
+src/bitmaps
+===========
 
 * `xorfilter::Xor8`     `xor8/0.0.1`
+
+src/wral
+========
+* `wral::Entry`         `0x001d0001_u32`
+* `wral::Batch`         `0x001f0001_u32`
+* `wral::NoState`       `0x00250001_u32`

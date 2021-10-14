@@ -86,6 +86,8 @@
 
 #![feature(drain_filter)]
 #![feature(concat_idents)]
+#![feature(unboxed_closures)]
+#![feature(fn_traits)]
 
 use std::result;
 
@@ -100,6 +102,7 @@ pub mod robt;
 #[macro_use]
 pub mod util;
 pub mod bitmaps;
+pub mod wral;
 
 pub use error::Error;
 

@@ -4,7 +4,6 @@ use cbordata::{Cbor, FromCbor, IntoCbor};
 
 use std::{
     borrow::Borrow,
-    convert::TryFrom,
     ffi, fs,
     ops::{Bound, RangeBounds},
     path,
@@ -155,6 +154,8 @@ pub fn key_footprint<K>(key: &K) -> Result<isize>
 where
     K: db::Footprint,
 {
+    use std::convert::TryFrom;
+
     use std::mem::size_of;
     let footprint = err_at!(FailConvert, isize::try_from(size_of::<K>()))?;
     Ok(footprint + key.footprint()?)
@@ -224,6 +225,17 @@ where
         Bound::Excluded(hk) => Bound::Included(hk.clone()),
         _ => unreachable!(),
     }
+}
+
+pub fn sync_write(file: &mut fs::File, data: &[u8]) -> Result<usize> {
+    use std::io::Write;
+
+    let n = err_at!(IOError, file.write(data))?;
+    if n != data.len() {
+        err_at!(IOError, msg: "partial write to file {} {}", n, data.len())?
+    }
+    err_at!(IOError, file.sync_all())?;
+    Ok(n)
 }
 
 #[cfg(test)]

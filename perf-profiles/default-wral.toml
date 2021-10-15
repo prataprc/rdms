@@ -1,0 +1,6 @@
+name = "wral-perf"
+ops = 1_000_000
+payload = 32
+threads = 8
+journal_limit = 1_000_000
+nosync = true

@@ -7,6 +7,7 @@ mod btree_map;
 mod llrb;
 mod lmdb;
 mod robt;
+mod wral;
 
 /// Command line options.
 #[derive(Clone, StructOpt)]
@@ -31,6 +32,7 @@ fn main() {
         "llrb" => llrb::perf(opts).unwrap(),
         "lmdb" => lmdb::perf(opts).unwrap(),
         "robt" => robt::perf(opts).unwrap(),
+        "wral" => wral::perf(opts).unwrap(),
         command => println!("rdms-perf: error invalid command {}", command),
     }
 }
@@ -39,6 +41,7 @@ fn load_profile(opts: &Opt) -> result::Result<String, String> {
     use std::{fs, str::from_utf8};
 
     let ppath = opts.profile.clone();
+    println!("{:?}", ppath);
     let s = from_utf8(&fs::read(ppath).expect("invalid profile file path"))
         .expect("invalid profile-text encoding, must be in toml")
         .to_string();

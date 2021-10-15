@@ -93,7 +93,7 @@ impl<'a> arbitrary::Arbitrary<'a> for Config {
 }
 
 impl Config {
-    pub fn new(name: &str, dir: &ffi::OsStr) -> Config {
+    pub fn new(dir: &ffi::OsStr, name: &str) -> Config {
         Config {
             name: name.to_string(),
             dir: dir.to_os_string(),

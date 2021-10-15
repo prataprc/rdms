@@ -14,5 +14,7 @@
   * measure concurrent read performance for 1, 2, 4, 8, 16 threads
     * try with and without lru cache.
 
+* wral: journal-limit, adjust the algorithm to not to exceed the journal limit.
+
 (a) review 5c71164f6d9e57ce60ed0030f1fa7dba7d5056b5
         fix errors before refactoring llrb out into ppom

@@ -256,7 +256,6 @@ impl<S> Journal<S> {
         }
     }
 
-    #[cfg(test)]
     pub fn to_location(&self) -> ffi::OsString {
         self.location.clone()
     }

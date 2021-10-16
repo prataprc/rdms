@@ -3,8 +3,12 @@
 //! Entries are added to `Wal` journal. Journals automatically rotate
 //! and are numbered from ZERO.
 
+use cbordata::FromCbor;
+
 use std::{
-    fs, mem, ops, path,
+    ffi, fs,
+    marker::PhantomData,
+    mem, ops, path,
     sync::{Arc, RwLock},
     vec,
 };
@@ -178,32 +182,38 @@ impl<S> Wal<S> {
     /// Iterate over all entries in this Wal instance, entries can span
     /// across multiple journal files. Iteration will start from lowest
     /// sequence-number to highest.
-    pub fn iter(&self) -> Result<impl Iterator<Item = Result<wral::Entry>>> {
+    pub fn iter(&self) -> Result<impl Iterator<Item = Result<wral::Entry>>>
+    where
+        S: Clone + FromCbor,
+    {
         self.range(..)
     }
 
-    /// Iterate over entries whose sequence number fall within the
-    /// specified `range`.
+    /// Iterate over entries whose sequence number fall within the specified `range`.
     pub fn range<R>(&self, range: R) -> Result<impl Iterator<Item = Result<wral::Entry>>>
     where
+        S: Clone + FromCbor,
         R: ops::RangeBounds<u64>,
     {
-        let journals = match Self::range_bound_to_range_inclusive(range) {
+        let (range, journals) = match Self::range_bound_to_range_inclusive(range) {
             Some(range) => {
                 let rd = err_at!(Fatal, self.w.read())?;
                 let mut journals = vec![];
                 for jn in rd.journals.iter() {
-                    journals.push(IterJournal::from_journal(jn, range.clone())?);
+                    journals.push(jn.to_location());
                 }
-                journals.push(IterJournal::from_journal(&rd.journal, range)?);
-                journals
+                journals.push(rd.journal.to_location());
+                (range, journals)
             }
-            None => vec![],
+            None => ((0..=0), vec![]),
         };
 
         Ok(Iter {
+            name: self.config.name.clone(),
+            range: range.clone(),
             journal: None,
             journals: journals.into_iter(),
+            _state: PhantomData::<S>,
         })
     }
 
@@ -227,33 +237,57 @@ impl<S> Wal<S> {
     }
 }
 
-struct Iter {
+struct Iter<S> {
+    name: String,
+    range: ops::RangeInclusive<u64>,
     journal: Option<IterJournal>,
-    journals: vec::IntoIter<IterJournal>,
+    journals: vec::IntoIter<ffi::OsString>,
+    _state: PhantomData<S>,
 }
 
-impl Iterator for Iter {
+macro_rules! next_journal_file {
+    ($self:expr) => {{
+        let jnfile = $self.journals.next()?;
+        match Journal::<S>::load(&$self.name, &jnfile) {
+            Some((jn, _)) => {
+                let iter = IterJournal::from_journal(&jn, $self.range.clone());
+                match iter {
+                    Ok(iter) => iter,
+                    Err(e) => return Some(
+                        err_at!(Fatal, msg: "iter on invalid journal {:?} {}", jnfile, e)
+                    ),
+                }
+            }
+            None => {
+                return Some(
+                    err_at!(Fatal, msg: "invalid journal {:?}", jnfile)
+                );
+            }
+        }
+    }};
+}
+
+impl<S> Iterator for Iter<S>
+where
+    S: Clone + FromCbor,
+{
     type Item = Result<wral::Entry>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let mut journal = match self.journal.take() {
             Some(journal) => journal,
-            None => self.journals.next()?,
+            None => next_journal_file!(self),
         };
+
         loop {
             match journal.next() {
                 Some(item) => {
                     self.journal = Some(journal);
-                    return Some(item);
+                    break Some(item);
                 }
-                None => match self.journals.next() {
-                    Some(j) => {
-                        journal = j;
-                    }
-                    None => {
-                        return None;
-                    }
-                },
+                None => {
+                    journal = next_journal_file!(self);
+                }
             }
         }
     }

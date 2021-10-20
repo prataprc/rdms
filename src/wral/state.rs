@@ -1,5 +1,7 @@
 use cbordata::{Cborize, FromCbor, IntoCbor};
 
+#[allow(unused_imports)]
+use crate::wral::Wal;
 use crate::{wral, Result};
 
 /// Callback trait for updating application state in relation to [Wal] type.

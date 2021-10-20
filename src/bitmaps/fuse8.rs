@@ -16,12 +16,35 @@ where
         }
     }
 
+    #[inline]
     fn add_key<Q: ?Sized + Hash>(&mut self, key: &Q) {
         self.insert(key)
     }
 
+    #[inline]
+    fn add_keys<Q: Hash>(&mut self, keys: &[Q]) {
+        self.populate(keys)
+    }
+
+    #[inline]
     fn add_digest32(&mut self, digest: u32) {
         self.populate_keys(&[u64::from(digest)])
+    }
+
+    #[inline]
+    fn add_digests32(&mut self, digests: &[u32]) {
+        let digests: Vec<u64> = digests.iter().map(|x| u64::from(*x)).collect();
+        self.populate_keys(&digests)
+    }
+
+    #[inline]
+    fn add_digest64(&mut self, digest: u64) {
+        self.populate_keys(&[digest])
+    }
+
+    #[inline]
+    fn add_digests64(&mut self, digests: &[u64]) {
+        self.populate_keys(digests)
     }
 
     fn build(&mut self) -> Result<()> {

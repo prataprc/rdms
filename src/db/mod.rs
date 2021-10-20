@@ -43,8 +43,20 @@ pub trait Bloom: Sized {
     /// Add key into the index.
     fn add_key<Q: ?Sized + Hash>(&mut self, key: &Q);
 
+    /// Add several keys into the index.
+    fn add_keys<Q: Hash>(&mut self, keys: &[Q]);
+
     /// Add key into the index.
     fn add_digest32(&mut self, digest: u32);
+
+    /// Add several keys into the index.
+    fn add_digests32(&mut self, digest: &[u32]);
+
+    /// Add key into the index.
+    fn add_digest64(&mut self, digest: u64);
+
+    /// Add several keys into the index.
+    fn add_digests64(&mut self, digest: &[u64]);
 
     /// Build keys, added so far via `add_key` and `add_digest32` into the
     /// bitmap index. Useful for types that support batch building and

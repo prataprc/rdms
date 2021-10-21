@@ -101,7 +101,7 @@ where
         let load_ops = (10_000, 10_000, 1000, 1000);
         random_load_index(prefix, seed, 0 /*seqno*/, key_max, load_ops)
     };
-    for e in index1.iter().unwrap() {
+    for e in index1.iter_versions().unwrap() {
         btmap.insert(e.to_key(), e);
     }
     let index2 = {
@@ -109,7 +109,7 @@ where
         let load_ops = (10_000, 10_000, 1000, 1000);
         random_load_index(prefix, seed + 100, index1.to_seqno(), key_max, load_ops)
     };
-    for e in index2.iter().unwrap() {
+    for e in index2.iter_versions().unwrap() {
         let e = match btmap.get(e.as_key()) {
             Some(entry) => entry.commit(&e).unwrap(),
             None => e,
@@ -118,13 +118,13 @@ where
     }
     println!("{} {} {}", prefix, index1.len(), index2.len());
     let n = index1
-        .commit(index2.iter().unwrap(), true /*delta*/)
+        .commit(index2.iter_versions().unwrap(), true /*versions*/)
         .unwrap();
 
     assert_eq!(n, index2.len());
     assert_eq!(index1.len(), btmap.len());
 
-    let mut iter1 = index1.iter().unwrap();
+    let mut iter1 = index1.iter_versions().unwrap();
     let iter2 = btmap.iter();
 
     let mut n_deleted = 0;
@@ -177,7 +177,7 @@ fn test_with_key<K>(
 {
     for _i in 0..n_init {
         let (key, val): (K, u64) = (rng.gen::<K>(), rng.gen::<u64>());
-        let Wr { seqno, .. } = index.set(key.clone(), val).unwrap();
+        let db::Wr { seqno, .. } = index.set(key.clone(), val).unwrap();
         btmap.insert(key.clone(), db::Entry::new(key, val, seqno));
     }
     println!(
@@ -205,7 +205,7 @@ fn test_with_key<K>(
     assert_eq!(index.len(), btmap.len());
 
     for (key, val) in btmap.iter() {
-        let entry = index.get(&key).unwrap();
+        let entry = index.get_versions(&key).unwrap();
         assert_eq!(entry, val.clone());
     }
 }
@@ -251,7 +251,7 @@ where
         let (_seqno, _cas) = match op {
             Op::Set(key, val) => {
                 let key = key_for_thread(key, key_max, n_threads, id);
-                let Wr { seqno, old_entry } = index.set(key.clone(), val).unwrap();
+                let db::Wr { seqno, old_entry } = index.set(key.clone(), val).unwrap();
                 let e = db::Entry::new(key.clone(), val, seqno);
                 compare_old_entry(old_entry, btmap.insert(key, e));
                 counts[0] += 1;
@@ -259,9 +259,9 @@ where
             }
             Op::SetCas(key, val) => {
                 let key = key_for_thread(key, key_max, n_threads, id);
-                let cas = index.get(&key).map(|e| e.to_seqno()).unwrap_or(0);
+                let cas = index.get_versions(&key).map(|e| e.to_seqno()).unwrap_or(0);
                 let (seqno, cas) = match index.set_cas(key.clone(), val, cas) {
-                    Ok(Wr { seqno, old_entry }) => {
+                    Ok(db::Wr { seqno, old_entry }) => {
                         let e = db::Entry::new(key.clone(), val, seqno);
                         compare_old_entry(old_entry, btmap.insert(key, e));
                         (seqno, cas)
@@ -276,7 +276,7 @@ where
             }
             Op::Insert(key, val) => {
                 let key = key_for_thread(key, key_max, n_threads, id);
-                let Wr { seqno, old_entry } = index.insert(key.clone(), val).unwrap();
+                let db::Wr { seqno, old_entry } = index.insert(key.clone(), val).unwrap();
                 let e = btmap
                     .get(&key)
                     .cloned()
@@ -288,9 +288,9 @@ where
             }
             Op::InsertCas(key, val) => {
                 let key = key_for_thread(key, key_max, n_threads, id);
-                let cas = index.get(&key).map(|e| e.to_seqno()).unwrap_or(0);
+                let cas = index.get_versions(&key).map(|e| e.to_seqno()).unwrap_or(0);
                 match index.insert_cas(key.clone(), val, cas) {
-                    Ok(Wr { seqno, old_entry }) => {
+                    Ok(db::Wr { seqno, old_entry }) => {
                         let e = btmap
                             .get(&key.clone())
                             .cloned()
@@ -307,7 +307,7 @@ where
             }
             Op::Remove(key) => {
                 let key = key_for_thread(key, key_max, n_threads, id);
-                let Wr { seqno, old_entry } = index.remove(&key).unwrap();
+                let db::Wr { seqno, old_entry } = index.remove(&key).unwrap();
                 compare_old_entry(old_entry, btmap.remove(&key));
                 counts[4] += 1;
                 (seqno, 0)
@@ -315,9 +315,9 @@ where
             Op::RemoveCas(key) => {
                 counts[5] += 1;
                 let key = key_for_thread(key, key_max, n_threads, id);
-                let cas = index.get(&key).map(|e| e.to_seqno()).unwrap_or(0);
+                let cas = index.get_versions(&key).map(|e| e.to_seqno()).unwrap_or(0);
                 match index.remove_cas(&key, cas) {
-                    Ok(Wr { seqno, old_entry }) => {
+                    Ok(db::Wr { seqno, old_entry }) => {
                         compare_old_entry(old_entry, btmap.remove(&key));
                         (seqno, cas)
                     }
@@ -330,7 +330,7 @@ where
             }
             Op::Delete(key) => {
                 let key = key_for_thread(key, key_max, n_threads, id);
-                let Wr { seqno, old_entry } = index.delete(&key).unwrap();
+                let db::Wr { seqno, old_entry } = index.delete(&key).unwrap();
                 let e = btmap
                     .get(&key)
                     .cloned()
@@ -342,9 +342,9 @@ where
             }
             Op::DeleteCas(key) => {
                 let key = key_for_thread(key, key_max, n_threads, id);
-                let cas = index.get(&key).map(|e| e.to_seqno()).unwrap_or(0);
+                let cas = index.get_versions(&key).map(|e| e.to_seqno()).unwrap_or(0);
                 let (seqno, cas) = match index.delete_cas(&key, cas) {
-                    Ok(Wr { seqno, old_entry }) => {
+                    Ok(db::Wr { seqno, old_entry }) => {
                         let e = btmap
                             .get(&key)
                             .cloned()
@@ -363,7 +363,7 @@ where
                 (seqno, cas)
             }
             Op::Get(key) => {
-                match (index.get(&key), btmap.get(&key)) {
+                match (index.get_versions(&key), btmap.get(&key)) {
                     (Err(Error::KeyNotFound(_, _)), None) => (),
                     (Err(err), _) => panic!("{}", err),
                     (Ok(e), Some(x)) => assert!(e.contains(x)),
@@ -374,7 +374,7 @@ where
             }
             Op::Iter => {
                 for (key, val) in btmap.iter() {
-                    assert!(index.get(key).unwrap().contains(val))
+                    assert!(index.get_versions(key).unwrap().contains(val))
                 }
                 counts[9] += 1;
                 (0, 0)
@@ -389,7 +389,7 @@ where
                 let r = (Bound::from(l), Bound::from(h));
                 compare_iter(
                     id,
-                    index.reverse(r.clone()).unwrap(),
+                    index.reverse_versions(r.clone()).unwrap(),
                     btmap.range(r).rev(),
                     false,
                 );
@@ -589,7 +589,7 @@ where
                 index.insert(key, value).ok();
                 ins -= 1;
             }
-            i => match index.get(&key) {
+            i => match index.get_versions(&key) {
                 Ok(entry) if !entry.is_deleted() && (i < (sets + ins + dels)) => {
                     index.delete(&key).unwrap();
                     dels -= 1;

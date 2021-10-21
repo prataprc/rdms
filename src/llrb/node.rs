@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
-    db::{Diff, Entry, Footprint, Value},
+    db::{self, Footprint},
     Error, Result,
 };
 
@@ -9,9 +9,9 @@ use crate::{
 #[derive(Clone)]
 pub struct Node<K, V>
 where
-    V: Diff,
+    V: db::Diff,
 {
-    pub entry: Arc<Entry<K, V>>,
+    pub entry: Arc<db::Entry<K, V>>,
     pub black: bool,                    // store: black or red
     pub left: Option<Arc<Node<K, V>>>,  // store: left child
     pub right: Option<Arc<Node<K, V>>>, // store: right child
@@ -20,8 +20,8 @@ where
 impl<K, V> Footprint for Node<K, V>
 where
     K: Footprint,
-    V: Diff + Footprint,
-    <V as Diff>::Delta: Footprint,
+    V: db::Diff + Footprint,
+    <V as db::Diff>::Delta: Footprint,
 {
     fn footprint(&self) -> Result<isize> {
         use std::{convert::TryFrom, mem::size_of};
@@ -34,14 +34,14 @@ where
 
 impl<K, V> Node<K, V>
 where
-    V: Diff,
+    V: db::Diff,
 {
     pub fn set(&mut self, value: V, seqno: u64)
     where
         K: Clone,
     {
         let mut entry = self.entry.as_ref().clone();
-        entry.value = Value::new_upsert(value, seqno);
+        entry.value = db::Value::new_upsert(value, seqno);
         entry.deltas = Vec::default();
         self.entry = Arc::new(entry);
     }
@@ -60,7 +60,7 @@ where
         self.entry = Arc::new(self.entry.as_ref().delete(seqno));
     }
 
-    pub fn commit(&mut self, other: Entry<K, V>) -> Result<()>
+    pub fn commit(&mut self, other: db::Entry<K, V>) -> Result<()>
     where
         K: PartialEq + Clone,
     {
@@ -86,7 +86,7 @@ where
 
 impl<K, V> Node<K, V>
 where
-    V: Diff,
+    V: db::Diff,
 {
     #[inline]
     pub fn as_left_ref(&self) -> Option<&Node<K, V>> {
@@ -119,11 +119,11 @@ where
     }
 }
 
-impl<K, V> From<Entry<K, V>> for Node<K, V>
+impl<K, V> From<db::Entry<K, V>> for Node<K, V>
 where
-    V: Diff,
+    V: db::Diff,
 {
-    fn from(entry: Entry<K, V>) -> Node<K, V> {
+    fn from(entry: db::Entry<K, V>) -> Node<K, V> {
         Node {
             entry: Arc::new(entry),
             black: false,

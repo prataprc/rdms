@@ -106,11 +106,27 @@ where
         Arc::clone(&self.root)
     }
 
+    pub fn footprint(&self) -> Result<usize> {
+        let mut n = err_at!(IOError, self.index.metadata())?.len();
+        n += match &self.vlog {
+            Some(f) => err_at!(IOError, f.metadata())?.len(),
+            None => 0,
+        };
+
+        err_at!(IOError, usize::try_from(n))
+    }
+}
+
+impl<K, V> Reader<K, V>
+where
+    K: FromCbor,
+    V: db::Diff + FromCbor,
+    <V as db::Diff>::Delta: FromCbor,
+{
     pub fn get<Q>(&mut self, ukey: &Q, versions: bool) -> Result<robt::Entry<K, V>>
     where
         K: Clone + Borrow<Q>,
-        V: Clone,
-        Q: Ord,
+        Q: Ord + ?Sized,
     {
         let m_blocksize = self.m_blocksize;
         let z_blocksize = self.z_blocksize;
@@ -151,7 +167,7 @@ where
         }
     }
 
-    pub fn iter<Q, R>(
+    pub fn iter<R, Q>(
         &mut self,
         range: R,
         reverse: bool,
@@ -159,8 +175,7 @@ where
     ) -> Result<Iter<K, V>>
     where
         K: Clone + Ord + Borrow<Q>,
-        V: Clone,
-        Q: Ord + ToOwned<Owned = K>,
+        Q: ?Sized + Ord + ToOwned<Owned = K>,
         R: RangeBounds<Q>,
     {
         let (stack, bound) = if reverse {
@@ -221,8 +236,7 @@ where
     ) -> Result<Vec<Vec<robt::Entry<K, V>>>>
     where
         K: Clone + Borrow<Q>,
-        V: Clone,
-        Q: Ord,
+        Q: ?Sized + Ord,
     {
         // println!("fwd_stack block_len:{}", block.len());
         let (entry, rem) = match block.first().map(|e| e.is_zblock()) {
@@ -271,8 +285,7 @@ where
     ) -> Result<Vec<Vec<robt::Entry<K, V>>>>
     where
         K: Clone + Borrow<Q>,
-        V: Clone,
-        Q: Ord,
+        Q: ?Sized + Ord,
     {
         let (entry, mut rem) = match block.first().map(|e| e.is_zblock()) {
             Some(false) => match block.binary_search_by(|e| rcmp(e.borrow_key(), ek)) {
@@ -317,7 +330,7 @@ where
     pub fn print(&mut self) -> Result<()>
     where
         K: Clone + fmt::Debug,
-        V: Clone + fmt::Debug,
+        V: fmt::Debug,
         <V as db::Diff>::Delta: fmt::Debug,
     {
         for entry in self.root.to_vec().into_iter() {
@@ -574,7 +587,7 @@ where
 
 fn fcmp<Q>(key: &Q, skey: Bound<&Q>) -> cmp::Ordering
 where
-    Q: Ord,
+    Q: ?Sized + Ord,
 {
     match skey {
         Bound::Unbounded => cmp::Ordering::Greater,
@@ -584,7 +597,7 @@ where
 
 fn rcmp<Q>(key: &Q, ekey: Bound<&Q>) -> cmp::Ordering
 where
-    Q: Ord,
+    Q: ?Sized + Ord,
 {
     match ekey {
         Bound::Unbounded => cmp::Ordering::Less,

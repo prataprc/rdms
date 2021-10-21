@@ -102,9 +102,11 @@ pub mod robt;
 #[macro_use]
 pub mod util;
 pub mod bitmaps;
+mod index;
 pub mod wral;
 
 pub use error::Error;
+pub use index::Index;
 
 // core modules
 // pub mod core;

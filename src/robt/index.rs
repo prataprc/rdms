@@ -144,7 +144,7 @@ where
 impl<K, V> Builder<K, V>
 where
     K: Clone + Hash + IntoCbor + FromCbor,
-    V: Clone + db::Diff + IntoCbor + FromCbor,
+    V: db::Diff + IntoCbor + FromCbor,
     <V as db::Diff>::Delta: IntoCbor + FromCbor,
 {
     pub fn build_index<B, I, E>(
@@ -188,7 +188,7 @@ where
 impl<K, V> Builder<K, V>
 where
     K: Clone + IntoCbor,
-    V: Clone + db::Diff + IntoCbor,
+    V: db::Diff + IntoCbor,
     <V as db::Diff>::Delta: IntoCbor,
 {
     fn build_tree<I>(&self, iter: I) -> Result<(I, Option<u64>)>
@@ -475,7 +475,7 @@ where
     ) -> Result<Self>
     where
         K: Clone + Ord + Hash + IntoCbor,
-        V: Clone + IntoCbor,
+        V: IntoCbor,
         <V as db::Diff>::Delta: IntoCbor,
     {
         // set to fresh vlog location, don't carry forward.
@@ -590,11 +590,22 @@ where
         }
     }
 
+    pub fn footprint(&self) -> Result<usize> {
+        self.reader.footprint()
+    }
+}
+
+impl<K, V, B> Index<K, V, B>
+where
+    K: FromCbor,
+    V: db::Diff + FromCbor,
+    <V as db::Diff>::Delta: FromCbor,
+    B: db::Bloom,
+{
     pub fn get<Q>(&mut self, key: &Q) -> Result<db::Entry<K, V>>
     where
         K: Clone + Borrow<Q>,
-        V: Clone,
-        Q: Ord,
+        Q: Ord + ?Sized,
     {
         let versions = false;
         db::Entry::try_from(self.reader.get(key, versions)?)
@@ -603,51 +614,46 @@ where
     pub fn get_versions<Q>(&mut self, key: &Q) -> Result<db::Entry<K, V>>
     where
         K: Clone + Borrow<Q>,
-        V: Clone,
-        Q: Ord,
+        Q: Ord + ?Sized,
     {
         let versions = true;
         db::Entry::try_from(self.reader.get(key, versions)?)
     }
 
-    pub fn iter<Q, R>(&mut self, range: R) -> Result<Iter<K, V>>
+    pub fn iter<R, Q>(&mut self, range: R) -> Result<Iter<K, V>>
     where
         K: Clone + Ord + Borrow<Q>,
-        V: Clone,
-        Q: Ord + ToOwned<Owned = K>,
+        Q: ?Sized + Ord + ToOwned<Owned = K>,
         R: RangeBounds<Q>,
     {
         let (reverse, versions) = (false, false);
         self.reader.iter(range, reverse, versions)
     }
 
-    pub fn reverse<Q, R>(&mut self, range: R) -> Result<Iter<K, V>>
+    pub fn iter_versions<R, Q>(&mut self, range: R) -> Result<Iter<K, V>>
     where
         K: Clone + Ord + Borrow<Q>,
-        V: Clone,
-        Q: Ord + ToOwned<Owned = K>,
-        R: RangeBounds<Q>,
-    {
-        let (reverse, versions) = (true, false);
-        self.reader.iter(range, reverse, versions)
-    }
-
-    pub fn iter_versions<Q, R>(&mut self, range: R) -> Result<Iter<K, V>>
-    where
-        K: Clone + Ord + Borrow<Q>,
-        V: Clone,
-        Q: Ord + ToOwned<Owned = K>,
+        Q: ?Sized + Ord + ToOwned<Owned = K>,
         R: RangeBounds<Q>,
     {
         let (reverse, versions) = (false, true);
         self.reader.iter(range, reverse, versions)
     }
 
-    pub fn reverse_versions<Q, R>(&mut self, range: R) -> Result<Iter<K, V>>
+    pub fn reverse<R, Q>(&mut self, range: R) -> Result<Iter<K, V>>
     where
         K: Clone + Ord + Borrow<Q>,
-        V: Clone,
-        Q: Ord + ToOwned<Owned = K>,
+        Q: ?Sized + Ord + ToOwned<Owned = K>,
+        R: RangeBounds<Q>,
+    {
+        let (reverse, versions) = (true, false);
+        self.reader.iter(range, reverse, versions)
+    }
+
+    pub fn reverse_versions<R, Q>(&mut self, range: R) -> Result<Iter<K, V>>
+    where
+        K: Clone + Ord + Borrow<Q>,
+        Q: ?Sized + Ord + ToOwned<Owned = K>,
         R: RangeBounds<Q>,
     {
         let (reverse, versions) = (true, true);
@@ -676,7 +682,6 @@ where
     pub fn validate(&mut self) -> Result<Stats>
     where
         K: Clone + PartialOrd + Ord + fmt::Debug,
-        V: Clone,
     {
         let iter = self.iter((Bound::<K>::Unbounded, Bound::<K>::Unbounded))?;
 
@@ -723,7 +728,7 @@ where
     pub fn print(&mut self) -> Result<()>
     where
         K: Clone + fmt::Debug,
-        V: Clone + fmt::Debug,
+        V: fmt::Debug,
         <V as db::Diff>::Delta: fmt::Debug,
     {
         println!("name              : {}", self.to_name());

@@ -3,13 +3,11 @@
 mod depth;
 mod index;
 mod node;
-mod op;
 mod stats;
 
 pub use depth::Depth;
-pub use index::Index;
+pub use index::{Index, Iter, Range, Reverse};
 use node::Node;
-pub use op::Write;
 pub use stats::Stats;
 
 #[cfg(any(test, feature = "rdms-perf"))]

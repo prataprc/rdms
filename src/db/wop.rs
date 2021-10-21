@@ -1,16 +1,16 @@
 use arbitrary::Arbitrary;
 
 #[allow(unused_imports)]
-use crate::llrb;
+use crate::Index;
 
-/// Write operations allowed on [llrb::Index] index.
+use crate::db;
+
+/// Write operations allowed on [Index] index, refer to [Index::write] method.
 ///
-/// Passed as argument to [llrb::Index::write] method.
-///
-/// * Optional `cas`, when supplied should match with key's current
+/// * Optional `cas`, when supplied, should match with key's current
 ///   sequence-number. If key is missing from index, `cas` must be supplied
 ///   as ZERO.
-/// * Optional `seqno`, when supplied shall be used as mutation's sequence
+/// * Optional `seqno`, when supplied, shall be used as mutation's sequence
 ///   number, ignoring index's monotonically increasing sequence-number.
 ///   Typically used while replaying operations from external entities like
 ///   Write-Ahead-Logs.
@@ -148,4 +148,14 @@ impl<K, V> Write<K, V> {
             },
         }
     }
+}
+
+/// Result type for all write operations into index.
+pub struct Wr<K, V>
+where
+    V: db::Diff,
+{
+    /// Mutation sequence number for this write-operation.
+    pub seqno: u64,
+    pub old_entry: Option<db::Entry<K, V>>,
 }

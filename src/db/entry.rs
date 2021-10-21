@@ -285,6 +285,17 @@ where
         };
         Some(entry)
     }
+
+    pub fn latest(&self) -> Entry<K, V>
+    where
+        K: Clone,
+    {
+        Entry {
+            key: self.key.clone(),
+            value: self.value.clone(),
+            deltas: Vec::default(),
+        }
+    }
 }
 
 impl<K, V, D> Entry<K, V, D>
@@ -321,6 +332,7 @@ where
     pub fn borrow_key<Q>(&self) -> &Q
     where
         K: Borrow<Q>,
+        Q: ?Sized,
     {
         self.key.borrow()
     }

@@ -48,8 +48,8 @@ where
 impl<'a, K, V, I, E> Iterator for YIter<'a, K, V, I, E>
 where
     K: Clone + Ord + FromCbor,
-    V: Clone + db::Diff + FromCbor,
-    <V as db::Diff>::Delta: Clone + FromCbor + From<V>,
+    V: db::Diff + FromCbor,
+    <V as db::Diff>::Delta: FromCbor + From<V>,
     I: Iterator<Item = Result<E>>,
     E: Into<Entry<K, V>>,
 {

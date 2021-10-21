@@ -13,6 +13,7 @@ mod diff;
 mod entry;
 mod types;
 mod value;
+mod wop;
 
 pub use compact::Cutoff;
 pub(crate) use delta::Delta;
@@ -20,6 +21,7 @@ pub use diff::{Diff, NoDiff};
 pub use entry::Entry;
 pub use types::Binary;
 pub(crate) use value::Value;
+pub use wop::{Wr, Write};
 
 /// Trait to be implemented by index-types, key-types and, value-types.
 ///

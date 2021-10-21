@@ -223,6 +223,7 @@ pub use config::{
 };
 pub use files::{IndexFileName, VlogFileName};
 pub use index::{Builder, Index};
+pub use reader::Iter;
 
 use entry::Entry;
 use flush::Flusher;

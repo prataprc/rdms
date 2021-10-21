@@ -191,7 +191,6 @@ where
     pub fn commit(self, new: Self) -> Self
     where
         K: Clone,
-        V: Clone,
         <V as db::Diff>::Delta: Clone + From<V>,
     {
         let (key, ovalue, odeltas) = match self {
@@ -296,6 +295,7 @@ where
     pub fn borrow_key<Q>(&self) -> &Q
     where
         K: Borrow<Q>,
+        Q: ?Sized,
     {
         match self {
             Entry::MZ { key, .. } => key.borrow(),

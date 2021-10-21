@@ -57,7 +57,7 @@ where
 impl<K, V, I> Iterator for BuildMM<K, V, I>
 where
     K: Clone + IntoCbor,
-    V: Clone + IntoCbor + db::Diff,
+    V: IntoCbor + db::Diff,
     <V as db::Diff>::Delta: IntoCbor,
     I: Iterator<Item = Result<Entry<K, V>>>,
 {
@@ -151,7 +151,7 @@ where
 impl<K, V, I> Iterator for BuildMZ<K, V, I>
 where
     K: Clone + IntoCbor,
-    V: Clone + IntoCbor + db::Diff,
+    V: IntoCbor + db::Diff,
     <V as db::Diff>::Delta: IntoCbor,
     I: Iterator<Item = Result<Entry<K, V>>>,
 {
@@ -249,7 +249,7 @@ where
 impl<K, V, I> Iterator for BuildZZ<K, V, I>
 where
     K: Clone + IntoCbor,
-    V: Clone + IntoCbor + db::Diff,
+    V: IntoCbor + db::Diff,
     <V as db::Diff>::Delta: IntoCbor,
     I: Iterator<Item = Result<Entry<K, V>>>,
 {
@@ -343,7 +343,7 @@ where
 impl<K, V, I> Iterator for BuildIter<K, V, I>
 where
     K: Clone + IntoCbor,
-    V: Clone + IntoCbor + db::Diff,
+    V: IntoCbor + db::Diff,
     <V as db::Diff>::Delta: IntoCbor,
     I: Iterator<Item = Result<Entry<K, V>>>,
 {

@@ -4,6 +4,15 @@ use std::{borrow::Borrow, convert::TryFrom, fmt, ops::RangeBounds};
 
 use crate::{bitmaps::NoBitmap, db, llrb, robt, Error, Result};
 
+// Outstanding robt-api:
+//  * initial, build_index,
+//  * incremental, build_index,
+//  * compact
+//
+//  * open, open_file, set_bitmap
+//  * lsm_merge, compact
+//  * as_bitmap, print, to_index_location, to_vlog_location
+
 pub enum Index<K, V, B = NoBitmap>
 where
     K: FromCbor,
@@ -28,6 +37,20 @@ where
 
     pub fn from_robt(db: robt::Index<K, V, B>) -> Index<K, V, B> {
         Index::Robt { db }
+    }
+
+    pub fn try_clone(&self) -> Result<Index<K, V, B>>
+    where
+        K: Clone,
+    {
+        let val = match self {
+            Index::Llrb { db } => Index::Llrb { db: db.clone() },
+            Index::Robt { db } => Index::Robt {
+                db: db.try_clone()?,
+            },
+        };
+
+        Ok(val)
     }
 
     pub fn set_seqno(&mut self, seqno: u64) -> Option<u64>
@@ -62,6 +85,20 @@ where
     <V as db::Diff>::Delta: FromCbor,
     B: db::Bloom,
 {
+    pub fn as_llrb(&self) -> Option<&llrb::Index<K, V>> {
+        match self {
+            Index::Llrb { db } => Some(db),
+            _ => None,
+        }
+    }
+
+    pub fn as_robt(&self) -> Option<&robt::Index<K, V, B>> {
+        match self {
+            Index::Robt { db } => Some(db),
+            _ => None,
+        }
+    }
+
     pub fn deleted_count(&mut self) -> Option<usize> {
         match self {
             Index::Llrb { db } => Some(db.deleted_count()),
@@ -83,6 +120,13 @@ where
         match self {
             Index::Llrb { db } => db.is_empty(),
             Index::Robt { db } => db.is_empty(),
+        }
+    }
+
+    pub fn is_compacted(&mut self) -> bool {
+        match self {
+            Index::Llrb { .. } => true,
+            Index::Robt { db } => db.is_compacted(),
         }
     }
 
@@ -119,6 +163,30 @@ where
             },
         };
         Ok(stats)
+    }
+
+    pub fn to_app_metadata(&self) -> Option<Vec<u8>> {
+        match self {
+            Index::Llrb { .. } => None,
+            Index::Robt { db } => Some(db.to_app_metadata()),
+        }
+    }
+
+    pub fn to_bitmap(&self) -> Option<B>
+    where
+        B: Clone,
+    {
+        match self {
+            Index::Llrb { .. } => None,
+            Index::Robt { db } => Some(db.to_bitmap()),
+        }
+    }
+
+    pub fn to_root(&self) -> Option<u64> {
+        match self {
+            Index::Llrb { .. } => None,
+            Index::Robt { db } => Some(db.to_root()),
+        }
     }
 }
 

@@ -18,8 +18,8 @@ name = "rdms"
 path = "src/lib.rs"
 
 [[bin]]
-name = "rdms-perf"
-required-features = ["rdms-perf"]
+name = "rdms"
+required-features = ["rdms"]
 
 [badges]
 maintenance = { status = "actively-developed" }
@@ -51,4 +51,4 @@ serde = { version = "1", features = ["derive"], optional = true }
 rand = "0.6.4"
 
 [features]
-rdms-perf = ["structopt", "rand", "lmdb", "serde"]
+rdms = ["structopt", "rand", "lmdb", "serde"]

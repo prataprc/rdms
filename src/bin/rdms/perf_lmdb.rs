@@ -4,7 +4,7 @@ use serde::Deserialize;
 
 use std::{io, result, sync::Arc, thread, time};
 
-use crate::{load_profile, Opt};
+use crate::cmd_perf::{load_profile, Opt};
 
 const DEFAULT_KEY_SIZE: usize = 16;
 const DEFAULT_VAL_SIZE: usize = 16;
@@ -86,7 +86,7 @@ fn load_and_spawn(opts: Opt, p: Profile) -> Result<(), String> {
     unsafe { Arc::get_mut(&mut env).unwrap().close_db(db) };
     env.sync(true).unwrap();
 
-    print!("rdms-perf: iterating ... ");
+    print!("rdms: iterating ... ");
     let (elapsed, n) = {
         let start = time::Instant::now();
         let (env, db) = open_lmdb(&p);
@@ -99,7 +99,7 @@ fn load_and_spawn(opts: Opt, p: Profile) -> Result<(), String> {
 
     println!(
         concat!(
-            "rdms-perf: stats ",
+            "rdms: stats ",
             "page_size:{} depth:{} branch_pages:{} leaf_pages:{} overflow_pages:{} ",
             "entries:{}"
         ),
@@ -120,7 +120,7 @@ fn initial_load(
     mut env: lmdb::Environment,
     db: lmdb::Database, // index
 ) -> result::Result<(), String> {
-    print!("rdms-perf: initial-load ...");
+    print!("rdms: initial-load ...");
 
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
@@ -193,7 +193,7 @@ fn incr_load(
 
     println!(
         concat!(
-            "rdms-perf: incremental-{} for (sets:{} rems:{} gets:{}) ",
+            "rdms: incremental-{} for (sets:{} rems:{} gets:{}) ",
             "operations took {:?}",
         ),
         j,

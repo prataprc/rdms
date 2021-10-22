@@ -185,7 +185,7 @@ where
     pub fn to_root(&self) -> Option<u64> {
         match self {
             Index::Llrb { .. } => None,
-            Index::Robt { db } => Some(db.to_root()),
+            Index::Robt { db } => db.to_root(),
         }
     }
 }

@@ -1704,10 +1704,10 @@ fn find_end<K, V, Q>(
     }
 }
 
-#[cfg(any(test, feature = "rdms-perf"))]
+#[cfg(any(test, feature = "rdms"))]
 use rand::{self, rngs::SmallRng, Rng, SeedableRng};
 
-#[cfg(any(test, feature = "rdms-perf"))]
+#[cfg(any(test, feature = "rdms"))]
 pub fn load_index<K, V>(
     seed: u128,
     sets: usize,

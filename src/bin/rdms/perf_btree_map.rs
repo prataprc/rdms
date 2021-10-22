@@ -7,7 +7,7 @@ use std::{
     time::{self, SystemTime},
 };
 
-use crate::{load_profile, Generate, Opt};
+use crate::cmd_perf::{load_profile, Generate, Opt};
 use rdms::db;
 
 const DEFAULT_KEY_SIZE: usize = 16;
@@ -90,7 +90,7 @@ where
     initial_load(&mut rng, p.clone(), &mut index)?;
     incr_load(opts.seed, p.clone(), &mut index)?;
 
-    print!("rdms-perf: iterating ... ");
+    print!("rdms: iterating ... ");
     let (elapsed, n) = {
         let start = time::Instant::now();
         let n: usize = index.iter().map(|_| 1_usize).sum();
@@ -99,7 +99,7 @@ where
     };
     println!("{} items, took {:?}", n, elapsed);
 
-    print!("rdms-perf: ranging ... ");
+    print!("rdms: ranging ... ");
     let (elapsed, n) = {
         let start = time::Instant::now();
         let n: usize = index.range(..).map(|_| 1_usize).sum();
@@ -108,7 +108,7 @@ where
     };
     println!("{} items, took {:?}", n, elapsed);
 
-    print!("rdms-perf: reverse iter ... ");
+    print!("rdms: reverse iter ... ");
     let (elapsed, n) = {
         let start = time::Instant::now();
         let n: usize = index.range(..).rev().map(|_| 1_usize).sum();
@@ -137,11 +137,7 @@ where
         index.insert(p.gen_key(rng), p.gen_value(rng));
     }
 
-    println!(
-        "rdms-perf: loaded {} items in {:?}",
-        p.loads,
-        start.elapsed()
-    );
+    println!("rdms: loaded {} items in {:?}", p.loads, start.elapsed());
 
     Ok(())
 }

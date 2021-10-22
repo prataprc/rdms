@@ -8,7 +8,7 @@ use rdms::{
     llrb::Index,
 };
 
-use crate::{load_profile, Generate, Opt};
+use crate::cmd_perf::{load_profile, Generate, Opt};
 
 const DEFAULT_KEY_SIZE: usize = 16;
 const DEFAULT_VAL_SIZE: usize = 16;
@@ -140,7 +140,7 @@ where
         handle.join().unwrap().unwrap()
     }
 
-    print!("rdms-perf: iterating ... ");
+    print!("rdms: iterating ... ");
     let (elapsed, n) = {
         let start = time::Instant::now();
         let n: usize = index.iter().unwrap().map(|_| 1_usize).sum();
@@ -149,7 +149,7 @@ where
     };
     println!("{} items, took {:?}", n, elapsed);
 
-    print!("rdms-perf: ranging ... ");
+    print!("rdms: ranging ... ");
     let (elapsed, n) = {
         let start = time::Instant::now();
         let n: usize = index.range(..).unwrap().map(|_| 1_usize).sum();
@@ -158,7 +158,7 @@ where
     };
     println!("{} items, took {:?}", n, elapsed);
 
-    print!("rdms-perf: reverse iter ... ");
+    print!("rdms: reverse iter ... ");
     let (elapsed, n) = {
         let start = time::Instant::now();
         let n: usize = index.reverse(..).unwrap().map(|_| 1_usize).sum();
@@ -167,13 +167,13 @@ where
     };
     println!("{} items, took {:?}", n, elapsed);
 
-    println!("rdms-perf: index latest-seqno:{}", index.to_seqno());
-    println!("rdms-perf: index deleted_count:{}", index.deleted_count());
+    println!("rdms: index latest-seqno:{}", index.to_seqno());
+    println!("rdms: index deleted_count:{}", index.deleted_count());
 
-    println!("rdms-perf: stats {}", index.to_stats().unwrap().to_json());
+    println!("rdms: stats {}", index.to_stats().unwrap().to_json());
 
     if p.validate {
-        print!("rdms-perf: validating {} items in index ... ", index.len());
+        print!("rdms: validating {} items in index ... ", index.len());
         index.validate().unwrap();
         println!("ok");
     }
@@ -199,11 +199,7 @@ where
         index.set(p.gen_key(rng), p.gen_value(rng)).unwrap();
     }
 
-    println!(
-        "rdms-perf: loaded {} items in {:?}",
-        p.loads,
-        start.elapsed()
-    );
+    println!("rdms: loaded {} items in {:?}", p.loads, start.elapsed());
 
     Ok(())
 }
@@ -279,7 +275,7 @@ where
 
     println!(
         concat!(
-            "rdms-perf: incremental-{} for (sets:{} ins:{} rems:{} dels:{} gets:{}) ",
+            "rdms: incremental-{} for (sets:{} ins:{} rems:{} dels:{} gets:{}) ",
             "operations took {:?}",
         ),
         j,

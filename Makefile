@@ -17,8 +17,8 @@ build:
 	cargo +nightly doc
 	#
 	# ... bins ...
-	# cargo +stable build --release --bin rdms-perf --features=rdms-perf
-	cargo +nightly build --release --bin rdms-perf --features=rdms-perf
+	# cargo +stable build --release --bin rdms --features=rdms
+	cargo +nightly build --release --bin rdms --features=rdms
 	#
 	# ... meta commands ...
 	cargo +nightly clippy --all-targets --all-features
@@ -34,7 +34,7 @@ bench:
 	cargo +nightly bench
 
 flamegraph:
-	cargo flamegraph --features=rdms-perf --release --bin=rdms-perf -- --load 1000000 --ops 10000
+	cargo flamegraph --features=rdms --release --bin=rdms -- --load 1000000 --ops 10000
 
 prepare: build test bench
 	check.sh check.out

@@ -4,7 +4,7 @@ use std::{result, time};
 
 use rdms::wral;
 
-use crate::{load_profile, Opt};
+use crate::cmd_perf::{load_profile, Opt};
 
 // Command line options.
 #[derive(Clone, Deserialize)]

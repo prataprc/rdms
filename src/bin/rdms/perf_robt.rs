@@ -7,7 +7,7 @@ use std::{ffi, fmt, hash::Hash, iter::FromIterator, path, result, thread, time};
 
 use rdms::{bitmaps::NoBitmap, db, llrb, robt, Result};
 
-use crate::{load_profile, Generate, Opt};
+use crate::cmd_perf::{load_profile, Generate, Opt};
 
 // to_name, to_index_location, to_vlog_location, len, to_root, to_seqno, to_app_metadata
 // to_stats, to_bitmap, is_compacted, validate
@@ -290,7 +290,7 @@ where
     initial_index::<K, V, B>(opts.seed, &p, bitmap.clone())?;
     let mut index = incr_index(opts.seed, &p, bitmap.clone())?;
 
-    println!("rdms-perf: load-spawn populated with {} items", index.len());
+    println!("rdms: load-spawn populated with {} items", index.len());
 
     let mut handles = vec![];
     for j in 0..p.load.readers {
@@ -315,10 +315,7 @@ where
             assert!(n == index.len(), "{} != {}", n, index.len());
             (start.elapsed(), n)
         };
-        println!(
-            "rdms-perf: load-spawn iter took {:?} for {} items",
-            elapsed, n
-        );
+        println!("rdms: load-spawn iter took {:?} for {} items", elapsed, n);
     }
     if p.load.iter_versions {
         let (elapsed, n) = {
@@ -328,7 +325,7 @@ where
             (start.elapsed(), n)
         };
         println!(
-            "rdms-perf: load-spawn iter_versions took {:?} for {} items",
+            "rdms: load-spawn iter_versions took {:?} for {} items",
             elapsed, n
         );
     }
@@ -340,7 +337,7 @@ where
             (start.elapsed(), n)
         };
         println!(
-            "rdms-perf: load-spawn reverse took {:?} for {} items",
+            "rdms: load-spawn reverse took {:?} for {} items",
             elapsed, n
         );
     }
@@ -352,16 +349,16 @@ where
             (start.elapsed(), n)
         };
         println!(
-            "rdms-perf: load-spawn reverse_versions took {:?} for {} items",
+            "rdms: load-spawn reverse_versions took {:?} for {} items",
             elapsed, n
         );
     }
 
-    println!("rdms-perf: index latest-seqno:{}", index.to_seqno());
-    println!("rdms-perf: stats {:?}", index.to_stats());
+    println!("rdms: index latest-seqno:{}", index.to_seqno());
+    println!("rdms: stats {:?}", index.to_stats());
 
     if p.load.validate {
-        print!("rdms-perf: validating {} items in index ... ", index.len());
+        print!("rdms: validating {} items in index ... ", index.len());
         index.validate().unwrap();
         println!("ok");
     }
@@ -528,7 +525,7 @@ where
     }
 
     println!(
-        "rdms-perf: read-load-{} for (gets:{} get_versions:{}) operations took {:?}",
+        "rdms: read-load-{} for (gets:{} get_versions:{}) operations took {:?}",
         j,
         p.load.gets,
         p.load.get_versions,
@@ -564,7 +561,7 @@ where
         })
         .sum();
     println!(
-        "rdms-perf: read-load-{} took {:?} to {} {} items",
+        "rdms: read-load-{} took {:?} to {} {} items",
         j,
         start.elapsed(),
         prefix,

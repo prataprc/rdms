@@ -10,5 +10,5 @@ pub use index::{Index, Iter, Range, Reverse};
 use node::Node;
 pub use stats::Stats;
 
-#[cfg(any(test, feature = "rdms-perf"))]
+#[cfg(any(test, feature = "rdms"))]
 pub use index::load_index;

@@ -1,0 +1,15 @@
+# Actual key-value, where key is the document location and value (aka document)
+# is the file, can be a subdirectory within the repo_path. If empty or missing
+# shall default to repo_path.
+db_path = ""
+
+# configuration meant for creating a fresh key-value repository.
+[init]
+# Can be one of "shared_umask", "shared_group", "shared_all".
+permissions = "shared_umask"
+# Must be a valid description for this kv store.
+description = ""
+
+[open]
+
+[clone]

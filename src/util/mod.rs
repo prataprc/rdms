@@ -4,13 +4,12 @@ use cbordata::{Cbor, FromCbor, IntoCbor};
 
 use std::{
     borrow::Borrow,
-    ffi, fs,
     ops::{Bound, RangeBounds},
-    path,
 };
 
 use crate::{db, Error, Result};
 
+pub mod files;
 pub mod spinlock;
 pub mod thread;
 
@@ -28,42 +27,6 @@ macro_rules! check_remaining {
             Ok(())
         }
     };
-}
-
-#[macro_export]
-macro_rules! read_file {
-    ($fd:expr, $seek:expr, $n:expr, $msg:expr) => {{
-        use std::convert::TryFrom;
-
-        match $fd.seek($seek) {
-            Ok(_) => {
-                let mut buf = vec![0; usize::try_from($n).unwrap()];
-                match $fd.read(&mut buf) {
-                    Ok(n) if buf.len() == n => Ok(buf),
-                    Ok(n) => {
-                        let m = buf.len();
-                        err_at!(Fatal, msg: concat!($msg, " {}/{} at {:?}"), m, n, $seek)
-                    }
-                    Err(err) => err_at!(IOError, Err(err)),
-                }
-            }
-            Err(err) => err_at!(IOError, Err(err)),
-        }
-    }};
-}
-
-#[macro_export]
-macro_rules! write_file {
-    ($fd:expr, $buffer:expr, $file:expr, $msg:expr) => {{
-        use std::io::Write;
-
-        match err_at!(IOError, $fd.write($buffer))? {
-            n if $buffer.len() == n => Ok(n),
-            n => err_at!(
-                Fatal, msg: "partial-wr {}, {:?}, {}/{}", $msg, $file, $buffer.len(), n
-            ),
-        }
-    }};
 }
 
 /// Helper function to serialize value `T` implementing IntoCbor, into byte-string.
@@ -91,45 +54,6 @@ where
 {
     let (val, n) = err_at!(FailCbor, Cbor::decode(&mut data))?;
     Ok((err_at!(FailCbor, T::from_cbor(val))?, n))
-}
-
-// create a file in append mode for writing.
-pub fn create_file_a(file: &ffi::OsStr) -> Result<fs::File> {
-    let os_file = {
-        let os_file = path::Path::new(file);
-        fs::remove_file(os_file).ok(); // NOTE: ignore remove errors.
-        os_file
-    };
-
-    {
-        let parent = match os_file.parent() {
-            Some(parent) => Ok(parent),
-            None => err_at!(InvalidFile, msg: "{:?}", file),
-        }?;
-        err_at!(IOError, fs::create_dir_all(parent))?;
-    };
-
-    let mut opts = fs::OpenOptions::new();
-    Ok(err_at!(
-        IOError,
-        opts.append(true).create_new(true).open(os_file)
-    )?)
-}
-
-// open existing file in append mode for writing.
-pub fn open_file_a(file: &ffi::OsStr) -> Result<fs::File> {
-    let os_file = path::Path::new(file);
-    let mut opts = fs::OpenOptions::new();
-    Ok(err_at!(IOError, opts.append(true).open(os_file))?)
-}
-
-// open file for reading.
-pub fn open_file_r(file: &ffi::OsStr) -> Result<fs::File> {
-    let os_file = path::Path::new(file);
-    Ok(err_at!(
-        IOError,
-        fs::OpenOptions::new().read(true).open(os_file)
-    )?)
 }
 
 pub fn to_start_end<G, K>(within: G) -> (Bound<K>, Bound<K>)
@@ -225,17 +149,6 @@ where
         Bound::Excluded(hk) => Bound::Included(hk.clone()),
         _ => unreachable!(),
     }
-}
-
-pub fn sync_write(file: &mut fs::File, data: &[u8]) -> Result<usize> {
-    use std::io::Write;
-
-    let n = err_at!(IOError, file.write(data))?;
-    if n != data.len() {
-        err_at!(IOError, msg: "partial write to file {} {}", n, data.len())?
-    }
-    err_at!(IOError, file.sync_all())?;
-    Ok(n)
 }
 
 #[cfg(test)]

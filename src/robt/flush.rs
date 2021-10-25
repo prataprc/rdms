@@ -28,10 +28,10 @@ impl Flusher {
     // for the index-file and the other is for value-file, if enabled.
     pub fn new(loc: &ffi::OsStr, create: bool, chan_size: usize) -> Result<Flusher> {
         let (fd, fpos) = if create {
-            (util::create_file_a(loc)?, 0)
+            (util::files::create_file_a(loc)?, 0)
         } else {
             let fpos = err_at!(IOError, fs::metadata(loc))?.len().saturating_sub(1);
-            (util::open_file_a(loc)?, fpos)
+            (util::files::open_file_a(loc)?, fpos)
         };
 
         let ffpp = loc.to_os_string();

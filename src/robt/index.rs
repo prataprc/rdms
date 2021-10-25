@@ -773,7 +773,7 @@ fn find_index_file(dir: &ffi::OsStr, name: &str) -> Option<ffi::OsString> {
 fn purge_file(file: ffi::OsString) -> Result<()> {
     use fs2::FileExt;
 
-    let fd = util::open_file_r(&file)?;
+    let fd = util::files::open_file_r(&file)?;
     // println!("purge file try_lock_exclusive <");
     match fd.try_lock_exclusive() {
         Ok(_) => {

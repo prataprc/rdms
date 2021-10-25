@@ -56,7 +56,7 @@ impl<S> Worker<S> {
 
             let length = {
                 let data = util::into_cbor_bytes(batch)?;
-                util::sync_write(file, &data)?;
+                util::files::sync_write(file, &data)?;
                 data.len()
             };
 

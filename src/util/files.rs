@@ -126,3 +126,7 @@ where
 
     Ok(state)
 }
+
+#[cfg(test)]
+#[path = "files_test.rs"]
+mod files_test;

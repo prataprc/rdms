@@ -38,6 +38,7 @@ fn main() {
 
     match cmd.as_str() {
         "perf" => cmd_perf::perf(cmd_args),
+        "git" => cmd_git::handle(cmd_args),
         cmd => println!("invalid command {}", cmd),
     }
 }

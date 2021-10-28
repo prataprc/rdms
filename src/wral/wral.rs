@@ -94,7 +94,7 @@ impl<S> Wal<S> {
     /// last journal.
     pub fn load(config: Config) -> Result<Wal<S>>
     where
-        S: Default + wral::State,
+        S: wral::State,
     {
         let mut journals: Vec<(Journal<S>, u64, S)> = vec![];
         for item in err_at!(IOError, fs::read_dir(&config.dir))? {

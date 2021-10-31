@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use std::ffi;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub enum Permissions {
     #[serde(rename = "shared_umask")]
     SharedUmask,
@@ -13,7 +13,7 @@ pub enum Permissions {
 }
 
 /// Configuration describing the index backed by a _git-repository_.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Config {
     /// location of repository root.
     pub loc_repo: ffi::OsString,

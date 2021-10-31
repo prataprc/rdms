@@ -1,6 +1,8 @@
 use structopt::StructOpt;
 
+mod cmd_git;
 mod cmd_perf;
+
 mod perf_btree_map;
 mod perf_llrb;
 mod perf_lmdb;

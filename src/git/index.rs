@@ -1,11 +1,14 @@
 use git2::{Repository, RepositoryInitMode, RepositoryInitOptions, RepositoryOpenFlags};
 
-use std::file;
+use std::{ffi, file, ops::RangeBounds};
 
 use crate::{
+    db,
     git::{Config, Permissions},
     Error, Result,
 };
+
+pub type Entry = db::Entry<ffi::OsString, db::Binary>;
 
 /// Git repository as Key-Value index.
 pub struct Index {
@@ -60,69 +63,105 @@ impl Index {
 
         Ok(index)
     }
+
+    pub fn close(self) -> Result<()> {
+        todo!()
+    }
+
+    pub fn purge(self) -> Result<()> {
+        todo!()
+    }
 }
 
 impl Index {
-    //pub fn path(&self) -> path::Path {
-    //    todo!()
-    //}
+    pub fn as_config(&self) -> &Config {
+        &self.config
+    }
 
-    //pub fn is_empty(&self) -> bool {
-    //    todo!()
-    //}
+    pub fn len(&self) -> Result<usize> {
+        todo!()
+    }
 
-    //pub fn len(&self) -> usize {
-    //    todo!()
-    //}
+    pub fn is_empty(&self) -> bool {
+        todo!()
+    }
+
+    pub fn footprint(&self) -> Result<isize> {
+        todo!()
+    }
+
+    pub fn to_stats(&self) -> Result<()> {
+        Ok(())
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 impl Index {
-    //pub fn get<Q>(&self, key: &Q) -> Option<V>
-    //where
-    //    K: Borrow<Q>,
-    //    Q: PartialEq,
-    //{
-    //    todo!()
-    //}
+    pub fn get(&self, _key: &ffi::OsStr) -> Option<String> {
+        todo!()
+    }
 
-    //pub fn set(&mut self, key: K, value: V) -> Option<V>
-    //where
-    //    K: PartialEq,
-    //{
-    //    todo!()
-    //}
+    pub fn get_versions(&self, _key: &ffi::OsStr) -> Option<Entry> {
+        todo!()
+    }
 
-    //pub fn remove<Q>(&mut self, key: &Q) -> Option<V>
-    //where
-    //    K: Borrow<Q>,
-    //    Q: PartialEq,
-    //{
-    //    todo!()
-    //}
+    pub fn iter(&self, _key: &ffi::OsStr) -> Result<Iter> {
+        todo!()
+    }
 
-    //pub fn iter(&self) -> Iter<'_, K, V> {
-    //    todo!()
-    //}
+    pub fn iter_versions<K, V>(&self, _key: &K) -> Result<Iter> {
+        todo!()
+    }
 
-    //pub fn iter_keys(&self) -> IterKeys<'_, K> {
-    //    todo!()
-    //}
+    pub fn range<R>(&self, _range: R) -> Result<Iter>
+    where
+        R: RangeBounds<ffi::OsStr>,
+    {
+        todo!()
+    }
 
-    //pub fn range<Q: ?Sized, R>(&self, range: R) -> Range<'_, K, V, R, Q>
-    //where
-    //    K: Borrow<Q>,
-    //    R: RangeBounds<Q>,
-    //    Q: Ord,
-    //{
-    //    todo!()
-    //}
+    pub fn range_versions<R>(&self, _range: R) -> Result<Iter>
+    where
+        R: RangeBounds<ffi::OsStr>,
+    {
+        todo!()
+    }
 
-    //pub fn reverse<Q: ?Sized, R>(&self, range: R) -> Reverse<'_, K, V, R, Q>
-    //where
-    //    K: Borrow<Q>,
-    //    R: RangeBounds<Q>,
-    //    Q: Ord,
-    //{
-    //    todo!()
-    //}
+    pub fn reverse<R>(&self, _range: R) -> Result<Iter>
+    where
+        R: RangeBounds<ffi::OsStr>,
+    {
+        todo!()
+    }
+
+    pub fn reverse_versions<R>(&self, _range: R) -> Result<Iter>
+    where
+        R: RangeBounds<ffi::OsStr>,
+    {
+        todo!()
+    }
+}
+
+impl Index {
+    pub fn insert(&mut self, _key: &ffi::OsStr, _value: String) -> Option<String> {
+        todo!()
+    }
+
+    pub fn remove(&mut self, _key: &ffi::OsStr) -> Option<String> {
+        todo!()
+    }
+
+    pub fn commit<I>(&mut self, _iter: I) -> Option<usize>
+    where
+        I: Iterator<Item = Entry>,
+    {
+        todo!()
+    }
+}
+
+pub struct Iter {
+    //
 }

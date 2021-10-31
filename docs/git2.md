@@ -1,178 +1,94 @@
 Concepts
 --------
 
+object{header,sha1}, blob-object, tree-object, commit-object, tag-object
+
+references, `refs/heads/<branch-name>`, `refs/remotes/<name>`, `refs/tags/<name>`
+
+merge, rebase, annotated-commits, action-signature-{name,email,timestamp}
+
 namespace
 work-tree
 revision-spec
 merge-message
 remote, remote-fetch, in-memory-remote
+
 ignore-rules
 
-Oid, ObjectType
-AnnotatedCommit
+Types
+-----
+
+AnnotatedCommit, Signature
+
+Diff, DiffHunk, DiffDelta, ApplyLocation, ApplyOptions
+
+Repository, ObjectType, Oid, Tree, Commit
+Blame, BlameOptions, BlameHunk, BlameIter
+
+Git as DB
+---------
+
+* Has to be content addressed database.
+* Commit oriented, similar to transactions in regular Key-Value store.
+* Commits are time-ordered via parent child relationshipt, a single commit can have multiple parents.
+  * This also implies that we may not need sequence-numbering.
+* Each file can be treated as a document and stored as a blob object-type.
+* Document as value, must emit a unique key, that can be treated as file path.
+
+```
+instance-api    | new, close, purge
+management-api  | len, deleted_count, footprint, is_empty, is_spin, to_name, to_seqno, to_stats, validate
+read-api        | get, get_versions, iter, iter_versions range range_versions, reverse, reverse_versions
+write-api       | set, set_cas, insert, insert_cas delete, delete_cas, remove, remove_cas
+transaction-api | commit
+```
+
 Repository
+    odb, set_odb
+    blob, blob_path, find_blob
 
-`add_ignore_rule`, `clear_ignore_rules`, `is_path_ignored`, `status_should_ignore`
 
-`annotated_commit_from_fetchhead`
-`branch_from_annotated_commit`
-`find_annotated_commit`
-`reference_to_annotated_commit`
-`set_head_detached_from_annotated`
+Objects
+-------
 
-`cherrypick_commit`
-`commit`
-`commit_create_buffer`
-`commit_signed`
-`find_commit`
-`merge_commits`
-`revert_commit`
+* Objects are immutable, signed and compressed-(zlib).
+* Commit objects are DAG, which means they can have more than one parent.
+* Tag can also be GPG signed.
 
-`apply`
-`apply_to_tree`
-`blame_file`
-`blob`
-`blob_path`
-`blob_writer`
-`branch`
-`branch_remote_name`
-`branch_upstream_name`
-`branch_upstream_remote`
-`branches`
-`checkout_head`
-`checkout_index`
-`checkout_tree`
-`cherrypick`
-`cleanup_state`
-`clone`
-`clone_recurse`
-`config`
-`describe`
-`diff_blobs`
-`diff_index_to_index`
-`diff_index_to_workdir`
-`diff_tree_to_index`
-`diff_tree_to_tree`
-`diff_tree_to_workdir`
-`diff_tree_to_workdir_with_index`
-`discover`
-`extract_signature`
-`fetchhead_foreach`
-`find_blob`
-`find_branch`
-`find_note`
-`find_object`
-`find_reference`
-`find_remote`
-`find_submodule`
-`find_tag`
-`find_tree`
-`find_worktree`
-`from_odb`
-`get_attr`
-`get_attr_bytes`
-`graph_ahead_behind`
-`graph_descendant_of`
-`head`
-`head_detached`
-`index`
-`init`
-`init_bare`
-`init_opts`
-`is_bare`
-`is_empty`
-`is_shallow`
-`is_worktree`
-`mailmap`
-`merge`
-`merge_analysis`
-`merge_analysis_for_ref`
-`merge_base`
-`merge_base_many`
-`merge_bases`
-`merge_bases_many`
-`merge_trees`
-`mergehead_foreach`
-`message`
-`namespace`
-`namespace_bytes`
-`note`
-`note_default_ref`
-`note_delete`
-`notes`
-`odb`
-`open`
-`open_bare`
-`open_ext`
-`open_from_env`
-`open_from_worktree`
-`open_rebase`
-`packbuilder`
-`path`
-`rebase`
-`reference`
-`reference_ensure_log`
-`reference_has_log`
-`reference_matching`
-`reference_symbolic`
-`reference_symbolic_matching`
-`references`
-`references_glob`
-`reflog`
-`reflog_delete`
-`reflog_rename`
-`refname_to_id`
-`remote`
-`remote_add_fetch`
-`remote_add_push`
-`remote_anonymous`
-`remote_delete`
-`remote_rename`
-`remote_set_pushurl`
-`remote_set_url`
-`remote_with_fetch`
-`remotes`
-`remove_message`
-`remove_namespace`
-`reset`
-`reset_default`
-`resolve_reference_from_short_name`
-`revert`
-`revparse`
-`revparse_ext`
-`revparse_single`
-`revwalk`
-`set_head`
-`set_head_detached`
-`set_index`
-`set_namespace`
-`set_namespace_bytes`
-`set_odb`
-`set_workdir`
-`signature`
-`stash_apply`
-`stash_drop`
-`stash_foreach`
-`stash_pop`
-`stash_save`
-`stash_save2`
-`state`
-`status_file`
-`statuses`
-`submodule`
-`submodule_set_branch`
-`submodule_set_ignore`
-`submodule_set_update`
-`submodule_set_url`
-`submodule_status`
-`submodules`
-`tag`
-`tag_delete`
-`tag_foreach`
-`tag_lightweight`
-`tag_names`
-`transaction`
-`treebuilder`
-`workdir`
-`worktree`
-`worktrees`
+
+    blob [content-size]\0       tree [content-size]\0               commit [content-size]\0                 tag [content-size]\0
+    ---------------------       ---------------------               -----------------------                 --------------------
+    Simple text                 100644 blob a906cb README           tree 1a738d                             object 0576fa
+                                100644 blob a874b7 Rakefile         parent a11bef                           type commit
+                                040000 tree fe8971 lib              author Scott Chacon                     tag v0.1
+                                                                        <schacon@gmail.com> 1205602288      tagger Scott Chacon
+                                                                    committer Scott Chacon                      <schacon@gmail.com> 1205624655
+                                                                        <schacon@gmail.com> 1205602288      this is my v0.1 tag
+                                                                    first commit
+
+
+                       +------+
+            +----------| Head |------------+
+            |          +------+            |
+            |              |               |
+            |              |               |
+      +--------+      +--------+        +--------+
+      | Remote |      | Branch |        |  Tag   |
+      +--------+      +--------+        +--------+
+            |              |               |
+            |              |               |
+            |         +--------+           |
+            +---------| Commit |-----------+
+                      +--------+
+                           |
+                           |
+                           |
+                      +--------+
+                  +---|  Tree  |---+
+                  |   +--------+   |
+                  +--------|-------+
+                           |
+                      +--------+
+                      |  Blobs |
+                      +--------+
+

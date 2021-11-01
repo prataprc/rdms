@@ -22,7 +22,7 @@ AnnotatedCommit, Signature
 
 Diff, DiffHunk, DiffDelta, ApplyLocation, ApplyOptions
 
-Repository, ObjectType, Oid, Tree, Commit
+Repository, ObjectType, Oid, Tree, Commit, Index
 Blame, BlameOptions, BlameHunk, BlameIter
 
 Git as DB

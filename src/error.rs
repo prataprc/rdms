@@ -36,6 +36,8 @@ pub enum Error {
     FailConvert(String, String),
     /// IO error from std::io
     IOError(String, String),
+    /// Git error from git2 library
+    FailGitapi(String, String),
 
     /// Supplied key is not found in the index.
     KeyNotFound(String, String),
@@ -140,6 +142,7 @@ impl fmt::Display for Error {
             Error::InvalidFile(p, m) => write!(f, "{} InvalidFile:{}", p, m),
             Error::FailConvert(p, m) => write!(f, "{} FailConvert:{}", p, m),
             Error::IOError(p, m) => write!(f, "{} IoError:{}", p, m),
+            Error::FailGitapi(p, m) => write!(f, "{} FailGitapi:{}", p, m),
             Error::KeyNotFound(p, m) => write!(f, "{} KeyNotFound:{}", p, m),
             Error::EmptyIndex(p, m) => write!(f, "{} EmptyIndex:{}", p, m),
             Error::InvalidCAS(p, m) => write!(f, "{} InvalidCAS:{}", p, m),

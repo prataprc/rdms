@@ -24,9 +24,7 @@ pub fn handle(args: Vec<String>) -> Result<()> {
     };
     let index = git::Index::open(config.clone())?;
 
-    for entry in index.iter().unwrap() {
-        println!("{:?}", entry.unwrap().key);
-    }
+    println!("{}", index.len().unwrap());
 
     Ok(())
 }

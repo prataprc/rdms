@@ -1,6 +1,6 @@
 use git2::{Repository, RepositoryInitMode, RepositoryInitOptions, RepositoryOpenFlags};
 
-use std::{ffi, file, fmt, fs, ops::Bound, ops::RangeBounds, path, result};
+use std::{ffi, file, fmt, fs, ops::Bound, ops::RangeBounds, path, result, time};
 
 use crate::{
     git::{Config, Permissions},
@@ -187,7 +187,7 @@ impl Index {
             IterLevel::reverse(&self.repo, "".into(), tree.clone(), &comps)?
         };
 
-        iter.pretty_print("");
+        // iter.pretty_print("");
 
         let low = range.start_bound().cloned();
         Ok(Reverse { iter, low })
@@ -211,11 +211,10 @@ impl Index {
         todo!()
     }
 
-    pub fn commit<I>(&mut self, _iter: I) -> Option<usize>
-    where
-        I: Iterator<Item = Entry>,
-    {
-        todo!()
+    pub fn transaction(&mut self) -> Result<Txn> {
+        let tree = self.get_db_root()?.into_tree().unwrap();
+        let txn = Txn { index: self, tree };
+        Ok(txn)
     }
 }
 
@@ -627,6 +626,222 @@ impl<'a> Iterator for IterLevel<'a> {
                 },
             }
         }
+    }
+}
+
+pub struct Txn<'a> {
+    index: &'a Index,
+    tree: git2::Tree<'a>,
+}
+
+impl<'a> Txn<'a> {
+    pub fn commit(&mut self) -> Result<()> {
+        let elapsed_from_epoch = {
+            let dur = err_at!(Fatal, time::UNIX_EPOCH.elapsed())?;
+            git2::Time::new(dur.as_secs() as i64, 0)
+        };
+        let update_ref = Some("HEAD");
+        let author = err_at!(
+            FailGitapi,
+            git2::Signature::new("rdms/git", "no-email-id", &elapsed_from_epoch)
+        )?;
+        let committer = err_at!(
+            FailGitapi,
+            git2::Signature::new("rdms/git", "no-email-id", &elapsed_from_epoch)
+        )?;
+        let message = "dummy message".to_string();
+        let parent = {
+            let refn = err_at!(FailGitapi, self.index.repo.find_reference("HEAD"))?;
+            err_at!(FailGitapi, refn.peel_to_commit())?
+        };
+
+        err_at!(
+            FailGitapi,
+            self.index.repo.commit(
+                update_ref,
+                &author,
+                &committer,
+                &message,
+                &self.tree,
+                vec![&parent].as_slice(),
+            )
+        )?;
+
+        Ok(())
+    }
+
+    pub fn insert<P, V>(&mut self, key: P, data: V) -> Result<()>
+    where
+        P: AsRef<path::Path>,
+        V: AsRef<[u8]>,
+    {
+        let key: &path::Path = key.as_ref();
+
+        let comps: Vec<String> = key
+            .components()
+            .filter_map(|c| match c {
+                path::Component::Normal(s) => Some(s.to_str()?.to_string()),
+                _ => None,
+            })
+            .collect();
+
+        self.tree = self.do_insert(Some(self.tree.clone()), &comps, data.as_ref())?;
+
+        Ok(())
+    }
+
+    pub fn remove<P, V>(&mut self, key: P) -> Result<()>
+    where
+        P: AsRef<path::Path>,
+        V: AsRef<[u8]>,
+    {
+        let repo = &self.index.repo;
+        let key: &path::Path = key.as_ref();
+
+        let comps: Vec<String> = key
+            .components()
+            .filter_map(|c| match c {
+                path::Component::Normal(s) => Some(s.to_str()?.to_string()),
+                _ => None,
+            })
+            .collect();
+
+        let elapsed_from_epoch = {
+            let dur = err_at!(Fatal, time::UNIX_EPOCH.elapsed())?;
+            git2::Time::new(dur.as_secs() as i64, 0)
+        };
+        let update_ref = Some("HEAD");
+        let author = err_at!(
+            FailGitapi,
+            git2::Signature::new("rdms/git", "", &elapsed_from_epoch)
+        )?;
+        let committer = err_at!(
+            FailGitapi,
+            git2::Signature::new("rdms/git", "", &elapsed_from_epoch)
+        )?;
+        let message = format!("insert {:?}", key);
+        let parent = {
+            let refn = err_at!(FailGitapi, repo.find_reference("HEAD"))?;
+            err_at!(FailGitapi, refn.peel_to_commit())?
+        };
+        let tree = {
+            let tree = self.index.get_db_root()?.into_tree().unwrap();
+            self.do_remove(tree, &comps)?
+        };
+
+        err_at!(
+            FailGitapi,
+            repo.commit(
+                update_ref,
+                &author,
+                &committer,
+                &message,
+                &tree,
+                vec![&parent].as_slice(),
+            )
+        )?;
+
+        Ok(())
+    }
+
+    //pub fn commit(self) -> Result<()> {
+    //    todo!()
+    //}
+
+    fn do_insert(
+        &self,
+        tree: Option<git2::Tree<'a>>,
+        comps: &[String],
+        data: &[u8],
+    ) -> Result<git2::Tree<'a>> {
+        let comp = comps.first();
+        let comps = &comps[1..];
+
+        match (comp, tree) {
+            (Some(comp), Some(tree)) if comps.len() == 0 => match tree.get_name(comp) {
+                Some(_) => self.insert_blob(Some(&tree), comp, data),
+                None => self.insert_blob(Some(&tree), comp, data),
+            },
+            (Some(comp), Some(tree)) => match tree.get_name(comp) {
+                Some(_) => self.insert_tree(
+                    Some(&tree),
+                    comp,
+                    self.do_insert(None, comps, data)?.id(),
+                ),
+                None => self.do_insert(None, comps, data),
+            },
+            (Some(comp), None) if comps.len() == 0 => self.insert_blob(None, comp, data),
+            (Some(comp), None) => {
+                self.insert_tree(None, comp, self.do_insert(None, comps, data)?.id())
+            }
+            (None, _) => unreachable!(),
+        }
+    }
+
+    fn insert_blob(
+        &self,
+        tree: Option<&git2::Tree>,
+        comp: &str,
+        data: &[u8],
+    ) -> Result<git2::Tree<'a>> {
+        let odb = err_at!(FailGitapi, self.index.repo.odb())?;
+        let mut builder = err_at!(FailGitapi, self.index.repo.treebuilder(tree))?;
+
+        let oid = err_at!(FailGitapi, odb.write(git2::ObjectType::Blob, data))?;
+        err_at!(FailGitapi, builder.insert(comp, oid, 0o100644))?;
+        let oid = err_at!(FailGitapi, builder.write())?;
+
+        let object = err_at!(FailGitapi, self.index.repo.find_object(oid, None))?;
+        Ok(object.as_tree().unwrap().clone())
+    }
+
+    fn insert_tree(
+        &self,
+        tree: Option<&git2::Tree>,
+        comp: &str,
+        oid: git2::Oid,
+    ) -> Result<git2::Tree<'a>> {
+        let mut builder = err_at!(FailGitapi, self.index.repo.treebuilder(tree))?;
+
+        err_at!(FailGitapi, builder.insert(comp, oid, 0o100644))?;
+        let oid = err_at!(FailGitapi, builder.write())?;
+
+        let object = err_at!(FailGitapi, self.index.repo.find_object(oid, None))?;
+        Ok(object.as_tree().unwrap().clone())
+    }
+
+    fn do_remove(
+        &self,
+        tree: git2::Tree<'a>,
+        comps: &[String],
+    ) -> Result<git2::Tree<'a>> {
+        let comp = comps.first();
+        let comps = &comps[1..];
+
+        match comp {
+            Some(comp) if comps.len() == 0 => self.remove_entry(&tree, comp),
+            Some(comp) => match tree.get_name(comp) {
+                Some(te) => match te.kind() {
+                    Some(git2::ObjectType::Tree) => {
+                        let obj = err_at!(FailGitapi, te.to_object(&self.index.repo))?;
+                        self.do_remove(obj.into_tree().unwrap(), comps)
+                    }
+                    Some(_) | None => err_at!(KeyNotFound, msg: "missing key"),
+                },
+                None => err_at!(KeyNotFound, msg: "missing key"),
+            },
+            None => unreachable!(),
+        }
+    }
+
+    fn remove_entry(&self, tree: &git2::Tree, comp: &str) -> Result<git2::Tree<'a>> {
+        let mut builder = err_at!(FailGitapi, self.index.repo.treebuilder(Some(tree)))?;
+
+        err_at!(FailGitapi, builder.remove(comp))?;
+        let oid = err_at!(FailGitapi, builder.write())?;
+
+        let object = err_at!(FailGitapi, self.index.repo.find_object(oid, None))?;
+        Ok(object.as_tree().unwrap().clone())
     }
 }
 

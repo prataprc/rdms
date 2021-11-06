@@ -1,6 +1,6 @@
 use structopt::StructOpt;
 
-use std::ffi;
+use std::{ffi, ops::Bound, path};
 
 use rdms::{git, Result};
 
@@ -24,7 +24,27 @@ pub fn handle(args: Vec<String>) -> Result<()> {
     };
     let index = git::Index::open(config.clone())?;
 
-    println!("{}", index.len().unwrap());
+    // println!("{}", index.len().unwrap());
+
+    //for e in index.iter().unwrap() {
+    //    println!("{}", e.unwrap().as_key_str())
+    //}
+
+    //let r = (
+    //    Bound::<path::PathBuf>::Unbounded,
+    //    Bound::<path::PathBuf>::Unbounded,
+    //);
+    //for e in index.range(r).unwrap() {
+    //    println!("{}", e.unwrap().as_key_str())
+    //}
+
+    let r = (
+        Bound::<path::PathBuf>::Included("tools/travis".into()),
+        Bound::<path::PathBuf>::Included("web/images".into()),
+    );
+    for e in index.reverse(r).unwrap() {
+        println!("{}", e.unwrap().as_key_str())
+    }
 
     Ok(())
 }

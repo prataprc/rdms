@@ -133,7 +133,8 @@ impl Index {
     pub fn iter(&self) -> Result<IterLevel> {
         let val = {
             let tree = self.get_db_root()?.into_tree().unwrap();
-            IterLevel::forward(&self.repo, "".into(), &tree)?
+            let comps = vec![];
+            IterLevel::forward(&self.repo, "".into(), tree.clone(), &comps)?
         };
         Ok(val)
     }
@@ -142,6 +143,10 @@ impl Index {
         self.iter()
     }
 
+    // convert a key to its components, there are few criterias in supplying the key:
+    // a. must be a valid string
+    // b. must not start with root or drive prefix
+    // c. must not start with current directory or parent directory.
     pub fn range<R, P>(&self, range: R) -> Result<Range<P>>
     where
         R: RangeBounds<P>,
@@ -149,15 +154,14 @@ impl Index {
     {
         let iter = {
             let tree = self.get_db_root()?.into_tree().unwrap();
-            IterLevel::forward(&self.repo, "".into(), &tree)?
-        };
-        let val = {
-            let low = Some(range.start_bound().cloned());
-            let high = range.end_bound().cloned();
-            Range { iter, low, high }
+            let comps = Index::key_to_components(range.start_bound());
+            IterLevel::forward(&self.repo, "".into(), tree.clone(), &comps)?
         };
 
-        Ok(val)
+        // iter.pretty_print("");
+
+        let high = range.end_bound().cloned();
+        Ok(Range { iter, high })
     }
 
     pub fn range_versions<R, P>(&self, range: R) -> Result<Range<P>>
@@ -168,6 +172,10 @@ impl Index {
         self.range(range)
     }
 
+    // convert a key to its components, there are few criterias in supplying the key:
+    // a. must be a valid string
+    // b. must not start with root or drive prefix
+    // c. must not start with current directory or parent directory.
     pub fn reverse<R, P>(&self, range: R) -> Result<Reverse<P>>
     where
         R: RangeBounds<P>,
@@ -175,15 +183,14 @@ impl Index {
     {
         let iter = {
             let tree = self.get_db_root()?.into_tree().unwrap();
-            IterLevel::reverse(&self.repo, "".into(), &tree)?
-        };
-        let val = {
-            let low = range.start_bound().cloned();
-            let high = Some(range.end_bound().cloned());
-            Reverse { iter, low, high }
+            let comps = Index::key_to_components(range.end_bound());
+            IterLevel::reverse(&self.repo, "".into(), tree.clone(), &comps)?
         };
 
-        Ok(val)
+        iter.pretty_print("");
+
+        let low = range.start_bound().cloned();
+        Ok(Reverse { iter, low })
     }
 
     pub fn reverse_versions<R, P>(&self, range: R) -> Result<Reverse<P>>
@@ -213,6 +220,37 @@ impl Index {
 }
 
 impl Index {
+    fn key_to_components<P>(key: Bound<P>) -> Vec<Bound<String>>
+    where
+        P: AsRef<path::Path>,
+    {
+        match key {
+            Bound::Unbounded => vec![Bound::Unbounded],
+            Bound::Included(key) => {
+                let key: &path::Path = key.as_ref();
+                key.components()
+                    .filter_map(|c| match c {
+                        path::Component::Normal(s) => {
+                            Some(Bound::Included(s.to_str()?.to_string()))
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            }
+            Bound::Excluded(key) => {
+                let key: &path::Path = key.as_ref();
+                key.components()
+                    .filter_map(|c| match c {
+                        path::Component::Normal(s) => {
+                            Some(Bound::Excluded(s.to_str()?.to_string()))
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            }
+        }
+    }
+
     fn get_db_root(&self) -> Result<git2::Object> {
         let tree = {
             let refn = err_at!(FailGitapi, self.repo.head())?;
@@ -237,33 +275,29 @@ impl Index {
         Ok(obj)
     }
 
-    // convert a key to its components, there are few criterias in supplying the key:
-    // a. must be a valid string
-    // b. must not start with root or drive prefix
-    // c. must not start with current directory or parent directory.
-    #[allow(dead_code)] // TODO
-    fn key_to_components(key: &path::Path) -> Vec<String> {
-        key.components()
-            .filter_map(|c| match c {
-                path::Component::Normal(s) => Some(s.to_str()?.to_string()),
-                _ => None,
-            })
-            .collect()
-    }
-
     // Entres in tree in reverse sort order.
-    fn tree_entries(tree: &git2::Tree, rev: bool) -> Vec<IterEntry<'static>> {
-        let mut items: Vec<IterEntry> = tree
+    fn tree_entries(tree: &git2::Tree) -> Vec<git2::TreeEntry<'static>> {
+        let mut items: Vec<git2::TreeEntry> = tree
             .iter()
             .filter(|e| e.name().is_some())
-            .map(|e| IterEntry::from(e.to_owned()))
+            .map(|e| e.to_owned())
             .collect();
-        match rev {
-            false => items
-                .sort_by(|a, b| a.to_name().unwrap().cmp(b.to_name().unwrap()).reverse()),
-            true => items.sort_by(|a, b| a.to_name().unwrap().cmp(b.to_name().unwrap())),
-        }
+        items.sort_by(|a, b| a.name().unwrap().cmp(b.name().unwrap()));
         items
+    }
+
+    fn as_kind_tree<'a>(
+        repo: &'a git2::Repository,
+        te: git2::TreeEntry,
+    ) -> Result<(git2::ObjectType, Option<git2::Tree<'a>>)> {
+        let kind = te.kind().unwrap();
+        let tree = match kind {
+            git2::ObjectType::Tree => {
+                err_at!(FailGitapi, te.to_object(repo))?.as_tree().cloned()
+            }
+            _ => None,
+        };
+        Ok((kind, tree))
     }
 }
 
@@ -273,7 +307,6 @@ where
     P: AsRef<path::Path>,
 {
     iter: IterLevel<'a>,
-    low: Option<Bound<P>>,
     high: Bound<P>,
 }
 
@@ -284,42 +317,23 @@ where
     type Item = Result<Entry>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match self.low.take() {
-            Some(low) => loop {
-                let e = match self.iter.next()? {
-                    Ok(e) => e,
-                    Err(e) => return Some(Err(e)),
-                };
-                let ekey: &path::Path = e.key.as_ref();
+        let e = match self.iter.next()? {
+            Ok(e) => e,
+            Err(e) => return Some(Err(e)),
+        };
+        let ekey: &path::Path = e.key.as_ref();
 
-                match &low {
-                    Bound::Unbounded => break Some(Ok(e)),
-                    Bound::Included(p) if ekey.ge(p.as_ref()) => break Some(Ok(e)),
-                    Bound::Included(_) => (),
-                    Bound::Excluded(p) if ekey.gt(p.as_ref()) => break Some(Ok(e)),
-                    Bound::Excluded(_) => (),
-                }
-            },
-            None => {
-                let e = match self.iter.next()? {
-                    Ok(e) => e,
-                    Err(e) => return Some(Err(e)),
-                };
-                let ekey: &path::Path = e.key.as_ref();
-
-                match &self.high {
-                    Bound::Unbounded => Some(Ok(e)),
-                    Bound::Included(p) if ekey.le(p.as_ref()) => Some(Ok(e)),
-                    Bound::Included(_) => {
-                        self.iter.drain_all();
-                        None
-                    }
-                    Bound::Excluded(p) if ekey.lt(p.as_ref()) => Some(Ok(e)),
-                    Bound::Excluded(_) => {
-                        self.iter.drain_all();
-                        None
-                    }
-                }
+        match &self.high {
+            Bound::Unbounded => Some(Ok(e)),
+            Bound::Included(p) if ekey.le(p.as_ref()) => Some(Ok(e)),
+            Bound::Included(_) => {
+                self.iter.drain_all();
+                None
+            }
+            Bound::Excluded(p) if ekey.lt(p.as_ref()) => Some(Ok(e)),
+            Bound::Excluded(_) => {
+                self.iter.drain_all();
+                None
             }
         }
     }
@@ -332,7 +346,6 @@ where
 {
     iter: IterLevel<'a>,
     low: Bound<P>,
-    high: Option<Bound<P>>,
 }
 
 impl<'a, P> Iterator for Reverse<'a, P>
@@ -342,42 +355,24 @@ where
     type Item = Result<Entry>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match self.high.take() {
-            Some(high) => loop {
-                let e = match self.iter.next()? {
-                    Ok(e) => e,
-                    Err(e) => return Some(Err(e)),
-                };
-                let ekey: &path::Path = e.key.as_ref();
+        let e = match self.iter.next()? {
+            Ok(e) => e,
+            Err(e) => return Some(Err(e)),
+        };
+        let ekey: &path::Path = e.key.as_ref();
+        // println!("{:?}", ekey);
 
-                match &high {
-                    Bound::Unbounded => break Some(Ok(e)),
-                    Bound::Included(p) if ekey.le(p.as_ref()) => break Some(Ok(e)),
-                    Bound::Included(_) => (),
-                    Bound::Excluded(p) if ekey.lt(p.as_ref()) => break Some(Ok(e)),
-                    Bound::Excluded(_) => (),
-                }
-            },
-            None => {
-                let e = match self.iter.next()? {
-                    Ok(e) => e,
-                    Err(e) => return Some(Err(e)),
-                };
-                let ekey: &path::Path = e.key.as_ref();
-
-                match &self.low {
-                    Bound::Unbounded => Some(Ok(e)),
-                    Bound::Included(p) if ekey.ge(p.as_ref()) => Some(Ok(e)),
-                    Bound::Included(_) => {
-                        self.iter.drain_all();
-                        None
-                    }
-                    Bound::Excluded(p) if ekey.gt(p.as_ref()) => Some(Ok(e)),
-                    Bound::Excluded(_) => {
-                        self.iter.drain_all();
-                        None
-                    }
-                }
+        match &self.low {
+            Bound::Unbounded => Some(Ok(e)),
+            Bound::Included(p) if ekey.ge(p.as_ref()) => Some(Ok(e)),
+            Bound::Included(_) => {
+                self.iter.drain_all();
+                None
+            }
+            Bound::Excluded(p) if ekey.gt(p.as_ref()) => Some(Ok(e)),
+            Bound::Excluded(_) => {
+                self.iter.drain_all();
+                None
             }
         }
     }
@@ -401,10 +396,11 @@ impl<'a> From<IterLevel<'a>> for IterEntry<'a> {
 }
 
 impl<'a> IterEntry<'a> {
-    fn to_name(&self) -> Option<&str> {
+    #[allow(dead_code)]
+    fn to_name(&self) -> &str {
         match self {
-            IterEntry::Entry { te } => te.name(),
-            IterEntry::Dir { .. } => None,
+            IterEntry::Entry { te } => te.name().unwrap(),
+            IterEntry::Dir { .. } => "--dir--",
         }
     }
 }
@@ -417,15 +413,82 @@ pub struct IterLevel<'a> {
 }
 
 impl<'a> IterLevel<'a> {
+    #[allow(dead_code)]
+    fn pretty_print(&self, prefix: &str) {
+        let names = self
+            .items
+            .iter()
+            .map(|e| e.to_name())
+            .collect::<Vec<&str>>();
+        println!("{}IterLevel<{:?}> items:{:?}", prefix, self.rloc, names);
+
+        let prefix = prefix.to_string() + "  ";
+        self.items.first().map(|x| match x {
+            IterEntry::Dir { iter } => iter.pretty_print(&prefix),
+            IterEntry::Entry { te } => println!("{}...@{}", prefix, te.name().unwrap()),
+        });
+    }
+
     fn forward(
         repo: &'a git2::Repository,
         rloc: path::PathBuf, // following `tree` argument is under `rloc` path.
-        tree: &git2::Tree,
+        tree: git2::Tree,
+        comps: &[Bound<String>],
     ) -> Result<IterLevel<'a>> {
+        let (items, par) = (Index::tree_entries(&tree), rloc.clone());
+
+        //println!(
+        //    "forward rloc:{:?} comps:{:?} items:{:?}",
+        //    rloc,
+        //    comps,
+        //    items.len(),
+        //);
+
+        let (item, mut items) = match comps.first() {
+            Some(Bound::Unbounded) => (None, items),
+            Some(Bound::Included(comp)) => {
+                match items.binary_search_by(|e| e.name().unwrap().cmp(comp)) {
+                    Ok(off) => match Index::as_kind_tree(repo, items[off].clone())? {
+                        (git2::ObjectType::Tree, Some(nt)) => {
+                            let subdir = items[off].name().unwrap().into();
+                            let rloc: path::PathBuf = [par, subdir].iter().collect();
+                            let level = Self::forward(repo, rloc, nt, &comps[1..])?;
+                            (Some(level), items[(off + 1)..].to_vec())
+                        }
+                        (git2::ObjectType::Blob, _) => (None, items[off..].to_vec()),
+                        (_, _) => unreachable!(),
+                    },
+                    Err(off) => (None, items[off..].to_vec()),
+                }
+            }
+            Some(Bound::Excluded(comp)) => {
+                match items.binary_search_by(|e| e.name().unwrap().cmp(comp)) {
+                    Ok(off) => match Index::as_kind_tree(repo, items[off].clone())? {
+                        (git2::ObjectType::Tree, Some(nt)) => {
+                            let subdir = items[off].name().unwrap().into();
+                            let rloc: path::PathBuf = [par, subdir].iter().collect();
+                            let level = Self::forward(repo, rloc, nt, &comps[1..])?;
+                            (Some(level), items[(off + 1)..].to_vec())
+                        }
+                        (git2::ObjectType::Blob, _) => (None, items[off + 1..].to_vec()),
+                        (_, _) => unreachable!(),
+                    },
+                    Err(off) => (None, items[off..].to_vec()),
+                }
+            }
+            None => (None, items),
+        };
+
+        items.reverse();
+
+        let mut items: Vec<IterEntry> =
+            items.into_iter().map(|x| IterEntry::from(x)).collect();
+        item.map(|item| items.push(IterEntry::from(item)));
+
         let val = IterLevel {
             repo,
             rloc,
-            items: Index::tree_entries(tree, false /*rev*/),
+            items,
             rev: false,
         };
 
@@ -435,12 +498,64 @@ impl<'a> IterLevel<'a> {
     fn reverse(
         repo: &'a git2::Repository,
         rloc: path::PathBuf, // following `tree` argument is under `rloc` path.
-        tree: &git2::Tree,
+        tree: git2::Tree,
+        comps: &[Bound<String>],
     ) -> Result<IterLevel<'a>> {
+        let (mut items, par) = (Index::tree_entries(&tree), rloc.clone());
+        items.reverse();
+
+        //println!(
+        //    "reverse rloc:{:?} comps:{:?} items:{:?}",
+        //    rloc,
+        //    comps,
+        //    items.len(),
+        //);
+
+        let (item, mut items) = match comps.first() {
+            Some(Bound::Unbounded) => (None, items),
+            Some(Bound::Included(comp)) => {
+                match items.binary_search_by(|e| e.name().unwrap().cmp(comp).reverse()) {
+                    Ok(off) => match Index::as_kind_tree(repo, items[off].clone())? {
+                        (git2::ObjectType::Tree, Some(nt)) => {
+                            let subdir = items[off].name().unwrap().into();
+                            let rloc: path::PathBuf = [par, subdir].iter().collect();
+                            let level = Self::reverse(repo, rloc, nt, &comps[1..])?;
+                            (Some(level), items[(off + 1)..].to_vec())
+                        }
+                        (git2::ObjectType::Blob, _) => (None, items[off..].to_vec()),
+                        (_, _) => unreachable!(),
+                    },
+                    Err(off) => (None, items[off..].to_vec()),
+                }
+            }
+            Some(Bound::Excluded(comp)) => {
+                match items.binary_search_by(|e| e.name().unwrap().cmp(comp).reverse()) {
+                    Ok(off) => match Index::as_kind_tree(repo, items[off].clone())? {
+                        (git2::ObjectType::Tree, Some(nt)) => {
+                            let subdir = items[off].name().unwrap().into();
+                            let rloc: path::PathBuf = [par, subdir].iter().collect();
+                            let level = Self::reverse(repo, rloc, nt, &comps[1..])?;
+                            (Some(level), items[(off + 1)..].to_vec())
+                        }
+                        (git2::ObjectType::Blob, _) => (None, items[off + 1..].to_vec()),
+                        (_, _) => unreachable!(),
+                    },
+                    Err(off) => (None, items[off..].to_vec()),
+                }
+            }
+            None => (None, items),
+        };
+
+        items.reverse();
+
+        let mut items: Vec<IterEntry> =
+            items.into_iter().map(|x| IterEntry::from(x)).collect();
+        item.map(|item| items.push(IterEntry::from(item)));
+
         let val = IterLevel {
             repo,
             rloc,
-            items: Index::tree_entries(tree, true /*rev*/),
+            items,
             rev: true,
         };
 
@@ -456,6 +571,8 @@ impl<'a> Iterator for IterLevel<'a> {
     type Item = Result<Entry>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        // println!("iterlevel {:?} ref:{}", self.rloc, self.rev);
+
         loop {
             let item = self.items.pop()?;
             match item {
@@ -473,7 +590,7 @@ impl<'a> Iterator for IterLevel<'a> {
                         // println!("{} iterl-tree {}", n, te.name().unwrap());
                         let tree = {
                             let val = iter_result!(te.to_object(&self.repo));
-                            val.into_tree().unwrap()
+                            val.into_tree().unwrap().clone()
                         };
                         let rloc: path::PathBuf =
                             [self.rloc.clone(), te.name().unwrap().into()]
@@ -481,13 +598,20 @@ impl<'a> Iterator for IterLevel<'a> {
                                 .collect();
 
                         let iter = match self.rev {
-                            false => {
-                                iter_result!(IterLevel::forward(&self.repo, rloc, &tree))
-                            }
-                            true => {
-                                iter_result!(IterLevel::reverse(&self.repo, rloc, &tree))
-                            }
+                            false => iter_result!(IterLevel::forward(
+                                &self.repo,
+                                rloc,
+                                tree,
+                                &vec![] // comps
+                            )),
+                            true => iter_result!(IterLevel::reverse(
+                                &self.repo,
+                                rloc,
+                                tree,
+                                &vec![] // comps
+                            )),
                         };
+                        // iter.pretty_print("...");
                         self.items.push(iter.into());
                         break self.next();
                     }

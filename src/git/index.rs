@@ -225,7 +225,7 @@ impl Index {
 }
 
 impl Index {
-    pub fn insert<P, V>(&mut self, key: &P, value: &V) -> Result<()>
+    pub fn insert<P, V>(&mut self, key: P, value: V) -> Result<()>
     where
         P: AsRef<path::Path>,
         V: AsRef<[u8]>,
@@ -235,7 +235,7 @@ impl Index {
         txn.commit()
     }
 
-    pub fn remove<P>(&mut self, key: &P) -> Result<()>
+    pub fn remove<P>(&mut self, key: P) -> Result<()>
     where
         P: AsRef<path::Path>,
     {
@@ -703,7 +703,7 @@ impl<'a> Txn<'a> {
         Ok(())
     }
 
-    pub fn insert<P, V>(&mut self, key: &P, data: &V) -> Result<()>
+    pub fn insert<P, V>(&mut self, key: P, data: V) -> Result<()>
     where
         P: AsRef<path::Path>,
         V: AsRef<[u8]>,
@@ -723,7 +723,7 @@ impl<'a> Txn<'a> {
         Ok(())
     }
 
-    pub fn remove<P>(&mut self, key: &P) -> Result<()>
+    pub fn remove<P>(&mut self, key: P) -> Result<()>
     where
         P: AsRef<path::Path>,
     {

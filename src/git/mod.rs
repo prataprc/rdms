@@ -1,16 +1,7 @@
-use std::path;
+//! Module implement db like interface into git repository.
 
+/// Default git directory under working git repository.
 pub const GIT_DIR: &'static str = ".git";
-
-trait ToKey {
-    type Key;
-
-    fn to_key(&self) -> Self::Key;
-}
-
-trait Keyable {
-    fn to_path(&self) -> path::Path;
-}
 
 mod config;
 mod index;

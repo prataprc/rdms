@@ -1,6 +1,18 @@
+//! Git repository as key-value index.
+//!
+//! Each file (aka blob in git parlance) is considered as a {key,value} entry, where
+//! value is the content of the file and key is path starting from repository root
+//! to the actual file location when it is checked out.
+//!
+//! There are few criterias in supplying the key:
+//!
+//! * must be a valid string
+//! * must not start with root or drive prefix
+//! * must not start with current directory or parent directory.
+
 use git2::{Repository, RepositoryInitMode, RepositoryInitOptions, RepositoryOpenFlags};
 
-use std::{ffi, file, fmt, fs, ops::Bound, ops::RangeBounds, path, result, time};
+use std::{file, fmt, fs, ops::Bound, ops::RangeBounds, path, result, time};
 
 use crate::{
     git::{Config, Permissions},
@@ -26,6 +38,7 @@ pub struct Index {
 }
 
 impl Index {
+    /// Create a new git repository to access it as key-value index.
     pub fn create(config: Config) -> Result<Index> {
         let mode = match &config.permissions {
             None => RepositoryInitMode::SHARED_UMASK,
@@ -55,6 +68,7 @@ impl Index {
         Ok(index)
     }
 
+    /// Open any existing git repository as key-value index. Refer to [Config] for details.
     pub fn open(config: Config) -> Result<Index> {
         let mut flags = RepositoryOpenFlags::empty();
         flags.set(RepositoryOpenFlags::NO_SEARCH, true);
@@ -73,25 +87,32 @@ impl Index {
         Ok(index)
     }
 
+    /// Close index, leave the repository as is.
     pub fn close(self) -> Result<()> {
         Ok(())
     }
 
+    /// Purge index, remove disk footprint of the repository and its working tree.
     pub fn purge(self) -> Result<()> {
         err_at!(IOError, fs::remove_dir(&self.config.loc_repo))
     }
 }
 
 impl Index {
+    /// Return the configuration for this git repository. Refer [Config] type for
+    /// details.
     pub fn as_config(&self) -> &Config {
         &self.config
     }
 
+    /// Return number of items in the repository. Note that this is costly call, it
+    /// iterates over every entry in the repository.
     pub fn len(&self) -> Result<usize> {
         let count: usize = self.iter()?.map(|_| 1).sum();
         Ok(count)
     }
 
+    /// Same as calling `index.len() == 0`.
     pub fn is_empty(&self) -> bool {
         match self.len() {
             Ok(n) if n == 0 => true,
@@ -102,6 +123,7 @@ impl Index {
 }
 
 impl Index {
+    /// Get the git blob corresponding to the specified key.
     pub fn get<P>(&self, key: P) -> Result<Option<Entry>>
     where
         P: Clone + AsRef<path::Path>,
@@ -123,13 +145,15 @@ impl Index {
         Ok(Some(entry))
     }
 
-    pub fn get_versions<P>(&self, key: P) -> Result<Option<Entry>>
+    /// TODO
+    pub fn get_versions<P>(&self, _key: P) -> Result<Option<Entry>>
     where
         P: Clone + AsRef<path::Path>,
     {
-        self.get(key)
+        todo!()
     }
 
+    /// Iter over each entry in repository in string sort order.
     pub fn iter(&self) -> Result<IterLevel> {
         let val = {
             let tree = self.get_db_root()?.into_tree().unwrap();
@@ -139,14 +163,13 @@ impl Index {
         Ok(val)
     }
 
+    /// TODO
     pub fn iter_versions(&self) -> Result<IterLevel> {
-        self.iter()
+        todo!()
     }
 
-    // convert a key to its components, there are few criterias in supplying the key:
-    // a. must be a valid string
-    // b. must not start with root or drive prefix
-    // c. must not start with current directory or parent directory.
+    /// Iter over each entry in repository, such that each entry's key falls within
+    /// the supplied range.
     pub fn range<R, P>(&self, range: R) -> Result<Range<P>>
     where
         R: RangeBounds<P>,
@@ -164,18 +187,16 @@ impl Index {
         Ok(Range { iter, high })
     }
 
-    pub fn range_versions<R, P>(&self, range: R) -> Result<Range<P>>
+    /// TODO
+    pub fn range_versions<R, P>(&self, _range: R) -> Result<Range<P>>
     where
         R: RangeBounds<P>,
         P: Clone + AsRef<path::Path>,
     {
-        self.range(range)
+        todo!()
     }
 
-    // convert a key to its components, there are few criterias in supplying the key:
-    // a. must be a valid string
-    // b. must not start with root or drive prefix
-    // c. must not start with current directory or parent directory.
+    /// Same as [Index::range] method except in reverse order.
     pub fn reverse<R, P>(&self, range: R) -> Result<Reverse<P>>
     where
         R: RangeBounds<P>,
@@ -193,22 +214,34 @@ impl Index {
         Ok(Reverse { iter, low })
     }
 
-    pub fn reverse_versions<R, P>(&self, range: R) -> Result<Reverse<P>>
+    /// TODO
+    pub fn reverse_versions<R, P>(&self, _range: R) -> Result<Reverse<P>>
     where
         R: RangeBounds<P>,
         P: Clone + AsRef<path::Path>,
     {
-        self.reverse(range)
+        todo!()
     }
 }
 
 impl Index {
-    pub fn insert(&mut self, _key: &ffi::OsStr, _value: String) -> Option<String> {
-        todo!()
+    pub fn insert<P, V>(&mut self, key: &P, value: &V) -> Result<()>
+    where
+        P: AsRef<path::Path>,
+        V: AsRef<[u8]>,
+    {
+        let mut txn = self.transaction()?;
+        txn.insert(key, value)?;
+        txn.commit()
     }
 
-    pub fn remove(&mut self, _key: &ffi::OsStr) -> Option<String> {
-        todo!()
+    pub fn remove<P>(&mut self, key: &P) -> Result<()>
+    where
+        P: AsRef<path::Path>,
+    {
+        let mut txn = self.transaction()?;
+        txn.remove(key)?;
+        txn.commit()
     }
 
     pub fn transaction(&mut self) -> Result<Txn> {
@@ -670,7 +703,7 @@ impl<'a> Txn<'a> {
         Ok(())
     }
 
-    pub fn insert<P, V>(&mut self, key: P, data: V) -> Result<()>
+    pub fn insert<P, V>(&mut self, key: &P, data: &V) -> Result<()>
     where
         P: AsRef<path::Path>,
         V: AsRef<[u8]>,
@@ -690,10 +723,9 @@ impl<'a> Txn<'a> {
         Ok(())
     }
 
-    pub fn remove<P, V>(&mut self, key: P) -> Result<()>
+    pub fn remove<P>(&mut self, key: &P) -> Result<()>
     where
         P: AsRef<path::Path>,
-        V: AsRef<[u8]>,
     {
         let repo = &self.index.repo;
         let key: &path::Path = key.as_ref();

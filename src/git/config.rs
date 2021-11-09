@@ -1,7 +1,10 @@
+//! Configuration information to open a git repository as key-value index.
+
 use serde::{Deserialize, Serialize};
 
 use std::ffi;
 
+/// Permission to use while creating repository
 #[derive(Clone, Serialize, Deserialize)]
 pub enum Permissions {
     #[serde(rename = "shared_umask")]

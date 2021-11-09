@@ -21,6 +21,10 @@ path = "src/lib.rs"
 name = "rdms"
 required-features = ["rdms"]
 
+[[bin]]
+name = "ghr"
+required-features = ["ghr"]
+
 [badges]
 maintenance = { status = "actively-developed" }
 travis-ci = { repository = "bnclabs/rdms" }
@@ -40,6 +44,7 @@ serde = { version = "1", features = ["derive"] }
 structopt = { version = "0.3.20", default-features = false, optional = true }
 rand = { version = "0.7.3", features = ["small_rng"], optional = true }
 lmdb = { version = "0.8.0", optional = true }
+octocrab = { version = "0.13.0", optional = true }
 
 
 # jsondata = "0.6.2"
@@ -53,3 +58,4 @@ rand = "0.6.4"
 
 [features]
 rdms = ["structopt", "rand", "lmdb"]
+ghr = ["structopt", "octocrab"]

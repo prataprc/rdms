@@ -9,10 +9,12 @@ use std::{
 
 use crate::{db, Error, Result};
 
+mod cmdline;
 pub mod files;
 pub mod spinlock;
 pub mod thread;
 
+pub use cmdline::parse_os_args;
 pub use spinlock::Spinlock;
 pub use thread::Thread;
 

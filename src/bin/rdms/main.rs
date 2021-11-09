@@ -1,5 +1,7 @@
 use structopt::StructOpt;
 
+use rdms::util;
+
 mod cmd_git;
 mod cmd_perf;
 
@@ -16,27 +18,13 @@ pub struct Opt {
 }
 
 fn main() {
-    let args_os: Vec<String> = std::env::args_os()
-        .map(|s| s.to_str().unwrap().to_string())
-        .skip(1)
+    let (_args, cmd, cmd_args) = util::parse_os_args(None);
+
+    let cmd = cmd.to_str().unwrap().to_string();
+    let cmd_args: Vec<String> = cmd_args
+        .into_iter()
+        .map(|x| x.to_str().unwrap().to_string())
         .collect();
-    let mut iter = args_os.clone().into_iter().enumerate();
-    let (_args, cmd, cmd_args) = loop {
-        match iter.next() {
-            None => break (args_os.clone(), "".to_string(), vec![]),
-            Some((i, arg)) if !arg.starts_with("-") && i < (args_os.len() - 1) => {
-                break (
-                    args_os[..i].to_vec(),
-                    args_os[i].clone(),
-                    args_os[i..].to_vec(),
-                )
-            }
-            Some((i, arg)) if !arg.starts_with("-") => {
-                break (args_os[..i].to_vec(), args_os[i].clone(), vec![])
-            }
-            _ => (),
-        }
-    };
 
     match cmd.as_str() {
         "perf" => cmd_perf::perf(cmd_args),

@@ -2,9 +2,10 @@ use lmdb::{self, Cursor, Transaction};
 use rand::{rngs::SmallRng, Rng, SeedableRng};
 use serde::Deserialize;
 
+use rdms::util;
 use std::{io, result, sync::Arc, thread, time};
 
-use crate::cmd_perf::{load_profile, Opt};
+use crate::cmd_perf::Opt;
 
 const DEFAULT_KEY_SIZE: usize = 16;
 const DEFAULT_VAL_SIZE: usize = 16;
@@ -55,7 +56,7 @@ impl Profile {
 
 pub fn perf(opts: Opt) -> result::Result<(), String> {
     let profile: Profile =
-        toml::from_str(&load_profile(&opts)?).map_err(|e| e.to_string())?;
+        util::files::load_toml(&opts.profile).map_err(|e| e.to_string())?;
     load_and_spawn(opts, profile)
 }
 

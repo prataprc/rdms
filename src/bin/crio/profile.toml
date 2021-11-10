@@ -1,0 +1,4 @@
+dump_url = "https://static.crates.io/db-dump.tar.gz"
+git_root = "/media/prataprc/hdd1.4tb/crates-rs/"
+index_dir = "indexes"
+analytics = "analytics"

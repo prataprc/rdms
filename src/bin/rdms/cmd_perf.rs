@@ -1,8 +1,6 @@
 use rand::{prelude::random, rngs::SmallRng};
 use structopt::StructOpt;
 
-use std::result;
-
 pub trait Generate<T> {
     fn gen_key(&self, rng: &mut SmallRng) -> T;
 
@@ -37,16 +35,4 @@ pub fn perf(args: Vec<String>) {
         "wral" => crate::perf_wral::perf(opts).unwrap(),
         module => println!("rdms: error invalid module {}", module),
     }
-}
-
-pub fn load_profile(opts: &Opt) -> result::Result<String, String> {
-    use std::{fs, str::from_utf8};
-
-    let ppath = opts.profile.clone();
-    println!("{:?}", ppath);
-    let s = from_utf8(&fs::read(ppath).expect("invalid profile file path"))
-        .expect("invalid profile-text encoding, must be in toml")
-        .to_string();
-    Ok(s)
-    // Ok(s.parse().expect("invalid profile format"))
 }

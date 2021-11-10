@@ -6,9 +6,10 @@ use std::{fmt, result, thread, time};
 use rdms::{
     db::{self, ToJson},
     llrb::Index,
+    util,
 };
 
-use crate::cmd_perf::{load_profile, Generate, Opt};
+use crate::cmd_perf::{Generate, Opt};
 
 const DEFAULT_KEY_SIZE: usize = 16;
 const DEFAULT_VAL_SIZE: usize = 16;
@@ -95,7 +96,7 @@ impl Profile {
 
 pub fn perf(opts: Opt) -> result::Result<(), String> {
     let profile: Profile =
-        toml::from_str(&load_profile(&opts)?).map_err(|e| e.to_string())?;
+        util::files::load_toml(&opts.profile).map_err(|e| e.to_string())?;
 
     let (kt, vt) = (&profile.key_type, &profile.value_type);
 

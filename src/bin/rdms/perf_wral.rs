@@ -2,9 +2,9 @@ use serde::Deserialize;
 
 use std::{result, time};
 
-use rdms::wral;
+use rdms::{util, wral};
 
-use crate::cmd_perf::{load_profile, Opt};
+use crate::cmd_perf::Opt;
 
 // Command line options.
 #[derive(Clone, Deserialize)]
@@ -32,8 +32,7 @@ impl Default for Profile {
 
 pub fn perf(opts: Opt) -> result::Result<(), String> {
     let profile: Profile =
-        toml::from_str(&load_profile(&opts)?).map_err(|e| e.to_string())?;
-
+        util::files::load_toml(&opts.profile).map_err(|e| e.to_string())?;
     load_and_spawn(opts, profile)
 }
 

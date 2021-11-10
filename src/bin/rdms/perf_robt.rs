@@ -5,9 +5,9 @@ use xorfilter::{BuildHasherDefault, Xor8};
 
 use std::{ffi, fmt, hash::Hash, iter::FromIterator, path, result, thread, time};
 
-use rdms::{bitmaps::NoBitmap, db, llrb, robt, Result};
+use rdms::{bitmaps::NoBitmap, db, llrb, robt, util, Result};
 
-use crate::cmd_perf::{load_profile, Generate, Opt};
+use crate::cmd_perf::{Generate, Opt};
 
 // to_name, to_index_location, to_vlog_location, len, to_root, to_seqno, to_app_metadata
 // to_stats, to_bitmap, is_compacted, validate
@@ -238,7 +238,8 @@ impl Profile {
 
 pub fn perf(opts: Opt) -> result::Result<(), String> {
     let mut profile: Profile =
-        toml::from_str(&load_profile(&opts)?).map_err(|e| e.to_string())?;
+        util::files::load_toml(&opts.profile).map_err(|e| e.to_string())?;
+
     profile.initial.robt.dir = path::PathBuf::from_iter(
         vec![std::env::temp_dir(), "rdms-perf-robt".into()].into_iter(),
     )

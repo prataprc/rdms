@@ -22,8 +22,8 @@ name = "rdms"
 required-features = ["rdms"]
 
 [[bin]]
-name = "ghr"
-required-features = ["ghr"]
+name = "crio"
+required-features = ["crio"]
 
 [badges]
 maintenance = { status = "actively-developed" }
@@ -44,7 +44,8 @@ serde = { version = "1", features = ["derive"] }
 structopt = { version = "0.3.20", default-features = false, optional = true }
 rand = { version = "0.7.3", features = ["small_rng"], optional = true }
 lmdb = { version = "0.8.0", optional = true }
-octocrab = { version = "0.13.0", optional = true }
+csv = { version = "1.1", optional = true }
+url = { version = "2.2.2", features = ["serde"], optional = true }
 
 
 # jsondata = "0.6.2"
@@ -58,4 +59,4 @@ rand = "0.6.4"
 
 [features]
 rdms = ["structopt", "rand", "lmdb"]
-ghr = ["structopt", "octocrab"]
+crio = ["structopt", "csv", "url"]

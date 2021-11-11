@@ -140,7 +140,7 @@ where
     let ploc: &path::Path = loc.as_ref();
     let data = err_at!(IOError, fs::read(ploc))?;
     let s = err_at!(FailConvert, from_utf8(&data), "not utf8 for {:?}", ploc)?;
-    err_at!(FailConvert, toml::from_str(&s), "{:?} not toml", ploc)
+    err_at!(FailConvert, toml::from_str(&s), "file:{:?}", ploc)
 }
 
 #[cfg(test)]

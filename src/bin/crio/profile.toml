@@ -1,4 +1,4 @@
-dump_url = "https://static.crates.io/db-dump.tar.gz"
-git_root = "/media/prataprc/hdd1.4tb/crates-rs/"
-index_dir = "indexes"
-analytics = "analytics"
+dump_url = "http://static.crates.io/db-dump.tar.gz"
+git_root = "/media/prataprc/hdd1.4tb/gitdb-rdms-crio"
+git_index_dir = "indexes"
+git_analytics = "analytics"

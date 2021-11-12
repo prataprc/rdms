@@ -1,4 +1,10 @@
 dump_url = "http://static.crates.io/db-dump.tar.gz"
-git_root = "/media/prataprc/hdd1.4tb/db-rdms-crio"
 git_index_dir = "index"
 git_analytics_dir = "analytics"
+
+[git]
+loc_repo = "/media/prataprc/hdd1.4tb/db-rdms-crio"
+loc_db = "/media/prataprc/hdd1.4tb/db-rdms-crio"
+permissions = "shared_umask"
+description = "repository holds data from crates.io db dump"
+

@@ -36,18 +36,18 @@ impl From<crate::SubCommand> for Opt {
 pub struct Profile {
     temp_dir: Option<String>,
     dump_url: url::Url,
-    git_root: String,
-    git_index_dir: String,
-    git_analytics_dir: String,
+    git_index_dir: Option<String>,
+    git_analytics_dir: Option<String>,
+    git: rdms::git::Config,
 }
 
 pub fn handle(opts: Opt) -> Result<()> {
     let mut profile: Profile = util::files::load_toml(&opts.profile)?;
-    profile.git_root = opts
+    profile.git.loc_repo = opts
         .git_root
-        .as_ref()
+        .clone()
         .map(|s| s.to_str().unwrap().to_string())
-        .unwrap_or(profile.git_root.clone());
+        .unwrap_or(profile.git.loc_repo.clone());
 
     let crates_io_dump_loc = match opts.nohttp {
         true => crates_io_dump_loc(&profile),
@@ -215,7 +215,7 @@ fn crates_io_metadata(_opts: &Opt, profile: &Profile) -> Result<()> {
     let src_loc: path::PathBuf = [crates_io_untar_dir(profile)?, "metadata.json".into()]
         .iter()
         .collect();
-    let dst_loc: path::PathBuf = [profile.git_root.clone(), "metadata.json".into()]
+    let dst_loc: path::PathBuf = [profile.git.loc_repo.clone(), "metadata.json".into()]
         .iter()
         .collect();
 
@@ -230,8 +230,9 @@ fn crates_io_metadata(_opts: &Opt, profile: &Profile) -> Result<()> {
 fn crates_io_data(_opts: &Opt, profile: &Profile) -> Result<()> {
     use std::fs;
 
-    let data_dir: path::PathBuf =
-        [profile.git_root.clone(), "data".into()].iter().collect();
+    let data_dir: path::PathBuf = [profile.git.loc_repo.clone(), "data".into()]
+        .iter()
+        .collect();
     fs::create_dir_all(&data_dir).ok();
 
     let primary_files = [
@@ -248,13 +249,12 @@ fn crates_io_data(_opts: &Opt, profile: &Profile) -> Result<()> {
         "data/version_downloads.csv",
         "data/versions.csv",
     ];
-    let analytic_files = ["data/badges.csv", "data/crate_owners.csv"];
 
-    for file in files.iter() {
+    for file in primary_files.iter() {
         let src_loc: path::PathBuf = [crates_io_untar_dir(profile)?, file.into()]
             .iter()
             .collect();
-        let dst_loc: path::PathBuf = [profile.git_root.clone(), file.to_string()]
+        let dst_loc: path::PathBuf = [profile.git.loc_repo.clone(), file.to_string()]
             .iter()
             .collect();
 

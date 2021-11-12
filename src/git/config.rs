@@ -2,8 +2,6 @@
 
 use serde::{Deserialize, Serialize};
 
-use std::ffi;
-
 /// Permission to use while creating repository
 #[derive(Clone, Serialize, Deserialize)]
 pub enum Permissions {
@@ -19,9 +17,9 @@ pub enum Permissions {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Config {
     /// location of repository root.
-    pub loc_repo: ffi::OsString,
+    pub loc_repo: String,
     /// location of database keys, aka file-names, relative to root.
-    pub loc_db: ffi::OsString,
+    pub loc_db: String,
     /// repository permissions.
     pub permissions: Option<Permissions>,
     /// repository/index description.

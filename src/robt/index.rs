@@ -351,7 +351,7 @@ where
         };
 
         let bitmap = match &metas[2] {
-            MetaItem::Bitmap(data) => err_at!(Fatal, B::from_bytes(&data))?.0,
+            MetaItem::Bitmap(data) => err_at!(Fatal, B::from_bytes(data))?.0,
             _ => unreachable!(),
         };
 
@@ -550,7 +550,7 @@ where
 
     pub fn to_root(&self) -> Option<u64> {
         match &self.metas[3] {
-            MetaItem::Root(root) => root.clone(),
+            MetaItem::Root(root) => *root,
             _ => unreachable!(),
         }
     }

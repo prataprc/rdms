@@ -11,7 +11,7 @@ use crate::{
 #[test]
 fn test_into_iter_scan() {
     use std::vec::IntoIter;
-    let seed: u128 = random();
+    let seed: u64 = random();
 
     let test_cases = [(6_000_i64, 2_000), (0, 2_000)];
     let within = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
@@ -21,15 +21,17 @@ fn test_into_iter_scan() {
 
         let ref_entries: Vec<Result<Entry<i64, i64>>> = llrb.iter().unwrap().collect();
         let mut into_iter = ref_entries.into_iter();
-        let entries: Vec<Entry<i64, i64>> = <IntoIter<Result<Entry<i64, i64>>> as CommitIterator<
-            i64,
-            i64,
-        >>::scan(&mut into_iter, within.clone())
-        .unwrap()
-        .map(|e| e.unwrap())
-        .collect();
+        let entries: Vec<Entry<i64, i64>> =
+            <IntoIter<Result<Entry<i64, i64>>> as CommitIterator<i64, i64>>::scan(
+                &mut into_iter,
+                within.clone(),
+            )
+            .unwrap()
+            .map(|e| e.unwrap())
+            .collect();
 
-        let ref_entries: Vec<Entry<i64, i64>> = llrb.iter().unwrap().map(|e| e.unwrap()).collect();
+        let ref_entries: Vec<Entry<i64, i64>> =
+            llrb.iter().unwrap().map(|e| e.unwrap()).collect();
         assert_eq!(ref_entries.len(), entries.len());
         entries
             .iter()
@@ -42,7 +44,7 @@ fn test_into_iter_scan() {
 fn test_into_iter_scans() {
     use std::vec::IntoIter;
 
-    let seed: u128 = random();
+    let seed: u64 = random();
     println!("seed {}", seed);
 
     let test_cases = [(6_000_i64, 2_000), (0, 2_000)];
@@ -53,16 +55,17 @@ fn test_into_iter_scans() {
 
         for shards in 1..10 {
             println!("n_ops:{} key_max:{} shards:{}", n_ops, key_max, shards);
-            let ref_entries: Vec<Result<Entry<i64, i64>>> = llrb.iter().unwrap().collect();
+            let ref_entries: Vec<Result<Entry<i64, i64>>> =
+                llrb.iter().unwrap().collect();
             let mut into_iter = ref_entries.into_iter();
             let iter = {
-                let mut iters =
-                    <IntoIter<Result<Entry<i64, i64>>> as CommitIterator<i64, i64>>::scans(
-                        &mut into_iter,
-                        shards,
-                        within.clone(),
-                    )
-                    .unwrap();
+                let mut iters = <IntoIter<Result<Entry<i64, i64>>> as CommitIterator<
+                    i64,
+                    i64,
+                >>::scans(
+                    &mut into_iter, shards, within.clone()
+                )
+                .unwrap();
                 let w = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
                 iters.reverse(); // make this to stack
                 FilterScans::new(iters, w)
@@ -85,7 +88,7 @@ fn test_into_iter_range_scans() {
     use std::ops::Bound::{Excluded, Included, Unbounded};
     use std::vec::IntoIter;
 
-    let seed: u128 = random();
+    let seed: u64 = random();
     println!("seed {}", seed);
 
     let test_cases = [(6_000_i64, 2_000)];
@@ -107,16 +110,17 @@ fn test_into_iter_range_scans() {
                 });
             ranges.push((last_hk, Unbounded));
 
-            let ref_entries: Vec<Result<Entry<i64, i64>>> = llrb.iter().unwrap().collect();
+            let ref_entries: Vec<Result<Entry<i64, i64>>> =
+                llrb.iter().unwrap().collect();
             let mut into_iter = ref_entries.into_iter();
             let iter = {
-                let mut iters =
-                    <IntoIter<Result<Entry<i64, i64>>> as CommitIterator<i64, i64>>::range_scans(
-                        &mut into_iter,
-                        ranges,
-                        within.clone(),
-                    )
-                    .unwrap();
+                let mut iters = <IntoIter<Result<Entry<i64, i64>>> as CommitIterator<
+                    i64,
+                    i64,
+                >>::range_scans(
+                    &mut into_iter, ranges, within.clone()
+                )
+                .unwrap();
                 iters.reverse(); // make this to stack
                 let w = (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded);
                 FilterScans::new(iters, w)
@@ -138,8 +142,8 @@ fn test_into_iter_range_scans() {
 fn test_skip_scan() {
     use std::ops::Bound;
 
-    let seed: u128 = random();
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let seed: u64 = random();
+    let mut rng = SmallRng::seed_from_u64(seed);
 
     let (n_ops, key_max) = (6_000_i64, 2_000);
     let mut llrb: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
@@ -167,14 +171,18 @@ fn test_skip_scan() {
                 n if (n >= 0) && (n % 4 == 0) => Bound::Included((n % n_ops) as u64),
                 n if (n >= 0) && (n % 4 == 1) => Bound::Included(0),
                 n if (n >= 0) && (n % 4 == 2) => Bound::Included((n % n_ops) as u64),
-                n if (n >= 0) && (n % 4 == 3) => Bound::Included(((n % n_ops) + 1) as u64),
+                n if (n >= 0) && (n % 4 == 3) => {
+                    Bound::Included(((n % n_ops) + 1) as u64)
+                }
                 _ => Bound::Unbounded,
             };
             let end_seqno = match rng.gen::<i64>() {
                 n if (n >= 0) && (n % 4 == 0) => Bound::Included((n % n_ops) as u64),
                 n if (n >= 0) && (n % 4 == 1) => Bound::Included(0),
                 n if (n >= 0) && (n % 4 == 2) => Bound::Included((n % n_ops) as u64),
-                n if (n >= 0) && (n % 4 == 3) => Bound::Included(((n % n_ops) + 1) as u64),
+                n if (n >= 0) && (n % 4 == 3) => {
+                    Bound::Included(((n % n_ops) + 1) as u64)
+                }
                 _ => Bound::Unbounded,
             };
             (start_seqno, end_seqno)
@@ -289,8 +297,8 @@ fn test_skip_scan() {
 fn test_filter_scan() {
     use std::ops::Bound;
 
-    let seed: u128 = random();
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let seed: u64 = random();
+    let mut rng = SmallRng::seed_from_u64(seed);
 
     let (n_ops, key_max) = (6_000_i64, 2_000);
     let mut llrb: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
@@ -317,14 +325,18 @@ fn test_filter_scan() {
                 n if (n >= 0) && (n % 4 == 0) => Bound::Included((n % n_ops) as u64),
                 n if (n >= 0) && (n % 4 == 1) => Bound::Included(0),
                 n if (n >= 0) && (n % 4 == 2) => Bound::Included((n % n_ops) as u64),
-                n if (n >= 0) && (n % 4 == 3) => Bound::Included(((n % n_ops) + 1) as u64),
+                n if (n >= 0) && (n % 4 == 3) => {
+                    Bound::Included(((n % n_ops) + 1) as u64)
+                }
                 _ => Bound::Unbounded,
             };
             let end_seqno = match rng.gen::<i64>() {
                 n if (n >= 0) && (n % 4 == 0) => Bound::Included((n % n_ops) as u64),
                 n if (n >= 0) && (n % 4 == 1) => Bound::Included(0),
                 n if (n >= 0) && (n % 4 == 2) => Bound::Included((n % n_ops) as u64),
-                n if (n >= 0) && (n % 4 == 3) => Bound::Included(((n % n_ops) + 1) as u64),
+                n if (n >= 0) && (n % 4 == 3) => {
+                    Bound::Included(((n % n_ops) + 1) as u64)
+                }
                 _ => Bound::Unbounded,
             };
             (start_seqno, end_seqno)
@@ -401,8 +413,8 @@ fn test_filter_scan() {
 
 #[test]
 fn test_bitmapped_scan() {
-    let seed: u128 = random();
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let seed: u64 = random();
+    let mut rng = SmallRng::seed_from_u64(seed);
 
     for i in 0..100 {
         let (n_ops, key_max) = (6_000_i64, 2_000);
@@ -410,7 +422,8 @@ fn test_bitmapped_scan() {
         random_llrb(n_ops, key_max, seed + (i * 10), &mut llrb);
 
         let (bitmap, es) = {
-            let mut scanner = BitmappedScan::<_, _, _, CRoaring>::new(llrb.iter().unwrap());
+            let mut scanner =
+                BitmappedScan::<_, _, _, CRoaring>::new(llrb.iter().unwrap());
             let mut es = vec![];
             let (mut iter, bitmap) = loop {
                 match scanner.next() {
@@ -431,7 +444,8 @@ fn test_bitmapped_scan() {
         );
         for _j in 0..10000 {
             let key = (rng.gen::<i64>() % key_max).abs();
-            let false_positve = llrb.get(&key).ok().is_some() == false && bitmap.contains(&key);
+            let false_positve =
+                llrb.get(&key).ok().is_some() == false && bitmap.contains(&key);
             assert!(!false_positve);
         }
     }
@@ -441,8 +455,8 @@ fn test_bitmapped_scan() {
 fn test_compact_scan() {
     use std::ops::Bound::{Included, Unbounded};
 
-    let seed: u128 = random();
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let seed: u64 = random();
+    let mut rng = SmallRng::seed_from_u64(seed);
 
     let (n_ops, key_max) = (6_000_i64, 2_000);
     let mut llrb: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
@@ -548,8 +562,9 @@ fn check_node(entry: &Entry<i64, i64>, ref_entry: &Entry<i64, i64>) {
     }
 }
 
-fn random_llrb(n_ops: i64, key_max: i64, seed: u128, llrb: &mut Llrb<i64, i64>) {
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+fn random_llrb(n_ops: i64, key_max: i64, seed: u64, llrb: &mut Llrb<i64, i64>) {
+    let mut rng = SmallRng::seed_from_u64(seed);
+
     for _i in 0..n_ops {
         let key = (rng.gen::<i64>() % key_max).abs();
         let op = rng.gen::<usize>() % 3;

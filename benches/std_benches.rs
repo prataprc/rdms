@@ -6,7 +6,7 @@ use test::Bencher;
 
 #[bench]
 fn bench_systemtime_now(b: &mut Bencher) {
-    b.iter(|| SystemTime::now());
+    b.iter(SystemTime::now);
 }
 
 #[bench]

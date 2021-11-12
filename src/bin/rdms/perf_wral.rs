@@ -81,7 +81,7 @@ fn load_and_spawn(opts: Opt, p: Profile) -> Result<()> {
     Ok(())
 }
 
-fn writer(id: usize, wal: wral::Wal, p: Profile, _seed: u128) -> Vec<wral::Entry> {
+fn writer(id: usize, wal: wral::Wal, p: Profile, _seed: u64) -> Vec<wral::Entry> {
     let start = time::Instant::now();
 
     let mut entries = vec![];

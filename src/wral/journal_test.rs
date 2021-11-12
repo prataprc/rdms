@@ -7,16 +7,14 @@ use super::*;
 fn test_wral_journal() {
     use std::env;
 
-    let seeds: Vec<u128> = vec![193003787382804392805109954488729196323, random()];
-    let seed = seeds[random::<usize>() % seeds.len()];
-    // let seed: u128 = 148484157541144179681685363423689665370;
+    let seed: u64 = random();
+    let mut rng = SmallRng::seed_from_u64(seed);
     println!("test_wral_journal {}", seed);
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
     let name = "test_wral_journal";
     let dir = env::temp_dir().into_os_string();
     println!("test_wral_journal {:?}", dir);
-    let mut jn = Journal::start(&dir, &name, 0, state::NoState).unwrap();
+    let mut jn = Journal::start(&dir, name, 0, state::NoState).unwrap();
     assert_eq!(jn.to_journal_number(), 0);
     assert_eq!(jn.len_batches(), 0);
     assert_eq!(jn.as_state().clone(), state::NoState);

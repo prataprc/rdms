@@ -23,14 +23,15 @@ pub fn handle(opts: Opt) -> Result<()> {
         loc_repo: opts.loc_repo.to_str().unwrap().to_string(),
         loc_db: opts
             .loc_db
-            .unwrap_or(opts.loc_repo.clone())
+            .as_ref()
+            .unwrap_or(&opts.loc_repo)
             .to_str()
             .unwrap()
             .to_string(),
         permissions: None,
         description: "git command".to_string(),
     };
-    let mut index = git::Index::open(config.clone())?;
+    let mut index = git::Index::open(config)?;
 
     println!("{}", index.len().unwrap());
 

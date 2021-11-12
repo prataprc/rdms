@@ -35,9 +35,12 @@ fn test_open_file_rw() {
     fs::remove_file(file).ok();
 
     let mut fd = create_file_a(file.as_os_str()).expect("open-write");
-    fd.write("hello world".as_bytes()).expect("write failed");
+    assert_eq!(
+        fd.write("hello world".as_bytes()).expect("write failed"),
+        11
+    );
     fd.seek(io::SeekFrom::Start(1)).expect("seek failed");
-    fd.write("i world".as_bytes()).expect("write failed");
+    assert_eq!(fd.write("i world".as_bytes()).expect("write failed"), 7);
 
     let txt = fs::read(file).expect("read failed");
     assert_eq!(std::str::from_utf8(&txt).unwrap(), "hello worldi world");
@@ -48,9 +51,12 @@ fn test_open_file_rw() {
     let file = dir.as_path();
 
     let mut fd = create_file_a(file.as_os_str()).expect("open-write");
-    fd.write("hello world".as_bytes()).expect("write failed");
+    assert_eq!(
+        fd.write("hello world".as_bytes()).expect("write failed"),
+        11
+    );
     fd.seek(io::SeekFrom::Start(1)).expect("seek failed");
-    fd.write("i world".as_bytes()).expect("write failed");
+    assert_eq!(fd.write("i world".as_bytes()).expect("write failed"), 7);
 
     let txt = fs::read(file).expect("read failed");
     assert_eq!(std::str::from_utf8(&txt).unwrap(), "hello worldi world");
@@ -61,11 +67,14 @@ fn test_open_file_rw() {
     let file = dir.as_path();
 
     let mut fd = open_file_a(file.as_os_str()).expect("open-write");
-    fd.write("hello world".as_bytes()).expect("write failed");
+    assert_eq!(
+        fd.write("hello world".as_bytes()).expect("write failed"),
+        11
+    );
     fd.seek(io::SeekFrom::Start(1)).expect("seek failed");
-    fd.write("i world".as_bytes()).expect("write failed");
+    assert_eq!(fd.write("i world".as_bytes()).expect("write failed"), 7);
 
-    let txt = fs::read(file.clone()).expect("read failed");
+    let txt = fs::read(&file).expect("read failed");
     assert_eq!(
         std::str::from_utf8(&txt).unwrap(),
         "hello worldi worldhello worldi world"
@@ -74,14 +83,14 @@ fn test_open_file_rw() {
     // case 6: read file.
     let mut fd = open_file_r(file.as_ref()).expect("open-read");
     let mut txt = [0_u8; 36];
-    fd.read(&mut txt).expect("read failed");
+    assert_eq!(fd.read(&mut txt).expect("read failed"), txt.len());
     assert_eq!(
         std::str::from_utf8(&txt).unwrap(),
         "hello worldi worldhello worldi world"
     );
 
     fd.seek(io::SeekFrom::Start(1)).expect("seek failed");
-    fd.read(&mut txt[0..35]).expect("read failed");
+    assert_eq!(fd.read(&mut txt[0..35]).expect("read failed"), 35);
     assert_eq!(
         std::str::from_utf8(&txt).unwrap(),
         "ello worldi worldhello worldi worldd"
@@ -90,5 +99,3 @@ fn test_open_file_rw() {
     fd.write("hello world".as_bytes())
         .expect_err("expected write error");
 }
-
-

@@ -223,7 +223,7 @@ impl Profile {
     fn to_initial_config(&self) -> robt::Config {
         let mut config = robt::Config::new(
             self.initial.robt.dir.as_ref(),
-            &self.initial.robt.name.as_ref(),
+            self.initial.robt.name.as_ref(),
         );
         config.z_blocksize = self.initial.robt.z_blocksize;
         config.m_blocksize = self.initial.robt.m_blocksize;
@@ -288,14 +288,14 @@ where
     Profile: Generate<K>,
 {
     initial_index::<K, V, B>(opts.seed, &p, bitmap.clone())?;
-    let mut index = incr_index(opts.seed, &p, bitmap.clone())?;
+    let mut index = incr_index(opts.seed, &p, bitmap)?;
 
     println!("rdms: load-spawn populated with {} items", index.len());
 
     let mut handles = vec![];
     for j in 0..p.load.readers {
         let (p, index) = (p.clone(), index.try_clone().unwrap());
-        let seed = opts.seed + ((j as u128) * 100);
+        let seed = opts.seed + ((j as u64) * 100);
         let h = thread::spawn(move || read_load(j, seed, p, index));
         handles.push(h);
     }
@@ -368,7 +368,7 @@ where
     Ok(())
 }
 
-fn initial_index<K, V, B>(seed: u128, p: &Profile, bitmap: B) -> Result<()>
+fn initial_index<K, V, B>(seed: u64, p: &Profile, bitmap: B) -> Result<()>
 where
     K: 'static + Key,
     V: 'static + Value,
@@ -396,11 +396,7 @@ where
         let mut build: robt::Builder<K, V> =
             robt::Builder::initial(config, appmd.to_vec()).unwrap();
         build
-            .build_index(
-                mdb.iter().unwrap().map(|e: db::Entry<K, V>| Ok(e)),
-                bitmap,
-                seqno,
-            )
+            .build_index(mdb.iter().unwrap().map(Ok), bitmap, seqno)
             .unwrap();
         start.elapsed()
     };
@@ -410,7 +406,7 @@ where
 }
 
 fn incr_index<K, V, B>(
-    mut seed: u128,
+    mut seed: u64,
     p: &Profile,
     bitmap: B,
 ) -> Result<robt::Index<K, V, B>>
@@ -451,11 +447,7 @@ where
             let start = time::Instant::now();
             let mut build = index.incremental(&config.dir, &config.name, appmd).unwrap();
             index = build
-                .build_index(
-                    mdb.iter().unwrap().map(|e: db::Entry<K, V>| Ok(e)),
-                    bitmap.clone(),
-                    seqno,
-                )
+                .build_index(mdb.iter().unwrap().map(Ok), bitmap.clone(), seqno)
                 .unwrap();
             start.elapsed()
         };
@@ -488,7 +480,7 @@ where
 
 fn read_load<K, V, B>(
     j: usize,
-    seed: u128,
+    seed: u64,
     p: Profile,
     mut index: robt::Index<K, V, B>,
 ) -> Result<()>
@@ -501,7 +493,7 @@ where
     rand::distributions::Standard: rand::distributions::Distribution<V>,
     Profile: Generate<K>,
 {
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = SmallRng::seed_from_u64(seed);
 
     let start = time::Instant::now();
     let (mut gets, mut getvers) = (p.load.gets, p.load.get_versions);

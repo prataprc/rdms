@@ -3,9 +3,9 @@ use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
 
 #[test]
 fn test_robt_entry() {
-    let seed: u128 = random();
+    let seed: u64 = random();
     println!("test_entry {}", seed);
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = SmallRng::seed_from_u64(seed);
     let key = 10;
 
     let dbnt = match rng.gen::<u8>() % 2 {
@@ -41,9 +41,9 @@ fn test_robt_entry() {
     assert_eq!(zz.to_key(), key);
     assert_eq!(mz.to_key(), key);
     assert_eq!(mm.to_key(), key);
-    assert_eq!(zz.is_zblock(), true);
-    assert_eq!(mz.is_zblock(), false);
-    assert_eq!(mm.is_zblock(), false);
+    assert!(zz.is_zblock());
+    assert!(!mz.is_zblock());
+    assert!(!mm.is_zblock());
 
     let res = mm.clone().into_reference(0, true).unwrap();
     assert_eq!(mm, res.0);

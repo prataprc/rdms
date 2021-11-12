@@ -44,6 +44,7 @@ pub trait Footprint {
 }
 
 /// Trait to build and manage keys in a bit-mapped Bloom-filter.
+#[allow(clippy::len_without_is_empty)]
 pub trait Bloom: Sized {
     fn len(&self) -> Result<usize>;
 

@@ -196,12 +196,11 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             match self.iter.next()? {
-                Ok(entry) => match entry.compact(self.cutoff) {
-                    Some(entry) => {
+                Ok(entry) => {
+                    if let Some(entry) = entry.compact(self.cutoff) {
                         break Some(Ok(entry));
                     }
-                    None => (),
-                },
+                }
                 Err(err) => break Some(Err(err)),
             }
         }

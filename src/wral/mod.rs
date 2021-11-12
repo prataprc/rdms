@@ -47,11 +47,11 @@ mod files;
 mod journal;
 mod journals;
 mod state;
-mod wral;
+mod wal;
 
 pub use crate::wral::entry::Entry;
 pub use crate::wral::state::{NoState, State};
-pub use crate::wral::wral::Wal;
+pub use crate::wral::wal::Wal;
 
 /// Default journal file limit is set at 1GB.
 pub const JOURNAL_LIMIT: usize = 1024 * 1024 * 1024;

@@ -45,8 +45,8 @@ fn test_shard_name() {
 
 #[test]
 fn test_root_file() {
-    let seed: u128 = random();
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let seed: u64 = random();
+    let mut rng = SmallRng::seed_from_u64(seed);
 
     let dir = {
         let mut dir = std::env::temp_dir();
@@ -75,8 +75,7 @@ fn test_root_file() {
 
 #[test]
 fn test_shrobt_llrb1() {
-    let seed: u128 = random();
-    // let seed: u128 = 85133815523348948613415341681453316437;
+    let seed: u64 = random();
     println!("seed: {}", seed);
     run_shrobt_llrb("test-shrobt-llrb1-1", 60_000, 20_000_i64, 2, seed);
     println!("test_shrobt_llrb1 first run ...");
@@ -88,25 +87,23 @@ fn test_shrobt_llrb1() {
 #[test]
 #[ignore]
 fn test_shrobt_llrb2() {
-    let seed: u128 = random();
-    // let seed: u128 = 157627728311520278572970358663336131466;
+    let seed: u64 = random();
     run_shrobt_llrb("test-shrobt-llrb2", 600_000, 200_000_i64, 1, seed);
 }
 
 #[test]
 #[ignore]
 fn test_shrobt_llrb3() {
-    let seed: u128 = random();
+    let seed: u64 = random();
     run_shrobt_llrb("test-shrobt-llrb3", 6_000_000, 2_000_000_i64, 1, seed);
 }
 
 #[test]
 fn test_shrobt_commit_compact() {
-    let i = random::<usize>() % 2;
-    let seed: u128 = [53026008077594988487982468431529121608, random()][i];
+    let seed: u64 = random();
+    let mut rng = SmallRng::seed_from_u64(seed);
 
     let name = "test-shrobt-commit-compact";
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
     let num_shards = (rng.gen::<usize>() % 8) + 1;
     let mmap = rng.gen::<bool>();
 
@@ -239,10 +236,9 @@ fn test_shrobt_commit_compact() {
 
 #[test]
 fn test_commit_iterator_scan() {
-    let seed: u128 = random();
-    // let seed: u128 = 30868729532779892339054805963672490750;
+    let seed: u64 = random();
+    let mut rng = SmallRng::seed_from_u64(seed);
     println!("seed:{}", seed);
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
     let dir = {
         let mut dir = std::env::temp_dir();
@@ -312,10 +308,9 @@ fn test_commit_iterator_scan() {
 
 #[test]
 fn test_commit_iterator_scans1() {
-    let seed: u128 = random();
-    // let seed: u128 = 245191762996097145033286145098010364124;
+    let seed: u64 = random();
+    let mut rng = SmallRng::seed_from_u64(seed);
     println!("seed:{}", seed);
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
     let dir = {
         let mut dir = std::env::temp_dir();
@@ -385,10 +380,9 @@ fn test_commit_iterator_scans1() {
 
 #[test]
 fn test_commit_iterator_scans2() {
-    let seed: u128 = random();
-    // let seed: u128 = 35667521011555069800221219023406283992;
+    let seed: u64 = random();
+    let mut rng = SmallRng::seed_from_u64(seed);
     println!("seed:{}", seed);
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
     let dir = {
         let mut dir = std::env::temp_dir();
@@ -460,10 +454,9 @@ fn test_commit_iterator_scans2() {
 
 #[test]
 fn test_commit_iterator_range_scans() {
-    let seed: u128 = random();
-    // let seed: u128 = 329574334243588244341656545742438834233;
+    let seed: u64 = random();
+    let mut rng = SmallRng::seed_from_u64(seed);
     println!("seed:{}", seed);
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
     let dir = {
         let mut dir = std::env::temp_dir();
@@ -559,12 +552,12 @@ fn run_shrobt_llrb(
     n_ops: u64,
     key_max: i64,
     repeat: usize,
-    seed: u128,
+    seed: u64,
 ) {
     for i in 0..repeat {
         let mut n_ops = n_ops;
-        let seed = seed + (i as u128);
-        let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+        let seed = seed + (i as u64);
+        let mut rng = SmallRng::seed_from_u64(seed);
 
         // populate llrb
         let lsm: bool = rng.gen();
@@ -846,8 +839,9 @@ where
     .collect()
 }
 
-fn random_llrb(n_ops: i64, key_max: i64, seed: u128, mindex: &mut Llrb<i64, i64>) {
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+fn random_llrb(n_ops: i64, key_max: i64, seed: u64, mindex: &mut Llrb<i64, i64>) {
+    let mut rng = SmallRng::seed_from_u64(seed);
+
     for _i in 0..n_ops {
         let _seqno = mindex.to_seqno().unwrap();
         let key = (rng.gen::<i64>() % key_max).abs();
@@ -879,8 +873,9 @@ fn random_llrb(n_ops: i64, key_max: i64, seed: u128, mindex: &mut Llrb<i64, i64>
     }
 }
 
-fn random_low_high(key_max: i64, seed: u128) -> (Bound<i64>, Bound<i64>) {
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+fn random_low_high(key_max: i64, seed: u64) -> (Bound<i64>, Bound<i64>) {
+    let mut rng = SmallRng::seed_from_u64(seed);
+
     let (low, high): (i64, i64) = (rng.gen(), rng.gen());
     let low = match rng.gen::<u8>() % 3 {
         0 => Bound::Included(low % key_max),
@@ -928,8 +923,8 @@ fn check_entry2(e1: &Entry<i64, i64>, e2: &Entry<i64, i64>) {
     }
 }
 
-fn random_ops_keys(seed: u128, ops_limit: i64, key_limit: i64) -> (i64, i64) {
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+fn random_ops_keys(seed: u64, ops_limit: i64, key_limit: i64) -> (i64, i64) {
+    let mut rng = SmallRng::seed_from_u64(seed);
 
     let n_ops_set: Vec<i64> = vec![
         0,

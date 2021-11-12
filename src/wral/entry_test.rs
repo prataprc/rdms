@@ -7,9 +7,9 @@ use super::*;
 fn test_wral_entry() {
     use cbordata::{Cbor, FromCbor, IntoCbor};
 
-    let seed: u128 = random();
+    let seed: u64 = random();
+    let mut rng = SmallRng::seed_from_u64(seed);
     println!("test_wral_entry {}", seed);
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
     let mut entries: Vec<Entry> = (0..1000)
         .map(|_i| {

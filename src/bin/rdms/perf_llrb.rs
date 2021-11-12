@@ -114,7 +114,7 @@ where
     <V as db::Diff>::Delta: Send + Sync + db::Footprint,
     Profile: Generate<K> + Generate<V>,
 {
-    let mut rng = SmallRng::from_seed(opts.seed.to_le_bytes());
+    let mut rng = SmallRng::seed_from_u64(opts.seed);
 
     let index = Index::<K, V>::new("rdms-llrb-perf", p.spin);
 
@@ -124,14 +124,14 @@ where
     for j in 0..p.writers {
         let (mut p, index) = (p.clone(), index.clone());
         p.reset_read_ops();
-        let seed = opts.seed + ((j as u128) * 100);
+        let seed = opts.seed + ((j as u64) * 100);
         let h = thread::spawn(move || incr_load(j, seed, p, index));
         handles.push(h);
     }
     for j in p.writers..(p.writers + p.readers) {
         let (mut p, index) = (p.clone(), index.clone());
         p.reset_write_ops();
-        let seed = opts.seed + ((j as u128) * 100);
+        let seed = opts.seed + ((j as u64) * 100);
         let h = thread::spawn(move || incr_load(j, seed, p, index));
         handles.push(h);
     }
@@ -200,14 +200,14 @@ where
     Ok(())
 }
 
-fn incr_load<K, V>(j: usize, seed: u128, p: Profile, index: Index<K, V>) -> Result<()>
+fn incr_load<K, V>(j: usize, seed: u64, p: Profile, index: Index<K, V>) -> Result<()>
 where
     K: 'static + Send + Sync + Clone + Ord + db::Footprint,
     V: 'static + Send + Sync + db::Diff + db::Footprint,
     <V as db::Diff>::Delta: Send + Sync + db::Footprint,
     Profile: Generate<K> + Generate<V>,
 {
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = SmallRng::seed_from_u64(seed);
 
     let start = time::Instant::now();
     let total = p.sets + p.ins + p.rems + p.dels + p.gets;

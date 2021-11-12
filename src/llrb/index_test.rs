@@ -19,10 +19,9 @@ use super::*;
 
 #[test]
 fn test_llrb() {
-    let seed: u128 = random();
-    // let seed: u128 = 306171699234476756746827099155462650145;
+    let seed: u64 = random();
+    let mut rng = SmallRng::seed_from_u64(seed);
     println!("test_llrb seed:{}", seed);
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
     let n_init = 100_000;
     let n_incr = 2000;
@@ -80,8 +79,7 @@ fn test_llrb() {
 
 #[test]
 fn test_llrb_commit() {
-    let seed: u128 = random();
-    // let seed: u128 = 101184856431704577826207314398605498816;
+    let seed: u64 = random();
     println!("test_llrb_commit seed:{}", seed);
 
     test_commit_with_key::<u8>("test_commit_u8", seed, u8::MAX);
@@ -89,7 +87,7 @@ fn test_llrb_commit() {
     test_commit_with_key::<u64>("test_commit_u64", seed, 1_000_000);
 }
 
-fn test_commit_with_key<K>(prefix: &str, seed: u128, key_max: K)
+fn test_commit_with_key<K>(prefix: &str, seed: u64, key_max: K)
 where
     K: Ord + Copy + Clone + Rem<Output = K> + fmt::Debug + fmt::Display + db::Footprint,
     rand::distributions::Standard: rand::distributions::Distribution<K>,
@@ -145,9 +143,10 @@ where
     index2.purge().unwrap();
 }
 
+#[allow(clippy::too_many_arguments)]
 fn test_with_key<K>(
     prefix: &'static str,
-    seed: u128,
+    seed: u64,
     rng: &mut SmallRng,
     n_init: usize,
     n_incr: usize,
@@ -190,7 +189,7 @@ fn test_with_key<K>(
     let mut handles = vec![];
     for id in 0..n_threads {
         let (index, bt, key_max) = (index.clone(), btmap.clone(), key_max.clone());
-        let seed = seed + ((id as u128) * 100);
+        let seed = seed + ((id as u64) * 100);
         let h = thread::spawn(move || {
             do_test_with_key(prefix, id, seed, n_incr, n_threads, key_max, index, bt)
         });
@@ -205,15 +204,16 @@ fn test_with_key<K>(
     assert_eq!(index.len(), btmap.len());
 
     for (key, val) in btmap.iter() {
-        let entry = index.get_versions(&key).unwrap();
+        let entry = index.get_versions(key).unwrap();
         assert_eq!(entry, val.clone());
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn do_test_with_key<K>(
     _prefix: &str,
     id: usize,
-    seed: u128,
+    seed: u64,
     ops: usize,
     n_threads: usize,
     key_max: K,
@@ -236,7 +236,8 @@ where
         + db::Footprint,
     <K as TryFrom<usize>>::Error: fmt::Debug,
 {
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = SmallRng::seed_from_u64(seed);
+
     let mut counts = [0_usize; 13];
     let mut cas_fails = [0_usize; 4];
     let mut skip_rr = 0;
@@ -281,7 +282,7 @@ where
                     .get(&key)
                     .cloned()
                     .map(|e| e.insert(val, seqno))
-                    .unwrap_or(db::Entry::new(key.clone(), val, seqno));
+                    .unwrap_or_else(|| db::Entry::new(key.clone(), val, seqno));
                 compare_old_entry(old_entry, btmap.insert(key.clone(), e));
                 counts[2] += 1;
                 (seqno, 0)
@@ -295,7 +296,7 @@ where
                             .get(&key.clone())
                             .cloned()
                             .map(|e| e.insert(val, seqno))
-                            .unwrap_or(db::Entry::new(key.clone(), val, seqno));
+                            .unwrap_or_else(|| db::Entry::new(key.clone(), val, seqno));
                         compare_old_entry(old_entry, btmap.insert(key.clone(), e));
                     }
                     Err(_) => {
@@ -335,7 +336,7 @@ where
                     .get(&key)
                     .cloned()
                     .map(|e| e.delete(seqno))
-                    .unwrap_or(db::Entry::new_delete(key.clone(), seqno));
+                    .unwrap_or_else(|| db::Entry::new_delete(key.clone(), seqno));
                 compare_old_entry(old_entry, btmap.insert(key.clone(), e));
                 counts[6] += 1;
                 (seqno, 0)
@@ -349,7 +350,7 @@ where
                             .get(&key)
                             .cloned()
                             .map(|e| e.delete(seqno))
-                            .unwrap_or(db::Entry::new_delete(key.clone(), seqno));
+                            .unwrap_or_else(|| db::Entry::new_delete(key.clone(), seqno));
                         compare_old_entry(old_entry, btmap.insert(key.clone(), e));
                         (seqno, cas)
                     }
@@ -529,7 +530,7 @@ fn compare_iter<'a, K>(
             match e {
                 Some(e) => match e.as_key().cmp(val.as_key()) {
                     Ordering::Equal => {
-                        assert!(e.contains(&val));
+                        assert!(e.contains(val));
                         break;
                     }
                     Ordering::Less if frwrd => (),
@@ -560,7 +561,7 @@ fn compare_old_entry<K>(
 
 fn random_load_index<K>(
     _prefix: &str,
-    seed: u128,
+    seed: u64,
     seqno: u64,
     key_max: K,
     (mut sets, mut ins, mut rems, mut dels): (u64, u64, u64, u64),
@@ -569,7 +570,8 @@ where
     K: Copy + Clone + Ord + Rem<Output = K> + db::Footprint + fmt::Display,
     rand::distributions::Standard: rand::distributions::Distribution<K>,
 {
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = SmallRng::seed_from_u64(seed);
+
     let spin = rng.gen::<bool>();
     let index = Index::new("testing", spin);
     index.set_seqno(seqno);

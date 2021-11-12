@@ -27,9 +27,8 @@ fn test_name() {
 
 #[test]
 fn test_auto_shard_interval() {
-    let seed: u128 = random();
-    // let seed: u128 = 137122643011174645787755929141427491522;
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let seed: u64 = random();
+    let mut rng = SmallRng::seed_from_u64(seed);
     println!("seed {}", seed);
 
     let limit = time::Duration::from_secs(32);
@@ -740,7 +739,10 @@ fn test_commit1() {
 
     index1
         .commit(
-            core::CommitIter::new(index2, (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded)),
+            core::CommitIter::new(
+                index2,
+                (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded),
+            ),
             |meta| meta.clone(),
         )
         .unwrap();
@@ -765,7 +767,10 @@ fn test_commit2() {
 
     index1
         .commit(
-            core::CommitIter::new(index2, (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded)),
+            core::CommitIter::new(
+                index2,
+                (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded),
+            ),
             |meta| meta.clone(),
         )
         .unwrap();
@@ -774,9 +779,8 @@ fn test_commit2() {
 
 #[test]
 fn test_commit3() {
-    let seed: u128 = random();
-    // let seed: u128 = 137122643011174645787755929141427491522;
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let seed: u64 = random();
+    let mut rng = SmallRng::seed_from_u64(seed);
     println!("seed {}", seed);
 
     for _i in 0..100 {
@@ -839,7 +843,10 @@ fn test_commit3() {
 
         index1
             .commit(
-                core::CommitIter::new(index2, (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded)),
+                core::CommitIter::new(
+                    index2,
+                    (Bound::<u64>::Unbounded, Bound::<u64>::Unbounded),
+                ),
                 |meta| meta.clone(),
             )
             .unwrap();
@@ -901,9 +908,8 @@ fn check_commit_nodes(index: &mut ShLlrb<i64, i64>, ref_index: &mut ShLlrb<i64, 
 
 #[test]
 fn test_compact() {
-    let seed: u128 = random();
-    // let seed: u128 = 2726664888361513285714080784886255657;
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let seed: u64 = random();
+    let mut rng = SmallRng::seed_from_u64(seed);
     println!("seed {}", seed);
 
     for _i in 0..50 {
@@ -1028,8 +1034,8 @@ fn check_compact_nodes(
 
 #[test]
 fn test_commit_iterator_scan() {
-    let seed: u128 = random();
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let seed: u64 = random();
+    let mut rng = SmallRng::seed_from_u64(seed);
 
     let (n_ops, key_max) = (60_000_i64, 20_000);
     let mut config: Config = Default::default();
@@ -1051,17 +1057,19 @@ fn test_commit_iterator_scan() {
         let mut iter = index.scan(within.clone()).unwrap();
         loop {
             match ref_iter.next() {
-                Some(Ok(ref_entry)) => match ref_entry.filter_within(within.0, within.1) {
-                    Some(ref_entry) => match iter.next() {
-                        Some(Ok(entry)) => {
-                            check_node1(&entry, &ref_entry);
-                            count += 1;
-                        }
-                        Some(Err(err)) => panic!("{:?}", err),
-                        None => unreachable!(),
-                    },
-                    None => continue,
-                },
+                Some(Ok(ref_entry)) => {
+                    match ref_entry.filter_within(within.0, within.1) {
+                        Some(ref_entry) => match iter.next() {
+                            Some(Ok(entry)) => {
+                                check_node1(&entry, &ref_entry);
+                                count += 1;
+                            }
+                            Some(Err(err)) => panic!("{:?}", err),
+                            None => unreachable!(),
+                        },
+                        None => continue,
+                    }
+                }
                 Some(Err(err)) => panic!("{:?}", err),
                 None => {
                     assert!(iter.next().is_none());
@@ -1075,8 +1083,8 @@ fn test_commit_iterator_scan() {
 
 #[test]
 fn test_commit_iterator_scans() {
-    let seed: u128 = random();
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let seed: u64 = random();
+    let mut rng = SmallRng::seed_from_u64(seed);
 
     let (n_ops, key_max) = (60_000_i64, 20_000);
     let mut config: Config = Default::default();
@@ -1105,17 +1113,19 @@ fn test_commit_iterator_scans() {
         let mut count = 0;
         loop {
             match ref_iter.next() {
-                Some(Ok(ref_entry)) => match ref_entry.filter_within(within.0, within.1) {
-                    Some(ref_entry) => match iter.next() {
-                        Some(Ok(entry)) => {
-                            check_node1(&entry, &ref_entry);
-                            count += 1;
-                        }
-                        Some(Err(err)) => panic!("{:?}", err),
-                        None => unreachable!(),
-                    },
-                    None => continue,
-                },
+                Some(Ok(ref_entry)) => {
+                    match ref_entry.filter_within(within.0, within.1) {
+                        Some(ref_entry) => match iter.next() {
+                            Some(Ok(entry)) => {
+                                check_node1(&entry, &ref_entry);
+                                count += 1;
+                            }
+                            Some(Err(err)) => panic!("{:?}", err),
+                            None => unreachable!(),
+                        },
+                        None => continue,
+                    }
+                }
                 Some(Err(err)) => panic!("{:?}", err),
                 None => {
                     assert!(iter.next().is_none());
@@ -1131,8 +1141,8 @@ fn test_commit_iterator_scans() {
 fn test_commit_iterator_range_scans() {
     use std::ops::Bound;
 
-    let seed: u128 = random();
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let seed: u64 = random();
+    let mut rng = SmallRng::seed_from_u64(seed);
 
     let (n_ops, key_max) = (128_000_i64, 20_000);
     let mut config: Config = Default::default();
@@ -1166,17 +1176,19 @@ fn test_commit_iterator_range_scans() {
         let mut count = 0;
         loop {
             match ref_iter.next() {
-                Some(Ok(ref_entry)) => match ref_entry.filter_within(within.0, within.1) {
-                    Some(ref_entry) => match iter.next() {
-                        Some(Ok(entry)) => {
-                            check_node1(&entry, &ref_entry);
-                            count += 1;
-                        }
-                        Some(Err(err)) => panic!("{:?}", err),
-                        None => unreachable!(),
-                    },
-                    None => continue,
-                },
+                Some(Ok(ref_entry)) => {
+                    match ref_entry.filter_within(within.0, within.1) {
+                        Some(ref_entry) => match iter.next() {
+                            Some(Ok(entry)) => {
+                                check_node1(&entry, &ref_entry);
+                                count += 1;
+                            }
+                            Some(Err(err)) => panic!("{:?}", err),
+                            None => unreachable!(),
+                        },
+                        None => continue,
+                    }
+                }
                 Some(Err(err)) => panic!("{:?}", err),
                 None => {
                     assert!(iter.next().is_none());
@@ -1188,8 +1200,8 @@ fn test_commit_iterator_range_scans() {
     }
 }
 
-fn random_index(n_ops: i64, key_max: i64, seed: u128, index: &mut ShLlrb<i64, i64>) {
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+fn random_index(n_ops: i64, key_max: i64, seed: u64, index: &mut ShLlrb<i64, i64>) {
+    let mut rng = SmallRng::seed_from_u64(seed);
 
     let mut w = index.to_writer().unwrap();
     let mut r = index.to_reader().unwrap();

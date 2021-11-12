@@ -4,7 +4,7 @@ use std::ffi;
 
 mod cmd_fetch;
 
-pub const TEMP_DIR_CRIO: &'static str = "crio";
+pub const TEMP_DIR_CRIO: &str = "crio";
 
 #[derive(Clone, StructOpt)]
 struct Opt {
@@ -35,7 +35,7 @@ pub enum SubCommand {
 fn main() {
     let opts = Opt::from_iter(std::env::args_os());
 
-    let res = match opts.subcmd.clone() {
+    let res = match opts.subcmd {
         c @ SubCommand::Fetch { .. } => cmd_fetch::handle(cmd_fetch::Opt::from(c)),
     };
 

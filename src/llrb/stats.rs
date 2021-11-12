@@ -37,16 +37,16 @@ impl fmt::Display for Stats {
     fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
         let none = "none".to_string();
         let b = self.blacks.as_ref().map_or(none.clone(), |x| x.to_string());
-        let d = self.depths.as_ref().map_or(none.clone(), |x| x.to_string());
-        write!(f, "llrb.name = {}\n", self.name)?;
-        write!(
+        let d = self.depths.as_ref().map_or(none, |x| x.to_string());
+        writeln!(f, "llrb.name = {}", self.name)?;
+        writeln!(
             f,
-            "llrb = {{ n_count={}, n_deleted={} node_size={}, blacks={} }}\n",
+            "llrb = {{ n_count={}, n_deleted={} node_size={}, blacks={} }}",
             self.n_count, self.n_deleted, self.node_size, b,
         )?;
-        write!(f, "llrb = {{ tree_footprint={} }}\n", self.tree_footprint)?;
-        write!(f, "llrb.spin_stats = {}\n", self.spin_stats)?;
-        write!(f, "llrb.depths = {}\n", d)
+        writeln!(f, "llrb = {{ tree_footprint={} }}", self.tree_footprint)?;
+        writeln!(f, "llrb.spin_stats = {}", self.spin_stats)?;
+        writeln!(f, "llrb.depths = {}", d)
     }
 }
 
@@ -72,7 +72,7 @@ impl db::ToJson for Stats {
             self.blacks
                 .as_ref()
                 .map_or(null.clone(), |x| format!("{}", x)),
-            self.depths.as_ref().map_or(null.clone(), |x| x.to_json()),
+            self.depths.as_ref().map_or(null, |x| x.to_json()),
         )
     }
 }

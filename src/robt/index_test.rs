@@ -60,15 +60,7 @@ impl Delta for db::Binary {}
 #[test]
 fn test_robt_build_read() {
     // TODO: passing the same seed down the functions shall repeat the randomness.
-    let seed: u128 = [
-        random(),
-        315408295460649044406651951935429140111,
-        109332097090788254409904627378619335666,
-        254380117901283245685140957742548176144,
-        109332097090788254409904627378619335666,
-        322996969452464517534523408982432480328,
-    ][random::<usize>() % 4];
-    // let seed: u128 = 322996969452464517534523408982432480328;
+    let seed: u64 = random();
     println!("test_robt_read {}", seed);
 
     do_robt_build_read::<u16, u64, _>("u16,nobitmap", seed, NoBitmap);
@@ -85,7 +77,7 @@ fn test_robt_build_read() {
     );
 }
 
-fn do_robt_build_read<K, V, B>(prefix: &str, seed: u128, bitmap: B)
+fn do_robt_build_read<K, V, B>(prefix: &str, seed: u64, bitmap: B)
 where
     for<'a> K: 'static + Key + Arbitrary<'a>,
     V: 'static + Value,
@@ -94,7 +86,7 @@ where
     rand::distributions::Standard: rand::distributions::Distribution<K>,
     rand::distributions::Standard: rand::distributions::Distribution<V>,
 {
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = SmallRng::seed_from_u64(seed);
 
     // initial build
     let dir = std::env::temp_dir().join("test_robt_read");
@@ -160,7 +152,7 @@ where
 
 fn do_initial<K, V, B>(
     prefix: &str,
-    seed: u128,
+    seed: u64,
     bitmap: B,
     config: &Config,
     seqno: Option<u64>,
@@ -179,7 +171,7 @@ where
     let mut n_dels = 10_000;
     let n_readers = 1;
 
-    if config.delta_ok == false && config.value_in_vlog == false {
+    if !config.delta_ok && !config.value_in_vlog {
         n_sets += n_inserts;
         n_rems += n_dels;
         n_inserts = 0;
@@ -192,7 +184,7 @@ where
 
     let mut build = Builder::initial(config.clone(), appmd.to_vec()).unwrap();
     build
-        .build_index(mdb.iter().unwrap().map(|e| Ok(e)), bitmap, seqno)
+        .build_index(mdb.iter().unwrap().map(Ok), bitmap, seqno)
         .unwrap();
     mem::drop(build);
 
@@ -200,7 +192,7 @@ where
     for i in 0..n_readers {
         let prefix = prefix.to_string();
         let (cnf, mdb, appmd) = (config.clone(), mdb.clone(), appmd.to_vec());
-        let seed = seed + ((i as u128) * 10);
+        let seed = seed + ((i as u64) * 10);
         handles.push(thread::spawn(move || {
             read_thread::<K, V, B>(prefix, i, seed, cnf, mdb, appmd)
         }));
@@ -215,7 +207,7 @@ where
 
 fn do_incremental<K, V, B>(
     prefix: &str,
-    seed: u128,
+    seed: u64,
     bitmap: B,
     mdb: llrb::Index<K, V>,
     mut index: Index<K, V, B>,
@@ -257,7 +249,7 @@ where
     build
         .build_index(
             index
-                .lsm_merge(snap.iter().unwrap().map(|e| Ok(e)), true /*versions*/)
+                .lsm_merge(snap.iter().unwrap().map(Ok), true /*versions*/)
                 .unwrap(),
             bitmap,
             Some(snap.to_seqno()),
@@ -272,7 +264,7 @@ where
     for i in 0..n_readers {
         let prefix = prefix.to_string();
         let (config, mdb, appmd) = (config.clone(), mdb.clone(), appmd.to_vec());
-        let seed = seed + ((i as u128) * 10);
+        let seed = seed + ((i as u64) * 100);
         handles.push(thread::spawn(move || {
             read_thread::<K, V, B>(prefix, i, seed, config, mdb, appmd)
         }));
@@ -288,7 +280,7 @@ where
 fn read_thread<K, V, B>(
     prefix: String,
     id: usize,
-    seed: u128,
+    seed: u64,
     config: Config,
     mdb: llrb::Index<K, V>,
     app_meta_data: Vec<u8>,
@@ -302,7 +294,7 @@ fn read_thread<K, V, B>(
 {
     use Error::KeyNotFound;
 
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = SmallRng::seed_from_u64(seed);
 
     let mut index = {
         let dir = config.dir.as_os_str();
@@ -326,11 +318,11 @@ fn read_thread<K, V, B>(
                 match meta_op {
                     IsCompacted => {
                         counts[1] += 1;
-                        assert_eq!(index.is_compacted(), true);
+                        assert!(index.is_compacted());
                     }
                     IsEmpty => {
                         counts[2] += 1;
-                        assert_eq!(index.is_empty(), false);
+                        assert!(!index.is_empty());
                     }
                     AsBitmap => {
                         counts[5] += 1;
@@ -420,7 +412,7 @@ fn read_thread<K, V, B>(
                         let r = (Bound::from(l), Bound::from(h));
                         let mut iter1 = mdb.range(r.clone()).unwrap();
                         let mut iter2 = index.iter(r).unwrap();
-                        while let Some(mut e1) = iter1.next() {
+                        for mut e1 in &mut iter1 {
                             e1.deltas = vec![];
                             assert_eq!(e1, iter2.next().unwrap().unwrap())
                         }
@@ -432,7 +424,7 @@ fn read_thread<K, V, B>(
                         let r = (Bound::from(l), Bound::from(h));
                         let mut iter1 = mdb.reverse(r.clone()).unwrap();
                         let mut iter2 = index.reverse(r).unwrap();
-                        while let Some(mut e1) = iter1.next() {
+                        for mut e1 in &mut iter1 {
                             e1.deltas = vec![];
                             assert_eq!(e1, iter2.next().unwrap().unwrap())
                         }
@@ -444,7 +436,7 @@ fn read_thread<K, V, B>(
                         let r = (Bound::from(l), Bound::from(h));
                         let mut iter1 = mdb.range(r.clone()).unwrap();
                         let mut iter2 = index.iter_versions(r).unwrap();
-                        while let Some(mut e1) = iter1.next() {
+                        for mut e1 in &mut iter1 {
                             if !config.delta_ok {
                                 e1.deltas = vec![];
                             }
@@ -473,7 +465,7 @@ fn read_thread<K, V, B>(
                         let r = (Bound::from(l), Bound::from(h));
                         let mut iter1 = mdb.reverse(r.clone()).unwrap();
                         let mut iter2 = index.reverse_versions(r).unwrap();
-                        while let Some(mut e1) = iter1.next() {
+                        for mut e1 in &mut iter1 {
                             if !config.delta_ok {
                                 e1.deltas = vec![];
                             }
@@ -522,7 +514,7 @@ fn open_index<K, V, B>(
     dir: &ffi::OsStr,
     name: &str,
     file: &ffi::OsStr,
-    seed: u128,
+    seed: u64,
 ) -> Index<K, V, B>
 where
     K: Clone + FromCbor,
@@ -530,7 +522,7 @@ where
     <V as db::Diff>::Delta: FromCbor,
     B: db::Bloom,
 {
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = SmallRng::seed_from_u64(seed);
 
     let index = match rng.gen::<u8>() % 2 {
         0 => Index::open(dir, name).unwrap(),

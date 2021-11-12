@@ -424,10 +424,14 @@ impl<'a> IterLevel<'a> {
         println!("{}IterLevel<{:?}> items:{:?}", prefix, self.rloc, names);
 
         let prefix = prefix.to_string() + "  ";
-        self.items.first().map(|x| match x {
-            IterEntry::Dir { iter } => iter.pretty_print(&prefix),
-            IterEntry::Entry { te } => println!("{}...@{}", prefix, te.name().unwrap()),
-        });
+        if let Some(x) = self.items.first() {
+            match x {
+                IterEntry::Dir { iter } => iter.pretty_print(&prefix),
+                IterEntry::Entry { te } => {
+                    println!("{}...@{}", prefix, te.name().unwrap())
+                }
+            }
+        }
     }
 
     fn forward(
@@ -482,9 +486,10 @@ impl<'a> IterLevel<'a> {
 
         items.reverse();
 
-        let mut items: Vec<IterEntry> =
-            items.into_iter().map(|x| IterEntry::from(x)).collect();
-        item.map(|item| items.push(IterEntry::from(item)));
+        let mut items: Vec<IterEntry> = items.into_iter().map(IterEntry::from).collect();
+        if let Some(item) = item {
+            items.push(IterEntry::from(item))
+        }
 
         let val = IterLevel {
             repo,
@@ -549,9 +554,10 @@ impl<'a> IterLevel<'a> {
 
         items.reverse();
 
-        let mut items: Vec<IterEntry> =
-            items.into_iter().map(|x| IterEntry::from(x)).collect();
-        item.map(|item| items.push(IterEntry::from(item)));
+        let mut items: Vec<IterEntry> = items.into_iter().map(IterEntry::from).collect();
+        if let Some(item) = item {
+            items.push(IterEntry::from(item))
+        };
 
         let val = IterLevel {
             repo,
@@ -581,7 +587,7 @@ impl<'a> Iterator for IterLevel<'a> {
                     git2::ObjectType::Blob => {
                         // println!("{} iterl-blob {}", n, te.name().unwrap());
                         let entry = iter_result!(Entry::from_tree_entry(
-                            &self.repo,
+                            self.repo,
                             self.rloc.clone(),
                             te
                         ));
@@ -590,7 +596,7 @@ impl<'a> Iterator for IterLevel<'a> {
                     git2::ObjectType::Tree => {
                         // println!("{} iterl-tree {}", n, te.name().unwrap());
                         let tree = {
-                            let val = iter_result!(te.to_object(&self.repo));
+                            let val = iter_result!(te.to_object(self.repo));
                             val.into_tree().unwrap().clone()
                         };
                         let rloc: path::PathBuf =
@@ -600,16 +606,16 @@ impl<'a> Iterator for IterLevel<'a> {
 
                         let iter = match self.rev {
                             false => iter_result!(IterLevel::forward(
-                                &self.repo,
+                                self.repo,
                                 rloc,
                                 tree,
-                                &vec![] // comps
+                                &[] // comps
                             )),
                             true => iter_result!(IterLevel::reverse(
-                                &self.repo,
+                                self.repo,
                                 rloc,
                                 tree,
-                                &vec![] // comps
+                                &[] // comps
                             )),
                         };
                         // iter.pretty_print("...");
@@ -618,14 +624,13 @@ impl<'a> Iterator for IterLevel<'a> {
                     }
                     _ => unreachable!(),
                 },
-                IterEntry::Dir { mut iter } => match iter.next() {
-                    Some(entry) => {
+                IterEntry::Dir { mut iter } => {
+                    if let Some(entry) = iter.next() {
                         // println!("{} iterl-dir {:?}", n, entry.as_ref().unwrap().key);
                         self.items.push(iter.into());
                         break Some(entry);
                     }
-                    None => (),
-                },
+                }
             }
         }
     }
@@ -755,7 +760,7 @@ impl<'a> Txn<'a> {
         let comps = &comps[1..];
 
         match (comp, tree) {
-            (Some(comp), Some(tree)) if comps.len() == 0 => match tree.get_name(comp) {
+            (Some(comp), Some(tree)) if comps.is_empty() => match tree.get_name(comp) {
                 Some(_) => self.insert_blob(Some(&tree), comp, data),
                 None => self.insert_blob(Some(&tree), comp, data),
             },
@@ -767,7 +772,7 @@ impl<'a> Txn<'a> {
                 ),
                 None => self.do_insert(None, comps, data),
             },
-            (Some(comp), None) if comps.len() == 0 => self.insert_blob(None, comp, data),
+            (Some(comp), None) if comps.is_empty() => self.insert_blob(None, comp, data),
             (Some(comp), None) => {
                 self.insert_tree(None, comp, self.do_insert(None, comps, data)?.id())
             }
@@ -816,7 +821,7 @@ impl<'a> Txn<'a> {
         let comps = &comps[1..];
 
         match comp {
-            Some(comp) if comps.len() == 0 => self.remove_entry(&tree, comp),
+            Some(comp) if comps.is_empty() => self.remove_entry(&tree, comp),
             Some(comp) => match tree.get_name(comp) {
                 Some(te) => match te.kind() {
                     Some(git2::ObjectType::Tree) => {

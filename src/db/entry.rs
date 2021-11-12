@@ -353,7 +353,7 @@ where
 
         for d in self.deltas.iter().rev() {
             let (old, seqno): (Option<V>, u64) = match (val, d) {
-                (Some(v), Delta::U { delta, seqno }) => (Some(v.merge(&delta)), *seqno),
+                (Some(v), Delta::U { delta, seqno }) => (Some(v.merge(delta)), *seqno),
                 (Some(_), Delta::D { seqno }) => (None, *seqno),
                 (None, Delta::U { delta, seqno }) => (Some(delta.clone().into()), *seqno),
                 (None, Delta::D { seqno }) => (None, *seqno),
@@ -393,7 +393,7 @@ where
         self.deltas
             .first()
             .map(|x| x.to_seqno())
-            .unwrap_or(self.value.to_seqno())
+            .unwrap_or_else(|| self.value.to_seqno())
     }
 }
 

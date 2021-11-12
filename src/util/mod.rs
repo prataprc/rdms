@@ -87,7 +87,7 @@ where
     Ok(footprint + key.footprint()?)
 }
 
-pub fn as_sharded_array<T>(array: &Vec<T>, mut shards: usize) -> Vec<&[T]>
+pub fn as_sharded_array<T>(array: &[T], mut shards: usize) -> Vec<&[T]>
 where
     T: Clone,
 {
@@ -97,7 +97,7 @@ where
     while (begin < array.len()) && (shards > 0) {
         let m: usize = ((n as f64) / (shards as f64)).ceil() as usize;
         acc.push(&array[begin..(begin + m)]);
-        begin = begin + m;
+        begin += m;
         n -= m;
         shards -= 1;
     }
@@ -107,7 +107,7 @@ where
     acc
 }
 
-pub fn as_part_array<T, K, N>(array: &Vec<T>, ranges: Vec<N>) -> Vec<Vec<T>>
+pub fn as_part_array<T, K, N>(array: &[T], ranges: Vec<N>) -> Vec<Vec<T>>
 where
     T: Clone + Borrow<K>,
     K: Clone + PartialOrd,

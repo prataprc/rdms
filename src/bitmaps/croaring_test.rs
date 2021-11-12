@@ -6,10 +6,9 @@ use super::*;
 
 #[test]
 fn test_croaring_bitmap() {
-    let seed: u128 =
-        [random(), 88567133792386184839771455948480536686][random::<usize>() % 2];
+    let seed: u64 = random();
+    let mut rng = SmallRng::seed_from_u64(seed);
     println!("test_croaring seed:{}", seed);
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
     let keys: Vec<u64> = (0..100_000).map(|_| rng.gen::<u64>()).collect();
 
@@ -30,7 +29,7 @@ fn test_croaring_bitmap() {
         filter.build().expect("fail building croaring filter");
         filter
     };
-    digests.sort();
+    digests.sort_unstable();
     digests.dedup();
     println!("digests {}", digests.len());
 

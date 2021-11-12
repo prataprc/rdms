@@ -11,7 +11,7 @@ pub trait Generate<T> {
 }
 
 pub struct Opt {
-    pub seed: u128,
+    pub seed: u64,
     pub profile: String,
     pub module: String,
 }

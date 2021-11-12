@@ -84,10 +84,11 @@ where
     <V as db::Diff>::Delta: Send + Sync + db::Footprint,
     Profile: Generate<K> + Generate<V>,
 {
-    let mut rng = SmallRng::from_seed(opts.seed.to_le_bytes());
+    let mut rng = SmallRng::seed_from_u64(opts.seed);
+
     let mut index: BTreeMap<K, V> = BTreeMap::new();
     initial_load(&mut rng, p.clone(), &mut index)?;
-    incr_load(opts.seed, p.clone(), &mut index)?;
+    incr_load(opts.seed, p, &mut index)?;
 
     print!("rdms: iterating ... ");
     let (elapsed, n) = {
@@ -141,14 +142,14 @@ where
     Ok(())
 }
 
-fn incr_load<K, V>(seed: u128, p: Profile, index: &mut BTreeMap<K, V>) -> Result<()>
+fn incr_load<K, V>(seed: u64, p: Profile, index: &mut BTreeMap<K, V>) -> Result<()>
 where
     K: 'static + Send + Sync + Clone + Ord + db::Footprint,
     V: 'static + Send + Sync + db::Diff + db::Footprint,
     <V as db::Diff>::Delta: Send + Sync + db::Footprint,
     Profile: Generate<K> + Generate<V>,
 {
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = SmallRng::seed_from_u64(seed);
 
     let start = time::Instant::now();
     let (mut sets, mut rems, mut gets) = (p.sets, p.rems, p.gets);

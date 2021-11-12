@@ -1,7 +1,6 @@
 #![feature(test)]
 extern crate test;
 
-use jemallocator;
 use test::Bencher;
 
 use std::{

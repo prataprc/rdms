@@ -7,10 +7,9 @@ use super::*;
 
 #[test]
 fn test_robt_flush() {
-    let seed: u128 = random();
-    // let seed: u128 = 242003304625878770005592428923264706511;
+    let seed: u64 = random();
     println!("test_flush {}", seed);
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = SmallRng::seed_from_u64(seed);
 
     let dir = std::env::temp_dir().join("test_flush");
     fs::create_dir_all(&dir).unwrap();

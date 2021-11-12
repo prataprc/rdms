@@ -16,7 +16,7 @@ fn test_robt_vlog_file() {
     let name = "test-vlog-file".to_string();
     let out = AsRef::<ffi::OsStr>::as_ref("test-vlog-file-robt.vlog").to_os_string();
 
-    let vlog_file = VlogFileName::from(name.clone());
+    let vlog_file = VlogFileName::from(name);
     assert_eq!(vlog_file.0, out);
     assert_eq!(ffi::OsString::from(vlog_file), out);
 }

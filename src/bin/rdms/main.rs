@@ -22,7 +22,7 @@ pub struct Opt {
 pub enum SubCommand {
     Perf {
         #[structopt(long = "seed", default_value = "0")]
-        seed: u128,
+        seed: u64,
 
         #[structopt(long = "profile", default_value = "")]
         profile: String,
@@ -41,7 +41,7 @@ pub enum SubCommand {
 fn main() {
     let opts = Opt::from_iter(std::env::args_os());
 
-    let res = match opts.subcmd.clone() {
+    let res = match opts.subcmd {
         c @ SubCommand::Perf { .. } => cmd_perf::perf(cmd_perf::Opt::from(c)),
         c @ SubCommand::Git { .. } => cmd_git::handle(cmd_git::Opt::from(c)),
     };

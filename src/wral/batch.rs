@@ -43,7 +43,7 @@ impl<S> Worker<S> {
     where
         S: state::State,
     {
-        if self.entries.len() > 0 {
+        if !self.entries.is_empty() {
             let fpos = err_at!(IOError, file.metadata())?.len();
             let first_seqno = self.entries.first().map(wral::Entry::to_seqno).unwrap();
             let last_seqno = self.entries.last().map(wral::Entry::to_seqno).unwrap();

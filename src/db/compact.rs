@@ -106,8 +106,8 @@ impl Cutoff {
     pub fn to_bound(&self) -> Bound<u64> {
         match self {
             Cutoff::Mono => Bound::Excluded(std::u64::MIN),
-            Cutoff::Lsm(b) => b.clone(),
-            Cutoff::Tombstone(b) => b.clone(),
+            Cutoff::Lsm(b) => *b,
+            Cutoff::Tombstone(b) => *b,
         }
     }
 

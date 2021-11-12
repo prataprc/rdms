@@ -7,9 +7,9 @@ use super::*;
 
 #[test]
 fn test_fuse8_bitmap() {
-    let seed: u128 = random();
+    let seed: u64 = random();
+    let mut rng = SmallRng::seed_from_u64(seed);
     println!("test_fuse8 seed:{}", seed);
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
     let keys: Vec<u64> = (0..100_000).map(|_| rng.gen::<u64>()).collect();
 

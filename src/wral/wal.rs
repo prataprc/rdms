@@ -61,11 +61,10 @@ impl<S> Wal<S> {
                 let file_name = err_at!(IOError, item)?.file_name();
                 [config.dir.clone(), file_name.clone()].iter().collect()
             };
-            match Journal::<S>::load_cold(&config.name, file_path.as_ref()) {
-                Some(journal) => {
-                    journal.purge().ok();
-                }
-                None => (),
+            if let Some(journal) =
+                Journal::<S>::load_cold(&config.name, file_path.as_ref())
+            {
+                journal.purge().ok();
             };
         }
 
@@ -102,12 +101,11 @@ impl<S> Wal<S> {
                 let file_name = err_at!(IOError, item)?.file_name();
                 [config.dir.clone(), file_name.clone()].iter().collect()
             };
-            match Journal::load(&config.name, file_path.as_ref()) {
-                Some((journal, state)) => {
-                    let seqno = journal.to_last_seqno().unwrap();
-                    journals.push((journal, seqno, state));
-                }
-                None => (),
+            if let Some((journal, state)) =
+                Journal::load(&config.name, file_path.as_ref())
+            {
+                let seqno = journal.to_last_seqno().unwrap();
+                journals.push((journal, seqno, state));
             };
         }
 
@@ -210,7 +208,7 @@ impl<S> Wal<S> {
 
         Ok(Iter {
             name: self.config.name.clone(),
-            range: range.clone(),
+            range,
             journal: None,
             journals: journals.into_iter(),
             _state: PhantomData::<S>,
@@ -294,5 +292,5 @@ where
 }
 
 #[cfg(test)]
-#[path = "wral_test.rs"]
-mod wral_test;
+#[path = "wal_test.rs"]
+mod wal_test;

@@ -16,9 +16,9 @@ use crate::{
 #[test]
 fn test_lsm_get1() {
     // test case using 5 mvcc versions
-    let seed: u128 = random();
-    println!("seed {}", seed);
+    let seed: u64 = random();
     let mut refi = Llrb::new_lsm("test-llrb");
+    println!("seed {}", seed);
 
     let (n_ops, key_max) = random_ops_keys(seed, 60, 20);
     println!("mvcc1 n_ops: {} key_max: {}", n_ops, key_max);
@@ -91,8 +91,7 @@ fn test_lsm_get1() {
 #[test]
 fn test_lsm_get2() {
     // test case using 2 robt version and 1 mvcc versions
-    let seed: u128 = random();
-    // let seed: u128 = 15892195916079603124929713164129097666;
+    let seed: u64 = random();
     println!("seed {}", seed);
     let mut refi = Llrb::new_lsm("test-llrb");
 
@@ -168,7 +167,7 @@ fn test_lsm_get2() {
 #[ignore]
 fn test_lsm_get_versions1() {
     // test case using 5 mvcc versions
-    let seed: u128 = random();
+    let seed: u64 = random();
     println!("seed {}", seed);
     let mut refi = Llrb::new_lsm("test-llrb");
 
@@ -254,8 +253,7 @@ fn test_lsm_get_versions1() {
 #[ignore]
 fn test_lsm_get_versions2() {
     // test case using 2 robt version and 1 mvcc versions
-    let seed: u128 = random();
-    // let seed: u128 = 207831376735128016456730006479960249204;
+    let seed: u64 = random();
     println!("seed {}", seed);
     let mut refi = Llrb::new_lsm("test-llrb");
 
@@ -347,7 +345,7 @@ fn test_lsm_get_versions2() {
 #[test]
 fn test_lsm_iter1() {
     // test case using 5 mvcc versions
-    let seed: u128 = random();
+    let seed: u64 = random();
     println!("seed {}", seed);
     let mut refi = Llrb::new_lsm("test-llrb");
 
@@ -423,7 +421,7 @@ fn test_lsm_iter1() {
 #[test]
 fn test_lsm_iter2() {
     // test case using 2 robt version and 1 mvcc versions
-    let seed: u128 = random();
+    let seed: u64 = random();
     println!("seed {}", seed);
     let mut refi = Llrb::new_lsm("test-llrb");
 
@@ -510,7 +508,7 @@ fn test_lsm_iter2() {
 #[ignore]
 fn test_lsm_iter_versions1() {
     // test case using 5 mvcc versions
-    let seed: u128 = random();
+    let seed: u64 = random();
     println!("seed {}", seed);
     let mut refi = Llrb::new_lsm("test-llrb");
 
@@ -601,7 +599,7 @@ fn test_lsm_iter_versions1() {
 #[ignore]
 fn test_lsm_iter_versions2() {
     // test case using 2 robt version and 1 mvcc versions
-    let seed: u128 = random();
+    let seed: u64 = random();
     println!("seed {}", seed);
     let mut refi = Llrb::new_lsm("test-llrb");
 
@@ -704,7 +702,7 @@ fn test_lsm_iter_versions2() {
 
 #[test]
 fn test_lsm_range1() {
-    let seed: u128 = random();
+    let seed: u64 = random();
     println!("seed {}", seed);
     let mut refi = Llrb::new_lsm("test-llrb");
 
@@ -795,8 +793,7 @@ fn test_lsm_range1() {
 #[test]
 fn test_lsm_range2() {
     // test case using 2 robt version and 1 mvcc versions
-    let seed: u128 = random();
-    //let seed: u128 = 99443758465951354559679348532807295713;
+    let seed: u64 = random();
     println!("seed {}", seed);
     let mut refi = Llrb::new_lsm("test-llrb");
 
@@ -904,8 +901,7 @@ fn test_lsm_range2() {
 #[ignore]
 fn test_lsm_range_versions1() {
     // test case using 5 mvcc versions
-    let seed: u128 = random();
-    //let seed: u128 = 165139395464580006058585702679737837028;
+    let seed: u64 = random();
     println!("seed {}", seed);
     let mut refi = Llrb::new_lsm("test-llrb");
 
@@ -1007,7 +1003,7 @@ fn test_lsm_range_versions1() {
 #[ignore]
 fn test_lsm_range_versions2() {
     // test case using 2 robt version and 1 mvcc versions
-    let seed: u128 = random();
+    let seed: u64 = random();
     println!("seed {}", seed);
     let mut refi = Llrb::new_lsm("test-llrb");
 
@@ -1120,8 +1116,7 @@ fn test_lsm_range_versions2() {
 
 #[test]
 fn test_lsm_reverse1() {
-    let seed: u128 = random();
-    // let seed: u128 = 311387800859545064624407857022978942318;
+    let seed: u64 = random();
     println!("seed {}", seed);
     let mut refi = Llrb::new_lsm("test-llrb");
 
@@ -1214,7 +1209,7 @@ fn test_lsm_reverse1() {
 #[test]
 fn test_lsm_reverse2() {
     // test case using 2 robt version and 1 mvcc versions
-    let seed: u128 = random();
+    let seed: u64 = random();
     println!("seed {}", seed);
     let mut refi = Llrb::new_lsm("test-llrb");
 
@@ -1320,7 +1315,7 @@ fn test_lsm_reverse2() {
 #[ignore]
 fn test_lsm_reverse_versions1() {
     // test case using 5 mvcc versions
-    let seed: u128 = random();
+    let seed: u64 = random();
     println!("seed {}", seed);
     let mut refi = Llrb::new_lsm("test-llrb");
 
@@ -1422,7 +1417,7 @@ fn test_lsm_reverse_versions1() {
 #[ignore]
 fn test_lsm_reverse_versions2() {
     // test case using 2 robt version and 1 mvcc versions
-    let seed: u128 = random();
+    let seed: u64 = random();
     // let seed: u128 = 215456859976182285399953190877559503919;
     println!("seed {}", seed);
     let mut refi = Llrb::new_lsm("test-llrb");
@@ -1539,11 +1534,12 @@ fn test_lsm_reverse_versions2() {
 fn random_llrb(
     n_ops: i64,
     key_max: i64,
-    seed: u128,
+    seed: u64,
     llrb: &mut Box<Llrb<i64, i64>>,
     refi: &mut Box<Llrb<i64, i64>>, // reference index
 ) {
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = SmallRng::seed_from_u64(seed);
+
     for _i in 0..n_ops {
         let key = (rng.gen::<i64>() % key_max).abs();
         let op = rng.gen::<usize>() % 3;
@@ -1592,11 +1588,12 @@ fn random_llrb(
 fn random_mvcc(
     n_ops: i64,
     key_max: i64,
-    seed: u128,
+    seed: u64,
     mvcc: &mut Mvcc<i64, i64>,
     refi: &mut Llrb<i64, i64>, // reference index
 ) {
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = SmallRng::seed_from_u64(seed);
+
     for _i in 0..n_ops {
         let key = (rng.gen::<i64>() % key_max).abs();
         let op = rng.gen::<usize>() % 3;
@@ -1643,11 +1640,12 @@ fn random_mvcc(
 
 fn random_robt(
     name: &str,
-    seed: u128,
+    seed: u64,
     delta_ok: bool,
     iter: IndexIter<i64, i64>,
 ) -> robt::Snapshot<i64, i64, CRoaring> {
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = SmallRng::seed_from_u64(seed);
+
     let dir = {
         let mut dir = std::env::temp_dir();
         dir.push(name);
@@ -1657,7 +1655,8 @@ fn random_robt(
     config.delta_ok = delta_ok;
     config.value_in_vlog = rng.gen();
     let b =
-        robt::Builder::<i64, i64, CRoaring>::initial(&dir, "random_robt", config.clone()).unwrap();
+        robt::Builder::<i64, i64, CRoaring>::initial(&dir, "random_robt", config.clone())
+            .unwrap();
     let app_meta = "heloo world".to_string();
     b.build(iter, app_meta.as_bytes().to_vec()).unwrap();
 
@@ -1667,11 +1666,12 @@ fn random_robt(
 fn concurrent_write(
     n_ops: i64,
     key_max: i64,
-    seed: u128,
+    seed: u64,
     mut r: MvccReader<i64, i64>,
     mut w: MvccWriter<i64, i64>,
 ) {
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = SmallRng::seed_from_u64(seed);
+
     let _start = std::time::SystemTime::now();
     for _i in 0..n_ops {
         let key = (rng.gen::<i64>() % key_max).abs();
@@ -1709,8 +1709,8 @@ fn concurrent_write(
     );
 }
 
-fn random_ops_keys(seed: u128, ops_limit: i64, key_limit: i64) -> (i64, i64) {
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+fn random_ops_keys(seed: u64, ops_limit: i64, key_limit: i64) -> (i64, i64) {
+    let mut rng = SmallRng::seed_from_u64(seed);
 
     let n_ops_set: Vec<i64> = vec![
         0,

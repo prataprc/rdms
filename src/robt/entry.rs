@@ -167,13 +167,11 @@ where
                     native_deltas.push(delta.into_native(f)?);
                 }
 
-                let entry = Entry::ZZ {
+                Entry::ZZ {
                     key,
                     value: native_value,
                     deltas: native_deltas,
-                };
-
-                entry
+                }
             }
             Entry::ZZ { key, value, .. } => {
                 let native_value = value.into_native(f)?;

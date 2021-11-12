@@ -8,11 +8,9 @@ fn test_wral_wal() {
     use crate::wral::state;
     use std::env;
 
-    let seeds: Vec<u128> = vec![275868558029936601763097336595517926704, random()];
-    let seed = seeds[random::<usize>() % seeds.len()];
-    // let seed: u128 = 275868558029936601763097336595517926704;
+    let seed: u64 = random();
+    let mut rng = SmallRng::seed_from_u64(seed);
     println!("test_wral_wal {}", seed);
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
     let mut config: Config = {
         let bytes = rng.gen::<[u8; 32]>();
@@ -30,7 +28,9 @@ fn test_wral_wal() {
     let mut writers = vec![];
     for id in 0..n_threads {
         let wal = val.clone();
-        writers.push(std::thread::spawn(move || writer(id, wal, 1000, seed + id)));
+        writers.push(std::thread::spawn(move || {
+            writer(id, wal, 1000, seed + (id as u64))
+        }));
     }
 
     let mut entries: Vec<Vec<wral::Entry>> = vec![];
@@ -48,7 +48,7 @@ fn test_wral_wal() {
         let wal = val.clone();
         let entries = entries.clone();
         readers.push(std::thread::spawn(move || {
-            reader(id, wal, 10, seed + id, entries)
+            reader(id, wal, 10, seed + (id as u64), entries)
         }));
     }
 
@@ -59,8 +59,8 @@ fn test_wral_wal() {
     val.purge().unwrap();
 }
 
-fn writer(_id: u128, wal: Wal, ops: usize, seed: u128) -> Vec<wral::Entry> {
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+fn writer(_id: u128, wal: Wal, ops: usize, seed: u64) -> Vec<wral::Entry> {
+    let mut rng = SmallRng::seed_from_u64(seed);
 
     let mut entries = vec![];
     for _i in 1..ops {
@@ -76,8 +76,8 @@ fn writer(_id: u128, wal: Wal, ops: usize, seed: u128) -> Vec<wral::Entry> {
     entries
 }
 
-fn reader(_id: u128, wal: Wal, ops: usize, seed: u128, entries: Vec<wral::Entry>) {
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+fn reader(_id: u128, wal: Wal, ops: usize, seed: u64, entries: Vec<wral::Entry>) {
+    let mut rng = SmallRng::seed_from_u64(seed);
 
     for _i in 0..ops {
         match rng.gen::<u8>() % 2 {

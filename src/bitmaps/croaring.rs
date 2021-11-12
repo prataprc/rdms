@@ -20,6 +20,12 @@ pub struct CRoaring {
     bitmap: Bitmap,
 }
 
+impl Default for CRoaring {
+    fn default() -> CRoaring {
+        CRoaring::new()
+    }
+}
+
 impl CRoaring {
     pub fn new() -> CRoaring {
         CRoaring {

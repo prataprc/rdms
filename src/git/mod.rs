@@ -1,7 +1,7 @@
 //! Module implement db like interface into git repository.
 
 /// Default git directory under working git repository.
-pub const GIT_DIR: &'static str = ".git";
+pub const GIT_DIR: &str = ".git";
 
 mod config;
 mod index;

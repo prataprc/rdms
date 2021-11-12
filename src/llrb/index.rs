@@ -1709,7 +1709,7 @@ use rand::{self, rngs::SmallRng, Rng, SeedableRng};
 
 #[cfg(any(test, feature = "rdms"))]
 pub fn load_index<K, V>(
-    seed: u128,
+    seed: u64,
     sets: usize,
     inserts: usize,
     rems: usize,
@@ -1723,7 +1723,8 @@ where
     rand::distributions::Standard: rand::distributions::Distribution<K>,
     rand::distributions::Standard: rand::distributions::Distribution<V>,
 {
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = SmallRng::seed_from_u64(seed);
+
     let index = Index::new("testing", false /*spin*/);
     seqno.map(|seqno| index.set_seqno(seqno));
 

@@ -47,7 +47,7 @@ pub fn handle(opts: Opt) -> Result<()> {
         .git_root
         .clone()
         .map(|s| s.to_str().unwrap().to_string())
-        .unwrap_or(profile.git.loc_repo.clone());
+        .unwrap_or_else(|| profile.git.loc_repo.clone());
 
     let crates_io_dump_loc = match opts.nohttp {
         true => crates_io_dump_loc(&profile),
@@ -58,7 +58,7 @@ pub fn handle(opts: Opt) -> Result<()> {
     };
     match opts.nountar {
         true => (),
-        false => untar(crates_io_dump_loc.clone())?,
+        false => untar(crates_io_dump_loc)?,
     };
     match opts.nocopy {
         true => (),
@@ -160,7 +160,7 @@ fn remove_temp_dir(profile: &Profile) -> Result<()> {
             .temp_dir
             .as_ref()
             .map(|x| x.into())
-            .unwrap_or(env::temp_dir()),
+            .unwrap_or_else(env::temp_dir),
         crate::TEMP_DIR_CRIO.into(),
     ]
     .iter()
@@ -177,7 +177,7 @@ fn crates_io_dump_loc(profile: &Profile) -> path::PathBuf {
             .temp_dir
             .as_ref()
             .map(|x| x.into())
-            .unwrap_or(env::temp_dir()),
+            .unwrap_or_else(env::temp_dir),
         crate::TEMP_DIR_CRIO.into(),
     ]
     .iter()
@@ -188,7 +188,7 @@ fn crates_io_dump_loc(profile: &Profile) -> path::PathBuf {
     let dump_fname = path::Path::new(profile.dump_url.path())
         .file_name()
         .unwrap();
-    [temp_dir.clone(), dump_fname.into()].iter().collect()
+    [temp_dir, dump_fname.into()].iter().collect()
 }
 
 fn crates_io_untar_dir(profile: &Profile) -> Result<path::PathBuf> {

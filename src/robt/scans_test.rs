@@ -10,18 +10,17 @@ use crate::{
 fn test_robt_build_scan() {
     use std::time::Duration;
 
-    let seed: u128 = random();
-    // let seed: u128 = 284595450980088120127817086088032225381;
+    let seed: u64 = random();
+    let mut rng = SmallRng::seed_from_u64(seed);
     println!("test_build_scan {}", seed);
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
     let inserts = 1_000_000;
     let mdb = llrb::load_index::<u16, u64>(seed, 0, inserts, 0, 1_000, None);
 
     let start_seqno = rng.gen::<u64>() % ((mdb.len() as u64) * 2);
-    let mut iter = BuildScan::new(mdb.iter().unwrap().map(|e| Ok(e)), start_seqno);
+    let mut iter = BuildScan::new(mdb.iter().unwrap().map(Ok), start_seqno);
     let mut count = 0;
-    while let Some(_) = iter.next() {
+    for _ in &mut iter {
         count += 1;
     }
     assert_eq!(count, mdb.len() as u64, "{} {}", count, mdb.len());
@@ -41,10 +40,9 @@ fn test_robt_build_scan() {
 fn test_robt_nobitmap_scan() {
     use crate::bitmaps::NoBitmap;
 
-    let seed: u128 = random();
-    // let seed: u128 = 284595450980088120127817086088032225381;
+    let seed: u64 = random();
+    let mut rng = SmallRng::seed_from_u64(seed);
     println!("test_nobitmap_scan {}", seed);
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
     let inserts = 1_000_000;
     let mdb = llrb::load_index::<u16, u64>(seed, 0, inserts, 0, 1_000, None);
@@ -69,10 +67,9 @@ fn test_robt_nobitmap_scan() {
 fn test_robt_xorfilter_scan() {
     use xorfilter::Xor8;
 
-    let seed: u128 = random();
-    // let seed: u128 = 55460639888202704213451510247183500784;
+    let seed: u64 = random();
+    let mut rng = SmallRng::seed_from_u64(seed);
     println!("test_xorfilter_scan {}", seed);
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
     let inserts = 1_000_000;
     let mdb = llrb::load_index::<u16, u64>(seed, 0, inserts, 0, 1_000, None);

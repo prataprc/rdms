@@ -10,7 +10,7 @@ pub fn parse_os_args(
     let args_os: Vec<ffi::OsString> = {
         args
             // while taking from std::env skip the first item, it is command-line
-            .unwrap_or(std::env::args_os().skip(1).collect())
+            .unwrap_or_else(|| std::env::args_os().skip(1).collect())
             .into_iter()
             // .map(|s| s.to_str().unwrap().to_string())
             .collect()
@@ -19,12 +19,12 @@ pub fn parse_os_args(
     let mut iter = args_os.clone().into_iter().enumerate();
 
     let is_cmd_option = |arg: &ffi::OsString| -> bool {
-        matches!(arg.to_str(), Some(arg) if arg.starts_with("-"))
+        matches!(arg.to_str(), Some(arg) if arg.starts_with('-'))
     };
 
     loop {
         match iter.next() {
-            None => break (args_os.clone(), ffi::OsString::new(), vec![]),
+            None => break (args_os, ffi::OsString::new(), vec![]),
             Some((i, arg)) if !is_cmd_option(&arg) && i < (args_os.len() - 1) => {
                 break (
                     args_os[..i].to_vec(),

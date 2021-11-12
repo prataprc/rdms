@@ -116,14 +116,14 @@ fn load_and_spawn(opts: Opt, p: Profile) -> Result<()> {
 }
 
 fn initial_load(
-    seed: u128,
+    seed: u64,
     p: &Profile,
     mut env: lmdb::Environment,
     db: lmdb::Database, // index
 ) -> Result<()> {
     print!("rdms: initial-load ...");
 
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = SmallRng::seed_from_u64(seed);
 
     let mut txn = env.begin_rw_txn().unwrap();
     let write_flags: lmdb::WriteFlags = Default::default();
@@ -132,7 +132,7 @@ fn initial_load(
     for _i in 0..p.loads {
         let key = format!("{:0width$}", rng.gen::<u64>(), width = p.key_size);
         let value = format!("{:0width$}", rng.gen::<u64>(), width = p.val_size);
-        txn.put(db, &key, &value, write_flags.clone()).unwrap();
+        txn.put(db, &key, &value, write_flags).unwrap();
     }
 
     txn.commit().unwrap();
@@ -141,7 +141,7 @@ fn initial_load(
     env.sync(true).unwrap();
 
     let stat = {
-        let (env, _) = open_lmdb(&p);
+        let (env, _) = open_lmdb(p);
         env.stat().unwrap()
     };
 
@@ -157,12 +157,12 @@ fn initial_load(
 
 fn incr_load(
     j: usize,
-    seed: u128,
+    seed: u64,
     p: Profile,
     env: Arc<lmdb::Environment>,
     db: lmdb::Database, // index
 ) -> Result<()> {
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = SmallRng::seed_from_u64(seed);
 
     let write_flags: lmdb::WriteFlags = Default::default();
     let start = time::Instant::now();
@@ -174,7 +174,7 @@ fn incr_load(
             op if op < sets => {
                 let value = format!("{:0width$}", rng.gen::<u64>(), width = p.val_size);
                 let mut txn = env.begin_rw_txn().unwrap();
-                txn.put(db, &key, &value, write_flags.clone()).unwrap();
+                txn.put(db, &key, &value, write_flags).unwrap();
                 txn.commit().unwrap();
                 sets -= 1;
             }

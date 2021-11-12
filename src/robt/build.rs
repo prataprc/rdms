@@ -278,10 +278,9 @@ where
                         entry.drain_deltas()
                     }
                     first_key.get_or_insert_with(|| entry.as_key().clone());
-                    let (e, vbytes) = {
-                        let e = robt::Entry::<K, V>::from(entry.clone());
-                        iter_result!(e.into_reference(vfpos, self.value_in_vlog))
-                    };
+                    let (e, vbytes) = iter_result!(entry
+                        .clone()
+                        .into_reference(vfpos, self.value_in_vlog));
                     let ibytes = iter_result!(util::into_cbor_bytes(e));
 
                     if (zblock.len() + ibytes.len()) > block_size {

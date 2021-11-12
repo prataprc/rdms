@@ -1,8 +1,8 @@
 use serde::Deserialize;
 
-use std::{result, time};
+use std::time;
 
-use rdms::{util, wral};
+use rdms::{util, wral, Result};
 
 use crate::cmd_perf::Opt;
 
@@ -30,13 +30,12 @@ impl Default for Profile {
     }
 }
 
-pub fn perf(opts: Opt) -> result::Result<(), String> {
-    let profile: Profile =
-        util::files::load_toml(&opts.profile).map_err(|e| e.to_string())?;
+pub fn perf(opts: Opt) -> Result<()> {
+    let profile: Profile = util::files::load_toml(&opts.profile)?;
     load_and_spawn(opts, profile)
 }
 
-fn load_and_spawn(opts: Opt, p: Profile) -> result::Result<(), String> {
+fn load_and_spawn(opts: Opt, p: Profile) -> Result<()> {
     use std::{env, path::PathBuf};
 
     let dir: PathBuf = vec![env::temp_dir(), "wral-perf".into()]

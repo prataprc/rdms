@@ -1,12 +1,12 @@
 use rand::{rngs::SmallRng, Rng, SeedableRng};
 use serde::Deserialize;
 
-use std::{fmt, result, thread, time};
+use std::{fmt, thread, time};
 
 use rdms::{
     db::{self, ToJson},
     llrb::Index,
-    util,
+    util, Result,
 };
 
 use crate::cmd_perf::{Generate, Opt};
@@ -94,9 +94,8 @@ impl Profile {
     }
 }
 
-pub fn perf(opts: Opt) -> result::Result<(), String> {
-    let profile: Profile =
-        util::files::load_toml(&opts.profile).map_err(|e| e.to_string())?;
+pub fn perf(opts: Opt) -> Result<()> {
+    let profile: Profile = util::files::load_toml(&opts.profile)?;
 
     let (kt, vt) = (&profile.key_type, &profile.value_type);
 
@@ -108,7 +107,7 @@ pub fn perf(opts: Opt) -> result::Result<(), String> {
     }
 }
 
-fn load_and_spawn<K, V>(opts: Opt, p: Profile) -> result::Result<(), String>
+fn load_and_spawn<K, V>(opts: Opt, p: Profile) -> Result<()>
 where
     K: 'static + Send + Sync + Clone + Ord + db::Footprint + fmt::Debug,
     V: 'static + Send + Sync + db::Diff + db::Footprint,
@@ -184,11 +183,7 @@ where
     Ok(())
 }
 
-fn initial_load<K, V>(
-    rng: &mut SmallRng,
-    p: Profile,
-    index: Index<K, V>,
-) -> result::Result<(), String>
+fn initial_load<K, V>(rng: &mut SmallRng, p: Profile, index: Index<K, V>) -> Result<()>
 where
     K: 'static + Send + Sync + Clone + Ord + db::Footprint,
     V: 'static + Send + Sync + db::Diff + db::Footprint,
@@ -205,12 +200,7 @@ where
     Ok(())
 }
 
-fn incr_load<K, V>(
-    j: usize,
-    seed: u128,
-    p: Profile,
-    index: Index<K, V>,
-) -> result::Result<(), String>
+fn incr_load<K, V>(j: usize, seed: u128, p: Profile, index: Index<K, V>) -> Result<()>
 where
     K: 'static + Send + Sync + Clone + Ord + db::Footprint,
     V: 'static + Send + Sync + db::Diff + db::Footprint,

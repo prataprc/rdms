@@ -3,16 +3,16 @@ extern crate test;
 
 use test::Bencher;
 
-use rdms::spinlock::RWSpinlock;
+use rdms::util::spinlock::Spinlock;
 
 #[bench]
-fn bench_acquire_read(b: &mut Bencher) {
-    let g = RWSpinlock::new();
-    b.iter(|| g.acquire_read(false));
+fn bench_spinlock_read(b: &mut Bencher) {
+    let g = Spinlock::new(0);
+    b.iter(|| g.read());
 }
 
 #[bench]
-fn bench_acquire_write(b: &mut Bencher) {
-    let g = RWSpinlock::new();
-    b.iter(|| g.acquire_write(false));
+fn bench_spinlock_write(b: &mut Bencher) {
+    let g = Spinlock::new(0);
+    b.iter(|| g.write());
 }

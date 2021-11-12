@@ -2,8 +2,9 @@ use lmdb::{self, Cursor, Transaction};
 use rand::{rngs::SmallRng, Rng, SeedableRng};
 use serde::Deserialize;
 
-use rdms::util;
-use std::{io, result, sync::Arc, thread, time};
+use std::{io, sync::Arc, thread, time};
+
+use rdms::{util, Result};
 
 use crate::cmd_perf::Opt;
 
@@ -54,13 +55,12 @@ impl Profile {
     }
 }
 
-pub fn perf(opts: Opt) -> result::Result<(), String> {
-    let profile: Profile =
-        util::files::load_toml(&opts.profile).map_err(|e| e.to_string())?;
+pub fn perf(opts: Opt) -> Result<()> {
+    let profile: Profile = util::files::load_toml(&opts.profile)?;
     load_and_spawn(opts, profile)
 }
 
-fn load_and_spawn(opts: Opt, p: Profile) -> Result<(), String> {
+fn load_and_spawn(opts: Opt, p: Profile) -> Result<()> {
     let (env, db) = init_lmdb(&p);
     initial_load(opts.seed, &p, env, db)?;
 
@@ -120,7 +120,7 @@ fn initial_load(
     p: &Profile,
     mut env: lmdb::Environment,
     db: lmdb::Database, // index
-) -> result::Result<(), String> {
+) -> Result<()> {
     print!("rdms: initial-load ...");
 
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
@@ -161,7 +161,7 @@ fn incr_load(
     p: Profile,
     env: Arc<lmdb::Environment>,
     db: lmdb::Database, // index
-) -> result::Result<(), String> {
+) -> Result<()> {
     let mut rng = SmallRng::from_seed(seed.to_le_bytes());
 
     let write_flags: lmdb::WriteFlags = Default::default();

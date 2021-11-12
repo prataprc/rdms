@@ -3,7 +3,7 @@ use rand::{rngs::SmallRng, Rng, SeedableRng};
 use serde::Deserialize;
 use xorfilter::{BuildHasherDefault, Xor8};
 
-use std::{ffi, fmt, hash::Hash, iter::FromIterator, path, result, thread, time};
+use std::{ffi, fmt, hash::Hash, iter::FromIterator, path, thread, time};
 
 use rdms::{bitmaps::NoBitmap, db, llrb, robt, util, Result};
 
@@ -236,9 +236,8 @@ impl Profile {
     }
 }
 
-pub fn perf(opts: Opt) -> result::Result<(), String> {
-    let mut profile: Profile =
-        util::files::load_toml(&opts.profile).map_err(|e| e.to_string())?;
+pub fn perf(opts: Opt) -> Result<()> {
+    let mut profile: Profile = util::files::load_toml(&opts.profile)?;
 
     profile.initial.robt.dir = path::PathBuf::from_iter(
         vec![std::env::temp_dir(), "rdms-perf-robt".into()].into_iter(),
@@ -278,7 +277,7 @@ pub fn perf(opts: Opt) -> result::Result<(), String> {
     }
 }
 
-fn load_and_spawn<K, V, B>(opts: Opt, p: Profile, bitmap: B) -> result::Result<(), String>
+fn load_and_spawn<K, V, B>(opts: Opt, p: Profile, bitmap: B) -> Result<()>
 where
     K: 'static + Key,
     V: 'static + Value,
@@ -369,11 +368,7 @@ where
     Ok(())
 }
 
-fn initial_index<K, V, B>(
-    seed: u128,
-    p: &Profile,
-    bitmap: B,
-) -> result::Result<(), String>
+fn initial_index<K, V, B>(seed: u128, p: &Profile, bitmap: B) -> Result<()>
 where
     K: 'static + Key,
     V: 'static + Value,
@@ -418,7 +413,7 @@ fn incr_index<K, V, B>(
     mut seed: u128,
     p: &Profile,
     bitmap: B,
-) -> result::Result<robt::Index<K, V, B>, String>
+) -> Result<robt::Index<K, V, B>>
 where
     K: 'static + Key,
     V: 'static + Value,
@@ -496,7 +491,7 @@ fn read_load<K, V, B>(
     seed: u128,
     p: Profile,
     mut index: robt::Index<K, V, B>,
-) -> result::Result<(), String>
+) -> Result<()>
 where
     K: 'static + Key,
     V: 'static + Value,

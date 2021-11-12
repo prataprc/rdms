@@ -27,8 +27,8 @@ fn bench_random_64(b: &mut Bencher) {
 
 #[bench]
 fn bench_atomicptr(b: &mut Bencher) {
-    let val = AtomicPtr<u32>;
     let ptr = Box::leak(Box::new(10_u32));
+    let val = std::sync::atomic::AtomicPtr::<u32>::new(ptr);
     b.iter(|| {
         val.store(ptr, std::sync::atomic::Ordering::SeqCst);
         val.load(std::sync::atomic::Ordering::SeqCst);

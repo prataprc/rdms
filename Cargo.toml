@@ -57,8 +57,12 @@ flate2 = { version = "1.0", optional = true }
 # memmap = "0.7.0"
 # sys-info = "0.5.10"
 
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+jemallocator = "0.3.2"
+
 [dev-dependencies]
 rand = "0.6.4"
+crc = "2.1.0"
 
 [features]
 rdms = ["structopt", "rand", "lmdb"]

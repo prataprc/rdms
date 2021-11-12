@@ -3,12 +3,12 @@ use serde::Deserialize;
 
 use std::{
     collections::BTreeMap,
-    fmt, result,
+    fmt,
     time::{self, SystemTime},
 };
 
 use crate::cmd_perf::{Generate, Opt};
-use rdms::{db, util};
+use rdms::{db, util, Result};
 
 const DEFAULT_KEY_SIZE: usize = 16;
 const DEFAULT_VAL_SIZE: usize = 16;
@@ -64,9 +64,8 @@ impl Default for Profile {
     }
 }
 
-pub fn perf(opts: Opt) -> result::Result<(), String> {
-    let profile: Profile =
-        util::files::load_toml(&opts.profile).map_err(|e| e.to_string())?;
+pub fn perf(opts: Opt) -> Result<()> {
+    let profile: Profile = util::files::load_toml(&opts.profile)?;
 
     let (kt, vt) = (&profile.key_type, &profile.value_type);
 
@@ -78,7 +77,7 @@ pub fn perf(opts: Opt) -> result::Result<(), String> {
     }
 }
 
-fn load_and_spawn<K, V>(opts: Opt, p: Profile) -> result::Result<(), String>
+fn load_and_spawn<K, V>(opts: Opt, p: Profile) -> Result<()>
 where
     K: 'static + Send + Sync + Clone + Ord + db::Footprint + fmt::Debug,
     V: 'static + Send + Sync + db::Diff + db::Footprint,
@@ -124,7 +123,7 @@ fn initial_load<K, V>(
     rng: &mut SmallRng,
     p: Profile,
     index: &mut BTreeMap<K, V>,
-) -> result::Result<(), String>
+) -> Result<()>
 where
     K: 'static + Send + Sync + Clone + Ord + db::Footprint,
     V: 'static + Send + Sync + db::Diff + db::Footprint,
@@ -142,11 +141,7 @@ where
     Ok(())
 }
 
-fn incr_load<K, V>(
-    seed: u128,
-    p: Profile,
-    index: &mut BTreeMap<K, V>,
-) -> result::Result<(), String>
+fn incr_load<K, V>(seed: u128, p: Profile, index: &mut BTreeMap<K, V>) -> Result<()>
 where
     K: 'static + Send + Sync + Clone + Ord + db::Footprint,
     V: 'static + Send + Sync + db::Diff + db::Footprint,

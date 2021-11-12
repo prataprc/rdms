@@ -1,24 +1,32 @@
-use structopt::StructOpt;
-
 use std::ffi;
 
 use rdms::{git, Result};
 
-/// Options for `git` subcommand.
-#[derive(Clone, StructOpt)]
-pub struct Opt {
-    #[structopt(long = "db")]
-    pub db: Option<ffi::OsString>,
+use crate::SubCommand;
 
-    loc: ffi::OsString,
+pub struct Opt {
+    pub loc_repo: ffi::OsString,
+    pub loc_db: Option<ffi::OsString>,
 }
 
-pub fn handle(args: Vec<String>) -> Result<()> {
-    let opts = Opt::from_iter(args.clone().into_iter());
+impl From<crate::SubCommand> for Opt {
+    fn from(subcmd: crate::SubCommand) -> Opt {
+        match subcmd {
+            SubCommand::Git { loc_repo, loc_db } => Opt { loc_repo, loc_db },
+            _ => unreachable!(),
+        }
+    }
+}
 
+pub fn handle(opts: Opt) -> Result<()> {
     let config = git::Config {
-        loc_repo: opts.loc.clone(),
-        loc_db: opts.db.unwrap_or(opts.loc.clone()),
+        loc_repo: opts.loc_repo.to_str().unwrap().to_string(),
+        loc_db: opts
+            .loc_db
+            .unwrap_or(opts.loc_repo.clone())
+            .to_str()
+            .unwrap()
+            .to_string(),
         permissions: None,
         description: "git command".to_string(),
     };

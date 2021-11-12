@@ -23,6 +23,11 @@ pub use types::Binary;
 pub(crate) use value::Value;
 pub use wop::{Wr, Write};
 
+/// A Key can decompose into path-like components.
+pub trait KeyPath {
+    fn key_path(&self) -> Vec<String>;
+}
+
 /// Trait to be implemented by index-types, key-types and, value-types.
 ///
 /// This trait is required to compute the memory or disk foot-print

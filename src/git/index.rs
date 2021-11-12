@@ -145,14 +145,6 @@ impl Index {
         Ok(Some(entry))
     }
 
-    /// TODO
-    pub fn get_versions<P>(&self, _key: P) -> Result<Option<Entry>>
-    where
-        P: Clone + AsRef<path::Path>,
-    {
-        todo!()
-    }
-
     /// Iter over each entry in repository in string sort order.
     pub fn iter(&self) -> Result<IterLevel> {
         let val = {
@@ -161,11 +153,6 @@ impl Index {
             IterLevel::forward(&self.repo, "".into(), tree.clone(), &comps)?
         };
         Ok(val)
-    }
-
-    /// TODO
-    pub fn iter_versions(&self) -> Result<IterLevel> {
-        todo!()
     }
 
     /// Iter over each entry in repository, such that each entry's key falls within
@@ -187,15 +174,6 @@ impl Index {
         Ok(Range { iter, high })
     }
 
-    /// TODO
-    pub fn range_versions<R, P>(&self, _range: R) -> Result<Range<P>>
-    where
-        R: RangeBounds<P>,
-        P: Clone + AsRef<path::Path>,
-    {
-        todo!()
-    }
-
     /// Same as [Index::range] method except in reverse order.
     pub fn reverse<R, P>(&self, range: R) -> Result<Reverse<P>>
     where
@@ -212,15 +190,6 @@ impl Index {
 
         let low = range.start_bound().cloned();
         Ok(Reverse { iter, low })
-    }
-
-    /// TODO
-    pub fn reverse_versions<R, P>(&self, _range: R) -> Result<Reverse<P>>
-    where
-        R: RangeBounds<P>,
-        P: Clone + AsRef<path::Path>,
-    {
-        todo!()
     }
 }
 
@@ -775,10 +744,6 @@ impl<'a> Txn<'a> {
 
         Ok(())
     }
-
-    //pub fn commit(self) -> Result<()> {
-    //    todo!()
-    //}
 
     fn do_insert(
         &self,

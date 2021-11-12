@@ -19,6 +19,8 @@ build:
 	# ... bins ...
 	# cargo +stable build --release --bin rdms --features=rdms
 	cargo +nightly build --release --bin rdms --features=rdms
+	# cargo +stable build --release --bin crio --features=crio
+	cargo +nightly build --release --bin crio --features=crio
 	#
 	# ... meta commands ...
 	cargo +nightly clippy --all-targets --all-features

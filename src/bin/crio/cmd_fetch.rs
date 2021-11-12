@@ -7,6 +7,7 @@ use rdms::{err_at, util, Error, Result};
 pub struct Opt {
     nohttp: bool,
     nountar: bool,
+    nocopy: bool,
     git_root: Option<ffi::OsString>,
     profile: ffi::OsString,
 }
@@ -17,11 +18,13 @@ impl From<crate::SubCommand> for Opt {
             crate::SubCommand::Fetch {
                 nohttp,
                 nountar,
+                nocopy,
                 git_root,
                 profile,
             } => Opt {
                 nohttp,
                 nountar,
+                nocopy,
                 git_root,
                 profile,
             },
@@ -35,11 +38,16 @@ pub struct Profile {
     dump_url: url::Url,
     git_root: String,
     git_index_dir: String,
-    git_analytics: String,
+    git_analytics_dir: String,
 }
 
 pub fn handle(opts: Opt) -> Result<()> {
-    let profile: Profile = util::files::load_toml(&opts.profile)?;
+    let mut profile: Profile = util::files::load_toml(&opts.profile)?;
+    profile.git_root = opts
+        .git_root
+        .as_ref()
+        .map(|s| s.to_str().unwrap().to_string())
+        .unwrap_or(profile.git_root.clone());
 
     let crates_io_dump_loc = match opts.nohttp {
         true => crates_io_dump_loc(&profile),
@@ -51,6 +59,13 @@ pub fn handle(opts: Opt) -> Result<()> {
     match opts.nountar {
         true => (),
         false => untar(crates_io_dump_loc.clone())?,
+    };
+    match opts.nocopy {
+        true => (),
+        false => {
+            crates_io_metadata(&opts, &profile)?;
+            crates_io_data(&opts, &profile)?;
+        }
     };
 
     //let mut fd = fs::OpenOptions::new()
@@ -74,7 +89,9 @@ fn untar(loc: path::PathBuf) -> Result<()> {
     use flate2::read::GzDecoder;
     use tar::Archive;
 
-    use std::fs;
+    use std::{fs, time};
+
+    let start = time::Instant::now();
 
     let fd = err_at!(IOError, fs::OpenOptions::new().read(true).open(&loc))?;
     match loc.extension().map(|x| x.to_str()) {
@@ -88,14 +105,20 @@ fn untar(loc: path::PathBuf) -> Result<()> {
         Some(_) | None => err_at!(Fatal, msg: "invalid tar dump: {:?}", loc)?,
     };
 
-    println!("untar into {:?} ... ok", loc.parent().unwrap());
+    println!(
+        "untar into {:?} ... ok ({:?})",
+        loc.parent().unwrap(),
+        start.elapsed()
+    );
 
     Ok(())
 }
 
 fn get_latest_db_dump(profile: &Profile) -> Result<path::PathBuf> {
-    use std::fs;
     use std::io::{Read, Write};
+    use std::{fs, time};
+
+    let start = time::Instant::now();
 
     let crates_io_dump_loc = crates_io_dump_loc(profile);
     let mut fd = err_at!(
@@ -118,7 +141,13 @@ fn get_latest_db_dump(profile: &Profile) -> Result<path::PathBuf> {
             }
         }
     }
-    println!("fetched {} bytes into {:?} ... ok", m, crates_io_dump_loc);
+
+    println!(
+        "fetched {} bytes into {:?} ... ok ({:?})",
+        m,
+        crates_io_dump_loc,
+        start.elapsed()
+    );
 
     Ok(crates_io_dump_loc)
 }
@@ -162,28 +191,92 @@ fn crates_io_dump_loc(profile: &Profile) -> path::PathBuf {
     [temp_dir.clone(), dump_fname.into()].iter().collect()
 }
 
-#[derive(Deserialize)]
-struct Category {
-    category: String,
-    crates_cnt: String,
-    created_at: String,
-    description: String,
-    id: String,
-    path: String,
-    slug: String,
+fn crates_io_untar_dir(profile: &Profile) -> Result<path::PathBuf> {
+    use std::fs;
+
+    let parent: path::PathBuf = crates_io_dump_loc(profile).parent().unwrap().into();
+    for entry in err_at!(IOError, fs::read_dir(&parent))? {
+        let entry = err_at!(IOError, entry)?;
+        let ok = err_at!(IOError, entry.metadata())?.is_dir();
+        match entry.file_name().to_str() {
+            Some(name) if ok && name.starts_with("20") => {
+                return Ok([parent, entry.file_name().into()].iter().collect())
+            }
+            _ => (),
+        }
+    }
+
+    err_at!(Fatal, msg: "missing valid untar-ed directory in {:?}", parent)
 }
 
-#[derive(Debug, Deserialize)]
-struct Crate {
-    created_at: String,
-    description: String,
-    documentation: String,
-    downloads: String,
-    homepage: String,
-    id: String,
-    max_upload_size: String,
-    name: String,
-    readme: String,
-    repository: String,
-    updated_at: String,
+fn crates_io_metadata(_opts: &Opt, profile: &Profile) -> Result<()> {
+    use std::fs;
+
+    let src_loc: path::PathBuf = [crates_io_untar_dir(profile)?, "metadata.json".into()]
+        .iter()
+        .collect();
+    let dst_loc: path::PathBuf = [profile.git_root.clone(), "metadata.json".into()]
+        .iter()
+        .collect();
+
+    let data = err_at!(IOError, fs::read(&src_loc))?;
+    err_at!(IOError, fs::write(&dst_loc, &data))?;
+
+    println!("copied {:?} -> {:?} ... ok", src_loc, dst_loc);
+
+    Ok(())
 }
+
+fn crates_io_data(_opts: &Opt, profile: &Profile) -> Result<()> {
+    use std::fs;
+
+    let data_dir: path::PathBuf =
+        [profile.git_root.clone(), "data".into()].iter().collect();
+    fs::create_dir_all(&data_dir).ok();
+
+    let primary_files = [
+        "data/categories.csv",
+        "data/crates_categories.csv",
+        "data/crates.csv",
+        "data/crates_keywords.csv",
+        "data/dependencies.csv",
+        "data/keywords.csv",
+        "data/metadata.csv",
+        "data/reserved_crate_names.csv",
+        "data/teams.csv",
+        "data/users.csv",
+        "data/version_downloads.csv",
+        "data/versions.csv",
+    ];
+    let analytic_files = ["data/badges.csv", "data/crate_owners.csv"];
+
+    for file in files.iter() {
+        let src_loc: path::PathBuf = [crates_io_untar_dir(profile)?, file.into()]
+            .iter()
+            .collect();
+        let dst_loc: path::PathBuf = [profile.git_root.clone(), file.to_string()]
+            .iter()
+            .collect();
+
+        let data = err_at!(IOError, fs::read(&src_loc))?;
+        err_at!(IOError, fs::write(&dst_loc, &data))?;
+
+        println!("copied {:?} -> {:?} ... ok", src_loc, dst_loc);
+    }
+
+    Ok(())
+}
+
+//let mut fd = fs::OpenOptions::new()
+//    .read(true)
+//    .open("/media/prataprc/hdd1.4tb/crates-io/2021-11-09-020028/data/crates.csv")
+//    .unwrap();
+//let mut rdr = csv::Reader::from_reader(&mut fd);
+//for (i, result) in rdr.deserialize().enumerate() {
+//    // Notice that we need to provide a type hint for automatic deserialization.
+//    let record: Crate = result.unwrap();
+//    println!("{:?}", record);
+//    if i > 2 {
+//        return;
+//    }
+//}

@@ -21,6 +21,9 @@ pub enum SubCommand {
         #[structopt(long = "nountar")]
         nountar: bool,
 
+        #[structopt(long = "nocopy")]
+        nocopy: bool,
+
         #[structopt(long = "git")]
         git_root: Option<ffi::OsString>,
 
@@ -36,5 +39,5 @@ fn main() {
         c @ SubCommand::Fetch { .. } => cmd_fetch::handle(cmd_fetch::Opt::from(c)),
     };
 
-    res.map_err(|e| println!("Error: {}", e));
+    res.map_err(|e| println!("Error: {}", e)).ok();
 }

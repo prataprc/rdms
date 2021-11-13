@@ -23,7 +23,7 @@ fn test_llrb_depth() {
             .to_vec()
             .into_iter()
             .enumerate()
-            .find(|(_, c)| *c == 0)
+            .find(|(_, c)| *c != 0)
             .map(|x| x.0)
             .unwrap_or(usize::MAX);
         assert_eq!(val.to_min(), min);
@@ -34,7 +34,7 @@ fn test_llrb_depth() {
             .into_iter()
             .enumerate()
             .rev()
-            .find(|(_, c)| *c == 0)
+            .find(|(_, c)| *c != 0)
             .map(|x| x.0)
             .unwrap_or(usize::MIN);
         assert_eq!(val.to_max(), max);

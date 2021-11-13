@@ -60,7 +60,8 @@ impl Delta for dbs::Binary {}
 #[test]
 fn test_robt_build_read() {
     // TODO: passing the same seed down the functions shall repeat the randomness.
-    let seed: u64 = random();
+    let seed: u64 = [419111650579980006, random()][random::<usize>() % 2];
+    // let seed: u64 = 419111650579980006;
     println!("test_robt_read {}", seed);
 
     do_robt_build_read::<u16, u64, _>("u16,nobitmap", seed, NoBitmap);
@@ -158,7 +159,7 @@ fn do_initial<K, V, B>(
     seqno: Option<u64>,
 ) -> llrb::Index<K, V>
 where
-    for<'a> K: 'static + Key + Arbitrary<'a>,
+    for<'a> K: 'static + Key + Arbitrary<'a> + fmt::Debug,
     V: 'static + Value,
     <V as dbs::Diff>::Delta: 'static + Delta,
     B: 'static + Sync + Send + Clone + dbs::Bloom,
@@ -184,7 +185,7 @@ where
 
     let mut build = Builder::initial(config.clone(), appmd.to_vec()).unwrap();
     build
-        .build_index(mdb.iter().unwrap().map(Ok), bitmap, seqno)
+        .build_index(mdb.iter_versions().unwrap().map(Ok), bitmap, seqno)
         .unwrap();
     mem::drop(build);
 
@@ -194,7 +195,7 @@ where
         let (cnf, mdb, appmd) = (config.clone(), mdb.clone(), appmd.to_vec());
         let seed = seed + ((i as u64) * 10);
         handles.push(thread::spawn(move || {
-            read_thread::<K, V, B>(prefix, i, seed, cnf, mdb, appmd)
+            read_thread::<K, V, B>(prefix, i, seed, cnf, mdb, appmd, false /*incr*/)
         }));
     }
 
@@ -214,7 +215,7 @@ fn do_incremental<K, V, B>(
     config: &Config,
 ) -> llrb::Index<K, V>
 where
-    for<'a> K: 'static + Key + Arbitrary<'a>,
+    for<'a> K: 'static + Key + Arbitrary<'a> + fmt::Debug,
     V: 'static + Value,
     <V as dbs::Diff>::Delta: 'static + Delta,
     B: 'static + Sync + Send + Clone + dbs::Bloom,
@@ -249,7 +250,10 @@ where
     build
         .build_index(
             index
-                .lsm_merge(snap.iter().unwrap().map(Ok), true /*versions*/)
+                .lsm_merge(
+                    snap.iter_versions().unwrap().map(Ok),
+                    true, /*versions*/
+                )
                 .unwrap(),
             bitmap,
             Some(snap.to_seqno()),
@@ -266,7 +270,9 @@ where
         let (config, mdb, appmd) = (config.clone(), mdb.clone(), appmd.to_vec());
         let seed = seed + ((i as u64) * 100);
         handles.push(thread::spawn(move || {
-            read_thread::<K, V, B>(prefix, i, seed, config, mdb, appmd)
+            read_thread::<K, V, B>(
+                prefix, i, seed, config, mdb, appmd, true, /*incr*/
+            )
         }));
     }
 
@@ -284,8 +290,9 @@ fn read_thread<K, V, B>(
     config: Config,
     mdb: llrb::Index<K, V>,
     app_meta_data: Vec<u8>,
+    incr: bool,
 ) where
-    for<'a> K: 'static + Key + Arbitrary<'a>,
+    for<'a> K: 'static + Key + Arbitrary<'a> + fmt::Debug,
     V: 'static + Value,
     <V as dbs::Diff>::Delta: 'static + Delta,
     B: 'static + Sync + Send + Clone + dbs::Bloom,
@@ -391,10 +398,17 @@ fn read_thread<K, V, B>(
             }
             Op::GetVersions(key) => {
                 counts[14] += 1;
-                match (index.get_versions(&key), mdb.get(&key)) {
+                match (index.get_versions(&key), mdb.get_versions(&key)) {
+                    (Ok(e1), Ok(mut e2)) if !config.delta_ok && incr => {
+                        e2.deltas = vec![];
+                        assert!(e1.contains(&e2), "index:{:?} mdb:{:?}", e1, e2);
+                    }
                     (Ok(e1), Ok(mut e2)) if !config.delta_ok => {
                         e2.deltas = vec![];
                         assert_eq!(e1, e2);
+                    }
+                    (Ok(e1), Ok(e2)) if incr => {
+                        assert!(e1.contains(&e2), "index:{:?} mdb:{:?}", e1, e2);
                     }
                     (Ok(e1), Ok(e2)) => assert_eq!(e1, e2),
                     (Err(KeyNotFound(_, _)), Err(Error::KeyNotFound(_, _))) => (),
@@ -434,18 +448,26 @@ fn read_thread<K, V, B>(
                     IterVersions((l, h)) => {
                         counts[17] += 1;
                         let r = (Bound::from(l), Bound::from(h));
-                        let mut iter1 = mdb.range(r.clone()).unwrap();
+                        let mut iter1 = mdb.range_versions(r.clone()).unwrap();
                         let mut iter2 = index.iter_versions(r).unwrap();
                         for mut e1 in &mut iter1 {
                             if !config.delta_ok {
                                 e1.deltas = vec![];
                             }
                             match iter2.next() {
+                                Some(Ok(e2)) if incr => {
+                                    assert!(
+                                        e2.contains(&e1),
+                                        "index:{:?} mdb:{:?}",
+                                        e2,
+                                        e1,
+                                    )
+                                }
                                 Some(Ok(e2)) => {
                                     assert_eq!(
                                         e1,
                                         e2,
-                                        "{} {}",
+                                        "mdb:{} index:{}",
                                         e1.as_key().to_string(),
                                         e2.as_key().to_string()
                                     )
@@ -463,13 +485,18 @@ fn read_thread<K, V, B>(
                     ReverseVersions((l, h)) => {
                         counts[18] += 1;
                         let r = (Bound::from(l), Bound::from(h));
-                        let mut iter1 = mdb.reverse(r.clone()).unwrap();
+                        let mut iter1 = mdb.reverse_versions(r.clone()).unwrap();
                         let mut iter2 = index.reverse_versions(r).unwrap();
                         for mut e1 in &mut iter1 {
                             if !config.delta_ok {
                                 e1.deltas = vec![];
                             }
-                            assert_eq!(e1, iter2.next().unwrap().unwrap())
+                            let e2 = iter2.next().unwrap().unwrap();
+                            if incr {
+                                assert!(e2.contains(&e1), "mdb:{:?} index:{:?}", e1, e2);
+                            } else {
+                                assert_eq!(e1, e2);
+                            }
                         }
                         assert!(iter1.next().is_none());
                         assert!(iter2.next().is_none());
@@ -549,7 +576,7 @@ fn validate_compact<K, V, B>(
     rand::distributions::Standard: rand::distributions::Distribution<V>,
 {
     let ref_entries: Vec<dbs::Entry<K, V>> = mdb
-        .iter()
+        .iter_versions()
         .unwrap()
         .filter_map(|e| e.compact(cutoff))
         .collect();
@@ -566,7 +593,7 @@ fn validate_compact<K, V, B>(
         entries.len()
     );
     for (i, (re, ee)) in ref_entries.into_iter().zip(entries.into_iter()).enumerate() {
-        assert_eq!(re, ee, "i:{}", i);
+        assert!(ee.contains(&re), "i:{} mdb:{:?} index:{:?}", i, re, ee);
     }
 }
 

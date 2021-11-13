@@ -274,6 +274,10 @@ where
             };
             match entry {
                 Some(Ok(mut entry)) => {
+                    //match &entry {
+                    //    Entry::MM { .. } | Entry::MZ { .. } => unreachable!(),
+                    //    Entry::ZZ { deltas, .. } => println!("{}", deltas.len()),
+                    //}
                     if !self.delta_ok {
                         entry.drain_deltas()
                     }

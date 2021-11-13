@@ -1394,8 +1394,8 @@ where
         Some(nref) => match nref.as_key().borrow().cmp(key) {
             Ordering::Less => get(nref.as_right_ref(), key, versions),
             Ordering::Greater => get(nref.as_left_ref(), key, versions),
-            Ordering::Equal if versions => Ok(nref.entry.as_ref().latest()),
-            Ordering::Equal => Ok(nref.entry.as_ref().clone()),
+            Ordering::Equal if versions => Ok(nref.entry.as_ref().clone()),
+            Ordering::Equal => Ok(nref.entry.as_ref().latest()),
         },
         None => err_at!(KeyNotFound, msg: "get missing key"),
     }
@@ -1746,18 +1746,22 @@ where
         //);
         match rng.gen::<usize>() % (se + it + ds + rs) {
             k if k < se => {
+                //println!("load index set");
                 index.set(key, value).ok();
                 se -= 1;
             }
             k if k < (se + it) => {
+                //println!("load index insert");
                 index.insert(key, value).ok();
                 it -= 1;
             }
             k if (k < (se + it + ds)) => {
+                //println!("load index delete");
                 index.delete(&key).unwrap();
                 ds -= 1;
             }
             _ => {
+                //println!("load index remove");
                 index.remove(&key).unwrap();
                 rs -= 1;
             }

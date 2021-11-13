@@ -154,7 +154,7 @@
 //! database-features like compaction, log-structured-merge we need to
 //! preserve more information about each entry. While the internal shape of
 //! entry is not exposed (for future compatibility), `robt` uses
-//! [db::Entry] as the default index-entry.
+//! [dbs::Entry] as the default index-entry.
 //!
 //! **Compaction**
 //!
@@ -203,7 +203,7 @@
 //! [leveldb]: https://en.wikipedia.org/wiki/LevelDB
 
 #[allow(unused_imports)]
-use crate::db::{self, Diff};
+use crate::dbs::{self, Diff};
 
 mod build;
 mod config;

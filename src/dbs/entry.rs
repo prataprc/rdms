@@ -3,7 +3,7 @@ use cbordata::Cborize;
 use std::{borrow::Borrow, convert::TryFrom, fmt, ops::Bound, result};
 
 use crate::{
-    db::{Cutoff, Delta, Diff, Footprint, Value},
+    dbs::{self, Cutoff, Delta, Diff, Footprint, Value},
     Error, Result,
 };
 
@@ -127,7 +127,7 @@ where
         D: Clone + From<V>,
     {
         if values.is_empty() {
-            err_at!(InvalidInput, msg: "empty set of values for db::Entry")?
+            err_at!(InvalidInput, msg: "empty set of values for dbs::Entry")?
         }
         let mut entry = match values.remove(0) {
             Value::U { value, seqno } => Entry::new(key, value, seqno),
@@ -242,18 +242,18 @@ where
 
         let cutoff = match cutoff {
             // mono: return early.
-            crate::db::Cutoff::Mono if value.is_none() => return None,
-            crate::db::Cutoff::Mono => return Some(self.drain_deltas()),
+            dbs::Cutoff::Mono if value.is_none() => return None,
+            dbs::Cutoff::Mono => return Some(self.drain_deltas()),
             // tombstone: return early.
-            crate::db::Cutoff::Tombstone(cutoff) if value.is_none() => match cutoff {
+            dbs::Cutoff::Tombstone(cutoff) if value.is_none() => match cutoff {
                 Bound::Included(cutoff) if seqno <= cutoff => return None,
                 Bound::Excluded(cutoff) if seqno < cutoff => return None,
                 Bound::Unbounded => return None,
                 _ => return Some(self.clone()),
             },
-            crate::db::Cutoff::Tombstone(_) => return Some(self.clone()),
+            dbs::Cutoff::Tombstone(_) => return Some(self.clone()),
             // lsm: return / fall through
-            crate::db::Cutoff::Lsm(cutoff) => match cutoff {
+            dbs::Cutoff::Lsm(cutoff) => match cutoff {
                 // lsm: return early
                 Bound::Included(cutoff) if seqno <= cutoff => return None,
                 Bound::Excluded(cutoff) if seqno < cutoff => return None,

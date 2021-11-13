@@ -9,8 +9,8 @@ fn test_robt_entry() {
     let key = 10;
 
     let dbnt = match rng.gen::<u8>() % 2 {
-        0 => db::Entry::<u64, u64>::new(key, rng.gen(), 1),
-        1 => db::Entry::<u64, u64>::new_delete(key, 1),
+        0 => dbs::Entry::<u64, u64>::new(key, rng.gen(), 1),
+        1 => dbs::Entry::<u64, u64>::new_delete(key, 1),
         _ => unreachable!(),
     };
     for seqno in 2..10 {
@@ -30,7 +30,7 @@ fn test_robt_entry() {
 
     assert_eq!(
         dbnt,
-        db::Entry::try_from(Entry::from(dbnt.clone())).unwrap()
+        dbs::Entry::try_from(Entry::from(dbnt.clone())).unwrap()
     );
     assert_eq!(zz.as_key(), &key);
     assert_eq!(mz.as_key(), &key);

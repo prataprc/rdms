@@ -1,6 +1,6 @@
 use cbordata::Cborize;
 
-use crate::{db::Footprint, Error, Result};
+use crate::{dbs::Footprint, Error, Result};
 
 const DELTA_VER: u32 = 0x00030001;
 

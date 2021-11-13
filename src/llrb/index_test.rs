@@ -30,7 +30,7 @@ fn test_llrb() {
 
     // with u8 keys
     let index: Index<u64, u64> = Index::new("test_diff", spin);
-    let mut btmap: BTreeMap<u64, db::Entry<u64, u64>> = BTreeMap::new();
+    let mut btmap: BTreeMap<u64, dbs::Entry<u64, u64>> = BTreeMap::new();
     test_with_key(
         "test_llrb_u8",
         seed,
@@ -46,7 +46,7 @@ fn test_llrb() {
 
     // with u16 keys
     let index: Index<u64, u64> = Index::new("test_diff", spin);
-    let mut btmap: BTreeMap<u64, db::Entry<u64, u64>> = BTreeMap::new();
+    let mut btmap: BTreeMap<u64, dbs::Entry<u64, u64>> = BTreeMap::new();
     test_with_key(
         "test_llrb_u16",
         seed,
@@ -62,7 +62,7 @@ fn test_llrb() {
 
     // with u64 keys
     let index: Index<u64, u64> = Index::new("test_diff", spin);
-    let mut btmap: BTreeMap<u64, db::Entry<u64, u64>> = BTreeMap::new();
+    let mut btmap: BTreeMap<u64, dbs::Entry<u64, u64>> = BTreeMap::new();
     test_with_key(
         "test_llrb_u64",
         seed,
@@ -89,10 +89,10 @@ fn test_llrb_commit() {
 
 fn test_commit_with_key<K>(prefix: &str, seed: u64, key_max: K)
 where
-    K: Ord + Copy + Clone + Rem<Output = K> + fmt::Debug + fmt::Display + db::Footprint,
+    K: Ord + Copy + Clone + Rem<Output = K> + fmt::Debug + fmt::Display + dbs::Footprint,
     rand::distributions::Standard: rand::distributions::Distribution<K>,
 {
-    let mut btmap = BTreeMap::<K, db::Entry<K, u64>>::new();
+    let mut btmap = BTreeMap::<K, dbs::Entry<K, u64>>::new();
 
     let index1 = {
         // (sets, ins, rems, dels)
@@ -153,7 +153,7 @@ fn test_with_key<K>(
     n_threads: usize,
     key_max: K,
     index: &Index<K, u64>,
-    btmap: &mut BTreeMap<K, db::Entry<K, u64>>,
+    btmap: &mut BTreeMap<K, dbs::Entry<K, u64>>,
 ) where
     for<'a> K: 'static
         + Send
@@ -170,14 +170,14 @@ fn test_with_key<K>(
         + Div<Output = K>
         + fmt::Debug
         + fmt::Display
-        + db::Footprint,
+        + dbs::Footprint,
     <K as TryFrom<usize>>::Error: fmt::Debug,
     rand::distributions::Standard: rand::distributions::Distribution<K>,
 {
     for _i in 0..n_init {
         let (key, val): (K, u64) = (rng.gen::<K>(), rng.gen::<u64>());
-        let db::Wr { seqno, .. } = index.set(key.clone(), val).unwrap();
-        btmap.insert(key.clone(), db::Entry::new(key, val, seqno));
+        let dbs::Wr { seqno, .. } = index.set(key.clone(), val).unwrap();
+        btmap.insert(key.clone(), dbs::Entry::new(key, val, seqno));
     }
     println!(
         "{} initial load len:{}/{}",
@@ -218,8 +218,8 @@ fn do_test_with_key<K>(
     n_threads: usize,
     key_max: K,
     index: Index<K, u64>,
-    mut btmap: BTreeMap<K, db::Entry<K, u64>>,
-) -> BTreeMap<K, db::Entry<K, u64>>
+    mut btmap: BTreeMap<K, dbs::Entry<K, u64>>,
+) -> BTreeMap<K, dbs::Entry<K, u64>>
 where
     for<'a> K: Clone
         + Default
@@ -233,7 +233,7 @@ where
         + Div<Output = K>
         + fmt::Debug
         + fmt::Display
-        + db::Footprint,
+        + dbs::Footprint,
     <K as TryFrom<usize>>::Error: fmt::Debug,
 {
     let mut rng = SmallRng::seed_from_u64(seed);
@@ -252,8 +252,8 @@ where
         let (_seqno, _cas) = match op {
             Op::Set(key, val) => {
                 let key = key_for_thread(key, key_max, n_threads, id);
-                let db::Wr { seqno, old_entry } = index.set(key.clone(), val).unwrap();
-                let e = db::Entry::new(key.clone(), val, seqno);
+                let dbs::Wr { seqno, old_entry } = index.set(key.clone(), val).unwrap();
+                let e = dbs::Entry::new(key.clone(), val, seqno);
                 compare_old_entry(old_entry, btmap.insert(key, e));
                 counts[0] += 1;
                 (seqno, 0)
@@ -262,8 +262,8 @@ where
                 let key = key_for_thread(key, key_max, n_threads, id);
                 let cas = index.get_versions(&key).map(|e| e.to_seqno()).unwrap_or(0);
                 let (seqno, cas) = match index.set_cas(key.clone(), val, cas) {
-                    Ok(db::Wr { seqno, old_entry }) => {
-                        let e = db::Entry::new(key.clone(), val, seqno);
+                    Ok(dbs::Wr { seqno, old_entry }) => {
+                        let e = dbs::Entry::new(key.clone(), val, seqno);
                         compare_old_entry(old_entry, btmap.insert(key, e));
                         (seqno, cas)
                     }
@@ -277,12 +277,13 @@ where
             }
             Op::Insert(key, val) => {
                 let key = key_for_thread(key, key_max, n_threads, id);
-                let db::Wr { seqno, old_entry } = index.insert(key.clone(), val).unwrap();
+                let dbs::Wr { seqno, old_entry } =
+                    index.insert(key.clone(), val).unwrap();
                 let e = btmap
                     .get(&key)
                     .cloned()
                     .map(|e| e.insert(val, seqno))
-                    .unwrap_or_else(|| db::Entry::new(key.clone(), val, seqno));
+                    .unwrap_or_else(|| dbs::Entry::new(key.clone(), val, seqno));
                 compare_old_entry(old_entry, btmap.insert(key.clone(), e));
                 counts[2] += 1;
                 (seqno, 0)
@@ -291,12 +292,12 @@ where
                 let key = key_for_thread(key, key_max, n_threads, id);
                 let cas = index.get_versions(&key).map(|e| e.to_seqno()).unwrap_or(0);
                 match index.insert_cas(key.clone(), val, cas) {
-                    Ok(db::Wr { seqno, old_entry }) => {
+                    Ok(dbs::Wr { seqno, old_entry }) => {
                         let e = btmap
                             .get(&key.clone())
                             .cloned()
                             .map(|e| e.insert(val, seqno))
-                            .unwrap_or_else(|| db::Entry::new(key.clone(), val, seqno));
+                            .unwrap_or_else(|| dbs::Entry::new(key.clone(), val, seqno));
                         compare_old_entry(old_entry, btmap.insert(key.clone(), e));
                     }
                     Err(_) => {
@@ -308,7 +309,7 @@ where
             }
             Op::Remove(key) => {
                 let key = key_for_thread(key, key_max, n_threads, id);
-                let db::Wr { seqno, old_entry } = index.remove(&key).unwrap();
+                let dbs::Wr { seqno, old_entry } = index.remove(&key).unwrap();
                 compare_old_entry(old_entry, btmap.remove(&key));
                 counts[4] += 1;
                 (seqno, 0)
@@ -318,7 +319,7 @@ where
                 let key = key_for_thread(key, key_max, n_threads, id);
                 let cas = index.get_versions(&key).map(|e| e.to_seqno()).unwrap_or(0);
                 match index.remove_cas(&key, cas) {
-                    Ok(db::Wr { seqno, old_entry }) => {
+                    Ok(dbs::Wr { seqno, old_entry }) => {
                         compare_old_entry(old_entry, btmap.remove(&key));
                         (seqno, cas)
                     }
@@ -331,12 +332,12 @@ where
             }
             Op::Delete(key) => {
                 let key = key_for_thread(key, key_max, n_threads, id);
-                let db::Wr { seqno, old_entry } = index.delete(&key).unwrap();
+                let dbs::Wr { seqno, old_entry } = index.delete(&key).unwrap();
                 let e = btmap
                     .get(&key)
                     .cloned()
                     .map(|e| e.delete(seqno))
-                    .unwrap_or_else(|| db::Entry::new_delete(key.clone(), seqno));
+                    .unwrap_or_else(|| dbs::Entry::new_delete(key.clone(), seqno));
                 compare_old_entry(old_entry, btmap.insert(key.clone(), e));
                 counts[6] += 1;
                 (seqno, 0)
@@ -345,12 +346,14 @@ where
                 let key = key_for_thread(key, key_max, n_threads, id);
                 let cas = index.get_versions(&key).map(|e| e.to_seqno()).unwrap_or(0);
                 let (seqno, cas) = match index.delete_cas(&key, cas) {
-                    Ok(db::Wr { seqno, old_entry }) => {
+                    Ok(dbs::Wr { seqno, old_entry }) => {
                         let e = btmap
                             .get(&key)
                             .cloned()
                             .map(|e| e.delete(seqno))
-                            .unwrap_or_else(|| db::Entry::new_delete(key.clone(), seqno));
+                            .unwrap_or_else(|| {
+                                dbs::Entry::new_delete(key.clone(), seqno)
+                            });
                         compare_old_entry(old_entry, btmap.insert(key.clone(), e));
                         (seqno, cas)
                     }
@@ -484,8 +487,8 @@ where
 }
 
 fn merge_btmap<K>(
-    items: [BTreeMap<K, db::Entry<K, u64>>; 2],
-) -> BTreeMap<K, db::Entry<K, u64>>
+    items: [BTreeMap<K, dbs::Entry<K, u64>>; 2],
+) -> BTreeMap<K, dbs::Entry<K, u64>>
 where
     K: Clone + Ord,
 {
@@ -500,7 +503,7 @@ where
         let e = {
             let mut values = e.to_values();
             values.dedup();
-            db::Entry::from_values(key.clone(), values).unwrap()
+            dbs::Entry::from_values(key.clone(), values).unwrap()
         };
         two.remove(key);
         thr.insert(key.clone(), e);
@@ -518,8 +521,8 @@ where
 
 fn compare_iter<'a, K>(
     id: usize,
-    mut index: impl Iterator<Item = db::Entry<K, u64>>,
-    btmap: impl Iterator<Item = (&'a K, &'a db::Entry<K, u64>)>,
+    mut index: impl Iterator<Item = dbs::Entry<K, u64>>,
+    btmap: impl Iterator<Item = (&'a K, &'a dbs::Entry<K, u64>)>,
     frwrd: bool,
 ) where
     K: 'a + Clone + PartialEq + Ord + fmt::Display,
@@ -546,8 +549,8 @@ fn compare_iter<'a, K>(
 }
 
 fn compare_old_entry<K>(
-    index: Option<db::Entry<K, u64>>,
-    btmap: Option<db::Entry<K, u64>>,
+    index: Option<dbs::Entry<K, u64>>,
+    btmap: Option<dbs::Entry<K, u64>>,
 ) where
     K: PartialEq + fmt::Debug,
 {
@@ -567,7 +570,7 @@ fn random_load_index<K>(
     (mut sets, mut ins, mut rems, mut dels): (u64, u64, u64, u64),
 ) -> Index<K, u64>
 where
-    K: Copy + Clone + Ord + Rem<Output = K> + db::Footprint + fmt::Display,
+    K: Copy + Clone + Ord + Rem<Output = K> + dbs::Footprint + fmt::Display,
     rand::distributions::Standard: rand::distributions::Distribution<K>,
 {
     let mut rng = SmallRng::seed_from_u64(seed);

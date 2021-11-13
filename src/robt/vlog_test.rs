@@ -4,12 +4,12 @@ use super::*;
 fn test_robt_vlog_value() {
     let dbval = {
         let (value, seqno) = (10, 1);
-        db::Value::U { value, seqno }
+        dbs::Value::U { value, seqno }
     };
 
     assert_eq!(
         dbval,
-        db::Value::try_from(Value::from(dbval.clone())).unwrap()
+        dbs::Value::try_from(Value::from(dbval.clone())).unwrap()
     );
 
     let value = Value::from(dbval.clone());
@@ -32,12 +32,12 @@ fn test_robt_vlog_value() {
 fn test_robt_vlog_delta() {
     let dbdelta = {
         let (delta, seqno) = (10, 1);
-        db::Delta::U { delta, seqno }
+        dbs::Delta::U { delta, seqno }
     };
 
     assert_eq!(
         dbdelta,
-        db::Delta::try_from(Delta::from(dbdelta.clone())).unwrap()
+        dbs::Delta::try_from(Delta::from(dbdelta.clone())).unwrap()
     );
 
     let delta = Delta::from(dbdelta.clone());

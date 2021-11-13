@@ -4,7 +4,7 @@ use cbordata::Cborize;
 use std::{convert::TryFrom, hash::Hash};
 
 use crate::{
-    db::{Diff, Footprint},
+    dbs::{Diff, Footprint},
     Error, Result,
 };
 

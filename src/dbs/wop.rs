@@ -3,7 +3,7 @@ use arbitrary::Arbitrary;
 #[allow(unused_imports)]
 use crate::Index;
 
-use crate::db;
+use crate::dbs;
 
 /// Write operations allowed on [Index] index, refer to [Index::write] method.
 ///
@@ -153,9 +153,9 @@ impl<K, V> Write<K, V> {
 /// Result type for all write operations into index.
 pub struct Wr<K, V>
 where
-    V: db::Diff,
+    V: dbs::Diff,
 {
     /// Mutation sequence number for this write-operation.
     pub seqno: u64,
-    pub old_entry: Option<db::Entry<K, V>>,
+    pub old_entry: Option<dbs::Entry<K, V>>,
 }

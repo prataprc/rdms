@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn test_llrb_node() {
-    let entry = db::Entry::new(10, 200, 1);
+    let entry = dbs::Entry::new(10, 200, 1);
     let mut node: Node<u32, u32> = entry.into();
     assert_eq!(node.footprint().unwrap(), 80);
     assert!(node.as_left_ref().is_none());
@@ -20,11 +20,11 @@ fn test_llrb_node() {
     assert!(!node.is_black());
 
     node.set(300, 2);
-    assert_eq!(db::Entry::new(10, 300, 2), node.entry.as_ref().clone());
+    assert_eq!(dbs::Entry::new(10, 300, 2), node.entry.as_ref().clone());
 
     node.insert(400, 3);
-    let mut entry = db::Entry::new(10, 400, 3);
-    entry.deltas = vec![crate::db::Delta::U {
+    let mut entry = dbs::Entry::new(10, 400, 3);
+    entry.deltas = vec![crate::dbs::Delta::U {
         delta: 300,
         seqno: 2,
     }];

@@ -1,6 +1,6 @@
 //! Module `croaring` implement the [Bloom] trait for [roaring bitmap][roaring-bitmap].
 //!
-//! [Bloom]: crate::db::Bloom
+//! [Bloom]: crate::dbs::Bloom
 //! [roaring-bitmap]: https://roaringbitmap.org
 
 use croaring::bitmap::Bitmap;
@@ -11,7 +11,7 @@ use std::{
     hash::{BuildHasher, Hash, Hasher},
 };
 
-use crate::{db::Bloom, Error, Result};
+use crate::{dbs::Bloom, Error, Result};
 
 // TODO: right now we are using crc32, make hasher generic.
 

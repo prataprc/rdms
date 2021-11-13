@@ -5,7 +5,7 @@ use xorfilter::{BuildHasherDefault, Xor8};
 
 use std::{ffi, fmt, hash::Hash, iter::FromIterator, path, thread, time};
 
-use rdms::{bitmaps::NoBitmap, db, llrb, robt, util, Result};
+use rdms::{bitmaps::NoBitmap, dbs, llrb, robt, util, Result};
 
 use crate::cmd_perf::{Generate, Opt};
 
@@ -22,7 +22,7 @@ trait Key:
     + Ord
     + PartialEq
     + Hash
-    + db::Footprint
+    + dbs::Footprint
     + IntoCbor
     + FromCbor
     + ToString
@@ -34,8 +34,8 @@ trait Value:
     + Send
     + Clone
     + PartialEq
-    + db::Diff
-    + db::Footprint
+    + dbs::Diff
+    + dbs::Footprint
     + IntoCbor
     + FromCbor
     + ToString
@@ -47,14 +47,14 @@ trait Delta:
     + Send
     + Clone
     + PartialEq
-    + db::Footprint
+    + dbs::Footprint
     + IntoCbor
     + FromCbor
     + ToString
     + fmt::Debug
 {
 }
-trait BloomFilter: Sync + Send + Clone + db::Bloom {}
+trait BloomFilter: Sync + Send + Clone + dbs::Bloom {}
 
 impl Key for u16 {}
 impl Value for u16 {}
@@ -62,9 +62,9 @@ impl Delta for u16 {}
 impl Key for u64 {}
 impl Value for u64 {}
 impl Delta for u64 {}
-impl Key for db::Binary {}
-impl Value for db::Binary {}
-impl Delta for db::Binary {}
+impl Key for dbs::Binary {}
+impl Value for dbs::Binary {}
+impl Delta for dbs::Binary {}
 impl BloomFilter for NoBitmap {}
 impl BloomFilter for Xor8 {}
 
@@ -190,17 +190,17 @@ impl Generate<u64> for Profile {
     }
 }
 
-impl Generate<db::Binary> for Profile {
-    fn gen_key(&self, rng: &mut SmallRng) -> db::Binary {
+impl Generate<dbs::Binary> for Profile {
+    fn gen_key(&self, rng: &mut SmallRng) -> dbs::Binary {
         let (key, size) = (rng.gen::<u64>(), self.key_size);
         let val = format!("{:0width$}", key, width = size).as_bytes().to_vec();
-        db::Binary { val }
+        dbs::Binary { val }
     }
 
-    fn gen_value(&self, rng: &mut SmallRng) -> db::Binary {
+    fn gen_value(&self, rng: &mut SmallRng) -> dbs::Binary {
         let (val, size) = (rng.gen::<u64>(), self.value_size);
         let val = format!("{:0width$}", val, width = size).as_bytes().to_vec();
-        db::Binary { val }
+        dbs::Binary { val }
     }
 }
 
@@ -253,22 +253,22 @@ pub fn perf(opts: Opt) -> Result<()> {
             load_and_spawn::<u64, u64, _>(opts, profile, NoBitmap)
         }
         ("u64", "binary", "nobitmap") => {
-            load_and_spawn::<u64, db::Binary, _>(opts, profile, NoBitmap)
+            load_and_spawn::<u64, dbs::Binary, _>(opts, profile, NoBitmap)
         }
         ("binary", "binary", "nobitmap") => {
-            load_and_spawn::<db::Binary, db::Binary, _>(opts, profile, NoBitmap)
+            load_and_spawn::<dbs::Binary, dbs::Binary, _>(opts, profile, NoBitmap)
         }
         ("u64", "u64", "xor8") => load_and_spawn::<u64, u64, Xor8>(
             opts,
             profile,
             Xor8::<BuildHasherDefault>::new(),
         ),
-        ("u64", "binary", "xor8") => load_and_spawn::<u64, db::Binary, Xor8>(
+        ("u64", "binary", "xor8") => load_and_spawn::<u64, dbs::Binary, Xor8>(
             opts,
             profile,
             Xor8::<BuildHasherDefault>::new(),
         ),
-        ("binary", "binary", "xor8") => load_and_spawn::<db::Binary, db::Binary, Xor8>(
+        ("binary", "binary", "xor8") => load_and_spawn::<dbs::Binary, dbs::Binary, Xor8>(
             opts,
             profile,
             Xor8::<BuildHasherDefault>::new(),
@@ -281,7 +281,7 @@ fn load_and_spawn<K, V, B>(opts: Opt, p: Profile, bitmap: B) -> Result<()>
 where
     K: 'static + Key,
     V: 'static + Value,
-    <V as db::Diff>::Delta: 'static + Delta,
+    <V as dbs::Diff>::Delta: 'static + Delta,
     B: 'static + BloomFilter,
     rand::distributions::Standard: rand::distributions::Distribution<K>,
     rand::distributions::Standard: rand::distributions::Distribution<V>,
@@ -310,7 +310,7 @@ where
             let n: usize = index
                 .iter(..)
                 .unwrap()
-                .map(|_: Result<db::Entry<K, V>>| 1_usize)
+                .map(|_: Result<dbs::Entry<K, V>>| 1_usize)
                 .sum();
             assert!(n == index.len(), "{} != {}", n, index.len());
             (start.elapsed(), n)
@@ -372,7 +372,7 @@ fn initial_index<K, V, B>(seed: u64, p: &Profile, bitmap: B) -> Result<()>
 where
     K: 'static + Key,
     V: 'static + Value,
-    <V as db::Diff>::Delta: 'static + Delta,
+    <V as dbs::Diff>::Delta: 'static + Delta,
     B: BloomFilter,
     rand::distributions::Standard: rand::distributions::Distribution<K>,
     rand::distributions::Standard: rand::distributions::Distribution<V>,
@@ -413,7 +413,7 @@ fn incr_index<K, V, B>(
 where
     K: 'static + Key,
     V: 'static + Value,
-    <V as db::Diff>::Delta: 'static + Delta,
+    <V as dbs::Diff>::Delta: 'static + Delta,
     B: BloomFilter,
     rand::distributions::Standard: rand::distributions::Distribution<K>,
     rand::distributions::Standard: rand::distributions::Distribution<V>,
@@ -461,7 +461,7 @@ where
             config.name = p_incr.compact_name.clone();
             let start = time::Instant::now();
             let cindex = index
-                .compact(config, bitmap.clone(), db::Cutoff::Mono)
+                .compact(config, bitmap.clone(), dbs::Cutoff::Mono)
                 .unwrap();
             let elapsed = start.elapsed();
             println!(
@@ -487,7 +487,7 @@ fn read_load<K, V, B>(
 where
     K: 'static + Key,
     V: 'static + Value,
-    <V as db::Diff>::Delta: 'static + Delta,
+    <V as dbs::Diff>::Delta: 'static + Delta,
     B: BloomFilter,
     rand::distributions::Standard: rand::distributions::Distribution<K>,
     rand::distributions::Standard: rand::distributions::Distribution<V>,
@@ -538,8 +538,8 @@ where
 
 fn do_iter<I, K, V>(j: usize, prefix: &str, iter: I)
 where
-    V: db::Diff,
-    I: Iterator<Item = Result<db::Entry<K, V>>>,
+    V: dbs::Diff,
+    I: Iterator<Item = Result<dbs::Entry<K, V>>>,
 {
     let start = time::Instant::now();
     let len: usize = iter

@@ -3,9 +3,9 @@ use xorfilter::Fuse16;
 
 use std::hash::{BuildHasher, Hash};
 
-use crate::{db, Error, Result};
+use crate::{dbs, Error, Result};
 
-impl<H> db::Bloom for Fuse16<H>
+impl<H> dbs::Bloom for Fuse16<H>
 where
     H: Clone + BuildHasher + From<Vec<u8>> + Into<Vec<u8>>,
 {

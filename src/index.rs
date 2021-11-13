@@ -2,7 +2,7 @@ use cbordata::FromCbor;
 
 use std::{borrow::Borrow, convert::TryFrom, fmt, ops::RangeBounds};
 
-use crate::{bitmaps::NoBitmap, db, llrb, robt, Error, Result};
+use crate::{bitmaps::NoBitmap, dbs, llrb, robt, Error, Result};
 
 // Outstanding robt-api:
 //  * initial, build_index,
@@ -16,27 +16,27 @@ use crate::{bitmaps::NoBitmap, db, llrb, robt, Error, Result};
 pub enum Index<K, V, B = NoBitmap>
 where
     K: FromCbor,
-    V: db::Diff + FromCbor,
-    <V as db::Diff>::Delta: FromCbor,
-    B: db::Bloom,
+    V: dbs::Diff + FromCbor,
+    <V as dbs::Diff>::Delta: FromCbor,
+    B: dbs::Bloom,
 {
-    Llrb { db: llrb::Index<K, V> },
-    Robt { db: robt::Index<K, V, B> },
+    Llrb { store: llrb::Index<K, V> },
+    Robt { store: robt::Index<K, V, B> },
 }
 
 impl<K, V, B> Index<K, V, B>
 where
     K: FromCbor,
-    V: db::Diff + FromCbor,
-    <V as db::Diff>::Delta: FromCbor,
-    B: db::Bloom,
+    V: dbs::Diff + FromCbor,
+    <V as dbs::Diff>::Delta: FromCbor,
+    B: dbs::Bloom,
 {
-    pub fn from_llrb(db: llrb::Index<K, V>) -> Index<K, V, B> {
-        Index::Llrb { db }
+    pub fn from_llrb(store: llrb::Index<K, V>) -> Index<K, V, B> {
+        Index::Llrb { store }
     }
 
-    pub fn from_robt(db: robt::Index<K, V, B>) -> Index<K, V, B> {
-        Index::Robt { db }
+    pub fn from_robt(store: robt::Index<K, V, B>) -> Index<K, V, B> {
+        Index::Robt { store }
     }
 
     pub fn try_clone(&self) -> Result<Index<K, V, B>>
@@ -44,9 +44,11 @@ where
         K: Clone,
     {
         let val = match self {
-            Index::Llrb { db } => Index::Llrb { db: db.clone() },
-            Index::Robt { db } => Index::Robt {
-                db: db.try_clone()?,
+            Index::Llrb { store } => Index::Llrb {
+                store: store.clone(),
+            },
+            Index::Robt { store } => Index::Robt {
+                store: store.try_clone()?,
             },
         };
 
@@ -58,22 +60,22 @@ where
         K: Clone,
     {
         match self {
-            Index::Llrb { db } => Some(db.set_seqno(seqno)),
+            Index::Llrb { store } => Some(store.set_seqno(seqno)),
             Index::Robt { .. } => None,
         }
     }
 
     pub fn close(self) -> Result<()> {
         match self {
-            Index::Llrb { db } => db.close(),
-            Index::Robt { db } => db.close(),
+            Index::Llrb { store } => store.close(),
+            Index::Robt { store } => store.close(),
         }
     }
 
     pub fn purge(self) -> Result<()> {
         match self {
-            Index::Llrb { db } => db.purge(),
-            Index::Robt { db } => db.purge(),
+            Index::Llrb { store } => store.purge(),
+            Index::Robt { store } => store.purge(),
         }
     }
 }
@@ -81,73 +83,73 @@ where
 impl<K, V, B> Index<K, V, B>
 where
     K: FromCbor,
-    V: db::Diff + FromCbor,
-    <V as db::Diff>::Delta: FromCbor,
-    B: db::Bloom,
+    V: dbs::Diff + FromCbor,
+    <V as dbs::Diff>::Delta: FromCbor,
+    B: dbs::Bloom,
 {
     pub fn as_llrb(&self) -> Option<&llrb::Index<K, V>> {
         match self {
-            Index::Llrb { db } => Some(db),
+            Index::Llrb { store } => Some(store),
             _ => None,
         }
     }
 
     pub fn as_robt(&self) -> Option<&robt::Index<K, V, B>> {
         match self {
-            Index::Robt { db } => Some(db),
+            Index::Robt { store } => Some(store),
             _ => None,
         }
     }
 
     pub fn deleted_count(&mut self) -> Option<usize> {
         match self {
-            Index::Llrb { db } => Some(db.deleted_count()),
-            Index::Robt { db } => Some(db.to_stats().n_deleted),
+            Index::Llrb { store } => Some(store.deleted_count()),
+            Index::Robt { store } => Some(store.to_stats().n_deleted),
         }
     }
 
     pub fn footprint(&mut self) -> Result<usize> {
         match self {
-            Index::Llrb { db } => {
-                let n = db.footprint()?;
+            Index::Llrb { store } => {
+                let n = store.footprint()?;
                 err_at!(FailConvert, usize::try_from(n))
             }
-            Index::Robt { db } => db.footprint(),
+            Index::Robt { store } => store.footprint(),
         }
     }
 
     pub fn is_empty(&mut self) -> bool {
         match self {
-            Index::Llrb { db } => db.is_empty(),
-            Index::Robt { db } => db.is_empty(),
+            Index::Llrb { store } => store.is_empty(),
+            Index::Robt { store } => store.is_empty(),
         }
     }
 
     pub fn is_compacted(&mut self) -> bool {
         match self {
             Index::Llrb { .. } => true,
-            Index::Robt { db } => db.is_compacted(),
+            Index::Robt { store } => store.is_compacted(),
         }
     }
 
     pub fn len(&mut self) -> usize {
         match self {
-            Index::Llrb { db } => db.len(),
-            Index::Robt { db } => db.len(),
+            Index::Llrb { store } => store.len(),
+            Index::Robt { store } => store.len(),
         }
     }
 
     pub fn to_name(&mut self) -> String {
         match self {
-            Index::Llrb { db } => db.to_name(),
-            Index::Robt { db } => db.to_name(),
+            Index::Llrb { store } => store.to_name(),
+            Index::Robt { store } => store.to_name(),
         }
     }
 
     pub fn to_seqno(&mut self) -> Option<u64> {
         let seqno = match self {
-            Index::Llrb { db } => db.to_seqno(),
-            Index::Robt { db } => db.to_seqno(),
+            Index::Llrb { store } => store.to_seqno(),
+            Index::Robt { store } => store.to_seqno(),
         };
 
         Some(seqno)
@@ -155,11 +157,11 @@ where
 
     pub fn to_stats(&mut self) -> Result<Stats> {
         let stats = match self {
-            Index::Llrb { db } => Stats::Llrb {
-                stats: db.to_stats()?,
+            Index::Llrb { store } => Stats::Llrb {
+                stats: store.to_stats()?,
             },
-            Index::Robt { db } => Stats::Robt {
-                stats: db.to_stats(),
+            Index::Robt { store } => Stats::Robt {
+                stats: store.to_stats(),
             },
         };
         Ok(stats)
@@ -168,7 +170,7 @@ where
     pub fn to_app_metadata(&self) -> Option<Vec<u8>> {
         match self {
             Index::Llrb { .. } => None,
-            Index::Robt { db } => Some(db.to_app_metadata()),
+            Index::Robt { store } => Some(store.to_app_metadata()),
         }
     }
 
@@ -178,116 +180,116 @@ where
     {
         match self {
             Index::Llrb { .. } => None,
-            Index::Robt { db } => Some(db.to_bitmap()),
+            Index::Robt { store } => Some(store.to_bitmap()),
         }
     }
 
     pub fn to_root(&self) -> Option<u64> {
         match self {
             Index::Llrb { .. } => None,
-            Index::Robt { db } => db.to_root(),
+            Index::Robt { store } => store.to_root(),
         }
     }
 }
 
 impl<K, V, B> Index<K, V, B>
 where
-    K: Clone + Ord + db::Footprint + FromCbor,
-    V: db::Diff + db::Footprint + FromCbor,
-    <V as db::Diff>::Delta: db::Footprint + FromCbor,
-    B: db::Bloom,
+    K: Clone + Ord + dbs::Footprint + FromCbor,
+    V: dbs::Diff + dbs::Footprint + FromCbor,
+    <V as dbs::Diff>::Delta: dbs::Footprint + FromCbor,
+    B: dbs::Bloom,
 {
-    pub fn set(&self, key: K, value: V) -> Result<db::Wr<K, V>> {
+    pub fn set(&self, key: K, value: V) -> Result<dbs::Wr<K, V>> {
         match self {
-            Index::Llrb { db } => db.set(key, value),
+            Index::Llrb { store } => store.set(key, value),
             Index::Robt { .. } => {
                 err_at!(NotImplemented, msg: "set op not supported for robt:Index")
             }
         }
     }
 
-    pub fn set_cas(&self, key: K, value: V, cas: u64) -> Result<db::Wr<K, V>> {
+    pub fn set_cas(&self, key: K, value: V, cas: u64) -> Result<dbs::Wr<K, V>> {
         match self {
-            Index::Llrb { db } => db.set_cas(key, value, cas),
+            Index::Llrb { store } => store.set_cas(key, value, cas),
             Index::Robt { .. } => {
                 err_at!(NotImplemented, msg: "set_cas op not supported for robt:Index")
             }
         }
     }
 
-    pub fn insert(&self, key: K, value: V) -> Result<db::Wr<K, V>> {
+    pub fn insert(&self, key: K, value: V) -> Result<dbs::Wr<K, V>> {
         match self {
-            Index::Llrb { db } => db.insert(key, value),
+            Index::Llrb { store } => store.insert(key, value),
             Index::Robt { .. } => {
                 err_at!(NotImplemented, msg: "insert op not supported for robt:Index")
             }
         }
     }
 
-    pub fn insert_cas(&self, key: K, value: V, cas: u64) -> Result<db::Wr<K, V>> {
+    pub fn insert_cas(&self, key: K, value: V, cas: u64) -> Result<dbs::Wr<K, V>> {
         match self {
-            Index::Llrb { db } => db.insert_cas(key, value, cas),
+            Index::Llrb { store } => store.insert_cas(key, value, cas),
             Index::Robt { .. } => {
                 err_at!(NotImplemented, msg: "insert_cas op not supported for robt:Index")
             }
         }
     }
 
-    pub fn delete<Q>(&self, key: &Q) -> Result<db::Wr<K, V>>
+    pub fn delete<Q>(&self, key: &Q) -> Result<dbs::Wr<K, V>>
     where
         K: Borrow<Q>,
         Q: Ord + ToOwned<Owned = K> + ?Sized,
     {
         match self {
-            Index::Llrb { db } => db.delete(key),
+            Index::Llrb { store } => store.delete(key),
             Index::Robt { .. } => {
                 err_at!(NotImplemented, msg: "delete op not supported for robt:Index")
             }
         }
     }
 
-    pub fn delete_cas<Q>(&self, key: &Q, cas: u64) -> Result<db::Wr<K, V>>
+    pub fn delete_cas<Q>(&self, key: &Q, cas: u64) -> Result<dbs::Wr<K, V>>
     where
         K: Borrow<Q>,
         Q: Ord + ToOwned<Owned = K> + ?Sized,
     {
         match self {
-            Index::Llrb { db } => db.delete_cas(key, cas),
+            Index::Llrb { store } => store.delete_cas(key, cas),
             Index::Robt { .. } => {
                 err_at!(NotImplemented, msg: "delete_cas op not supported for robt:Index")
             }
         }
     }
 
-    pub fn remove<Q>(&self, key: &Q) -> Result<db::Wr<K, V>>
+    pub fn remove<Q>(&self, key: &Q) -> Result<dbs::Wr<K, V>>
     where
         K: Borrow<Q>,
         Q: Ord + ToOwned<Owned = K> + ?Sized,
     {
         match self {
-            Index::Llrb { db } => db.remove(key),
+            Index::Llrb { store } => store.remove(key),
             Index::Robt { .. } => {
                 err_at!(NotImplemented, msg: "remove op not supported for robt:Index")
             }
         }
     }
 
-    pub fn remove_cas<Q>(&self, key: &Q, cas: u64) -> Result<db::Wr<K, V>>
+    pub fn remove_cas<Q>(&self, key: &Q, cas: u64) -> Result<dbs::Wr<K, V>>
     where
         K: Borrow<Q>,
         Q: Ord + ToOwned<Owned = K> + ?Sized,
     {
         match self {
-            Index::Llrb { db } => db.remove_cas(key, cas),
+            Index::Llrb { store } => store.remove_cas(key, cas),
             Index::Robt { .. } => {
                 err_at!(NotImplemented, msg: "remove_cas op not supported for robt:Index")
             }
         }
     }
 
-    pub fn write(&self, op: db::Write<K, V>) -> Result<db::Wr<K, V>> {
+    pub fn write(&self, op: dbs::Write<K, V>) -> Result<dbs::Wr<K, V>> {
         match self {
-            Index::Llrb { db } => db.write(op),
+            Index::Llrb { store } => store.write(op),
             Index::Robt { .. } => {
                 err_at!(NotImplemented, msg: "write ops not supported for robt:Index")
             }
@@ -297,10 +299,10 @@ where
     pub fn commit<I>(&self, iter: I, versions: bool) -> Result<usize>
     where
         K: PartialEq,
-        I: Iterator<Item = db::Entry<K, V>>,
+        I: Iterator<Item = dbs::Entry<K, V>>,
     {
         match self {
-            Index::Llrb { db } => db.commit(iter, versions),
+            Index::Llrb { store } => store.commit(iter, versions),
             Index::Robt { .. } => {
                 err_at!(NotImplemented, msg: "cannot commit into robt::Index")
             }
@@ -311,29 +313,29 @@ where
 impl<K, V, B> Index<K, V, B>
 where
     K: Clone + FromCbor,
-    V: db::Diff + FromCbor,
-    <V as db::Diff>::Delta: FromCbor,
-    B: db::Bloom,
+    V: dbs::Diff + FromCbor,
+    <V as dbs::Diff>::Delta: FromCbor,
+    B: dbs::Bloom,
 {
-    pub fn get<Q: ?Sized>(&mut self, key: &Q) -> Result<db::Entry<K, V>>
+    pub fn get<Q: ?Sized>(&mut self, key: &Q) -> Result<dbs::Entry<K, V>>
     where
         K: Borrow<Q>,
         Q: Ord,
     {
         match self {
-            Index::Llrb { db } => db.get(key),
-            Index::Robt { db } => db.get(key),
+            Index::Llrb { store } => store.get(key),
+            Index::Robt { store } => store.get(key),
         }
     }
 
-    pub fn get_versions<Q: ?Sized>(&mut self, key: &Q) -> Result<db::Entry<K, V>>
+    pub fn get_versions<Q: ?Sized>(&mut self, key: &Q) -> Result<dbs::Entry<K, V>>
     where
         K: Borrow<Q>,
         Q: Ord,
     {
         match self {
-            Index::Llrb { db } => db.get_versions(key),
-            Index::Robt { db } => db.get_versions(key),
+            Index::Llrb { store } => store.get_versions(key),
+            Index::Robt { store } => store.get_versions(key),
         }
     }
 
@@ -342,8 +344,12 @@ where
         K: Ord,
     {
         let iter = match self {
-            Index::Llrb { db } => Iter::Llrb { iter: db.iter()? },
-            Index::Robt { db } => Iter::Robt { iter: db.iter(..)? },
+            Index::Llrb { store } => Iter::Llrb {
+                iter: store.iter()?,
+            },
+            Index::Robt { store } => Iter::Robt {
+                iter: store.iter(..)?,
+            },
         };
 
         Ok(iter)
@@ -354,11 +360,11 @@ where
         K: Ord,
     {
         let iter = match self {
-            Index::Llrb { db } => Iter::Llrb {
-                iter: db.iter_versions()?,
+            Index::Llrb { store } => Iter::Llrb {
+                iter: store.iter_versions()?,
             },
-            Index::Robt { db } => Iter::Robt {
-                iter: db.iter_versions(..)?,
+            Index::Robt { store } => Iter::Robt {
+                iter: store.iter_versions(..)?,
             },
         };
 
@@ -372,11 +378,11 @@ where
         Q: ?Sized + Ord + ToOwned<Owned = K>,
     {
         let iter = match self {
-            Index::Llrb { db } => Range::Llrb {
-                iter: db.range(range)?,
+            Index::Llrb { store } => Range::Llrb {
+                iter: store.range(range)?,
             },
-            Index::Robt { db } => Range::Robt {
-                iter: db.iter(range)?,
+            Index::Robt { store } => Range::Robt {
+                iter: store.iter(range)?,
             },
         };
 
@@ -390,11 +396,11 @@ where
         Q: ?Sized + Ord + ToOwned<Owned = K>,
     {
         let iter = match self {
-            Index::Llrb { db } => Range::Llrb {
-                iter: db.range_versions(range)?,
+            Index::Llrb { store } => Range::Llrb {
+                iter: store.range_versions(range)?,
             },
-            Index::Robt { db } => Range::Robt {
-                iter: db.iter_versions(range)?,
+            Index::Robt { store } => Range::Robt {
+                iter: store.iter_versions(range)?,
             },
         };
 
@@ -408,11 +414,11 @@ where
         Q: ?Sized + Ord + ToOwned<Owned = K>,
     {
         let iter = match self {
-            Index::Llrb { db } => Reverse::Llrb {
-                iter: db.reverse(range)?,
+            Index::Llrb { store } => Reverse::Llrb {
+                iter: store.reverse(range)?,
             },
-            Index::Robt { db } => Reverse::Robt {
-                iter: db.reverse(range)?,
+            Index::Robt { store } => Reverse::Robt {
+                iter: store.reverse(range)?,
             },
         };
 
@@ -426,11 +432,11 @@ where
         Q: ?Sized + Ord + ToOwned<Owned = K>,
     {
         let iter = match self {
-            Index::Llrb { db } => Reverse::Llrb {
-                iter: db.reverse_versions(range)?,
+            Index::Llrb { store } => Reverse::Llrb {
+                iter: store.reverse_versions(range)?,
             },
-            Index::Robt { db } => Reverse::Robt {
-                iter: db.reverse_versions(range)?,
+            Index::Robt { store } => Reverse::Robt {
+                iter: store.reverse_versions(range)?,
             },
         };
 
@@ -442,8 +448,8 @@ where
         K: Ord + fmt::Debug,
     {
         match self {
-            Index::Llrb { db } => db.validate(),
-            Index::Robt { db } => db.validate().map(|_| ()),
+            Index::Llrb { store } => store.validate(),
+            Index::Robt { store } => store.validate().map(|_| ()),
         }
     }
 }
@@ -455,7 +461,7 @@ pub enum Stats {
 
 pub enum Iter<'a, K, V>
 where
-    V: db::Diff,
+    V: dbs::Diff,
 {
     Llrb { iter: llrb::Iter<K, V> },
     Robt { iter: robt::Iter<'a, K, V> },
@@ -463,7 +469,7 @@ where
 
 pub enum Range<'a, K, V, R, Q>
 where
-    V: db::Diff,
+    V: dbs::Diff,
     Q: ?Sized,
 {
     Llrb { iter: llrb::Range<K, V, R, Q> },
@@ -472,7 +478,7 @@ where
 
 pub enum Reverse<'a, K, V, R, Q>
 where
-    V: db::Diff,
+    V: dbs::Diff,
     Q: ?Sized + Ord,
 {
     Llrb { iter: llrb::Reverse<K, V, R, Q> },

@@ -1,11 +1,11 @@
-src/db
+src/dbs
 ======
 
-* `db::Value<V>`    `0x00020001_u32`
-* `db::Delta<D>`    `0x00030001_u32`
-* `db::Entry<K, V>` `0x00050001_u32`
-* `db::NoDiff`      `0x00070001_u32`
-* `db::Binary`      `0x00170001_u32`
+* `dbs::Value<V>`    `0x00020001_u32`
+* `dbs::Delta<D>`    `0x00030001_u32`
+* `dbs::Entry<K, V>` `0x00050001_u32`
+* `dbs::NoDiff`      `0x00070001_u32`
+* `dbs::Binary`      `0x00170001_u32`
 
 src/robt
 ========

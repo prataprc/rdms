@@ -12,7 +12,7 @@ use std::{
 };
 
 use crate::{
-    db, read_file,
+    dbs, read_file,
     robt::{self, Stats},
     util, Error, Result,
 };
@@ -33,7 +33,7 @@ macro_rules! iter_result {
 
 pub struct Reader<K, V>
 where
-    V: db::Diff,
+    V: dbs::Diff,
 {
     pub m_blocksize: usize,
     pub z_blocksize: usize,
@@ -45,7 +45,7 @@ where
 
 impl<K, V> Drop for Reader<K, V>
 where
-    V: db::Diff,
+    V: dbs::Diff,
 {
     fn drop(&mut self) {
         // println!("reader unlock >");
@@ -64,8 +64,8 @@ where
 impl<K, V> Reader<K, V>
 where
     K: FromCbor,
-    V: db::Diff + FromCbor,
-    <V as db::Diff>::Delta: FromCbor,
+    V: dbs::Diff + FromCbor,
+    <V as dbs::Diff>::Delta: FromCbor,
 {
     pub fn from_root(
         root: Option<u64>,
@@ -120,8 +120,8 @@ where
 impl<K, V> Reader<K, V>
 where
     K: FromCbor,
-    V: db::Diff + FromCbor,
-    <V as db::Diff>::Delta: FromCbor,
+    V: dbs::Diff + FromCbor,
+    <V as dbs::Diff>::Delta: FromCbor,
 {
     pub fn get<Q>(&mut self, ukey: &Q, versions: bool) -> Result<robt::Entry<K, V>>
     where
@@ -331,7 +331,7 @@ where
     where
         K: Clone + fmt::Debug,
         V: fmt::Debug,
-        <V as db::Diff>::Delta: fmt::Debug,
+        <V as dbs::Diff>::Delta: fmt::Debug,
     {
         for entry in self.root.to_vec().into_iter() {
             entry.print("", self)?;
@@ -342,19 +342,19 @@ where
 
 pub struct Iter<'a, K, V>
 where
-    V: db::Diff,
+    V: dbs::Diff,
 {
     reader: &'a mut Reader<K, V>,
     stack: Vec<Vec<robt::Entry<K, V>>>,
     reverse: bool,
     versions: bool,
-    entry: Option<db::Entry<K, V>>,
+    entry: Option<dbs::Entry<K, V>>,
     bound: Bound<K>,
 }
 
 impl<'a, K, V> Iter<'a, K, V>
 where
-    V: db::Diff,
+    V: dbs::Diff,
 {
     fn new(
         r: &'a mut Reader<K, V>,
@@ -373,11 +373,11 @@ where
         }
     }
 
-    fn push(&mut self, entry: db::Entry<K, V>) {
+    fn push(&mut self, entry: dbs::Entry<K, V>) {
         self.entry = Some(entry);
     }
 
-    fn till(&mut self, e: db::Entry<K, V>) -> Option<Result<db::Entry<K, V>>>
+    fn till(&mut self, e: dbs::Entry<K, V>) -> Option<Result<dbs::Entry<K, V>>>
     where
         K: Ord,
     {
@@ -409,7 +409,7 @@ where
     fn fetchzz(&mut self, mut entry: robt::Entry<K, V>) -> Result<robt::Entry<K, V>>
     where
         V: FromCbor,
-        <V as db::Diff>::Delta: FromCbor,
+        <V as dbs::Diff>::Delta: FromCbor,
     {
         match &mut self.reader.vlog {
             Some(fd) if self.versions => entry.into_native(fd, self.versions),
@@ -428,10 +428,10 @@ where
 impl<'a, K, V> Iterator for Iter<'a, K, V>
 where
     K: Ord + FromCbor,
-    V: db::Diff + FromCbor,
-    <V as db::Diff>::Delta: FromCbor,
+    V: dbs::Diff + FromCbor,
+    <V as dbs::Diff>::Delta: FromCbor,
 {
-    type Item = Result<db::Entry<K, V>>;
+    type Item = Result<dbs::Entry<K, V>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(entry) = self.entry.take() {
@@ -448,7 +448,7 @@ where
                 entry @ robt::Entry::ZZ { .. } => {
                     self.stack.push(block);
                     let entry = iter_result!(self.fetchzz(entry));
-                    match db::Entry::try_from(entry) {
+                    match dbs::Entry::try_from(entry) {
                         Ok(entry) => self.till(entry),
                         err => Some(err),
                     }
@@ -493,7 +493,7 @@ where
 
 pub struct IterLsm<'a, K, V>
 where
-    V: db::Diff,
+    V: dbs::Diff,
 {
     reader: &'a mut Reader<K, V>,
     stack: Vec<Vec<robt::Entry<K, V>>>,
@@ -502,7 +502,7 @@ where
 
 impl<'a, K, V> IterLsm<'a, K, V>
 where
-    V: db::Diff,
+    V: dbs::Diff,
 {
     pub fn new(
         r: &'a mut Reader<K, V>,
@@ -519,7 +519,7 @@ where
     fn fetchzz(&mut self, mut entry: robt::Entry<K, V>) -> Result<robt::Entry<K, V>>
     where
         V: FromCbor,
-        <V as db::Diff>::Delta: FromCbor,
+        <V as dbs::Diff>::Delta: FromCbor,
     {
         match &mut self.reader.vlog {
             Some(fd) if self.versions => entry.into_native(fd, self.versions),
@@ -538,8 +538,8 @@ where
 impl<'a, K, V> Iterator for IterLsm<'a, K, V>
 where
     K: Ord + FromCbor,
-    V: db::Diff + FromCbor,
-    <V as db::Diff>::Delta: FromCbor,
+    V: dbs::Diff + FromCbor,
+    <V as dbs::Diff>::Delta: FromCbor,
 {
     type Item = Result<robt::Entry<K, V>>;
 

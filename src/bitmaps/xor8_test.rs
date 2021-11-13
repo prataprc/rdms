@@ -1,7 +1,7 @@
 use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
 use xorfilter::BuildHasherDefault;
 
-use crate::db::Bloom;
+use crate::dbs::Bloom;
 
 use super::*;
 
@@ -27,9 +27,9 @@ fn test_xor8_bitmap() {
     }
 
     let filter = {
-        let val = <Xor8 as db::Bloom>::to_bytes(&filter).unwrap();
+        let val = <Xor8 as dbs::Bloom>::to_bytes(&filter).unwrap();
         let (filter, n) =
-            <Xor8<BuildHasherDefault> as db::Bloom>::from_bytes(&val).unwrap();
+            <Xor8<BuildHasherDefault> as dbs::Bloom>::from_bytes(&val).unwrap();
         assert_eq!(n, val.len(), "{} {}", n, val.len());
         filter
     };

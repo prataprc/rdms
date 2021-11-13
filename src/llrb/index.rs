@@ -38,7 +38,7 @@ use std::{
 };
 
 use crate::{
-    db::{self, Footprint},
+    dbs::{self, Footprint},
     llrb::{Node, Stats},
     util::Spinlock,
     Error, Result,
@@ -71,7 +71,7 @@ macro_rules! compute_n_deleted {
 #[derive(Clone)]
 pub struct Index<K, V>
 where
-    V: db::Diff,
+    V: dbs::Diff,
 {
     name: String,
     spin: bool,
@@ -82,7 +82,7 @@ where
 
 impl<K, V> Index<K, V>
 where
-    V: db::Diff,
+    V: dbs::Diff,
 {
     pub fn new(name: &str, spin: bool) -> Index<K, V> {
         let inner = Inner {
@@ -131,7 +131,7 @@ where
 
 impl<K, V> Index<K, V>
 where
-    V: db::Diff,
+    V: dbs::Diff,
 {
     /// Return name of this index instance.
     #[inline]
@@ -196,13 +196,13 @@ where
 
 impl<K, V> Index<K, V>
 where
-    K: Clone + Ord + db::Footprint,
-    V: db::Diff + db::Footprint,
-    <V as db::Diff>::Delta: db::Footprint,
+    K: Clone + Ord + dbs::Footprint,
+    V: dbs::Diff + dbs::Footprint,
+    <V as dbs::Diff>::Delta: dbs::Footprint,
 {
     /// Set `key`, `value` into index. If an older entry exist with same key,
     /// it shall be overwritten.
-    pub fn set(&self, key: K, value: V) -> Result<db::Wr<K, V>> {
+    pub fn set(&self, key: K, value: V) -> Result<dbs::Wr<K, V>> {
         let _w = self.mu.lock();
 
         let inner = Arc::clone(&self.inner.read());
@@ -211,13 +211,13 @@ where
         let seqno = inner.seqno;
         *self.inner.write() = Arc::new(inner);
 
-        Ok(db::Wr { seqno, old_entry })
+        Ok(dbs::Wr { seqno, old_entry })
     }
 
     /// Set `key`, `value` into index. If already an entry in present with
     /// `key`, `cas` should match entry's sequence-number. If index don't
     /// have an entry with `key`, `cas` must be ZERO.
-    pub fn set_cas(&self, key: K, value: V, cas: u64) -> Result<db::Wr<K, V>> {
+    pub fn set_cas(&self, key: K, value: V, cas: u64) -> Result<dbs::Wr<K, V>> {
         let _w = self.mu.lock();
 
         let inner = Arc::clone(&self.inner.read());
@@ -226,13 +226,13 @@ where
         let seqno = inner.seqno;
         *self.inner.write() = Arc::new(inner);
 
-        Ok(db::Wr { seqno, old_entry })
+        Ok(dbs::Wr { seqno, old_entry })
     }
 
     /// Insert `key`, `value` into index. Non destructive version of
-    /// set method. If an older entry exist with same key, use [db::Diff]
+    /// set method. If an older entry exist with same key, use [dbs::Diff]
     /// to compute the delta and insert a new value-version.
-    pub fn insert(&self, key: K, value: V) -> Result<db::Wr<K, V>> {
+    pub fn insert(&self, key: K, value: V) -> Result<dbs::Wr<K, V>> {
         let _w = self.mu.lock();
 
         let inner = Arc::clone(&self.inner.read());
@@ -241,15 +241,15 @@ where
         let seqno = inner.seqno;
         *self.inner.write() = Arc::new(inner);
 
-        Ok(db::Wr { seqno, old_entry })
+        Ok(dbs::Wr { seqno, old_entry })
     }
 
     /// Insert `key`, `value` into index. Non destructive version of
-    /// set method. If an older entry exist with same `key`, use [db::Diff]
+    /// set method. If an older entry exist with same `key`, use [dbs::Diff]
     /// to compute the delta and insert a new value-version. Also if an
     /// older entry exist with same `key`, `cas` should match entry's
     /// sequence-number.
-    pub fn insert_cas(&self, key: K, value: V, cas: u64) -> Result<db::Wr<K, V>> {
+    pub fn insert_cas(&self, key: K, value: V, cas: u64) -> Result<dbs::Wr<K, V>> {
         let _w = self.mu.lock();
 
         let inner = Arc::clone(&self.inner.read());
@@ -258,11 +258,11 @@ where
         let seqno = inner.seqno;
         *self.inner.write() = Arc::new(inner);
 
-        Ok(db::Wr { seqno, old_entry })
+        Ok(dbs::Wr { seqno, old_entry })
     }
 
     /// Remove the entry, matching the key, from the index.
-    pub fn remove<Q>(&self, key: &Q) -> Result<db::Wr<K, V>>
+    pub fn remove<Q>(&self, key: &Q) -> Result<dbs::Wr<K, V>>
     where
         K: Borrow<Q>,
         Q: Ord + ToOwned<Owned = K> + ?Sized,
@@ -275,12 +275,12 @@ where
         let seqno = inner.seqno;
         *self.inner.write() = Arc::new(inner);
 
-        Ok(db::Wr { seqno, old_entry })
+        Ok(dbs::Wr { seqno, old_entry })
     }
 
     /// Remove the entry, with matching key and matching entry's
     /// sequencey-number with `cas`.
-    pub fn remove_cas<Q>(&self, key: &Q, cas: u64) -> Result<db::Wr<K, V>>
+    pub fn remove_cas<Q>(&self, key: &Q, cas: u64) -> Result<dbs::Wr<K, V>>
     where
         K: Borrow<Q>,
         Q: Ord + ToOwned<Owned = K> + ?Sized,
@@ -293,11 +293,11 @@ where
         let seqno = inner.seqno;
         *self.inner.write() = Arc::new(inner);
 
-        Ok(db::Wr { seqno, old_entry })
+        Ok(dbs::Wr { seqno, old_entry })
     }
 
     /// Non destructive version of remove method. Mark entry as deleted.
-    pub fn delete<Q>(&self, key: &Q) -> Result<db::Wr<K, V>>
+    pub fn delete<Q>(&self, key: &Q) -> Result<dbs::Wr<K, V>>
     where
         K: Borrow<Q>,
         Q: Ord + ToOwned<Owned = K> + ?Sized,
@@ -310,11 +310,11 @@ where
         let seqno = inner.seqno;
         *self.inner.write() = Arc::new(inner);
 
-        Ok(db::Wr { seqno, old_entry })
+        Ok(dbs::Wr { seqno, old_entry })
     }
 
     /// Non destructive version of remove method. Mark entry as deleted.
-    pub fn delete_cas<Q>(&self, key: &Q, cas: u64) -> Result<db::Wr<K, V>>
+    pub fn delete_cas<Q>(&self, key: &Q, cas: u64) -> Result<dbs::Wr<K, V>>
     where
         K: Borrow<Q>,
         Q: Ord + ToOwned<Owned = K> + ?Sized,
@@ -327,31 +327,31 @@ where
         let seqno = inner.seqno;
         *self.inner.write() = Arc::new(inner);
 
-        Ok(db::Wr { seqno, old_entry })
+        Ok(dbs::Wr { seqno, old_entry })
     }
 
-    /// Apply op on top of this index. For more detail refer to [db::Write] type.
-    pub fn write(&self, op: db::Write<K, V>) -> Result<db::Wr<K, V>> {
+    /// Apply op on top of this index. For more detail refer to [dbs::Write] type.
+    pub fn write(&self, op: dbs::Write<K, V>) -> Result<dbs::Wr<K, V>> {
         let _w = self.mu.lock();
 
         let inner = Arc::clone(&self.inner.read());
         let (inner, old_entry) = match op {
-            db::Write::Set {
+            dbs::Write::Set {
                 key,
                 value,
                 cas,
                 seqno,
             } => inner.set((key, value, cas, seqno))?.into_root(),
-            db::Write::Ins {
+            dbs::Write::Ins {
                 key,
                 value,
                 cas,
                 seqno,
             } => inner.insert((key, value, cas, seqno))?.into_root(),
-            db::Write::Rem { key, cas, seqno } => {
+            dbs::Write::Rem { key, cas, seqno } => {
                 inner.remove((&key, cas, seqno))?.into_root()
             }
-            db::Write::Del { key, cas, seqno } => {
+            dbs::Write::Del { key, cas, seqno } => {
                 inner.delete((&key, cas, seqno))?.into_root()
             }
         };
@@ -359,7 +359,7 @@ where
         let seqno = inner.seqno;
         *self.inner.write() = Arc::new(inner);
 
-        Ok(db::Wr { seqno, old_entry })
+        Ok(dbs::Wr { seqno, old_entry })
     }
 
     /// Commit a latest batch of mutations into this snapshot, there by creating a
@@ -368,7 +368,7 @@ where
     pub fn commit<I>(&self, iter: I, versions: bool) -> Result<usize>
     where
         K: PartialEq,
-        I: Iterator<Item = db::Entry<K, V>>,
+        I: Iterator<Item = dbs::Entry<K, V>>,
     {
         let mut inner = self.inner.write();
         let (new_inner, n) = {
@@ -384,12 +384,12 @@ where
 
 impl<K, V> Index<K, V>
 where
-    V: db::Diff,
+    V: dbs::Diff,
 {
     // TODO: add test case for this
     /// Get entry from index for `key`, return only the latest value, older values
     /// are skipped. If key is not found return [Error::KeyNotFound].
-    pub fn get<Q>(&self, key: &Q) -> Result<db::Entry<K, V>>
+    pub fn get<Q>(&self, key: &Q) -> Result<dbs::Entry<K, V>>
     where
         K: Clone + Borrow<Q>,
         Q: Ord + ?Sized,
@@ -400,7 +400,7 @@ where
 
     /// Get entry from index for `key`. If key is not found return
     /// [Error::KeyNotFound]
-    pub fn get_versions<Q>(&self, key: &Q) -> Result<db::Entry<K, V>>
+    pub fn get_versions<Q>(&self, key: &Q) -> Result<dbs::Entry<K, V>>
     where
         K: Clone + Borrow<Q>,
         Q: Ord + ?Sized,
@@ -489,7 +489,7 @@ where
 #[derive(Clone)]
 struct Inner<K, V>
 where
-    V: db::Diff,
+    V: dbs::Diff,
 {
     root: Option<Arc<Node<K, V>>>,
     seqno: u64,
@@ -501,27 +501,27 @@ where
 
 enum Ir<K, V>
 where
-    V: db::Diff,
+    V: dbs::Diff,
 {
     // returned by recursive call.
     Res {
         root: Option<Arc<Node<K, V>>>,
-        old: Option<Arc<db::Entry<K, V>>>,
+        old: Option<Arc<dbs::Entry<K, V>>>,
         footprint: isize, // difference in footprint
     },
     // returned by root of the recursion.
     Root {
         inner: Inner<K, V>,
-        old: Option<db::Entry<K, V>>,
+        old: Option<dbs::Entry<K, V>>,
     },
 }
 
 impl<K, V> Ir<K, V>
 where
-    V: db::Diff,
+    V: dbs::Diff,
 {
     #[allow(clippy::type_complexity)]
-    fn into_root(self) -> (Inner<K, V>, Option<db::Entry<K, V>>) {
+    fn into_root(self) -> (Inner<K, V>, Option<dbs::Entry<K, V>>) {
         match self {
             Ir::Root { inner, old } => (inner, old),
             _ => unreachable!(),
@@ -529,7 +529,13 @@ where
     }
 
     #[allow(clippy::type_complexity)]
-    fn into_res(self) -> (Option<Arc<Node<K, V>>>, Option<Arc<db::Entry<K, V>>>, isize) {
+    fn into_res(
+        self,
+    ) -> (
+        Option<Arc<Node<K, V>>>,
+        Option<Arc<dbs::Entry<K, V>>>,
+        isize,
+    ) {
         match self {
             Ir::Res {
                 root,
@@ -543,9 +549,9 @@ where
 
 impl<K, V> Inner<K, V>
 where
-    K: Clone + Ord + db::Footprint,
-    V: db::Diff + db::Footprint,
-    <V as db::Diff>::Delta: db::Footprint,
+    K: Clone + Ord + dbs::Footprint,
+    V: dbs::Diff + dbs::Footprint,
+    <V as dbs::Diff>::Delta: dbs::Footprint,
 {
     fn set(&self, op: (K, V, Option<u64>, Option<u64>)) -> Result<Ir<K, V>> {
         let (key, value, cas, seqno) = op;
@@ -685,7 +691,7 @@ where
     fn commit<I>(&self, iter: I, versions: bool) -> Result<(Ir<K, V>, usize)>
     where
         K: PartialEq,
-        I: Iterator<Item = db::Entry<K, V>>,
+        I: Iterator<Item = dbs::Entry<K, V>>,
     {
         let mut n_entries = 0;
         let mut commit_seqno = self.seqno;
@@ -753,7 +759,7 @@ where
             (Some(node), _) => node.clone(),
             (None, Some(0)) | (None, None) => {
                 let (key, value, _, seqno) = op;
-                let node: Node<K, V> = db::Entry::new(key, value, seqno).into();
+                let node: Node<K, V> = dbs::Entry::new(key, value, seqno).into();
                 let footprint = node.footprint()?;
                 let (root, old) = (Some(Arc::new(node)), None);
                 return Ok(Ir::Res {
@@ -808,7 +814,7 @@ where
             (Some(node), _) => node.clone(),
             (None, Some(0)) | (None, None) => {
                 let (key, value, _, seqno) = op;
-                let node: Node<K, V> = db::Entry::new(key, value, seqno).into();
+                let node: Node<K, V> = dbs::Entry::new(key, value, seqno).into();
                 let footprint = node.footprint()?;
                 let (root, old) = (Some(Arc::new(node)), None);
                 return Ok(Ir::Res {
@@ -960,7 +966,7 @@ where
             (Some(node), _) => node.clone(),
             (None, Some(0)) | (None, None) => {
                 let key: K = key.to_owned();
-                let node: Node<K, V> = db::Entry::new_delete(key, seqno).into();
+                let node: Node<K, V> = dbs::Entry::new_delete(key, seqno).into();
                 let footprint = node.footprint()?;
                 let (root, old) = (Some(Arc::new(node)), None);
                 return Ok(Ir::Res {
@@ -1029,7 +1035,7 @@ where
     fn do_commit(
         &self,
         node: Option<&Node<K, V>>,
-        entry: db::Entry<K, V>,
+        entry: dbs::Entry<K, V>,
         versions: bool,
     ) -> Result<Ir<K, V>>
     where
@@ -1073,8 +1079,8 @@ where
             Ordering::Equal => {
                 let (oldfp, old) = (node.footprint()?, node.entry.clone());
                 match entry.value {
-                    db::Value::U { value, seqno } => node.set(value, seqno),
-                    db::Value::D { seqno } => node.delete(seqno),
+                    dbs::Value::U { value, seqno } => node.set(value, seqno),
+                    dbs::Value::D { seqno } => node.delete(seqno),
                 }
                 let footprint = oldfp - node.footprint()?;
                 (node, Some(old), footprint)
@@ -1092,9 +1098,9 @@ where
 
 impl<K, V> Inner<K, V>
 where
-    V: db::Diff,
+    V: dbs::Diff,
 {
-    fn get<Q>(&self, key: &Q, versions: bool) -> Result<db::Entry<K, V>>
+    fn get<Q>(&self, key: &Q, versions: bool) -> Result<dbs::Entry<K, V>>
     where
         K: Clone + Borrow<Q>,
         Q: Ord + ?Sized,
@@ -1198,7 +1204,7 @@ where
 #[inline]
 fn is_red<K, V>(node: Option<&Node<K, V>>) -> bool
 where
-    V: db::Diff,
+    V: dbs::Diff,
 {
     node.map_or(false, |node| !node.is_black())
 }
@@ -1206,7 +1212,7 @@ where
 #[inline]
 fn is_black<K, V>(node: Option<&Node<K, V>>) -> bool
 where
-    V: db::Diff,
+    V: dbs::Diff,
 {
     node.map_or(true, Node::is_black)
 }
@@ -1214,7 +1220,7 @@ where
 fn walkuprot_23<K, V>(mut node: Node<K, V>) -> Node<K, V>
 where
     K: Clone,
-    V: db::Diff,
+    V: dbs::Diff,
 {
     if is_red(node.as_right_ref()) && !is_red(node.as_left_ref()) {
         node = rotate_left(node)
@@ -1242,7 +1248,7 @@ where
 fn rotate_left<K, V>(mut node: Node<K, V>) -> Node<K, V>
 where
     K: Clone,
-    V: db::Diff,
+    V: dbs::Diff,
 {
     let old_right: &Node<K, V> = node.right.as_ref().map(|r| r.borrow()).unwrap();
     if is_black(Some(old_right)) {
@@ -1272,7 +1278,7 @@ where
 fn rotate_right<K, V>(mut node: Node<K, V>) -> Node<K, V>
 where
     K: Clone,
-    V: db::Diff,
+    V: dbs::Diff,
 {
     let old_left: &Node<K, V> = node.left.as_ref().map(|l| l.borrow()).unwrap();
     if is_black(Some(old_left)) {
@@ -1300,7 +1306,7 @@ where
 fn flip<K, V>(node: &mut Node<K, V>)
 where
     K: Clone,
-    V: db::Diff,
+    V: dbs::Diff,
 {
     let mut left = {
         let left: &Node<K, V> = node.left.as_ref().map(|l| l.borrow()).unwrap();
@@ -1322,7 +1328,7 @@ where
 fn fixup<K, V>(mut node: Node<K, V>) -> Node<K, V>
 where
     K: Clone,
-    V: db::Diff,
+    V: dbs::Diff,
 {
     if is_red(node.as_right_ref()) {
         node = rotate_left(node)
@@ -1342,7 +1348,7 @@ where
 fn move_red_left<K, V>(mut node: Node<K, V>) -> Node<K, V>
 where
     K: Clone,
-    V: db::Diff,
+    V: dbs::Diff,
 {
     flip(&mut node);
 
@@ -1362,7 +1368,7 @@ where
 fn move_red_right<K, V>(mut node: Node<K, V>) -> Node<K, V>
 where
     K: Clone,
-    V: db::Diff,
+    V: dbs::Diff,
 {
     flip(&mut node);
 
@@ -1378,10 +1384,10 @@ fn get<K, V, Q>(
     node: Option<&Node<K, V>>,
     key: &Q,
     versions: bool,
-) -> Result<db::Entry<K, V>>
+) -> Result<dbs::Entry<K, V>>
 where
     K: Clone + Borrow<Q>,
-    V: db::Diff,
+    V: dbs::Diff,
     Q: Ord + ?Sized,
 {
     match node {
@@ -1403,7 +1409,7 @@ fn validate_tree<K, V>(
 ) -> Result<(usize, usize, usize)>
 where
     K: Ord + fmt::Debug,
-    V: db::Diff,
+    V: dbs::Diff,
 {
     let red = is_red(node);
 
@@ -1457,7 +1463,7 @@ where
 // read threads, but not with concurrent write threads.
 pub struct Iter<K, V>
 where
-    V: db::Diff,
+    V: dbs::Diff,
 {
     paths: Vec<Fragment<K, V>>,
     frwrd: bool,
@@ -1467,9 +1473,9 @@ where
 impl<K, V> Iterator for Iter<K, V>
 where
     K: Clone,
-    V: db::Diff,
+    V: dbs::Diff,
 {
-    type Item = db::Entry<K, V>;
+    type Item = dbs::Entry<K, V>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -1521,7 +1527,7 @@ where
 pub struct Range<K, V, R, Q>
 where
     Q: ?Sized,
-    V: db::Diff,
+    V: dbs::Diff,
 {
     range: R,
     iter: Iter<K, V>,
@@ -1533,11 +1539,11 @@ where
 impl<K, V, R, Q> Iterator for Range<K, V, R, Q>
 where
     K: Clone + Borrow<Q>,
-    V: db::Diff,
+    V: dbs::Diff,
     Q: Ord + ?Sized,
     R: RangeBounds<Q>,
 {
-    type Item = db::Entry<K, V>;
+    type Item = dbs::Entry<K, V>;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self.fin {
@@ -1563,7 +1569,7 @@ where
 pub struct Reverse<K, V, R, Q>
 where
     Q: ?Sized,
-    V: db::Diff,
+    V: dbs::Diff,
 {
     range: R,
     iter: Iter<K, V>,
@@ -1575,10 +1581,10 @@ impl<K, V, R, Q> Iterator for Reverse<K, V, R, Q>
 where
     K: Clone + Borrow<Q>,
     Q: Ord + ?Sized,
-    V: db::Diff,
+    V: dbs::Diff,
     R: RangeBounds<Q>,
 {
-    type Item = db::Entry<K, V>;
+    type Item = dbs::Entry<K, V>;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self.fin {
@@ -1606,7 +1612,7 @@ where
 // its current state (IFlag), together this tuple is called as a Fragment.
 struct Fragment<K, V>
 where
-    V: db::Diff,
+    V: dbs::Diff,
 {
     flag: IFlag,
     node: Arc<Node<K, V>>,
@@ -1623,7 +1629,7 @@ fn build_iter<K, V>(
     node: Option<Arc<Node<K, V>>>,
     paths: &mut Vec<Fragment<K, V>>,
 ) where
-    V: db::Diff,
+    V: dbs::Diff,
 {
     if let Some(node) = node {
         let item = Fragment {
@@ -1648,7 +1654,7 @@ fn find_start<K, V, Q>(
 ) where
     K: Borrow<Q>,
     Q: Ord + ?Sized,
-    V: db::Diff,
+    V: dbs::Diff,
 {
     if let Some(node) = node {
         let left = node.left.as_ref().map(Arc::clone);
@@ -1680,7 +1686,7 @@ fn find_end<K, V, Q>(
 ) where
     K: Borrow<Q>,
     Q: Ord + ?Sized,
-    V: db::Diff,
+    V: dbs::Diff,
 {
     if let Some(node) = node {
         let left = node.left.as_ref().map(Arc::clone);
@@ -1717,9 +1723,9 @@ pub fn load_index<K, V>(
     seqno: Option<u64>,
 ) -> Index<K, V>
 where
-    K: Clone + Ord + db::Footprint + fmt::Debug,
-    V: db::Diff + db::Footprint + fmt::Debug,
-    <V as db::Diff>::Delta: db::Footprint,
+    K: Clone + Ord + dbs::Footprint + fmt::Debug,
+    V: dbs::Diff + dbs::Footprint + fmt::Debug,
+    <V as dbs::Diff>::Delta: dbs::Footprint,
     rand::distributions::Standard: rand::distributions::Distribution<K>,
     rand::distributions::Standard: rand::distributions::Distribution<V>,
 {

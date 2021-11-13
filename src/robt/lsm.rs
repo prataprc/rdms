@@ -6,7 +6,7 @@ use cbordata::FromCbor;
 use std::cmp;
 
 use crate::{
-    db,
+    dbs,
     robt::{reader::IterLsm, Entry},
     Result,
 };
@@ -14,8 +14,8 @@ use crate::{
 pub struct YIter<'a, K, V, I, E>
 where
     K: Ord + FromCbor,
-    V: db::Diff + FromCbor,
-    <V as db::Diff>::Delta: FromCbor,
+    V: dbs::Diff + FromCbor,
+    <V as dbs::Diff>::Delta: FromCbor,
     I: Iterator<Item = Result<E>>,
     E: Into<Entry<K, V>>,
 {
@@ -28,8 +28,8 @@ where
 impl<'a, K, V, I, E> YIter<'a, K, V, I, E>
 where
     K: Ord + FromCbor,
-    V: db::Diff + FromCbor,
-    <V as db::Diff>::Delta: FromCbor,
+    V: dbs::Diff + FromCbor,
+    <V as dbs::Diff>::Delta: FromCbor,
     I: Iterator<Item = Result<E>>,
     E: Into<Entry<K, V>>,
 {
@@ -48,8 +48,8 @@ where
 impl<'a, K, V, I, E> Iterator for YIter<'a, K, V, I, E>
 where
     K: Clone + Ord + FromCbor,
-    V: db::Diff + FromCbor,
-    <V as db::Diff>::Delta: FromCbor + From<V>,
+    V: dbs::Diff + FromCbor,
+    <V as dbs::Diff>::Delta: FromCbor + From<V>,
     I: Iterator<Item = Result<E>>,
     E: Into<Entry<K, V>>,
 {

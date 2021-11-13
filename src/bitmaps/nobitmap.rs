@@ -2,12 +2,12 @@
 
 use std::hash::Hash;
 
-use crate::{db, Result};
+use crate::{dbs, Result};
 
 #[derive(Default, Clone)]
 pub struct NoBitmap;
 
-impl db::Bloom for NoBitmap {
+impl dbs::Bloom for NoBitmap {
     #[inline]
     fn len(&self) -> Result<usize> {
         Ok(0)

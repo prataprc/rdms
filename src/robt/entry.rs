@@ -8,7 +8,7 @@ use std::{
 };
 
 use crate::{
-    db, read_file,
+    dbs, read_file,
     robt::{reader::Reader, vlog},
     util, Error, Result,
 };
@@ -16,9 +16,9 @@ use crate::{
 const ENTRY_VER: u32 = 0x00130001;
 
 #[derive(Clone, Debug, Eq, PartialEq, Cborize)]
-pub enum Entry<K, V, D = <V as db::Diff>::Delta>
+pub enum Entry<K, V, D = <V as dbs::Diff>::Delta>
 where
-    V: db::Diff<Delta = D>,
+    V: dbs::Diff<Delta = D>,
 {
     MM {
         key: K,
@@ -35,11 +35,11 @@ where
     },
 }
 
-impl<K, V, D> From<db::Entry<K, V, D>> for Entry<K, V, D>
+impl<K, V, D> From<dbs::Entry<K, V, D>> for Entry<K, V, D>
 where
-    V: db::Diff<Delta = D>,
+    V: dbs::Diff<Delta = D>,
 {
-    fn from(e: db::Entry<K, V, D>) -> Entry<K, V, D> {
+    fn from(e: dbs::Entry<K, V, D>) -> Entry<K, V, D> {
         Entry::ZZ {
             key: e.key,
             value: e.value.into(),
@@ -48,21 +48,21 @@ where
     }
 }
 
-impl<K, V, D> TryFrom<Entry<K, V, D>> for db::Entry<K, V, D>
+impl<K, V, D> TryFrom<Entry<K, V, D>> for dbs::Entry<K, V, D>
 where
-    V: db::Diff<Delta = D>,
+    V: dbs::Diff<Delta = D>,
 {
     type Error = Error;
 
-    fn try_from(e: Entry<K, V, D>) -> Result<db::Entry<K, V, D>> {
+    fn try_from(e: Entry<K, V, D>) -> Result<dbs::Entry<K, V, D>> {
         let entry = match e {
             Entry::ZZ { key, value, deltas } => {
-                let value = db::Value::try_from(value)?;
+                let value = dbs::Value::try_from(value)?;
                 let mut ds = vec![];
                 for delta in deltas.into_iter() {
-                    ds.push(db::Delta::try_from(delta)?);
+                    ds.push(dbs::Delta::try_from(delta)?);
                 }
-                db::Entry {
+                dbs::Entry {
                     key,
                     value,
                     deltas: ds,
@@ -78,7 +78,7 @@ where
 
 impl<K, V, D> Entry<K, V, D>
 where
-    V: db::Diff<Delta = D>,
+    V: dbs::Diff<Delta = D>,
 {
     const ID: u32 = ENTRY_VER;
 
@@ -102,7 +102,7 @@ where
 
 impl<K, V, D> Entry<K, V, D>
 where
-    V: db::Diff<Delta = D>,
+    V: dbs::Diff<Delta = D>,
 {
     // serialize into value-block and return the same.
     pub fn into_reference(self, mut vfpos: u64, vlog: bool) -> Result<(Self, Vec<u8>)>
@@ -189,22 +189,22 @@ where
     pub fn commit(self, new: Self) -> Self
     where
         K: Clone,
-        <V as db::Diff>::Delta: Clone + From<V>,
+        <V as dbs::Diff>::Delta: Clone + From<V>,
     {
         let (key, ovalue, odeltas) = match self {
             Entry::ZZ { key, value, deltas } => (key, value, deltas),
             _ => unreachable!(),
         };
-        let new: db::Entry<K, V> = new.try_into().unwrap();
-        let mut entry = db::Entry {
+        let new: dbs::Entry<K, V> = new.try_into().unwrap();
+        let mut entry = dbs::Entry {
             key,
             value: ovalue.try_into().unwrap(),
             deltas: odeltas.into_iter().map(|d| d.try_into().unwrap()).collect(),
         };
         for value in new.to_values() {
             entry = match value {
-                db::Value::U { value, seqno } => entry.insert(value, seqno),
-                db::Value::D { seqno } => entry.delete(seqno),
+                dbs::Value::U { value, seqno } => entry.insert(value, seqno),
+                dbs::Value::D { seqno } => entry.delete(seqno),
             }
         }
         entry.into()
@@ -214,7 +214,7 @@ where
     where
         K: fmt::Debug + FromCbor,
         V: fmt::Debug + FromCbor,
-        <V as db::Diff>::Delta: fmt::Debug + FromCbor,
+        <V as dbs::Diff>::Delta: fmt::Debug + FromCbor,
     {
         let fd = &mut reader.index;
         let entries = match self {
@@ -255,7 +255,7 @@ where
 
 impl<K, V, D> Entry<K, V, D>
 where
-    V: db::Diff<Delta = D>,
+    V: dbs::Diff<Delta = D>,
 {
     pub fn as_key(&self) -> &K {
         match self {

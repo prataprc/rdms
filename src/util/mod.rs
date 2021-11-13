@@ -7,7 +7,7 @@ use std::{
     ops::{Bound, RangeBounds},
 };
 
-use crate::{db, Error, Result};
+use crate::{dbs, Error, Result};
 
 mod cmdline;
 pub mod files;
@@ -78,7 +78,7 @@ where
 
 pub fn key_footprint<K>(key: &K) -> Result<isize>
 where
-    K: db::Footprint,
+    K: dbs::Footprint,
 {
     use std::convert::TryFrom;
 

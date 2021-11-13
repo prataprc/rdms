@@ -5,7 +5,7 @@ use xorfilter::{BuildHasherDefault, Xor8};
 use std::{fs, mem, thread};
 
 use super::*;
-use crate::{bitmaps::NoBitmap, db, llrb};
+use crate::{bitmaps::NoBitmap, dbs, llrb};
 
 trait Key:
     Sync
@@ -14,7 +14,7 @@ trait Key:
     + Ord
     + PartialEq
     + Hash
-    + db::Footprint
+    + dbs::Footprint
     + IntoCbor
     + FromCbor
     + ToString
@@ -26,8 +26,8 @@ trait Value:
     + Send
     + Clone
     + PartialEq
-    + db::Diff
-    + db::Footprint
+    + dbs::Diff
+    + dbs::Footprint
     + IntoCbor
     + FromCbor
     + ToString
@@ -39,7 +39,7 @@ trait Delta:
     + Send
     + Clone
     + PartialEq
-    + db::Footprint
+    + dbs::Footprint
     + IntoCbor
     + FromCbor
     + ToString
@@ -53,9 +53,9 @@ impl Delta for u16 {}
 impl Key for u64 {}
 impl Value for u64 {}
 impl Delta for u64 {}
-impl Key for db::Binary {}
-impl Value for db::Binary {}
-impl Delta for db::Binary {}
+impl Key for dbs::Binary {}
+impl Value for dbs::Binary {}
+impl Delta for dbs::Binary {}
 
 #[test]
 fn test_robt_build_read() {
@@ -64,13 +64,13 @@ fn test_robt_build_read() {
     println!("test_robt_read {}", seed);
 
     do_robt_build_read::<u16, u64, _>("u16,nobitmap", seed, NoBitmap);
-    do_robt_build_read::<db::Binary, db::Binary, _>("binary,nobitmap", seed, NoBitmap);
+    do_robt_build_read::<dbs::Binary, dbs::Binary, _>("binary,nobitmap", seed, NoBitmap);
     do_robt_build_read::<u16, u64, _>(
         "u16,xor8",
         seed,
         Xor8::<BuildHasherDefault>::new(),
     );
-    do_robt_build_read::<db::Binary, db::Binary, _>(
+    do_robt_build_read::<dbs::Binary, dbs::Binary, _>(
         "binary,xor8",
         seed,
         Xor8::<BuildHasherDefault>::new(),
@@ -81,8 +81,8 @@ fn do_robt_build_read<K, V, B>(prefix: &str, seed: u64, bitmap: B)
 where
     for<'a> K: 'static + Key + Arbitrary<'a>,
     V: 'static + Value,
-    <V as db::Diff>::Delta: 'static + Delta,
-    B: 'static + Sync + Send + Clone + db::Bloom,
+    <V as dbs::Diff>::Delta: 'static + Delta,
+    B: 'static + Sync + Send + Clone + dbs::Bloom,
     rand::distributions::Standard: rand::distributions::Distribution<K>,
     rand::distributions::Standard: rand::distributions::Distribution<V>,
 {
@@ -134,7 +134,7 @@ where
 
     config.name = name.to_owned() + "-compact1";
     config.set_vlog_location(None);
-    let cutoff: db::Cutoff = {
+    let cutoff: dbs::Cutoff = {
         let bytes = rng.gen::<[u8; 32]>();
         let mut uns = Unstructured::new(&bytes);
         uns.arbitrary().unwrap()
@@ -160,8 +160,8 @@ fn do_initial<K, V, B>(
 where
     for<'a> K: 'static + Key + Arbitrary<'a>,
     V: 'static + Value,
-    <V as db::Diff>::Delta: 'static + Delta,
-    B: 'static + Sync + Send + Clone + db::Bloom,
+    <V as dbs::Diff>::Delta: 'static + Delta,
+    B: 'static + Sync + Send + Clone + dbs::Bloom,
     rand::distributions::Standard: rand::distributions::Distribution<K>,
     rand::distributions::Standard: rand::distributions::Distribution<V>,
 {
@@ -216,8 +216,8 @@ fn do_incremental<K, V, B>(
 where
     for<'a> K: 'static + Key + Arbitrary<'a>,
     V: 'static + Value,
-    <V as db::Diff>::Delta: 'static + Delta,
-    B: 'static + Sync + Send + Clone + db::Bloom,
+    <V as dbs::Diff>::Delta: 'static + Delta,
+    B: 'static + Sync + Send + Clone + dbs::Bloom,
     rand::distributions::Standard: rand::distributions::Distribution<K>,
     rand::distributions::Standard: rand::distributions::Distribution<V>,
 {
@@ -287,8 +287,8 @@ fn read_thread<K, V, B>(
 ) where
     for<'a> K: 'static + Key + Arbitrary<'a>,
     V: 'static + Value,
-    <V as db::Diff>::Delta: 'static + Delta,
-    B: 'static + Sync + Send + Clone + db::Bloom,
+    <V as dbs::Diff>::Delta: 'static + Delta,
+    B: 'static + Sync + Send + Clone + dbs::Bloom,
     rand::distributions::Standard: rand::distributions::Distribution<K>,
     rand::distributions::Standard: rand::distributions::Distribution<V>,
 {
@@ -489,7 +489,7 @@ fn validate_stats<K, V>(
     mdb: &llrb::Index<K, V>,
     n_abytes: u64,
 ) where
-    V: db::Diff,
+    V: dbs::Diff,
 {
     assert_eq!(stats.name, config.name);
     assert_eq!(stats.z_blocksize, config.z_blocksize);
@@ -518,9 +518,9 @@ fn open_index<K, V, B>(
 ) -> Index<K, V, B>
 where
     K: Clone + FromCbor,
-    V: db::Diff + FromCbor,
-    <V as db::Diff>::Delta: FromCbor,
-    B: db::Bloom,
+    V: dbs::Diff + FromCbor,
+    <V as dbs::Diff>::Delta: FromCbor,
+    B: dbs::Bloom,
 {
     let mut rng = SmallRng::seed_from_u64(seed);
 
@@ -538,22 +538,22 @@ where
 
 fn validate_compact<K, V, B>(
     index: &mut Index<K, V, B>,
-    cutoff: db::Cutoff,
+    cutoff: dbs::Cutoff,
     mdb: &llrb::Index<K, V>,
 ) where
     for<'a> K: 'static + Key + Arbitrary<'a>,
     V: 'static + Value,
-    <V as db::Diff>::Delta: 'static + Delta,
-    B: 'static + Sync + Send + Clone + db::Bloom,
+    <V as dbs::Diff>::Delta: 'static + Delta,
+    B: 'static + Sync + Send + Clone + dbs::Bloom,
     rand::distributions::Standard: rand::distributions::Distribution<K>,
     rand::distributions::Standard: rand::distributions::Distribution<V>,
 {
-    let ref_entries: Vec<db::Entry<K, V>> = mdb
+    let ref_entries: Vec<dbs::Entry<K, V>> = mdb
         .iter()
         .unwrap()
         .filter_map(|e| e.compact(cutoff))
         .collect();
-    let entries: Vec<db::Entry<K, V>> = index
+    let entries: Vec<dbs::Entry<K, V>> = index
         .iter_versions(..)
         .unwrap()
         .map(|e| e.unwrap())
@@ -574,8 +574,8 @@ fn validate_bitmap<K, V, B>(index: &mut Index<K, V, B>)
 where
     for<'a> K: 'static + Key + Arbitrary<'a>,
     V: 'static + Value,
-    <V as db::Diff>::Delta: 'static + Delta,
-    B: 'static + Sync + Send + Clone + db::Bloom,
+    <V as dbs::Diff>::Delta: 'static + Delta,
+    B: 'static + Sync + Send + Clone + dbs::Bloom,
     rand::distributions::Standard: rand::distributions::Distribution<K>,
     rand::distributions::Standard: rand::distributions::Distribution<V>,
 {

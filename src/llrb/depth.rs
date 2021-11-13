@@ -1,6 +1,6 @@
 use std::{fmt, result};
 
-use crate::db;
+use crate::dbs;
 
 /// Statistic type, that captures minimum, maximum, average and percentile of
 /// leaf-node depth in the LLRB tree.
@@ -98,7 +98,7 @@ impl fmt::Display for Depth {
     }
 }
 
-impl db::ToJson for Depth {
+impl dbs::ToJson for Depth {
     fn to_json(&self) -> String {
         let props: Vec<String> = self
             .to_percentiles()

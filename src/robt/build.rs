@@ -3,7 +3,7 @@ use cbordata::{self as cbor, Cbor, IntoCbor};
 use std::{cell::RefCell, convert::TryFrom, marker, rc::Rc};
 
 use crate::{
-    db,
+    dbs,
     robt::{self, Config, Entry, Flusher},
     util, Error, Result,
 };
@@ -22,7 +22,7 @@ macro_rules! iter_result {
 
 pub struct BuildMM<K, V, I>
 where
-    V: db::Diff,
+    V: dbs::Diff,
     I: Iterator<Item = Result<Entry<K, V>>>,
 {
     m_blocksize: usize,
@@ -35,7 +35,7 @@ where
 
 impl<K, V, I> BuildMM<K, V, I>
 where
-    V: db::Diff,
+    V: dbs::Diff,
     I: Iterator<Item = Result<Entry<K, V>>>,
 {
     pub fn new(
@@ -57,8 +57,8 @@ where
 impl<K, V, I> Iterator for BuildMM<K, V, I>
 where
     K: Clone + IntoCbor,
-    V: IntoCbor + db::Diff,
-    <V as db::Diff>::Delta: IntoCbor,
+    V: IntoCbor + dbs::Diff,
+    <V as dbs::Diff>::Delta: IntoCbor,
     I: Iterator<Item = Result<Entry<K, V>>>,
 {
     type Item = Result<(K, u64)>;
@@ -116,7 +116,7 @@ where
 
 pub struct BuildMZ<K, V, I>
 where
-    V: db::Diff,
+    V: dbs::Diff,
     I: Iterator<Item = Result<Entry<K, V>>>,
 {
     m_blocksize: usize,
@@ -129,7 +129,7 @@ where
 
 impl<K, V, I> BuildMZ<K, V, I>
 where
-    V: db::Diff,
+    V: dbs::Diff,
     I: Iterator<Item = Result<Entry<K, V>>>,
 {
     pub fn new(
@@ -151,8 +151,8 @@ where
 impl<K, V, I> Iterator for BuildMZ<K, V, I>
 where
     K: Clone + IntoCbor,
-    V: IntoCbor + db::Diff,
-    <V as db::Diff>::Delta: IntoCbor,
+    V: IntoCbor + dbs::Diff,
+    <V as dbs::Diff>::Delta: IntoCbor,
     I: Iterator<Item = Result<Entry<K, V>>>,
 {
     type Item = Result<(K, u64)>;
@@ -203,7 +203,7 @@ where
 
 pub struct BuildZZ<K, V, I>
 where
-    V: db::Diff,
+    V: dbs::Diff,
     I: Iterator<Item = Result<Entry<K, V>>>,
 {
     z_blocksize: usize,
@@ -221,7 +221,7 @@ where
 
 impl<K, V, I> BuildZZ<K, V, I>
 where
-    V: db::Diff,
+    V: dbs::Diff,
     I: Iterator<Item = Result<Entry<K, V>>>,
 {
     pub fn new(
@@ -249,8 +249,8 @@ where
 impl<K, V, I> Iterator for BuildZZ<K, V, I>
 where
     K: Clone + IntoCbor,
-    V: IntoCbor + db::Diff,
-    <V as db::Diff>::Delta: IntoCbor,
+    V: IntoCbor + dbs::Diff,
+    <V as dbs::Diff>::Delta: IntoCbor,
     I: Iterator<Item = Result<Entry<K, V>>>,
 {
     type Item = Result<(K, u64)>;
@@ -312,7 +312,7 @@ where
 
 pub enum BuildIter<K, V, I>
 where
-    V: db::Diff,
+    V: dbs::Diff,
     I: Iterator<Item = Result<Entry<K, V>>>,
 {
     MM(BuildMM<K, V, I>),
@@ -321,7 +321,7 @@ where
 
 impl<K, V, I> From<BuildMZ<K, V, I>> for BuildIter<K, V, I>
 where
-    V: db::Diff,
+    V: dbs::Diff,
     I: Iterator<Item = Result<Entry<K, V>>>,
 {
     fn from(val: BuildMZ<K, V, I>) -> Self {
@@ -331,7 +331,7 @@ where
 
 impl<K, V, I> From<BuildMM<K, V, I>> for BuildIter<K, V, I>
 where
-    V: db::Diff,
+    V: dbs::Diff,
     I: Iterator<Item = Result<Entry<K, V>>>,
 {
     fn from(val: BuildMM<K, V, I>) -> Self {
@@ -342,8 +342,8 @@ where
 impl<K, V, I> Iterator for BuildIter<K, V, I>
 where
     K: Clone + IntoCbor,
-    V: IntoCbor + db::Diff,
-    <V as db::Diff>::Delta: IntoCbor,
+    V: IntoCbor + dbs::Diff,
+    <V as dbs::Diff>::Delta: IntoCbor,
     I: Iterator<Item = Result<Entry<K, V>>>,
 {
     type Item = Result<(K, u64)>;

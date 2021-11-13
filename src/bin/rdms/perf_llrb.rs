@@ -4,7 +4,7 @@ use serde::Deserialize;
 use std::{fmt, thread, time};
 
 use rdms::{
-    db::{self, ToJson},
+    dbs::{self, ToJson},
     llrb::Index,
     util, Result,
 };
@@ -43,19 +43,19 @@ impl Generate<u64> for Profile {
     }
 }
 
-impl Generate<db::Binary> for Profile {
-    fn gen_key(&self, rng: &mut SmallRng) -> db::Binary {
+impl Generate<dbs::Binary> for Profile {
+    fn gen_key(&self, rng: &mut SmallRng) -> dbs::Binary {
         let key = rng.gen::<u64>();
         let size = self.key_size;
         let val = format!("{:0width$}", key, width = size).as_bytes().to_vec();
-        db::Binary { val }
+        dbs::Binary { val }
     }
 
-    fn gen_value(&self, rng: &mut SmallRng) -> db::Binary {
+    fn gen_value(&self, rng: &mut SmallRng) -> dbs::Binary {
         let val = rng.gen::<u64>();
         let size = self.value_size;
         let val = format!("{:0width$}", val, width = size).as_bytes().to_vec();
-        db::Binary { val }
+        dbs::Binary { val }
     }
 }
 
@@ -101,17 +101,17 @@ pub fn perf(opts: Opt) -> Result<()> {
 
     match (kt.as_str(), vt.as_str()) {
         ("u64", "u64") => load_and_spawn::<u64, u64>(opts, profile),
-        ("u64", "binary") => load_and_spawn::<u64, db::Binary>(opts, profile),
-        ("binary", "binary") => load_and_spawn::<db::Binary, db::Binary>(opts, profile),
+        ("u64", "binary") => load_and_spawn::<u64, dbs::Binary>(opts, profile),
+        ("binary", "binary") => load_and_spawn::<dbs::Binary, dbs::Binary>(opts, profile),
         (_, _) => unreachable!(),
     }
 }
 
 fn load_and_spawn<K, V>(opts: Opt, p: Profile) -> Result<()>
 where
-    K: 'static + Send + Sync + Clone + Ord + db::Footprint + fmt::Debug,
-    V: 'static + Send + Sync + db::Diff + db::Footprint,
-    <V as db::Diff>::Delta: Send + Sync + db::Footprint,
+    K: 'static + Send + Sync + Clone + Ord + dbs::Footprint + fmt::Debug,
+    V: 'static + Send + Sync + dbs::Diff + dbs::Footprint,
+    <V as dbs::Diff>::Delta: Send + Sync + dbs::Footprint,
     Profile: Generate<K> + Generate<V>,
 {
     let mut rng = SmallRng::seed_from_u64(opts.seed);
@@ -185,9 +185,9 @@ where
 
 fn initial_load<K, V>(rng: &mut SmallRng, p: Profile, index: Index<K, V>) -> Result<()>
 where
-    K: 'static + Send + Sync + Clone + Ord + db::Footprint,
-    V: 'static + Send + Sync + db::Diff + db::Footprint,
-    <V as db::Diff>::Delta: Send + Sync + db::Footprint,
+    K: 'static + Send + Sync + Clone + Ord + dbs::Footprint,
+    V: 'static + Send + Sync + dbs::Diff + dbs::Footprint,
+    <V as dbs::Diff>::Delta: Send + Sync + dbs::Footprint,
     Profile: Generate<K> + Generate<V>,
 {
     let start = time::Instant::now();
@@ -202,9 +202,9 @@ where
 
 fn incr_load<K, V>(j: usize, seed: u64, p: Profile, index: Index<K, V>) -> Result<()>
 where
-    K: 'static + Send + Sync + Clone + Ord + db::Footprint,
-    V: 'static + Send + Sync + db::Diff + db::Footprint,
-    <V as db::Diff>::Delta: Send + Sync + db::Footprint,
+    K: 'static + Send + Sync + Clone + Ord + dbs::Footprint,
+    V: 'static + Send + Sync + dbs::Diff + dbs::Footprint,
+    <V as dbs::Diff>::Delta: Send + Sync + dbs::Footprint,
     Profile: Generate<K> + Generate<V>,
 {
     let mut rng = SmallRng::seed_from_u64(seed);

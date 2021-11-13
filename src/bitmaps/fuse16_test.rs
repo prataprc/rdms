@@ -1,7 +1,7 @@
 use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
 use xorfilter::BuildHasherDefault;
 
-use crate::db::Bloom;
+use crate::dbs::Bloom;
 
 use super::*;
 

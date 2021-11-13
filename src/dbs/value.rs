@@ -1,6 +1,6 @@
 use cbordata::Cborize;
 
-use crate::{db::Footprint, Error, Result};
+use crate::{dbs::Footprint, Error, Result};
 
 /// This value must change only when the shape of Value type changes. High 16-bits
 /// identify the type and lower 16-bits identify the version.

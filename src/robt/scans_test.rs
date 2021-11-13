@@ -2,7 +2,7 @@ use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
 
 use super::*;
 use crate::{
-    db::{self, Bloom},
+    dbs::{self, Bloom},
     llrb,
 };
 
@@ -83,8 +83,8 @@ fn test_robt_xorfilter_scan() {
     assert_eq!(len, mdb.len());
     assert_eq!(iter.next(), None);
     let bitma = {
-        let bytes = <Xor8 as db::Bloom>::to_bytes(&bitmap).unwrap();
-        <Xor8 as db::Bloom>::from_bytes(&bytes).unwrap().0
+        let bytes = <Xor8 as dbs::Bloom>::to_bytes(&bitmap).unwrap();
+        <Xor8 as dbs::Bloom>::from_bytes(&bytes).unwrap().0
     };
     let mut found_keys = 0;
     for _i in 0..1_000_000 {

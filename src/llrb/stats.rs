@@ -2,7 +2,7 @@ use std::{fmt, result};
 
 #[allow(unused_imports)]
 use crate::llrb::Index;
-use crate::{db, llrb::Depth, util::spinlock};
+use crate::{dbs, llrb::Depth, util::spinlock};
 
 /// Statistic type, for [Index] type.
 pub struct Stats {
@@ -50,7 +50,7 @@ impl fmt::Display for Stats {
     }
 }
 
-impl db::ToJson for Stats {
+impl dbs::ToJson for Stats {
     fn to_json(&self) -> String {
         let null = "null".to_string();
         // TODO: should we convert this to to_json() ?

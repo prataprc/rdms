@@ -16,7 +16,7 @@ use std::{
 };
 
 use crate::{
-    db, read_file,
+    dbs, read_file,
     robt::{
         build,
         lsm::YIter,
@@ -40,8 +40,8 @@ const MAX_DEPTH: usize = 11;
 pub struct Builder<K, V>
 where
     K: IntoCbor,
-    V: db::Diff + IntoCbor,
-    <V as db::Diff>::Delta: IntoCbor,
+    V: dbs::Diff + IntoCbor,
+    <V as dbs::Diff>::Delta: IntoCbor,
 {
     // configuration
     config: Config,
@@ -60,8 +60,8 @@ where
 impl<K, V> Builder<K, V>
 where
     K: IntoCbor,
-    V: db::Diff + IntoCbor,
-    <V as db::Diff>::Delta: IntoCbor,
+    V: dbs::Diff + IntoCbor,
+    <V as dbs::Diff>::Delta: IntoCbor,
 {
     /// Build a fresh index, using configuration and snapshot specific meta-data.
     ///
@@ -144,8 +144,8 @@ where
 impl<K, V> Builder<K, V>
 where
     K: Clone + Hash + IntoCbor + FromCbor,
-    V: db::Diff + IntoCbor + FromCbor,
-    <V as db::Diff>::Delta: IntoCbor + FromCbor,
+    V: dbs::Diff + IntoCbor + FromCbor,
+    <V as dbs::Diff>::Delta: IntoCbor + FromCbor,
 {
     pub fn build_index<B, I, E>(
         &mut self,
@@ -154,7 +154,7 @@ where
         seqno: Option<u64>,
     ) -> Result<Index<K, V, B>>
     where
-        B: db::Bloom,
+        B: dbs::Bloom,
         I: Iterator<Item = Result<E>>,
         E: TryInto<Entry<K, V>>,
         <E as TryInto<Entry<K, V>>>::Error: fmt::Display,
@@ -188,8 +188,8 @@ where
 impl<K, V> Builder<K, V>
 where
     K: Clone + IntoCbor,
-    V: db::Diff + IntoCbor,
-    <V as db::Diff>::Delta: IntoCbor,
+    V: dbs::Diff + IntoCbor,
+    <V as dbs::Diff>::Delta: IntoCbor,
 {
     fn build_tree<I>(&self, iter: I) -> Result<(I, Option<u64>)>
     where
@@ -290,9 +290,9 @@ impl MetaItem {
 pub struct Index<K, V, B>
 where
     K: FromCbor,
-    V: db::Diff + FromCbor,
-    <V as db::Diff>::Delta: FromCbor,
-    B: db::Bloom,
+    V: dbs::Diff + FromCbor,
+    <V as dbs::Diff>::Delta: FromCbor,
+    B: dbs::Bloom,
 {
     dir: ffi::OsString,
     name: String,
@@ -306,9 +306,9 @@ where
 impl<K, V, B> Index<K, V, B>
 where
     K: FromCbor,
-    V: db::Diff + FromCbor,
-    <V as db::Diff>::Delta: FromCbor,
-    B: db::Bloom,
+    V: dbs::Diff + FromCbor,
+    <V as dbs::Diff>::Delta: FromCbor,
+    B: dbs::Bloom,
 {
     /// Open an existing index for read-only.
     pub fn open(dir: &ffi::OsStr, name: &str) -> Result<Index<K, V, B>> {
@@ -456,7 +456,7 @@ where
     where
         K: IntoCbor,
         V: IntoCbor,
-        <V as db::Diff>::Delta: IntoCbor,
+        <V as dbs::Diff>::Delta: IntoCbor,
     {
         let mut config: Config = self.stats.into();
         config.dir = dir.to_os_string();
@@ -471,12 +471,12 @@ where
         mut self,
         mut config: Config,
         bitmap: B,
-        cutoff: db::Cutoff,
+        cutoff: dbs::Cutoff,
     ) -> Result<Self>
     where
         K: Clone + Ord + Hash + IntoCbor,
         V: IntoCbor,
-        <V as db::Diff>::Delta: IntoCbor,
+        <V as dbs::Diff>::Delta: IntoCbor,
     {
         // set to fresh vlog location, don't carry forward.
         config.set_vlog_location(None);
@@ -518,9 +518,9 @@ where
 impl<K, V, B> Index<K, V, B>
 where
     K: FromCbor,
-    V: db::Diff + FromCbor,
-    <V as db::Diff>::Delta: FromCbor,
-    B: db::Bloom,
+    V: dbs::Diff + FromCbor,
+    <V as dbs::Diff>::Delta: FromCbor,
+    B: dbs::Bloom,
 {
     pub fn to_name(&self) -> String {
         self.name.clone()
@@ -598,26 +598,26 @@ where
 impl<K, V, B> Index<K, V, B>
 where
     K: FromCbor,
-    V: db::Diff + FromCbor,
-    <V as db::Diff>::Delta: FromCbor,
-    B: db::Bloom,
+    V: dbs::Diff + FromCbor,
+    <V as dbs::Diff>::Delta: FromCbor,
+    B: dbs::Bloom,
 {
-    pub fn get<Q>(&mut self, key: &Q) -> Result<db::Entry<K, V>>
+    pub fn get<Q>(&mut self, key: &Q) -> Result<dbs::Entry<K, V>>
     where
         K: Clone + Borrow<Q>,
         Q: Ord + ?Sized,
     {
         let versions = false;
-        db::Entry::try_from(self.reader.get(key, versions)?)
+        dbs::Entry::try_from(self.reader.get(key, versions)?)
     }
 
-    pub fn get_versions<Q>(&mut self, key: &Q) -> Result<db::Entry<K, V>>
+    pub fn get_versions<Q>(&mut self, key: &Q) -> Result<dbs::Entry<K, V>>
     where
         K: Clone + Borrow<Q>,
         Q: Ord + ?Sized,
     {
         let versions = true;
-        db::Entry::try_from(self.reader.get(key, versions)?)
+        dbs::Entry::try_from(self.reader.get(key, versions)?)
     }
 
     pub fn iter<R, Q>(&mut self, range: R) -> Result<Iter<K, V>>
@@ -667,8 +667,8 @@ where
     ) -> Result<YIter<K, V, I, E>>
     where
         K: Clone + Ord + FromCbor,
-        V: db::Diff + FromCbor,
-        <V as db::Diff>::Delta: FromCbor,
+        V: dbs::Diff + FromCbor,
+        <V as dbs::Diff>::Delta: FromCbor,
         I: Iterator<Item = Result<E>>,
         E: Into<Entry<K, V>>,
     {
@@ -729,7 +729,7 @@ where
     where
         K: Clone + fmt::Debug,
         V: fmt::Debug,
-        <V as db::Diff>::Delta: fmt::Debug,
+        <V as dbs::Diff>::Delta: fmt::Debug,
     {
         println!("name              : {}", self.to_name());
         println!("app_meta_data     : {}", self.to_app_metadata().len());

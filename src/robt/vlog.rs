@@ -2,14 +2,14 @@ use cbordata::{Cborize, FromCbor, IntoCbor};
 
 use std::{convert::TryFrom, io};
 
-use crate::{db, err_at, read_file, util, Error, Result};
+use crate::{dbs, err_at, read_file, util, Error, Result};
 
 const VALUE_VER: u32 = 0x000d0001;
 const DELTA_VER: u32 = 0x00110001;
 
 #[derive(Clone, Debug, Eq, PartialEq, Cborize)]
 pub enum Value<V> {
-    N { value: db::Value<V> },
+    N { value: dbs::Value<V> },
     R { fpos: u64, length: u64 },
 }
 
@@ -17,20 +17,20 @@ impl<V> Value<V> {
     const ID: u32 = VALUE_VER;
 }
 
-impl<V> From<db::Value<V>> for Value<V> {
-    fn from(value: db::Value<V>) -> Value<V> {
+impl<V> From<dbs::Value<V>> for Value<V> {
+    fn from(value: dbs::Value<V>) -> Value<V> {
         Value::N { value }
     }
 }
 
-impl<V> TryFrom<Value<V>> for db::Value<V> {
+impl<V> TryFrom<Value<V>> for dbs::Value<V> {
     type Error = Error;
 
-    fn try_from(value: Value<V>) -> Result<db::Value<V>> {
+    fn try_from(value: Value<V>) -> Result<dbs::Value<V>> {
         let value = match value {
             Value::N { value } => value,
             Value::R { .. } => err_at!(
-                FailConvert, msg: "robt::Value is reference, can't convert to db::Value"
+                FailConvert, msg: "robt::Value is reference, can't convert to dbs::Value"
             )?,
         };
 
@@ -90,7 +90,7 @@ impl<V> Value<V> {
 
 #[derive(Clone, Debug, Eq, PartialEq, Cborize)]
 pub enum Delta<D> {
-    N { delta: db::Delta<D> },
+    N { delta: dbs::Delta<D> },
     R { fpos: u64, length: u64 },
 }
 
@@ -98,20 +98,20 @@ impl<D> Delta<D> {
     const ID: u32 = DELTA_VER;
 }
 
-impl<D> From<db::Delta<D>> for Delta<D> {
-    fn from(delta: db::Delta<D>) -> Delta<D> {
+impl<D> From<dbs::Delta<D>> for Delta<D> {
+    fn from(delta: dbs::Delta<D>) -> Delta<D> {
         Delta::N { delta }
     }
 }
 
-impl<D> TryFrom<Delta<D>> for db::Delta<D> {
+impl<D> TryFrom<Delta<D>> for dbs::Delta<D> {
     type Error = Error;
 
-    fn try_from(delta: Delta<D>) -> Result<db::Delta<D>> {
+    fn try_from(delta: Delta<D>) -> Result<dbs::Delta<D>> {
         let delta = match delta {
             Delta::N { delta } => delta,
             Delta::R { .. } => err_at!(
-                FailConvert, msg: "robt::Delta is reference, can't convert to db::Value"
+                FailConvert, msg: "robt::Delta is reference, can't convert to dbs::Value"
             )?,
         };
 

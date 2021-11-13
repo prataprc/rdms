@@ -4,7 +4,7 @@ use std::{
     fmt, hash, marker, time,
 };
 
-use crate::{db, robt, Error, Result};
+use crate::{dbs, robt, Error, Result};
 
 // BuildScan, BitmappedScan, CompactScan
 
@@ -12,7 +12,7 @@ use crate::{db, robt, Error, Result};
 // index-items, deleted items and epoch.
 pub struct BuildScan<K, V, I, E>
 where
-    V: db::Diff,
+    V: dbs::Diff,
     I: Iterator<Item = Result<E>>,
     E: TryInto<robt::Entry<K, V>>,
 {
@@ -29,7 +29,7 @@ where
 
 impl<K, V, I, E> BuildScan<K, V, I, E>
 where
-    V: db::Diff,
+    V: dbs::Diff,
     I: Iterator<Item = Result<E>>,
     E: TryInto<robt::Entry<K, V>>,
 {
@@ -73,7 +73,7 @@ where
 
 impl<K, V, I, E> Iterator for BuildScan<K, V, I, E>
 where
-    V: db::Diff,
+    V: dbs::Diff,
     I: Iterator<Item = Result<E>>,
     E: TryInto<robt::Entry<K, V>>,
     <E as TryInto<robt::Entry<K, V>>>::Error: fmt::Display,
@@ -105,7 +105,7 @@ where
 // is parameterised as `B`.
 pub struct BitmappedScan<K, V, B, I>
 where
-    V: db::Diff,
+    V: dbs::Diff,
     I: Iterator<Item = Result<robt::Entry<K, V>>>,
 {
     iter: I,
@@ -116,8 +116,8 @@ where
 
 impl<K, V, B, I> BitmappedScan<K, V, B, I>
 where
-    V: db::Diff,
-    B: db::Bloom,
+    V: dbs::Diff,
+    B: dbs::Bloom,
     I: Iterator<Item = Result<robt::Entry<K, V>>>,
 {
     pub fn new(iter: I, bitmap: B) -> BitmappedScan<K, V, B, I> {
@@ -138,8 +138,8 @@ where
 impl<K, V, B, I> Iterator for BitmappedScan<K, V, B, I>
 where
     K: hash::Hash,
-    V: db::Diff,
-    B: db::Bloom,
+    V: dbs::Diff,
+    B: dbs::Bloom,
     I: Iterator<Item = Result<robt::Entry<K, V>>>,
 {
     type Item = Result<robt::Entry<K, V>>;
@@ -160,10 +160,10 @@ where
 // older mutations.
 pub struct CompactScan<K, V, I>
 where
-    V: db::Diff,
+    V: dbs::Diff,
 {
     iter: I,
-    cutoff: db::Cutoff,
+    cutoff: dbs::Cutoff,
 
     _key: marker::PhantomData<K>,
     _val: marker::PhantomData<V>,
@@ -171,9 +171,9 @@ where
 
 impl<K, V, I> CompactScan<K, V, I>
 where
-    V: db::Diff,
+    V: dbs::Diff,
 {
-    pub fn new(iter: I, cutoff: db::Cutoff) -> Self {
+    pub fn new(iter: I, cutoff: dbs::Cutoff) -> Self {
         CompactScan {
             iter,
             cutoff,
@@ -187,10 +187,10 @@ where
 impl<K, V, I> Iterator for CompactScan<K, V, I>
 where
     K: Clone,
-    V: db::Diff,
-    I: Iterator<Item = Result<db::Entry<K, V>>>,
+    V: dbs::Diff,
+    I: Iterator<Item = Result<dbs::Entry<K, V>>>,
 {
-    type Item = Result<db::Entry<K, V>>;
+    type Item = Result<dbs::Entry<K, V>>;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {

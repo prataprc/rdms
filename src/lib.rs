@@ -94,6 +94,7 @@ pub type Result<T> = result::Result<T, Error>;
 
 #[macro_use]
 mod error;
+pub mod dba;
 pub mod dbs;
 pub mod llrb;
 pub mod robt;

@@ -2,25 +2,25 @@ use chrono::TimeZone;
 
 use std::convert::{TryFrom, TryInto};
 
-use crate::{Error, Result};
+use crate::{dba, Error, Result};
 
 pub enum Object {
     Oid {
-        hash: Vec<u8>,
+        hash: dba::Oid,
     },
     Blob {
-        hash: Vec<u8>,
-        older: Vec<Vec<u8>>,
+        hash: dba::Oid,
+        older: Vec<dba::Oid>,
         value: Vec<u8>,
     },
     Tree {
-        hash: Vec<u8>,
+        hash: dba::Oid,
         entries: Vec<Entry>,
     },
     Commit {
-        hash: Vec<u8>,
+        hash: dba::Oid,
         tree: Box<Object>,
-        parents: Vec<Vec<u8>>,
+        parents: Vec<dba::Oid>,
         author: User,
         commiter: User,
     },
@@ -29,7 +29,7 @@ pub enum Object {
 impl From<git2::Oid> for Object {
     fn from(oid: git2::Oid) -> Object {
         Object::Oid {
-            hash: oid.as_bytes().to_vec(),
+            hash: dba::Oid::from_sha1(oid.as_bytes()),
         }
     }
 }
@@ -37,7 +37,7 @@ impl From<git2::Oid> for Object {
 impl<'a> From<git2::Blob<'a>> for Object {
     fn from(blob: git2::Blob) -> Object {
         Object::Blob {
-            hash: blob.id().as_bytes().to_vec(),
+            hash: dba::Oid::from_sha1(blob.id().as_bytes()),
             older: Vec::default(),
             value: blob.content().to_vec(),
         }
@@ -54,7 +54,7 @@ impl<'a> TryFrom<git2::Tree<'a>> for Object {
         }
 
         let tree = Object::Tree {
-            hash: tree.id().as_bytes().to_vec(),
+            hash: dba::Oid::from_sha1(tree.id().as_bytes()),
             entries,
         };
 
@@ -68,16 +68,14 @@ impl<'a> TryFrom<git2::Commit<'a>> for Object {
     fn try_from(commit: git2::Commit) -> Result<Object> {
         let mut parents = Vec::with_capacity(commit.parent_count());
         for i in 0..parents.capacity() {
-            parents.push(
-                err_at!(FailGitapi, commit.parent_id(i))?
-                    .as_bytes()
-                    .to_vec(),
-            );
+            parents.push(dba::Oid::from_sha1(
+                err_at!(FailGitapi, commit.parent_id(i))?.as_bytes(),
+            ));
         }
         let tree = err_at!(FailGitapi, commit.tree())?;
 
         let obj = Object::Commit {
-            hash: commit.id().as_bytes().to_vec(),
+            hash: dba::Oid::from_sha1(commit.id().as_bytes()),
             tree: Object::try_from(tree)?.into(),
             parents,
             author: commit.author().try_into()?,

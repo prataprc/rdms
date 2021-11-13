@@ -1,4 +1,5 @@
-//! Traits and Types, related to core-database, and required by rest of this package.
+//! Traits and Types, related to core-database. The kind of database that follows
+//! synchronous distribution of data, does sequence-numbering of each mutation.
 
 use std::{borrow::Borrow, hash::Hash};
 

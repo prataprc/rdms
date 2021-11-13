@@ -34,7 +34,10 @@ pub enum SubCommand {
         #[structopt(long = "db")]
         loc_db: Option<ffi::OsString>,
 
-        loc_repo: ffi::OsString,
+        #[structopt(long = "hash-file")]
+        hash_file: Option<ffi::OsString>,
+
+        loc_repo: Option<ffi::OsString>,
     },
 }
 

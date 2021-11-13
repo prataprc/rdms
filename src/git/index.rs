@@ -15,6 +15,7 @@ use git2::{Repository, RepositoryInitMode, RepositoryInitOptions, RepositoryOpen
 use std::{file, fmt, fs, ops::Bound, ops::RangeBounds, path, result, time};
 
 use crate::{
+    dba,
     git::{Config, Permissions},
     Error, Result,
 };
@@ -124,13 +125,13 @@ impl Index {
 
 impl Index {
     /// Get the git blob corresponding to the specified key.
-    pub fn get<P>(&self, key: P) -> Result<Option<Entry>>
+    pub fn get<K>(&self, key: K) -> Result<Option<Entry>>
     where
-        P: Clone + AsRef<path::Path>,
+        K: Clone + dba::AsKey,
     {
-        let key: &path::Path = key.as_ref();
+        let key: path::PathBuf = key.to_key_path()?.into_iter().collect();
         let tree = self.get_db_root()?.into_tree().unwrap();
-        let te = err_at!(FailGitapi, tree.get_path(key))?;
+        let te = err_at!(FailGitapi, tree.get_path(&key))?;
 
         let data = {
             let obj = err_at!(FailGitapi, te.to_object(&self.repo))?;

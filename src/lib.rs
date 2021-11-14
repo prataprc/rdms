@@ -104,6 +104,7 @@ pub mod bitmaps;
 pub mod git;
 mod index;
 pub mod wral;
+pub mod zimf;
 
 pub use error::Error;
 pub use index::Index;

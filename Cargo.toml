@@ -25,6 +25,10 @@ required-features = ["rdms"]
 name = "crio"
 required-features = ["crio"]
 
+[[bin]]
+name = "zimf"
+required-features = ["zimf"]
+
 [badges]
 maintenance = { status = "actively-developed" }
 travis-ci = { repository = "bnclabs/rdms" }
@@ -41,9 +45,13 @@ fasthash = "0.4.0"
 git2 = "0.13.20"
 serde = { version = "1", features = ["derive"] }
 chrono = "0.4.19"
+binread = "2.2.0"
+uuid = "0.8.2"
+rand = { version = "0.8.4", features = ["small_rng"] }
+xz2 = "0.1.6"
+zstd = "0.9.0"
 
 structopt = { version = "0.3.20", default-features = false, optional = true }
-rand = { version = "0.8.4", features = ["small_rng"], optional = true }
 lmdb = { version = "0.8.0", optional = true }
 csv = { version = "1.1", optional = true }
 url = { version = "2.2.2", features = ["serde"], optional = true }
@@ -51,6 +59,7 @@ ureq = { version = "2.3", optional = true }
 tar = { version = "0.4", optional = true }
 flate2 = { version = "1.0", optional = true }
 sha-1 = { version = "0.9.8", optional = true }
+prettytable-rs = { version="0.8.0", optional = true }
 
 # jsondata = "0.6.2"
 # jsondata = { git = "https://github.com/bnclabs/jsondata.git" }
@@ -62,9 +71,9 @@ sha-1 = { version = "0.9.8", optional = true }
 jemallocator = "0.3.2"
 
 [dev-dependencies]
-rand = { version = "0.8.4", features = ["small_rng"]}
 crc = "2.1.0"
 
 [features]
-rdms = ["structopt", "rand", "lmdb", "sha-1"]
+rdms = ["structopt", "lmdb", "sha-1"]
 crio = ["structopt", "csv", "url", "ureq", "tar", "flate2"]
+zimf = ["structopt", "prettytable-rs"]

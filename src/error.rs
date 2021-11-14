@@ -25,6 +25,8 @@ pub enum Error {
     /// Invalid input from application, like function arguments,
     /// file input etc..
     InvalidInput(String, String),
+    /// Invalid format of data
+    InvalidFormat(String, String),
     /// API is being misused, as in there are not invoked in
     /// suggested order/manner.
     APIMisuse(String, String),
@@ -138,6 +140,7 @@ impl fmt::Display for Error {
             Error::ThreadFail(p, m) => write!(f, "{} ThreadFail:{}", p, m),
             Error::SystemFail(p, m) => write!(f, "{} SystemFail:{}", p, m),
             Error::InvalidInput(p, m) => write!(f, "{} InvalidInput:{}", p, m),
+            Error::InvalidFormat(p, m) => write!(f, "{} InvalidFormat:{}", p, m),
             Error::APIMisuse(p, m) => write!(f, "{} APIMisuse:{}", p, m),
             Error::InvalidFile(p, m) => write!(f, "{} InvalidFile:{}", p, m),
             Error::FailConvert(p, m) => write!(f, "{} FailConvert:{}", p, m),

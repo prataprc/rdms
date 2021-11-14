@@ -1560,7 +1560,7 @@ fn random_llrb(
                 let value: i64 = rng.gen();
                 {
                     let cas = match llrb.get(&key) {
-                        Err(Error::KeyNotFound) => 0,
+                        Err(Error::NotFound) => 0,
                         Err(_err) => unreachable!(),
                         Ok(e) => e.to_seqno(),
                     };
@@ -1568,7 +1568,7 @@ fn random_llrb(
                 }
                 {
                     let cas = match refi.get(&key) {
-                        Err(Error::KeyNotFound) => 0,
+                        Err(Error::NotFound) => 0,
                         Err(_err) => unreachable!(),
                         Ok(e) => e.to_seqno(),
                     };
@@ -1614,7 +1614,7 @@ fn random_mvcc(
                 let value: i64 = rng.gen();
                 {
                     let cas = match mvcc.get(&key) {
-                        Err(Error::KeyNotFound) => 0,
+                        Err(Error::NotFound) => 0,
                         Err(_err) => unreachable!(),
                         Ok(e) => e.to_seqno(),
                     };
@@ -1622,7 +1622,7 @@ fn random_mvcc(
                 }
                 {
                     let cas = match refi.get(&key) {
-                        Err(Error::KeyNotFound) => 0,
+                        Err(Error::NotFound) => 0,
                         Err(_err) => unreachable!(),
                         Ok(e) => e.to_seqno(),
                     };
@@ -1688,7 +1688,7 @@ fn concurrent_write(
             1 => {
                 let value: i64 = rng.gen();
                 let cas = match r.get(&key) {
-                    Err(Error::KeyNotFound) => 0,
+                    Err(Error::NotFound) => 0,
                     Err(_err) => unreachable!(),
                     Ok(e) => e.to_seqno(),
                 };

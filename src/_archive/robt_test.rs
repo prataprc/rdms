@@ -828,7 +828,8 @@ fn test_compact_lsm_cutoff() {
             _ => unreachable!(),
         };
         for e in entries.into_iter() {
-            let mut seqnos: Vec<u64> = e.as_deltas().iter().map(|d| d.to_seqno()).collect();
+            let mut seqnos: Vec<u64> =
+                e.as_deltas().iter().map(|d| d.to_seqno()).collect();
             seqnos.insert(0, e.to_seqno());
             for seqno in seqnos {
                 match cutoff {
@@ -1350,7 +1351,8 @@ fn run_robt_llrb(name: &str, n_ops: u64, key_max: i64, repeat: usize, seed: u128
             dir.push("test-robt-build");
             dir.into_os_string()
         };
-        let b = Builder::<i64, i64, CRoaring>::initial(&dir, name, config.clone()).unwrap();
+        let b =
+            Builder::<i64, i64, CRoaring>::initial(&dir, name, config.clone()).unwrap();
         let app_meta = "heloo world".to_string();
         b.build(iter, app_meta.as_bytes().to_vec()).unwrap();
 
@@ -1564,7 +1566,7 @@ fn random_llrb(n_ops: i64, key_max: i64, seed: u128, llrb: &mut Llrb<i64, i64>) 
                 // println!("key {} {} {} {}", key, llrb.to_seqno(), op, value);
                 {
                     let cas = match llrb.get(&key) {
-                        Err(Error::KeyNotFound) => 0,
+                        Err(Error::NotFound) => 0,
                         Err(_err) => unreachable!(),
                         Ok(e) => e.to_seqno(),
                     };

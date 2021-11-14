@@ -40,7 +40,7 @@ pub enum Error {
     FailGitapi(String, String),
 
     /// Supplied key is not found in the index.
-    KeyNotFound(String, String),
+    NotFound(String, String),
     /// Index is empty
     EmptyIndex(String, String),
     /// Can be returned by set_cas() API when:
@@ -143,7 +143,7 @@ impl fmt::Display for Error {
             Error::FailConvert(p, m) => write!(f, "{} FailConvert:{}", p, m),
             Error::IOError(p, m) => write!(f, "{} IoError:{}", p, m),
             Error::FailGitapi(p, m) => write!(f, "{} FailGitapi:{}", p, m),
-            Error::KeyNotFound(p, m) => write!(f, "{} KeyNotFound:{}", p, m),
+            Error::NotFound(p, m) => write!(f, "{} NotFound:{}", p, m),
             Error::EmptyIndex(p, m) => write!(f, "{} EmptyIndex:{}", p, m),
             Error::InvalidCAS(p, m) => write!(f, "{} InvalidCAS:{}", p, m),
             Error::KeySizeExceeded(p, m) => write!(f, "{} KeySizeExceeded:{}", p, m),

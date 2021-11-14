@@ -2252,9 +2252,9 @@ where
 
         match Rs::get(&mut w_rs.rs, &key) {
             Ok(old) if cas == old.to_seqno() => Ok(()),
-            Err(Error::KeyNotFound) if cas == 0 => Ok(()),
+            Err(Error::NotFound) if cas == 0 => Ok(()),
             Ok(old) => Err(Error::InvalidCAS(old.to_seqno())),
-            Err(Error::KeyNotFound) => Err(Error::InvalidCAS(0)),
+            Err(Error::NotFound) => Err(Error::InvalidCAS(0)),
             Err(err) => Err(err),
         }?;
 
@@ -2314,14 +2314,14 @@ where
     {
         match self.r_m0.get(key) {
             Ok(entry) => return Ok(entry),
-            Err(Error::KeyNotFound) => (),
+            Err(Error::NotFound) => (),
             Err(err) => return Err(err),
         }
 
         if let Some(m1) = &mut self.r_m1 {
             match m1.get(key) {
                 Ok(entry) => return Ok(entry),
-                Err(Error::KeyNotFound) => (),
+                Err(Error::NotFound) => (),
                 Err(err) => return Err(err),
             }
         }
@@ -2331,10 +2331,10 @@ where
             match iter.next() {
                 Some(disk) => match disk.get(key) {
                     Ok(entry) => break Ok(entry),
-                    Err(Error::KeyNotFound) => (),
+                    Err(Error::NotFound) => (),
                     Err(err) => break Err(err),
                 },
-                None => break Err(Error::KeyNotFound),
+                None => break Err(Error::NotFound),
             }
         }
     }
@@ -2425,7 +2425,7 @@ where
     {
         let m0_entry = match rs.r_m0.get_with_versions(key) {
             Ok(entry) => Ok(Some(entry)),
-            Err(Error::KeyNotFound) => Ok(None),
+            Err(Error::NotFound) => Ok(None),
             Err(err) => Err(err),
         }?;
 
@@ -2433,8 +2433,8 @@ where
             Some(m1) => match (m1.get_with_versions(key), m0_entry) {
                 (Ok(m1_e), Some(m0_e)) => Ok(Some(m0_e.xmerge(m1_e)?)),
                 (Ok(m1_e), None) => Ok(Some(m1_e)),
-                (Err(Error::KeyNotFound), Some(m0_e)) => Ok(Some(m0_e)),
-                (Err(Error::KeyNotFound), None) => Ok(None),
+                (Err(Error::NotFound), Some(m0_e)) => Ok(Some(m0_e)),
+                (Err(Error::NotFound), None) => Ok(None),
                 (Err(err), _) => Err(err),
             },
             None => Ok(m0_entry),
@@ -2446,15 +2446,15 @@ where
                 Some(disk) => match (disk.get_with_versions(key), entry) {
                     (Ok(e), Some(entry)) => Ok(Some(entry.xmerge(e)?)),
                     (Ok(e), None) => Ok(Some(e)),
-                    (Err(Error::KeyNotFound), Some(entry)) => Ok(Some(entry)),
-                    (Err(Error::KeyNotFound), None) => Ok(None),
+                    (Err(Error::NotFound), Some(entry)) => Ok(Some(entry)),
+                    (Err(Error::NotFound), None) => Ok(None),
                     (Err(err), _) => Err(err),
                 },
                 None => break entry,
             }?;
         };
 
-        entry.ok_or(Error::KeyNotFound)
+        entry.ok_or(Error::NotFound)
     }
 
     fn iter_with_versions(mut rs: MutexGuard<Rs<K, V, M, D>>) -> Result<IndexIter<K, V>> {

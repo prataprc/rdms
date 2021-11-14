@@ -1,180 +1,169 @@
-use chrono::TimeZone;
+use std::{fmt, result};
 
-use std::convert::{TryFrom, TryInto};
+use crate::dba;
 
-use crate::{dba, Error, Result};
-
+#[derive(Clone)]
 pub enum Object {
     Oid {
-        hash: dba::Oid,
+        hash: Oid,
     },
     Blob {
-        hash: dba::Oid,
-        older: Vec<dba::Oid>,
+        hash: Oid,
+        older: Vec<Oid>,
         value: Vec<u8>,
     },
     Tree {
-        hash: dba::Oid,
-        entries: Vec<Entry>,
+        hash: Oid,
+        edges: Vec<Edge>,
     },
     Commit {
-        hash: dba::Oid,
+        hash: Oid,
         tree: Box<Object>,
-        parents: Vec<dba::Oid>,
+        parents: Vec<Oid>,
         author: User,
-        commiter: User,
+        committer: User,
     },
 }
 
-impl From<git2::Oid> for Object {
-    fn from(oid: git2::Oid) -> Object {
-        Object::Oid {
-            hash: dba::Oid::from_sha1(oid.as_bytes()),
+impl Object {
+    pub fn to_oid(&self) -> Oid {
+        match self {
+            Object::Oid { hash } => hash.clone(),
+            Object::Blob { hash, .. } => hash.clone(),
+            Object::Tree { hash, .. } => hash.clone(),
+            Object::Commit { hash, .. } => hash.clone(),
+        }
+    }
+
+    pub fn as_value(&self) -> Option<&[u8]> {
+        match self {
+            Object::Blob { value, .. } => Some(value),
+            _ => None,
+        }
+    }
+
+    pub fn iter_edges(&self) -> Option<impl Iterator<Item = &Edge>> {
+        match self {
+            Object::Tree { edges, .. } => Some(edges.iter()),
+            _ => None,
+        }
+    }
+
+    pub fn as_tree(&self) -> Option<&Object> {
+        match self {
+            Object::Commit { tree, .. } => Some(tree),
+            _ => None,
+        }
+    }
+
+    pub fn iter_parents(&self) -> Option<impl Iterator<Item = &Oid>> {
+        match self {
+            Object::Commit { parents, .. } => Some(parents.iter()),
+            _ => None,
+        }
+    }
+
+    pub fn as_author(&self) -> Option<&User> {
+        match self {
+            Object::Commit { author, .. } => Some(author),
+            _ => None,
+        }
+    }
+
+    pub fn as_committer(&self) -> Option<&User> {
+        match self {
+            Object::Commit { committer, .. } => Some(committer),
+            _ => None,
         }
     }
 }
 
-impl<'a> From<git2::Blob<'a>> for Object {
-    fn from(blob: git2::Blob) -> Object {
-        Object::Blob {
-            hash: dba::Oid::from_sha1(blob.id().as_bytes()),
-            older: Vec::default(),
-            value: blob.content().to_vec(),
-        }
-    }
-}
-
-impl<'a> TryFrom<git2::Tree<'a>> for Object {
-    type Error = Error;
-
-    fn try_from(tree: git2::Tree) -> Result<Object> {
-        let mut entries = Vec::with_capacity(tree.len());
-        for entry in tree.iter() {
-            entries.push(entry.try_into()?);
-        }
-
-        let tree = Object::Tree {
-            hash: dba::Oid::from_sha1(tree.id().as_bytes()),
-            entries,
-        };
-
-        Ok(tree)
-    }
-}
-
-impl<'a> TryFrom<git2::Commit<'a>> for Object {
-    type Error = Error;
-
-    fn try_from(commit: git2::Commit) -> Result<Object> {
-        let mut parents = Vec::with_capacity(commit.parent_count());
-        for i in 0..parents.capacity() {
-            parents.push(dba::Oid::from_sha1(
-                err_at!(FailGitapi, commit.parent_id(i))?.as_bytes(),
-            ));
-        }
-        let tree = err_at!(FailGitapi, commit.tree())?;
-
-        let obj = Object::Commit {
-            hash: dba::Oid::from_sha1(commit.id().as_bytes()),
-            tree: Object::try_from(tree)?.into(),
-            parents,
-            author: commit.author().try_into()?,
-            commiter: commit.committer().try_into()?,
-        };
-
-        Ok(obj)
-    }
-}
-
-pub struct Entry {
+#[derive(Clone)]
+pub struct Edge {
     pub file_mode: i32,
     pub obj_type: Type,
-    pub obj_hash: Vec<u8>,
+    pub obj_hash: Oid,
     pub name: String,
 }
 
-impl<'a> TryFrom<git2::TreeEntry<'a>> for Entry {
-    type Error = Error;
-
-    fn try_from(te: git2::TreeEntry) -> Result<Entry> {
-        let name = match te.name() {
-            Some(name) => Ok(name),
-            None => err_at!(FailGitapi, msg: "missing name for entry"),
-        }?
-        .to_string();
-        let obj_type: Type = match te.kind() {
-            Some(obj_type) => obj_type.try_into(),
-            None => err_at!(FailGitapi, msg: "missing kind for {}", name),
-        }?;
-
-        let entry = Entry {
-            file_mode: te.filemode(),
-            obj_type,
-            obj_hash: te.id().as_bytes().to_vec(),
-            name,
-        };
-
-        Ok(entry)
-    }
-}
-
+#[derive(Clone)]
 pub enum Type {
     Blob,
     Tree,
     Commit,
 }
 
-impl TryFrom<git2::ObjectType> for Type {
-    type Error = Error;
-
-    fn try_from(t: git2::ObjectType) -> Result<Type> {
-        match t {
-            git2::ObjectType::Blob => Ok(Type::Blob),
-            git2::ObjectType::Tree => Ok(Type::Tree),
-            git2::ObjectType::Commit => Ok(Type::Commit),
-            _ => err_at!(FailGitapi, msg: "object-type {} is invalid", t),
-        }
-    }
-}
-
+#[derive(Clone)]
 pub struct User {
     pub name: String,
     pub email: String,
     pub timestamp: u64, // utc timestamp from epoch.
 }
 
-impl<'a> TryFrom<git2::Signature<'a>> for User {
-    type Error = Error;
+#[derive(Clone)]
+pub enum Oid {
+    Sha1 { hash: [u8; 20] },
+}
 
-    fn try_from(signt: git2::Signature) -> Result<User> {
-        let name = match signt.name() {
-            Some(name) => Ok(name),
-            None => err_at!(FailGitapi, msg: "missing user name in signature"),
-        }?
-        .to_string();
+impl Oid {
+    pub fn from_sha1(bytes: &[u8]) -> Oid {
+        let mut hash = [0; 20];
+        hash[..].copy_from_slice(bytes);
+        Oid::Sha1 { hash }
+    }
 
-        let timestamp = {
-            let time = signt.when();
-            let ts = chrono::Utc.timestamp(time.seconds(), 0);
-            let offset = match time.offset_minutes() {
-                minutes if minutes < 0 => chrono::FixedOffset::west(minutes * 60),
-                minutes => chrono::FixedOffset::east(minutes * 60),
-            };
-            err_at!(FailConvert, (ts + offset).timestamp().try_into())?
-        };
+    pub fn to_shah1(&self) -> &[u8] {
+        match self {
+            Oid::Sha1 { hash } => hash,
+        }
+    }
+}
 
-        let email = match signt.email() {
-            Some(email) => Ok(email),
-            None => err_at!(FailGitapi, msg: "missing email in signature for {}", name),
-        }?
-        .to_string();
+#[derive(Clone)]
+pub struct Entry<K>
+where
+    K: dba::AsKey,
+{
+    key: K,
+    obj: dba::Object,
+}
 
-        let user = User {
-            name,
-            email,
-            timestamp,
-        };
+impl<K> Entry<K>
+where
+    K: dba::AsKey,
+{
+    pub fn from_object(key: K, obj: dba::Object) -> Entry<K> {
+        Entry { key, obj }
+    }
+}
 
-        Ok(user)
+impl<K> Entry<K>
+where
+    K: dba::AsKey,
+{
+    pub fn as_key(&self) -> &K {
+        &self.key
+    }
+
+    pub fn as_obj(&self) -> &dba::Object {
+        &self.obj
+    }
+}
+
+impl<K> fmt::Display for Entry<K>
+where
+    K: dba::AsKey + fmt::Display,
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
+        write!(f, "Entry<{}>", self.key)
+    }
+}
+
+impl<K> fmt::Debug for Entry<K>
+where
+    K: dba::AsKey + fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
+        write!(f, "Entry<{:?}>", self.key)
     }
 }

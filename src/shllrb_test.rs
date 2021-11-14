@@ -82,12 +82,12 @@ fn test_lsm_sticky() {
     let mut r = index.to_reader().unwrap();
     let key = populate(&mut index);
     match r.get(&key) {
-        Err(Error::KeyNotFound) => (),
+        Err(Error::NotFound) => (),
         Err(err) => panic!("unexpected {:?}", err),
         Ok(e) => panic!("unexpected {}", e.to_seqno()),
     };
     match r.get(&missing_key) {
-        Err(Error::KeyNotFound) => (),
+        Err(Error::NotFound) => (),
         Err(err) => panic!("unexpected {:?}", err),
         Ok(e) => panic!("unexpected {}", e.to_seqno()),
     };
@@ -99,7 +99,7 @@ fn test_lsm_sticky() {
     let key = populate(&mut index);
     let mut r = index.to_reader().unwrap();
     match r.get(&key) {
-        Err(Error::KeyNotFound) => (),
+        Err(Error::NotFound) => (),
         Err(err) => panic!("unexpected {:?}", err),
         Ok(e) => {
             assert_eq!(e.is_deleted(), true);
@@ -112,7 +112,7 @@ fn test_lsm_sticky() {
         }
     };
     match r.get(&missing_key) {
-        Err(Error::KeyNotFound) => (),
+        Err(Error::NotFound) => (),
         Err(err) => panic!("unexpected {:?}", err),
         Ok(e) => {
             assert_eq!(e.is_deleted(), true);
@@ -132,7 +132,7 @@ fn test_lsm_sticky() {
     let key = populate(&mut index);
     let mut r = index.to_reader().unwrap();
     match r.get(&key) {
-        Err(Error::KeyNotFound) => (),
+        Err(Error::NotFound) => (),
         Err(err) => panic!("unexpected {:?}", err),
         Ok(e) => {
             assert_eq!(e.is_deleted(), true);
@@ -156,7 +156,7 @@ fn test_lsm_sticky() {
         }
     };
     match r.get(&missing_key) {
-        Err(Error::KeyNotFound) => (),
+        Err(Error::NotFound) => (),
         Err(err) => panic!("unexpected {:?}", err),
         Ok(e) => {
             assert_eq!(e.is_deleted(), true);
@@ -1219,7 +1219,7 @@ fn random_index(n_ops: i64, key_max: i64, seed: u64, index: &mut ShLlrb<i64, i64
                 let value: i64 = rng.gen();
                 {
                     let cas = match r.get(&key) {
-                        Err(Error::KeyNotFound) => 0,
+                        Err(Error::NotFound) => 0,
                         Err(_err) => unreachable!(),
                         Ok(e) => e.to_seqno(),
                     };

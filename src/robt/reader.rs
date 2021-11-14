@@ -136,7 +136,7 @@ where
         loop {
             let off = match es.binary_search_by(|e| e.borrow_key().cmp(ukey)) {
                 Ok(off) => off,
-                Err(off) if off == 0 => break err_at!(KeyNotFound, msg: "missing key"),
+                Err(off) if off == 0 => break err_at!(NotFound, msg: "missing key"),
                 Err(off) => off - 1,
             };
             es = match es[off].clone() {
@@ -162,7 +162,7 @@ where
                     };
                     break Ok(entry);
                 }
-                _ => break err_at!(KeyNotFound, msg: "missing key"),
+                _ => break err_at!(NotFound, msg: "missing key"),
             }
         }
     }

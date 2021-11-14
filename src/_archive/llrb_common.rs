@@ -65,7 +65,7 @@ where
             Ordering::Greater => get(nref.as_left_deref(), key),
             Ordering::Equal => Ok(nref.entry.clone()),
         },
-        None => Err(Error::KeyNotFound),
+        None => Err(Error::NotFound),
     }
 }
 

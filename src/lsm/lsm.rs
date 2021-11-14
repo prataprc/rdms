@@ -26,7 +26,7 @@ where
     Box::new(move |key: &Q| -> Result<Entry<K, V>> {
         match x(key) {
             Ok(entry) => Ok(entry),
-            Err(Error::KeyNotFound) => y(key),
+            Err(Error::NotFound) => y(key),
             Err(err) => Err(err),
         }
     })
@@ -49,10 +49,10 @@ where
         match y(key) {
             Ok(y_entry) => match x(key) {
                 Ok(x_entry) => x_entry.xmerge(y_entry),
-                Err(Error::KeyNotFound) => Ok(y_entry),
+                Err(Error::NotFound) => Ok(y_entry),
                 res => res,
             },
-            Err(Error::KeyNotFound) => x(key),
+            Err(Error::NotFound) => x(key),
             res => res,
         }
     })
@@ -241,7 +241,10 @@ where
 }
 
 #[allow(dead_code)] // TODO: remove if not required.
-pub(crate) fn getter<'a, 'b, I, K, V, Q>(index: &'a mut I, versions: bool) -> LsmGet<'a, K, V, Q>
+pub(crate) fn getter<'a, 'b, I, K, V, Q>(
+    index: &'a mut I,
+    versions: bool,
+) -> LsmGet<'a, K, V, Q>
 where
     K: Clone + Ord + Borrow<Q>,
     V: Clone + Diff,

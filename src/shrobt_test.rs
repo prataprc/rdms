@@ -857,7 +857,7 @@ fn random_llrb(n_ops: i64, key_max: i64, seed: u64, mindex: &mut Llrb<i64, i64>)
                 // println!("key {} {} {} {}", key, _seqno, op, value);
                 {
                     let cas = match mindex.get(&key) {
-                        Err(Error::KeyNotFound) => 0,
+                        Err(Error::NotFound) => 0,
                         Err(_err) => unreachable!(),
                         Ok(e) => e.to_seqno(),
                     };

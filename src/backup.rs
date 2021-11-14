@@ -136,7 +136,7 @@ struct Root {
     lsm: bool,
     archive: bool,
     disk_ratio: f64,
-    backup_interval: Option<time::Duration>,  // in seconds.
+    backup_interval: Option<time::Duration>, // in seconds.
     compact_interval: Option<time::Duration>, // in seconds.
 }
 
@@ -560,7 +560,8 @@ where
     disks: Vec<Snapshot<K, V, D::I>>, // NLEVELS
 
     writers: Vec<Arc<Mutex<Ws<K, V, <M::I as Index<K, V>>::W>>>>,
-    readers: Vec<Arc<Mutex<Rs<K, V, <M::I as Index<K, V>>::R, <D::I as Index<K, V>>::R>>>>,
+    readers:
+        Vec<Arc<Mutex<Rs<K, V, <M::I as Index<K, V>>::R, <D::I as Index<K, V>>::R>>>>,
 }
 
 impl<K, V, M, D> InnerBackup<K, V, M, D>
@@ -1494,7 +1495,10 @@ where
         Ok(())
     }
 
-    fn do_compact(inner: &Arc<Mutex<InnerDgm<K, V, M, D>>>, cutoff: Cutoff) -> Result<usize> {
+    fn do_compact(
+        inner: &Arc<Mutex<InnerDgm<K, V, M, D>>>,
+        cutoff: Cutoff,
+    ) -> Result<usize> {
         match cutoff {
             Cutoff::Mono => {
                 let msg = format!("can't have mono-cutoff");
@@ -1857,7 +1861,8 @@ where
             return Err(Error::UnExpectedFail(msg));
         }
 
-        let mut seqnos: Vec<u64> = entry.as_deltas().iter().map(|d| d.to_seqno()).collect();
+        let mut seqnos: Vec<u64> =
+            entry.as_deltas().iter().map(|d| d.to_seqno()).collect();
         seqnos.insert(0, entry.to_seqno());
         max_seqno = cmp::max(
             max_seqno,
@@ -2132,7 +2137,10 @@ where
         Ok(Box::new(BackupIter::new(rs, iter)))
     }
 
-    fn range<'a, R, Q>(mut rs: MutexGuard<'a, Rs<K, V, M, D>>, range: R) -> Result<IndexIter<K, V>>
+    fn range<'a, R, Q>(
+        mut rs: MutexGuard<'a, Rs<K, V, M, D>>,
+        range: R,
+    ) -> Result<IndexIter<K, V>>
     where
         K: Borrow<Q>,
         R: 'a + Clone + RangeBounds<Q>,
@@ -2155,14 +2163,17 @@ where
         Ok(Box::new(BackupIter::new(rs, iter)))
     }
 
-    fn get_with_versions<Q>(mut rs: MutexGuard<Rs<K, V, M, D>>, key: &Q) -> Result<Entry<K, V>>
+    fn get_with_versions<Q>(
+        mut rs: MutexGuard<Rs<K, V, M, D>>,
+        key: &Q,
+    ) -> Result<Entry<K, V>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized + Hash,
     {
         let mem_entry = match rs.r_mem.get_with_versions(key) {
             Ok(entry) => Ok(Some(entry)),
-            Err(Error::KeyNotFound) => Ok(None),
+            Err(Error::NotFound) => Ok(None),
             Err(err) => Err(err),
         }?;
 
@@ -2173,8 +2184,8 @@ where
                     Some(disk) => match (disk.get_with_versions(key), entry) {
                         (Ok(e), Some(entry)) => Ok(Some(entry.xmerge(e)?)),
                         (Ok(e), None) => Ok(Some(e)),
-                        (Err(Error::KeyNotFound), Some(entry)) => Ok(Some(entry)),
-                        (Err(Error::KeyNotFound), None) => Ok(None),
+                        (Err(Error::NotFound), Some(entry)) => Ok(Some(entry)),
+                        (Err(Error::NotFound), None) => Ok(None),
                         (Err(err), _) => Err(err),
                     },
                     None => break entry,
@@ -2184,7 +2195,7 @@ where
             mem_entry
         };
 
-        entry.ok_or(Error::KeyNotFound)
+        entry.ok_or(Error::NotFound)
     }
 
     fn iter_with_versions(mut rs: MutexGuard<Rs<K, V, M, D>>) -> Result<IndexIter<K, V>> {
@@ -2430,7 +2441,11 @@ where
         panic!("backup-reader, scans() not supported by {} !!", self.name);
     }
 
-    fn range_scans<N, G>(&mut self, _ranges: Vec<N>, _within: G) -> Result<Vec<IndexIter<K, V>>>
+    fn range_scans<N, G>(
+        &mut self,
+        _ranges: Vec<N>,
+        _within: G,
+    ) -> Result<Vec<IndexIter<K, V>>>
     where
         G: Clone + RangeBounds<u64>,
         N: Clone + RangeBounds<K>,
@@ -2578,7 +2593,11 @@ where
         Ok(result_iters)
     }
 
-    fn range_scans<N, G>(&mut self, ranges: Vec<N>, within: G) -> Result<Vec<IndexIter<K, V>>>
+    fn range_scans<N, G>(
+        &mut self,
+        ranges: Vec<N>,
+        within: G,
+    ) -> Result<Vec<IndexIter<K, V>>>
     where
         N: Clone + RangeBounds<K>,
         G: Clone + RangeBounds<u64>,
@@ -2626,7 +2645,8 @@ where
     <M as WriteIndexFactory<K, V>>::I: 'static + Send + Footprint,
     <<M as WriteIndexFactory<K, V>>::I as Index<K, V>>::R: 'static + Send,
     <<M as WriteIndexFactory<K, V>>::I as Index<K, V>>::W: 'static + Send,
-    <D as DiskIndexFactory<K, V>>::I: 'static + Send + CommitIterator<K, V> + Footprint + Clone,
+    <D as DiskIndexFactory<K, V>>::I:
+        'static + Send + CommitIterator<K, V> + Footprint + Clone,
     <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::R: 'static + Send,
     <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::W: 'static + Send,
 {
@@ -2710,7 +2730,8 @@ where
     <M as WriteIndexFactory<K, V>>::I: 'static + Send + Footprint,
     <<M as WriteIndexFactory<K, V>>::I as Index<K, V>>::R: 'static + Send,
     <<M as WriteIndexFactory<K, V>>::I as Index<K, V>>::W: 'static + Send,
-    <D as DiskIndexFactory<K, V>>::I: 'static + Send + CommitIterator<K, V> + Footprint + Clone,
+    <D as DiskIndexFactory<K, V>>::I:
+        'static + Send + CommitIterator<K, V> + Footprint + Clone,
     <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::R: 'static + Send,
     <<D as DiskIndexFactory<K, V>>::I as Index<K, V>>::W: 'static + Send,
 {

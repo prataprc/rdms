@@ -54,12 +54,12 @@ fn test_lsm_sticky() {
     let mut index: Box<Mvcc<i64, i64>> = Mvcc::new("test-mvcc");
     let key = populate(&mut index);
     match index.get(&key) {
-        Err(Error::KeyNotFound) => (),
+        Err(Error::NotFound) => (),
         Err(err) => panic!("unexpected {:?}", err),
         Ok(e) => panic!("unexpected {}", e.to_seqno()),
     };
     match index.get(&missing_key) {
-        Err(Error::KeyNotFound) => (),
+        Err(Error::NotFound) => (),
         Err(err) => panic!("unexpected {:?}", err),
         Ok(e) => panic!("unexpected {}", e.to_seqno()),
     };
@@ -69,7 +69,7 @@ fn test_lsm_sticky() {
     index.set_sticky(true).unwrap();
     let key = populate(&mut index);
     match index.get(&key) {
-        Err(Error::KeyNotFound) => (),
+        Err(Error::NotFound) => (),
         Err(err) => panic!("unexpected {:?}", err),
         Ok(e) => {
             assert_eq!(e.is_deleted(), true);
@@ -82,7 +82,7 @@ fn test_lsm_sticky() {
         }
     };
     match index.get(&missing_key) {
-        Err(Error::KeyNotFound) => (),
+        Err(Error::NotFound) => (),
         Err(err) => panic!("unexpected {:?}", err),
         Ok(e) => {
             assert_eq!(e.is_deleted(), true);
@@ -100,7 +100,7 @@ fn test_lsm_sticky() {
     index.set_sticky(true).unwrap();
     let key = populate(&mut index);
     match index.get(&key) {
-        Err(Error::KeyNotFound) => (),
+        Err(Error::NotFound) => (),
         Err(err) => panic!("unexpected {:?}", err),
         Ok(e) => {
             assert_eq!(e.is_deleted(), true);
@@ -110,7 +110,8 @@ fn test_lsm_sticky() {
             assert_eq!(es.len(), 5);
             let seqnos: Vec<u64> = es.iter().map(|e| e.to_seqno()).collect();
             let dels: Vec<bool> = es.iter().map(|e| e.is_deleted()).collect();
-            let values: Vec<i64> = es.iter().filter_map(|e| e.to_native_value()).collect();
+            let values: Vec<i64> =
+                es.iter().filter_map(|e| e.to_native_value()).collect();
 
             assert_eq!(&seqnos[..4], &[504, 503, 502, 501]);
             assert_eq!(dels, &[true, false, true, false, false]);
@@ -120,7 +121,7 @@ fn test_lsm_sticky() {
         }
     };
     match index.get(&missing_key) {
-        Err(Error::KeyNotFound) => (),
+        Err(Error::NotFound) => (),
         Err(err) => panic!("unexpected {:?}", err),
         Ok(e) => {
             assert_eq!(e.is_deleted(), true);
@@ -1125,17 +1126,19 @@ fn test_commit_iterator_scan() {
         let mut count = 0;
         loop {
             match ref_iter.next() {
-                Some(Ok(ref_entry)) => match ref_entry.filter_within(within.0, within.1) {
-                    Some(ref_entry) => match iter.next() {
-                        Some(Ok(entry)) => {
-                            check_node1(&entry, &ref_entry);
-                            count += 1;
-                        }
-                        Some(Err(err)) => panic!("{:?}", err),
-                        None => unreachable!(),
-                    },
-                    None => continue,
-                },
+                Some(Ok(ref_entry)) => {
+                    match ref_entry.filter_within(within.0, within.1) {
+                        Some(ref_entry) => match iter.next() {
+                            Some(Ok(entry)) => {
+                                check_node1(&entry, &ref_entry);
+                                count += 1;
+                            }
+                            Some(Err(err)) => panic!("{:?}", err),
+                            None => unreachable!(),
+                        },
+                        None => continue,
+                    }
+                }
                 Some(Err(err)) => panic!("{:?}", err),
                 None => {
                     assert!(iter.next().is_none());
@@ -1212,17 +1215,19 @@ fn test_commit_iterator_scans2() {
         let mut count = 0;
         loop {
             match ref_iter.next() {
-                Some(Ok(ref_entry)) => match ref_entry.filter_within(within.0, within.1) {
-                    Some(ref_entry) => match iter.next() {
-                        Some(Ok(entry)) => {
-                            check_node1(&entry, &ref_entry);
-                            count += 1;
-                        }
-                        Some(Err(err)) => panic!("{:?}", err),
-                        None => unreachable!(),
-                    },
-                    None => continue,
-                },
+                Some(Ok(ref_entry)) => {
+                    match ref_entry.filter_within(within.0, within.1) {
+                        Some(ref_entry) => match iter.next() {
+                            Some(Ok(entry)) => {
+                                check_node1(&entry, &ref_entry);
+                                count += 1;
+                            }
+                            Some(Err(err)) => panic!("{:?}", err),
+                            None => unreachable!(),
+                        },
+                        None => continue,
+                    }
+                }
                 Some(Err(err)) => panic!("{:?}", err),
                 None => {
                     assert!(iter.next().is_none());
@@ -1273,17 +1278,19 @@ fn test_commit_iterator_range_scans() {
         let mut count = 0;
         loop {
             match ref_iter.next() {
-                Some(Ok(ref_entry)) => match ref_entry.filter_within(within.0, within.1) {
-                    Some(ref_entry) => match iter.next() {
-                        Some(Ok(entry)) => {
-                            check_node1(&entry, &ref_entry);
-                            count += 1;
-                        }
-                        Some(Err(err)) => panic!("{:?}", err),
-                        None => unreachable!(),
-                    },
-                    None => continue,
-                },
+                Some(Ok(ref_entry)) => {
+                    match ref_entry.filter_within(within.0, within.1) {
+                        Some(ref_entry) => match iter.next() {
+                            Some(Ok(entry)) => {
+                                check_node1(&entry, &ref_entry);
+                                count += 1;
+                            }
+                            Some(Err(err)) => panic!("{:?}", err),
+                            None => unreachable!(),
+                        },
+                        None => continue,
+                    }
+                }
                 Some(Err(err)) => panic!("{:?}", err),
                 None => {
                     assert!(iter.next().is_none());
@@ -1310,7 +1317,7 @@ fn random_mvcc(n_ops: i64, key_max: i64, seed: u128, mvcc: &mut Mvcc<i64, i64>) 
                 let value: i64 = rng.gen();
                 {
                     let cas = match mvcc.get(&key) {
-                        Err(Error::KeyNotFound) => 0,
+                        Err(Error::NotFound) => 0,
                         Err(_err) => unreachable!(),
                         Ok(e) => e.to_seqno(),
                     };

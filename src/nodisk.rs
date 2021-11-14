@@ -142,7 +142,7 @@ where
         K: Borrow<Q>,
         Q: Ord + ?Sized + Hash,
     {
-        Err(Error::KeyNotFound)
+        Err(Error::NotFound)
     }
 
     fn iter(&mut self) -> Result<IndexIter<K, V>> {
@@ -175,7 +175,7 @@ where
         K: Borrow<Q>,
         Q: Ord + ?Sized + Hash,
     {
-        Err(Error::KeyNotFound)
+        Err(Error::NotFound)
     }
 
     fn iter_with_versions(&mut self) -> Result<IndexIter<K, V>> {
@@ -223,7 +223,11 @@ where
         err_at!(NotImplemented, msg:"<NoDisk as CommitIterator>.scans()".to_string())
     }
 
-    fn range_scans<N, G>(&mut self, _ranges: Vec<N>, _within: G) -> Result<Vec<IndexIter<K, V>>>
+    fn range_scans<N, G>(
+        &mut self,
+        _ranges: Vec<N>,
+        _within: G,
+    ) -> Result<Vec<IndexIter<K, V>>>
     where
         G: Clone + RangeBounds<u64>,
         N: Clone + RangeBounds<K>,

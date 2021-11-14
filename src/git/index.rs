@@ -12,7 +12,7 @@
 
 use git2::{Repository, RepositoryInitMode, RepositoryInitOptions, RepositoryOpenFlags};
 
-use std::{file, fmt, fs, ops::Bound, ops::RangeBounds, path, result, time};
+use std::{convert::TryInto, file, fs, ops::Bound, ops::RangeBounds, path, time};
 
 use crate::{
     dba,
@@ -125,7 +125,7 @@ impl Index {
 
 impl Index {
     /// Get the git blob corresponding to the specified key.
-    pub fn get<K>(&self, key: K) -> Result<Option<Entry>>
+    pub fn get<K>(&self, key: K) -> Result<Option<dba::Object>>
     where
         K: Clone + dba::AsKey,
     {
@@ -133,17 +133,13 @@ impl Index {
         let tree = self.get_db_root()?.into_tree().unwrap();
         let te = err_at!(FailGitapi, tree.get_path(&key))?;
 
-        let data = {
-            let obj = err_at!(FailGitapi, te.to_object(&self.repo))?;
-            obj.as_blob().unwrap().content().to_vec()
-        };
+        let obj = err_at!(FailGitapi, te.to_object(&self.repo))?;
+        let obj: dba::Object = match obj.as_blob().cloned() {
+            Some(blob) => Ok(blob.into()),
+            None => err_at!(NotFound, msg: "key not found {:?}", key),
+        }?;
 
-        let entry = Entry {
-            key: key.into(),
-            data,
-        };
-
-        Ok(Some(entry))
+        Ok(Some(obj))
     }
 
     /// Iter over each entry in repository in string sort order.
@@ -158,38 +154,46 @@ impl Index {
 
     /// Iter over each entry in repository, such that each entry's key falls within
     /// the supplied range.
-    pub fn range<R, P>(&self, range: R) -> Result<Range<P>>
+    pub fn range<R, K>(&self, range: R) -> Result<Range>
     where
-        R: RangeBounds<P>,
-        P: Clone + AsRef<path::Path>,
+        R: RangeBounds<K>,
+        K: Clone + dba::AsKey,
     {
         let iter = {
             let tree = self.get_db_root()?.into_tree().unwrap();
-            let comps = Index::key_to_components(range.start_bound());
+            let comps = Index::key_to_components(range.start_bound())?;
             IterLevel::forward(&self.repo, "".into(), tree.clone(), &comps)?
         };
 
         // iter.pretty_print("");
 
-        let high = range.end_bound().cloned();
+        let high = match range.end_bound() {
+            Bound::Unbounded => Bound::Unbounded,
+            Bound::Included(end) => Bound::Included(end.to_key_path()?.iter().collect()),
+            Bound::Excluded(end) => Bound::Excluded(end.to_key_path()?.iter().collect()),
+        };
         Ok(Range { iter, high })
     }
 
     /// Same as [Index::range] method except in reverse order.
-    pub fn reverse<R, P>(&self, range: R) -> Result<Reverse<P>>
+    pub fn reverse<R, K>(&self, range: R) -> Result<Reverse>
     where
-        R: RangeBounds<P>,
-        P: Clone + AsRef<path::Path>,
+        R: RangeBounds<K>,
+        K: Clone + dba::AsKey,
     {
         let iter = {
             let tree = self.get_db_root()?.into_tree().unwrap();
-            let comps = Index::key_to_components(range.end_bound());
+            let comps = Index::key_to_components(range.end_bound())?;
             IterLevel::reverse(&self.repo, "".into(), tree.clone(), &comps)?
         };
 
         // iter.pretty_print("");
 
-        let low = range.start_bound().cloned();
+        let low = match range.start_bound() {
+            Bound::Unbounded => Bound::Unbounded,
+            Bound::Included(s) => Bound::Included(s.to_key_path()?.iter().collect()),
+            Bound::Excluded(s) => Bound::Excluded(s.to_key_path()?.iter().collect()),
+        };
         Ok(Reverse { iter, low })
     }
 }
@@ -222,35 +226,25 @@ impl Index {
 }
 
 impl Index {
-    fn key_to_components<P>(key: Bound<P>) -> Vec<Bound<String>>
+    fn key_to_components<K>(key: Bound<&K>) -> Result<Vec<Bound<String>>>
     where
-        P: AsRef<path::Path>,
+        K: dba::AsKey,
     {
-        match key {
+        let comps = match key {
             Bound::Unbounded => vec![Bound::Unbounded],
-            Bound::Included(key) => {
-                let key: &path::Path = key.as_ref();
-                key.components()
-                    .filter_map(|c| match c {
-                        path::Component::Normal(s) => {
-                            Some(Bound::Included(s.to_str()?.to_string()))
-                        }
-                        _ => None,
-                    })
-                    .collect()
-            }
-            Bound::Excluded(key) => {
-                let key: &path::Path = key.as_ref();
-                key.components()
-                    .filter_map(|c| match c {
-                        path::Component::Normal(s) => {
-                            Some(Bound::Excluded(s.to_str()?.to_string()))
-                        }
-                        _ => None,
-                    })
-                    .collect()
-            }
-        }
+            Bound::Included(key) => key
+                .to_key_path()?
+                .into_iter()
+                .map(|s| Bound::Included(s.to_string()))
+                .collect(),
+            Bound::Excluded(key) => key
+                .to_key_path()?
+                .into_iter()
+                .map(|s| Bound::Excluded(s.to_string()))
+                .collect(),
+        };
+
+        Ok(comps)
     }
 
     fn get_db_root(&self) -> Result<git2::Object> {
@@ -304,35 +298,29 @@ impl Index {
 }
 
 // iterate from low to high
-pub struct Range<'a, P>
-where
-    P: AsRef<path::Path>,
-{
+pub struct Range<'a> {
     iter: IterLevel<'a>,
-    high: Bound<P>,
+    high: Bound<path::PathBuf>,
 }
 
-impl<'a, P> Iterator for Range<'a, P>
-where
-    P: AsRef<path::Path>,
-{
-    type Item = Result<Entry>;
+impl<'a> Iterator for Range<'a> {
+    type Item = Result<dba::Entry<path::PathBuf>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let e = match self.iter.next()? {
             Ok(e) => e,
             Err(e) => return Some(Err(e)),
         };
-        let ekey: &path::Path = e.key.as_ref();
+        let ekey: &path::Path = e.as_key();
 
         match &self.high {
             Bound::Unbounded => Some(Ok(e)),
-            Bound::Included(p) if ekey.le(p.as_ref()) => Some(Ok(e)),
+            Bound::Included(high) if ekey.le(high) => Some(Ok(e)),
             Bound::Included(_) => {
                 self.iter.drain_all();
                 None
             }
-            Bound::Excluded(p) if ekey.lt(p.as_ref()) => Some(Ok(e)),
+            Bound::Excluded(high) if ekey.lt(high) => Some(Ok(e)),
             Bound::Excluded(_) => {
                 self.iter.drain_all();
                 None
@@ -342,36 +330,31 @@ where
 }
 
 // iterate from high to low
-pub struct Reverse<'a, P>
-where
-    P: AsRef<path::Path>,
-{
+pub struct Reverse<'a> {
     iter: IterLevel<'a>,
-    low: Bound<P>,
+    low: Bound<path::PathBuf>,
 }
 
-impl<'a, P> Iterator for Reverse<'a, P>
-where
-    P: AsRef<path::Path>,
-{
-    type Item = Result<Entry>;
+impl<'a> Iterator for Reverse<'a> {
+    type Item = Result<dba::Entry<path::PathBuf>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let e = match self.iter.next()? {
             Ok(e) => e,
             Err(e) => return Some(Err(e)),
         };
-        let ekey: &path::Path = e.key.as_ref();
+        let ekey: &path::Path = e.as_key();
+
         // println!("{:?}", ekey);
 
         match &self.low {
             Bound::Unbounded => Some(Ok(e)),
-            Bound::Included(p) if ekey.ge(p.as_ref()) => Some(Ok(e)),
+            Bound::Included(low) if ekey.ge(low) => Some(Ok(e)),
             Bound::Included(_) => {
                 self.iter.drain_all();
                 None
             }
-            Bound::Excluded(p) if ekey.gt(p.as_ref()) => Some(Ok(e)),
+            Bound::Excluded(low) if ekey.gt(low) => Some(Ok(e)),
             Bound::Excluded(_) => {
                 self.iter.drain_all();
                 None
@@ -398,7 +381,6 @@ impl<'a> From<IterLevel<'a>> for IterEntry<'a> {
 }
 
 impl<'a> IterEntry<'a> {
-    #[allow(dead_code)]
     fn to_name(&self) -> &str {
         match self {
             IterEntry::Entry { te } => te.name().unwrap(),
@@ -576,7 +558,7 @@ impl<'a> IterLevel<'a> {
 }
 
 impl<'a> Iterator for IterLevel<'a> {
-    type Item = Result<Entry>;
+    type Item = Result<dba::Entry<path::PathBuf>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         // println!("iterlevel {:?} ref:{}", self.rloc, self.rev);
@@ -587,11 +569,8 @@ impl<'a> Iterator for IterLevel<'a> {
                 IterEntry::Entry { te } => match te.kind().unwrap() {
                     git2::ObjectType::Blob => {
                         // println!("{} iterl-blob {}", n, te.name().unwrap());
-                        let entry = iter_result!(Entry::from_tree_entry(
-                            self.repo,
-                            self.rloc.clone(),
-                            te
-                        ));
+                        let entry =
+                            iter_result!(te_to_entry(self.repo, self.rloc.clone(), te));
                         break Some(Ok(entry));
                     }
                     git2::ObjectType::Tree => {
@@ -829,9 +808,9 @@ impl<'a> Txn<'a> {
                         let obj = err_at!(FailGitapi, te.to_object(&self.index.repo))?;
                         self.do_remove(obj.into_tree().unwrap(), comps)
                     }
-                    Some(_) | None => err_at!(KeyNotFound, msg: "missing key"),
+                    Some(_) | None => err_at!(NotFound, msg: "missing key"),
                 },
-                None => err_at!(KeyNotFound, msg: "missing key"),
+                None => err_at!(NotFound, msg: "missing key"),
             },
             None => unreachable!(),
         }
@@ -848,53 +827,18 @@ impl<'a> Txn<'a> {
     }
 }
 
-pub struct Entry {
-    key: Box<path::Path>,
-    data: Vec<u8>,
-}
+fn te_to_entry(
+    repo: &git2::Repository,
+    mut rloc: path::PathBuf,
+    te: git2::TreeEntry<'static>,
+) -> Result<dba::Entry<path::PathBuf>> {
+    let key: path::PathBuf = {
+        rloc.push(te.name().unwrap());
+        rloc.into()
+    };
 
-impl fmt::Display for Entry {
-    fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
-        write!(f, "Entry<{:?}>", self.key)
-    }
-}
+    let obj: dba::Object = err_at!(FailGitapi, te.to_object(repo))?.try_into()?;
 
-impl fmt::Debug for Entry {
-    fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
-        write!(f, "Entry<{:?}>", self.key)
-    }
-}
-
-impl Entry {
-    fn from_tree_entry(
-        repo: &git2::Repository,
-        mut rloc: path::PathBuf,
-        tree_entry: git2::TreeEntry<'static>,
-    ) -> Result<Self> {
-        let key: Box<path::Path> = {
-            rloc.push(tree_entry.name().unwrap());
-            rloc.into()
-        };
-        let data = {
-            let obj = err_at!(FailGitapi, tree_entry.to_object(repo))?;
-            obj.as_blob().unwrap().content().to_vec()
-        };
-
-        let entry = Entry { key, data };
-        Ok(entry)
-    }
-}
-
-impl Entry {
-    pub fn as_key(&self) -> &path::Path {
-        self.key.as_ref()
-    }
-
-    pub fn as_key_str(&self) -> &str {
-        self.key.to_str().unwrap()
-    }
-
-    pub fn as_blob(&self) -> &[u8] {
-        &self.data
-    }
+    let entry = dba::Entry::from_object(key, obj);
+    Ok(entry)
 }

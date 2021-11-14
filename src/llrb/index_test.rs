@@ -368,7 +368,7 @@ where
             }
             Op::Get(key) => {
                 match (index.get_versions(&key), btmap.get(&key)) {
-                    (Err(Error::KeyNotFound(_, _)), None) => (),
+                    (Err(Error::NotFound(_, _)), None) => (),
                     (Err(err), _) => panic!("{}", err),
                     (Ok(e), Some(x)) => assert!(e.contains(x)),
                     (Ok(_), None) => (),

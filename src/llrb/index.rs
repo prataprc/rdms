@@ -388,7 +388,7 @@ where
 {
     // TODO: add test case for this
     /// Get entry from index for `key`, return only the latest value, older values
-    /// are skipped. If key is not found return [Error::KeyNotFound].
+    /// are skipped. If key is not found return [Error::NotFound].
     pub fn get<Q>(&self, key: &Q) -> Result<dbs::Entry<K, V>>
     where
         K: Clone + Borrow<Q>,
@@ -399,7 +399,7 @@ where
     }
 
     /// Get entry from index for `key`. If key is not found return
-    /// [Error::KeyNotFound]
+    /// [Error::NotFound]
     pub fn get_versions<Q>(&self, key: &Q) -> Result<dbs::Entry<K, V>>
     where
         K: Clone + Borrow<Q>,
@@ -1397,7 +1397,7 @@ where
             Ordering::Equal if versions => Ok(nref.entry.as_ref().clone()),
             Ordering::Equal => Ok(nref.entry.as_ref().latest()),
         },
-        None => err_at!(KeyNotFound, msg: "get missing key"),
+        None => err_at!(NotFound, msg: "get missing key"),
     }
 }
 

@@ -7,4 +7,4 @@ mod config;
 mod index;
 
 pub use config::{Config, Permissions};
-pub use index::{Index, IterLevel, Range, Reverse, Txn};
+pub use index::{Index, IterLevel, Txn};

@@ -299,7 +299,7 @@ fn read_thread<K, V, B>(
     rand::distributions::Standard: rand::distributions::Distribution<K>,
     rand::distributions::Standard: rand::distributions::Distribution<V>,
 {
-    use Error::KeyNotFound;
+    use Error::NotFound;
 
     let mut rng = SmallRng::seed_from_u64(seed);
 
@@ -390,7 +390,7 @@ fn read_thread<K, V, B>(
                         e2.deltas = vec![];
                         assert_eq!(e1, e2);
                     }
-                    (Err(KeyNotFound(_, _)), Err(Error::KeyNotFound(_, _))) => (),
+                    (Err(NotFound(_, _)), Err(Error::NotFound(_, _))) => (),
                     (Err(err1), Err(err2)) => panic!("{} != {}", err1, err2),
                     (Ok(e), Err(err)) => panic!("{:?} != {}", e, err),
                     (Err(err), Ok(e)) => panic!("{} != {:?}", err, e),
@@ -411,7 +411,7 @@ fn read_thread<K, V, B>(
                         assert!(e1.contains(&e2), "index:{:?} mdb:{:?}", e1, e2);
                     }
                     (Ok(e1), Ok(e2)) => assert_eq!(e1, e2),
-                    (Err(KeyNotFound(_, _)), Err(Error::KeyNotFound(_, _))) => (),
+                    (Err(NotFound(_, _)), Err(Error::NotFound(_, _))) => (),
                     (Err(err1), Err(err2)) => panic!("{} != {}", err1, err2),
                     (Ok(e), Err(err)) => panic!("{:?} != {}", e, err),
                     (Err(err), Ok(e)) => panic!("{} != {:?}", err, e),

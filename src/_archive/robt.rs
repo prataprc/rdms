@@ -3047,7 +3047,7 @@ where
         // check in the bitmap if key is present, there can be false
         // positive, but can't be a false negative.
         if self.bitmap.contains(key) == false {
-            return Err(Error::KeyNotFound);
+            return Err(Error::NotFound);
         }
         // println!("robt get ..");
         let versions = false;
@@ -3092,7 +3092,7 @@ where
         // check in the bitmap if key is present, there can be false
         // positive, but can't be a false negative.
         if self.bitmap.contains(key) == false {
-            return Err(Error::KeyNotFound);
+            return Err(Error::NotFound);
         }
 
         let versions = true;
@@ -3327,7 +3327,7 @@ where
             "get_zpos(), reading mblock",
         )?)?;
         match mblock.get(key, Bound::Unbounded, Bound::Unbounded) {
-            Err(Error::__LessThan) => Err(Error::KeyNotFound),
+            Err(Error::__LessThan) => Err(Error::NotFound),
             Ok(mentry) if mentry.is_zblock() => Ok(mentry.to_fpos()),
             Ok(mentry) => self.get_zpos(key, mentry.to_fpos()),
             Err(err) => Err(err),
@@ -3353,11 +3353,11 @@ where
                     self.fetch(&mut entry, false /*shallow*/, versions)?;
                     Ok(entry)
                 } else {
-                    Err(Error::KeyNotFound)
+                    Err(Error::NotFound)
                 }
             }
-            Err(Error::__LessThan) => Err(Error::KeyNotFound),
-            Err(Error::__ZBlockExhausted(_)) => Err(Error::KeyNotFound),
+            Err(Error::__LessThan) => Err(Error::NotFound),
+            Err(Error::__ZBlockExhausted(_)) => Err(Error::NotFound),
             Err(err) => Err(err),
         }
     }

@@ -1564,7 +1564,7 @@ fn random_llrb(
                 let value: i64 = rng.gen();
                 {
                     let cas = match llrb.get(&key) {
-                        Err(Error::KeyNotFound) => 0,
+                        Err(Error::NotFound) => 0,
                         Err(_err) => unreachable!(),
                         Ok(e) => e.to_seqno(),
                     };
@@ -1572,7 +1572,7 @@ fn random_llrb(
                 }
                 {
                     let cas = match refi.get(&key) {
-                        Err(Error::KeyNotFound) => 0,
+                        Err(Error::NotFound) => 0,
                         Err(_err) => unreachable!(),
                         Ok(e) => e.to_seqno(),
                     };
@@ -1617,7 +1617,7 @@ fn random_mvcc(
                 let value: i64 = rng.gen();
                 {
                     let cas = match mvcc.get(&key) {
-                        Err(Error::KeyNotFound) => 0,
+                        Err(Error::NotFound) => 0,
                         Err(_err) => unreachable!(),
                         Ok(e) => e.to_seqno(),
                     };
@@ -1625,7 +1625,7 @@ fn random_mvcc(
                 }
                 {
                     let cas = match refi.get(&key) {
-                        Err(Error::KeyNotFound) => 0,
+                        Err(Error::NotFound) => 0,
                         Err(_err) => unreachable!(),
                         Ok(e) => e.to_seqno(),
                     };
@@ -1657,7 +1657,8 @@ fn random_robt(
     config.delta_ok = delta_ok;
     config.value_in_vlog = rng.gen();
     let b =
-        robt::Builder::<i64, i64, CRoaring>::initial(&dir, "random_robt", config.clone()).unwrap();
+        robt::Builder::<i64, i64, CRoaring>::initial(&dir, "random_robt", config.clone())
+            .unwrap();
     let app_meta = "heloo world".to_string();
     b.build(iter, app_meta.as_bytes().to_vec()).unwrap();
 
@@ -1688,7 +1689,7 @@ fn concurrent_write(
             1 => {
                 let value: i64 = rng.gen();
                 let cas = match r.get(&key) {
-                    Err(Error::KeyNotFound) => 0,
+                    Err(Error::NotFound) => 0,
                     Err(_err) => unreachable!(),
                     Ok(e) => e.to_seqno(),
                 };

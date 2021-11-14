@@ -329,7 +329,7 @@ fn test_dgm_crud() {
                 1 => {
                     let cas = match index_r.get(&key) {
                         Ok(entry) => entry.to_seqno(),
-                        Err(Error::KeyNotFound) => std::u64::MIN,
+                        Err(Error::NotFound) => std::u64::MIN,
                         Err(err) => panic!(err),
                     };
                     let entry = {
@@ -414,7 +414,7 @@ fn test_dgm_crud() {
     for key in 0..(key_max * 3) {
         let cas = match ref_index.get(&key) {
             Ok(e) => e.to_seqno(),
-            Err(Error::KeyNotFound) => 0,
+            Err(Error::NotFound) => 0,
             Err(err) => panic!("unexpected error: {:?}", err),
         };
         let cas_arg = {
@@ -425,7 +425,9 @@ fn test_dgm_crud() {
             (123456789, Err(Error::InvalidCAS(val))) => assert_eq!(val, cas),
             (123456789, Ok(_)) => panic!("expected error"),
             (_, Ok(_)) => (),
-            (_, Err(err)) => panic!("unexpected cas:{} cas_arg:{} err:{:?}", cas, cas_arg, err),
+            (_, Err(err)) => {
+                panic!("unexpected cas:{} cas_arg:{} err:{:?}", cas, cas_arg, err)
+            }
         }
     }
 }
@@ -497,7 +499,7 @@ fn test_dgm_non_lsm() {
                 1 => {
                     let cas = match index_r.get(&key) {
                         Ok(entry) => entry.to_seqno(),
-                        Err(Error::KeyNotFound) => std::u64::MIN,
+                        Err(Error::NotFound) => std::u64::MIN,
                         Err(err) => panic!(err),
                     };
                     index_w.set_cas(key, value, cas).unwrap()
@@ -590,7 +592,7 @@ fn test_dgm_cutoffs() {
                 1 => {
                     let cas = match index_r.get(&key) {
                         Ok(entry) => entry.to_seqno(),
-                        Err(Error::KeyNotFound) => std::u64::MIN,
+                        Err(Error::NotFound) => std::u64::MIN,
                         Err(err) => panic!(err),
                     };
                     index_w.set_cas(key, value, cas).unwrap()
@@ -643,7 +645,7 @@ fn verify_read(
             let ref_res = ref_index.get(&key);
             match (res, ref_res) {
                 (Ok(entry), Ok(ref_entry)) => check_entry1(&entry, &ref_entry),
-                (Err(Error::KeyNotFound), Err(Error::KeyNotFound)) => (),
+                (Err(Error::NotFound), Err(Error::NotFound)) => (),
                 _ => unreachable!(),
             }
 
@@ -654,7 +656,7 @@ fn verify_read(
                     check_entry1(&entry, &ref_entry);
                     check_entry2(&entry, &ref_entry);
                 }
-                (Err(Error::KeyNotFound), Err(Error::KeyNotFound)) => (),
+                (Err(Error::NotFound), Err(Error::NotFound)) => (),
                 (res, ref_res) => {
                     println!("res:{} ref_res:{}", res.is_ok(), ref_res.is_ok());
                     match res {

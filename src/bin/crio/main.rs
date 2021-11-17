@@ -3,6 +3,7 @@ use structopt::StructOpt;
 use std::ffi;
 
 mod cmd_fetch;
+mod types;
 
 pub const TEMP_DIR_CRIO: &str = "crio";
 
@@ -14,6 +15,7 @@ struct Opt {
 
 #[derive(Clone, StructOpt)]
 pub enum SubCommand {
+    /// Fetch the crates_io dump via http, untar the file and extract the tables.
     Fetch {
         #[structopt(long = "nohttp")]
         nohttp: bool,

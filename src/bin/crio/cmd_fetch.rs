@@ -2,6 +2,7 @@ use serde::Deserialize;
 
 use std::{ffi, path};
 
+use crate::types;
 use rdms::{err_at, util, Error, Result};
 
 pub struct Opt {
@@ -64,7 +65,8 @@ pub fn handle(opts: Opt) -> Result<()> {
         true => (),
         false => {
             crates_io_metadata(&opts, &profile)?;
-            crates_io_data(&opts, &profile)?;
+            // crates_io_data(&opts, &profile)?;
+            unpack_crates_csv(&opts, &profile)?;
         }
     };
 
@@ -267,16 +269,29 @@ fn crates_io_data(_opts: &Opt, profile: &Profile) -> Result<()> {
     Ok(())
 }
 
-//let mut fd = fs::OpenOptions::new()
-//    .read(true)
-//    .open("/media/prataprc/hdd1.4tb/crates-io/2021-11-09-020028/data/crates.csv")
-//    .unwrap();
-//let mut rdr = csv::Reader::from_reader(&mut fd);
-//for (i, result) in rdr.deserialize().enumerate() {
-//    // Notice that we need to provide a type hint for automatic deserialization.
-//    let record: Crate = result.unwrap();
-//    println!("{:?}", record);
-//    if i > 2 {
-//        return;
-//    }
-//}
+fn unpack_crates_csv(_opts: &Opt, profile: &Profile) -> Result<usize> {
+    use std::{fs, result};
+
+    let file = "data/crates.csv";
+    let file_loc: path::PathBuf = [crates_io_untar_dir(profile)?, file.into()]
+        .iter()
+        .collect();
+
+    let mut fd = err_at!(IOError, fs::OpenOptions::new().read(true).open(&file_loc))?;
+    let mut rdr = csv::Reader::from_reader(&mut fd);
+    let iter = rdr
+        .deserialize()
+        .map(|r: result::Result<types::Crate, csv::Error>| err_at!(InvalidFormat, r));
+
+    let mut n = 0;
+    for item in iter {
+        if item.is_err() {
+            println!("{:?}", item);
+        }
+        n += 1;
+    }
+
+    println!("extracted {} crates", n);
+
+    Ok(n)
+}

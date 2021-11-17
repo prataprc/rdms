@@ -4,7 +4,7 @@ git_analytics_dir = "analytics"
 
 [git]
 loc_repo = "/media/prataprc/hdd1.4tb/db-rdms-crio"
-loc_db = "/media/prataprc/hdd1.4tb/db-rdms-crio"
+loc_db = ""
 permissions = "shared_umask"
 description = "repository holds data from crates.io db dump"
 

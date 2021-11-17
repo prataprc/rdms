@@ -3,7 +3,7 @@ use serde::Deserialize;
 use std::{ffi, path};
 
 use crate::types;
-use rdms::{err_at, util, Error, Result};
+use rdms::{err_at, git, util, Error, Result};
 
 pub struct Opt {
     nohttp: bool,
@@ -64,7 +64,7 @@ pub fn handle(opts: Opt) -> Result<()> {
     match opts.nocopy {
         true => (),
         false => {
-            crates_io_metadata(&opts, &profile)?;
+            // crates_io_metadata(&opts, &profile)?;
             // crates_io_data(&opts, &profile)?;
             unpack_crates_csv(&opts, &profile)?;
         }
@@ -283,15 +283,38 @@ fn unpack_crates_csv(_opts: &Opt, profile: &Profile) -> Result<usize> {
         .deserialize()
         .map(|r: result::Result<types::Crate, csv::Error>| err_at!(InvalidFormat, r));
 
-    let mut n = 0;
-    for item in iter {
-        if item.is_err() {
-            println!("{:?}", item);
+    let mut index = git::Index::open(profile.git.clone())?;
+    let n = {
+        let mut txn = index.transaction()?;
+        let (mut n, mut x) = (0, 0);
+        for item in iter.take(3) {
+            let item = item?;
+            let key = match item.to_crate_key() {
+                Some(key) => key,
+                None => {
+                    x += 1;
+                    continue;
+                }
+            };
+            println!("key:{}", key);
+            let s = err_at!(FailConvert, serde_json::to_string_pretty(&item))?;
+            txn.insert(key, s)?;
+            n += 1;
         }
-        n += 1;
-    }
+        txn.commit()?;
+        assert!(x == 0);
+        n
+    };
+    print!("checking out ... ");
+    let mut cb = git2::build::CheckoutBuilder::new();
+    cb.recreate_missing(true);
+    index.checkout_head(Some(&mut cb))?;
+    println!("ok");
 
-    println!("extracted {} crates", n);
-
+    println!(
+        "unpacked {} crate records into {:?} table",
+        n,
+        types::CRATE_TABLE
+    );
     Ok(n)
 }

@@ -60,9 +60,9 @@ tar = { version = "0.4", optional = true }
 flate2 = { version = "1.0", optional = true }
 sha-1 = { version = "0.9.8", optional = true }
 prettytable-rs = { version="0.8.0", optional = true }
+serde_json = { version = "1.0.70", optional = true }
+# jsondata = { path = "../jsondata", optional = true }
 
-# jsondata = "0.6.2"
-# jsondata = { git = "https://github.com/bnclabs/jsondata.git" }
 # log = "0.4.8"
 # memmap = "0.7.0"
 # sys-info = "0.5.10"
@@ -75,5 +75,5 @@ crc = "2.1.0"
 
 [features]
 rdms = ["structopt", "lmdb", "sha-1"]
-crio = ["structopt", "csv", "url", "ureq", "tar", "flate2"]
+crio = ["structopt", "csv", "url", "ureq", "tar", "flate2", "serde_json"]
 zimf = ["structopt", "prettytable-rs"]

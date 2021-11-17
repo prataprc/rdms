@@ -223,6 +223,13 @@ impl Index {
         let txn = Txn { index: self, tree };
         Ok(txn)
     }
+
+    pub fn checkout_head(
+        &mut self,
+        cb: Option<&mut git2::build::CheckoutBuilder>,
+    ) -> Result<()> {
+        err_at!(FailGitapi, self.repo.checkout_head(cb))
+    }
 }
 
 impl Index {
@@ -254,17 +261,12 @@ impl Index {
             err_at!(FailGitapi, commit.tree())?
         };
 
-        let db_path = {
-            let repo_path = path::Path::new(&self.config.loc_repo);
-            let db_path = path::Path::new(&self.config.loc_db);
-            err_at!(InvalidInput, db_path.strip_prefix(&repo_path))?
-        };
-
-        let obj = match db_path.as_os_str().is_empty() {
+        let db_root_loc: path::PathBuf = self.config.loc_db.clone().into();
+        let obj = match db_root_loc.as_os_str().is_empty() {
             true => tree.as_object().clone(),
             false => err_at!(
                 FailGitapi,
-                err_at!(FailGitapi, tree.get_path(db_path))?.to_object(&self.repo)
+                err_at!(FailGitapi, tree.get_path(&db_root_loc))?.to_object(&self.repo)
             )?,
         };
 
@@ -672,9 +674,16 @@ impl<'a> Txn<'a> {
             })
             .collect();
 
-        self.tree = self.do_insert(Some(self.tree.clone()), &comps, data.as_ref())?;
-
-        Ok(())
+        match comps.len() {
+            0 => err_at!(InvalidInput, msg: "empty key"),
+            _ => {
+                println!("insert comps:{:?}", comps);
+                self.tree =
+                    self.do_insert(Some(self.tree.clone()), &comps, data.as_ref())?;
+                println!("insert oid:{:?}", self.tree.id());
+                Ok(())
+            }
+        }
     }
 
     pub fn remove<P>(&mut self, key: P) -> Result<()>
@@ -740,21 +749,37 @@ impl<'a> Txn<'a> {
         let comps = &comps[1..];
 
         match (comp, tree) {
-            (Some(comp), Some(tree)) if comps.is_empty() => match tree.get_name(comp) {
-                Some(_) => self.insert_blob(Some(&tree), comp, data),
-                None => self.insert_blob(Some(&tree), comp, data),
-            },
+            (Some(comp), Some(tree)) if comps.is_empty() => {
+                println!("do_insert blob:{}", comp);
+                self.insert_blob(Some(&tree), comp, data)
+            }
             (Some(comp), Some(tree)) => match tree.get_name(comp) {
-                Some(_) => self.insert_tree(
-                    Some(&tree),
-                    comp,
-                    self.do_insert(None, comps, data)?.id(),
-                ),
-                None => self.do_insert(None, comps, data),
+                Some(te) => match te.kind() {
+                    Some(git2::ObjectType::Tree) => {
+                        println!("do_insert tree:{}", comp);
+                        let obj = err_at!(FailGitapi, te.to_object(&self.index.repo))?;
+                        let child = obj.into_tree().unwrap();
+                        let oid = self.do_insert(Some(child), comps, data)?.id();
+
+                        self.insert_tree(Some(&tree), comp, oid)
+                    }
+                    None => err_at!(FailGitapi, msg: "missing kind"),
+                    _ => err_at!(FailGitapi, msg: "not a directory {}", comp),
+                },
+                None => {
+                    println!("do_insert newtree:{}", comp);
+                    let oid = self.do_insert(None, comps, data)?.id();
+                    self.insert_tree(Some(&tree), comp, oid)
+                }
             },
-            (Some(comp), None) if comps.is_empty() => self.insert_blob(None, comp, data),
+            (Some(comp), None) if comps.is_empty() => {
+                println!("do_insert mkdir blob:{}", comp);
+                self.insert_blob(None, comp, data)
+            }
             (Some(comp), None) => {
-                self.insert_tree(None, comp, self.do_insert(None, comps, data)?.id())
+                println!("do_insert mkdir tree:{}", comp);
+                let oid = self.do_insert(None, comps, data)?.id();
+                self.insert_tree(None, comp, oid)
             }
             (None, _) => unreachable!(),
         }
@@ -769,12 +794,16 @@ impl<'a> Txn<'a> {
         let odb = err_at!(FailGitapi, self.index.repo.odb())?;
         let mut builder = err_at!(FailGitapi, self.index.repo.treebuilder(tree))?;
 
+        println!("insert_blob comp:{}", comp);
         let oid = err_at!(FailGitapi, odb.write(git2::ObjectType::Blob, data))?;
-        err_at!(FailGitapi, builder.insert(comp, oid, 0o100644))?;
+        err_at!(
+            FailGitapi,
+            builder.insert(comp, oid, git2::FileMode::Blob.into())
+        )?;
         let oid = err_at!(FailGitapi, builder.write())?;
 
         let object = err_at!(FailGitapi, self.index.repo.find_object(oid, None))?;
-        Ok(object.as_tree().unwrap().clone())
+        Ok(object.into_tree().unwrap())
     }
 
     fn insert_tree(
@@ -785,7 +814,12 @@ impl<'a> Txn<'a> {
     ) -> Result<git2::Tree<'a>> {
         let mut builder = err_at!(FailGitapi, self.index.repo.treebuilder(tree))?;
 
-        err_at!(FailGitapi, builder.insert(comp, oid, 0o100644))?;
+        let o = self.index.repo.find_object(oid, None).unwrap();
+        println!("insert_tree comp:{} kind:{:?}", comp, o.kind());
+        err_at!(
+            FailGitapi,
+            builder.insert(comp, oid, git2::FileMode::Tree.into())
+        )?;
         let oid = err_at!(FailGitapi, builder.write())?;
 
         let object = err_at!(FailGitapi, self.index.repo.find_object(oid, None))?;

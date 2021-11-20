@@ -14,11 +14,7 @@ use git2::{Repository, RepositoryInitMode, RepositoryInitOptions, RepositoryOpen
 
 use std::{convert::TryInto, file, fs, ops::Bound, ops::RangeBounds, path, time};
 
-use crate::{
-    dba,
-    git::{Config, Permissions},
-    Error, Result,
-};
+use crate::{dba, git, Error, Result};
 
 macro_rules! iter_result {
     ($res:expr) => {{
@@ -34,29 +30,29 @@ macro_rules! iter_result {
 
 /// Git repository as Key-Value index.
 pub struct Index {
-    config: Config,
+    config: git::Config,
     repo: git2::Repository,
 }
 
 impl Index {
     /// Create a new git repository to access it as key-value index.
-    pub fn create(config: Config) -> Result<Index> {
-        let mode = match &config.permissions {
+    pub fn create(config: git::Config) -> Result<Index> {
+        let mode = match &config.init.permissions {
             None => RepositoryInitMode::SHARED_UMASK,
-            Some(Permissions::SharedUmask) => RepositoryInitMode::SHARED_UMASK,
-            Some(Permissions::SharedGroup) => RepositoryInitMode::SHARED_GROUP,
-            Some(Permissions::SharedAll) => RepositoryInitMode::SHARED_ALL,
+            Some(git::Permissions::SharedUmask) => RepositoryInitMode::SHARED_UMASK,
+            Some(git::Permissions::SharedGroup) => RepositoryInitMode::SHARED_GROUP,
+            Some(git::Permissions::SharedAll) => RepositoryInitMode::SHARED_ALL,
         };
 
         let mut options = RepositoryInitOptions::new();
         options
-            .bare(false)
-            .no_reinit(true)
+            .bare(config.init.bare.unwrap_or(false))
+            .no_reinit(config.init.no_reinit.unwrap_or(true))
             .no_dotgit_dir(false)
             .mkdir(true)
             .mkpath(true)
             .mode(mode)
-            .description(&config.description);
+            .description(&config.init.description);
 
         let repo = {
             let loc = config.loc_repo.clone();
@@ -69,10 +65,14 @@ impl Index {
         Ok(index)
     }
 
-    /// Open any existing git repository as key-value index. Refer to [Config] for details.
-    pub fn open(config: Config) -> Result<Index> {
+    /// Open any existing git repository as key-value index. Refer to [git::Config]
+    /// for details.
+    pub fn open(config: git::Config) -> Result<Index> {
         let mut flags = RepositoryOpenFlags::empty();
-        flags.set(RepositoryOpenFlags::NO_SEARCH, true);
+        flags.set(
+            RepositoryOpenFlags::NO_SEARCH,
+            config.open.no_search.unwrap_or(true),
+        );
 
         // initialize a new repository for key-value access.
         let repo = {
@@ -100,9 +100,9 @@ impl Index {
 }
 
 impl Index {
-    /// Return the configuration for this git repository. Refer [Config] type for
-    /// details.
-    pub fn as_config(&self) -> &Config {
+    /// Return the configuration for this git repository. Refer [git::Config]
+    /// type for details.
+    pub fn as_config(&self) -> &git::Config {
         &self.config
     }
 
@@ -121,6 +121,17 @@ impl Index {
             Err(_) => false,
         }
     }
+
+    fn to_signature(&self, timestamp: &git2::Time) -> Result<git2::Signature> {
+        err_at!(
+            FailGitapi,
+            git2::Signature::new(
+                &self.config.user_name,
+                &self.config.user_email,
+                &timestamp
+            )
+        )
+    }
 }
 
 impl Index {
@@ -130,7 +141,7 @@ impl Index {
         K: Clone + dba::AsKey,
     {
         let key: path::PathBuf = key.to_key_path()?.into_iter().collect();
-        let tree = self.get_db_root()?.into_tree().unwrap();
+        let tree = self.get_db_root()?;
         let te = err_at!(FailGitapi, tree.get_path(&key))?;
 
         let obj = err_at!(FailGitapi, te.to_object(&self.repo))?;
@@ -145,7 +156,7 @@ impl Index {
     /// Iter over each entry in repository in string sort order.
     pub fn iter(&self) -> Result<IterLevel> {
         let val = {
-            let tree = self.get_db_root()?.into_tree().unwrap();
+            let tree = self.get_db_root()?;
             let comps = vec![];
             IterLevel::forward(&self.repo, "".into(), tree.clone(), &comps)?
         };
@@ -160,7 +171,7 @@ impl Index {
         K: Clone + dba::AsKey,
     {
         let iter = {
-            let tree = self.get_db_root()?.into_tree().unwrap();
+            let tree = self.get_db_root()?;
             let comps = Index::key_to_components(range.start_bound())?;
             IterLevel::forward(&self.repo, "".into(), tree.clone(), &comps)?
         };
@@ -182,7 +193,7 @@ impl Index {
         K: Clone + dba::AsKey,
     {
         let iter = {
-            let tree = self.get_db_root()?.into_tree().unwrap();
+            let tree = self.get_db_root()?;
             let comps = Index::key_to_components(range.end_bound())?;
             IterLevel::reverse(&self.repo, "".into(), tree.clone(), &comps)?
         };
@@ -199,28 +210,85 @@ impl Index {
 }
 
 impl Index {
-    pub fn insert<P, V>(&mut self, key: P, value: V) -> Result<()>
+    pub fn insert<K, V>(&mut self, key: K, value: V) -> Result<()>
     where
-        P: AsRef<path::Path>,
+        K: Clone + dba::AsKey,
         V: AsRef<[u8]>,
     {
-        let mut txn = self.transaction()?;
-        txn.insert(key, value)?;
-        txn.commit()
+        let message = format!("inserting {}", key.to_key_path()?.join("/"));
+        let iter = vec![git::WriteOp::Ins { key, value }].into_iter();
+        self.commit(iter, &message)?;
+        Ok(())
     }
 
-    pub fn remove<P>(&mut self, key: P) -> Result<()>
+    pub fn remove<K>(&mut self, key: K) -> Result<()>
     where
-        P: AsRef<path::Path>,
+        K: Clone + dba::AsKey,
     {
-        let mut txn = self.transaction()?;
-        txn.remove(key)?;
-        txn.commit()
+        let message = format!("removing {}", key.to_key_path()?.join("/"));
+        let iter = vec![git::WriteOp::<K, [u8; 0]>::Rem { key }].into_iter();
+        self.commit(iter, &message)?;
+        Ok(())
+    }
+
+    pub fn commit<K, V, I>(&mut self, ops: I, message: &str) -> Result<usize>
+    where
+        K: dba::AsKey,
+        V: AsRef<[u8]>,
+        I: Iterator<Item = git::WriteOp<K, V>>,
+    {
+        let mut odb = err_at!(FailGitapi, self.repo.odb())?;
+        let mut trie = git::Trie::new();
+        let mut n_ops = 0;
+        for w in ops {
+            match w {
+                git::WriteOp::Ins { key, value } => {
+                    trie.insert(&key.to_key_path()?, value.as_ref())
+                }
+                git::WriteOp::Rem { key } => trie.remove(&key.to_key_path()?),
+            }
+            n_ops += 1;
+        }
+
+        let root = trie.as_root();
+        let tree = self.get_db_root()?;
+
+        let tree = self.do_commit(&mut odb, Some(tree), root)?;
+
+        // actual commit
+        let elapsed_from_epoch = {
+            let dur = err_at!(Fatal, time::UNIX_EPOCH.elapsed())?;
+            git2::Time::new(dur.as_secs() as i64, 0)
+        };
+        let update_ref = Some("HEAD");
+        let author = self.to_signature(&elapsed_from_epoch)?;
+        let committer = self.to_signature(&elapsed_from_epoch)?;
+        let parent = {
+            let refn = err_at!(FailGitapi, self.repo.find_reference("HEAD"))?;
+            err_at!(FailGitapi, refn.peel_to_commit())?
+        };
+
+        err_at!(
+            FailGitapi,
+            self.repo.commit(
+                update_ref,
+                &author,
+                &committer,
+                message,
+                &tree,
+                vec![&parent].as_slice(),
+            )
+        )?;
+
+        Ok(n_ops)
     }
 
     pub fn transaction(&mut self) -> Result<Txn> {
-        let tree = self.get_db_root()?.into_tree().unwrap();
-        let txn = Txn { index: self, tree };
+        let txn = Txn {
+            index: self,
+            trie: git::Trie::new(),
+            n_ops: 0,
+        };
         Ok(txn)
     }
 
@@ -229,6 +297,75 @@ impl Index {
         cb: Option<&mut git2::build::CheckoutBuilder>,
     ) -> Result<()> {
         err_at!(FailGitapi, self.repo.checkout_head(cb))
+    }
+}
+
+impl Index {
+    fn do_commit(
+        &self,
+        odb: &mut git2::Odb,
+        tree: Option<git2::Tree>,
+        node: &git::Node,
+    ) -> Result<git2::Tree> {
+        let mut builder = err_at!(FailGitapi, self.repo.treebuilder(tree.as_ref()))?;
+
+        // iterate over leafs of this node.
+        let blob_type = git2::ObjectType::Blob;
+        let blob_mode: i32 = git2::FileMode::Blob.into();
+        let mut leaf_names = vec![];
+        for leaf in node.as_leafs().iter() {
+            match leaf {
+                git::Op::Ins { comp, value } => {
+                    leaf_names.push(comp.as_str());
+                    // println!("insert_blob comp:{}", comp);
+                    let oid = err_at!(FailGitapi, odb.write(blob_type, value))?;
+                    err_at!(FailGitapi, builder.insert(comp, oid, blob_mode))?;
+                }
+                git::Op::Rem { comp } => err_at!(FailGitapi, builder.remove(comp))?,
+            }
+        }
+
+        // traverse deeper
+        let tree_mode = git2::FileMode::Tree.into();
+        for child in node.as_children().iter() {
+            let comp = child.as_comp();
+
+            if leaf_names.contains(&comp) {
+                err_at!(FailGitapi, msg: "dir and file same name {}", comp)?
+            }
+            let oid = match err_at!(FailGitapi, builder.get(comp))? {
+                Some(te) => match te.kind() {
+                    Some(git2::ObjectType::Tree) => {
+                        // println!("do_insert tree:{}", comp);
+                        let obj = err_at!(FailGitapi, te.to_object(&self.repo))?;
+                        let ct = obj.into_tree().unwrap();
+                        Some(self.do_commit(odb, Some(ct), child)?.id())
+                    }
+                    None => {
+                        err_at!(FailGitapi, msg: "missing kind")?;
+                        None
+                    }
+                    _ => {
+                        err_at!(FailGitapi, msg: "not a directory {}", comp)?;
+                        None
+                    }
+                },
+                None => {
+                    // println!("do_commit newtree:{}", comp);
+                    Some(self.do_commit(odb, None, child)?.id())
+                }
+            };
+            match oid {
+                Some(oid) => {
+                    err_at!(FailGitapi, builder.insert(comp, oid, tree_mode))?;
+                }
+                None => (),
+            }
+        }
+
+        let oid = err_at!(FailGitapi, builder.write())?;
+        let object = err_at!(FailGitapi, self.repo.find_object(oid, None))?;
+        Ok(object.into_tree().unwrap())
     }
 }
 
@@ -254,7 +391,7 @@ impl Index {
         Ok(comps)
     }
 
-    fn get_db_root(&self) -> Result<git2::Object> {
+    fn get_db_root(&self) -> Result<git2::Tree> {
         let tree = {
             let refn = err_at!(FailGitapi, self.repo.head())?;
             let commit = err_at!(FailGitapi, refn.peel_to_commit())?;
@@ -270,7 +407,10 @@ impl Index {
             )?,
         };
 
-        Ok(obj)
+        match obj.into_tree() {
+            Ok(tree) => Ok(tree),
+            Err(_) => err_at!(FailGitapi, msg: "git repo root not tree-type"),
+        }
     }
 
     // Entres in tree in reverse sort order.
@@ -620,25 +760,45 @@ impl<'a> Iterator for IterLevel<'a> {
 
 pub struct Txn<'a> {
     index: &'a Index,
-    tree: git2::Tree<'a>,
+    trie: git::Trie,
+    n_ops: usize,
 }
 
 impl<'a> Txn<'a> {
-    pub fn commit(&mut self) -> Result<()> {
+    pub fn insert<K, V>(&mut self, key: K, value: V) -> Result<()>
+    where
+        K: dba::AsKey,
+        V: AsRef<[u8]>,
+    {
+        self.trie.insert(&key.to_key_path()?, value.as_ref());
+        self.n_ops += 1;
+        Ok(())
+    }
+
+    pub fn remove<K>(&mut self, key: K) -> Result<()>
+    where
+        K: dba::AsKey,
+    {
+        self.trie.remove(&key.to_key_path()?);
+        self.n_ops += 1;
+        Ok(())
+    }
+
+    pub fn commit(&mut self, message: &str) -> Result<()> {
+        let mut odb = err_at!(FailGitapi, self.index.repo.odb())?;
+        let root = self.trie.as_root();
+        let tree = self.index.get_db_root()?;
+
+        let tree = self.index.do_commit(&mut odb, Some(tree), root)?;
+
+        // actual commit
         let elapsed_from_epoch = {
             let dur = err_at!(Fatal, time::UNIX_EPOCH.elapsed())?;
             git2::Time::new(dur.as_secs() as i64, 0)
         };
         let update_ref = Some("HEAD");
-        let author = err_at!(
-            FailGitapi,
-            git2::Signature::new("rdms/git", "no-email-id", &elapsed_from_epoch)
-        )?;
-        let committer = err_at!(
-            FailGitapi,
-            git2::Signature::new("rdms/git", "no-email-id", &elapsed_from_epoch)
-        )?;
-        let message = "dummy message".to_string();
+        let author = self.index.to_signature(&elapsed_from_epoch)?;
+        let committer = self.index.to_signature(&elapsed_from_epoch)?;
         let parent = {
             let refn = err_at!(FailGitapi, self.index.repo.find_reference("HEAD"))?;
             err_at!(FailGitapi, refn.peel_to_commit())?
@@ -650,214 +810,13 @@ impl<'a> Txn<'a> {
                 update_ref,
                 &author,
                 &committer,
-                &message,
-                &self.tree,
-                vec![&parent].as_slice(),
-            )
-        )?;
-
-        Ok(())
-    }
-
-    pub fn insert<P, V>(&mut self, key: P, data: V) -> Result<()>
-    where
-        P: AsRef<path::Path>,
-        V: AsRef<[u8]>,
-    {
-        let key: &path::Path = key.as_ref();
-
-        let comps: Vec<String> = key
-            .components()
-            .filter_map(|c| match c {
-                path::Component::Normal(s) => Some(s.to_str()?.to_string()),
-                _ => None,
-            })
-            .collect();
-
-        match comps.len() {
-            0 => err_at!(InvalidInput, msg: "empty key"),
-            _ => {
-                println!("insert comps:{:?}", comps);
-                self.tree =
-                    self.do_insert(Some(self.tree.clone()), &comps, data.as_ref())?;
-                println!("insert oid:{:?}", self.tree.id());
-                Ok(())
-            }
-        }
-    }
-
-    pub fn remove<P>(&mut self, key: P) -> Result<()>
-    where
-        P: AsRef<path::Path>,
-    {
-        let repo = &self.index.repo;
-        let key: &path::Path = key.as_ref();
-
-        let comps: Vec<String> = key
-            .components()
-            .filter_map(|c| match c {
-                path::Component::Normal(s) => Some(s.to_str()?.to_string()),
-                _ => None,
-            })
-            .collect();
-
-        let elapsed_from_epoch = {
-            let dur = err_at!(Fatal, time::UNIX_EPOCH.elapsed())?;
-            git2::Time::new(dur.as_secs() as i64, 0)
-        };
-        let update_ref = Some("HEAD");
-        let author = err_at!(
-            FailGitapi,
-            git2::Signature::new("rdms/git", "", &elapsed_from_epoch)
-        )?;
-        let committer = err_at!(
-            FailGitapi,
-            git2::Signature::new("rdms/git", "", &elapsed_from_epoch)
-        )?;
-        let message = format!("insert {:?}", key);
-        let parent = {
-            let refn = err_at!(FailGitapi, repo.find_reference("HEAD"))?;
-            err_at!(FailGitapi, refn.peel_to_commit())?
-        };
-        let tree = {
-            let tree = self.index.get_db_root()?.into_tree().unwrap();
-            self.do_remove(tree, &comps)?
-        };
-
-        err_at!(
-            FailGitapi,
-            repo.commit(
-                update_ref,
-                &author,
-                &committer,
-                &message,
+                message,
                 &tree,
                 vec![&parent].as_slice(),
             )
         )?;
 
         Ok(())
-    }
-
-    fn do_insert(
-        &self,
-        tree: Option<git2::Tree<'a>>,
-        comps: &[String],
-        data: &[u8],
-    ) -> Result<git2::Tree<'a>> {
-        let comp = comps.first();
-        let comps = &comps[1..];
-
-        match (comp, tree) {
-            (Some(comp), Some(tree)) if comps.is_empty() => {
-                println!("do_insert blob:{}", comp);
-                self.insert_blob(Some(&tree), comp, data)
-            }
-            (Some(comp), Some(tree)) => match tree.get_name(comp) {
-                Some(te) => match te.kind() {
-                    Some(git2::ObjectType::Tree) => {
-                        println!("do_insert tree:{}", comp);
-                        let obj = err_at!(FailGitapi, te.to_object(&self.index.repo))?;
-                        let child = obj.into_tree().unwrap();
-                        let oid = self.do_insert(Some(child), comps, data)?.id();
-
-                        self.insert_tree(Some(&tree), comp, oid)
-                    }
-                    None => err_at!(FailGitapi, msg: "missing kind"),
-                    _ => err_at!(FailGitapi, msg: "not a directory {}", comp),
-                },
-                None => {
-                    println!("do_insert newtree:{}", comp);
-                    let oid = self.do_insert(None, comps, data)?.id();
-                    self.insert_tree(Some(&tree), comp, oid)
-                }
-            },
-            (Some(comp), None) if comps.is_empty() => {
-                println!("do_insert mkdir blob:{}", comp);
-                self.insert_blob(None, comp, data)
-            }
-            (Some(comp), None) => {
-                println!("do_insert mkdir tree:{}", comp);
-                let oid = self.do_insert(None, comps, data)?.id();
-                self.insert_tree(None, comp, oid)
-            }
-            (None, _) => unreachable!(),
-        }
-    }
-
-    fn insert_blob(
-        &self,
-        tree: Option<&git2::Tree>,
-        comp: &str,
-        data: &[u8],
-    ) -> Result<git2::Tree<'a>> {
-        let odb = err_at!(FailGitapi, self.index.repo.odb())?;
-        let mut builder = err_at!(FailGitapi, self.index.repo.treebuilder(tree))?;
-
-        println!("insert_blob comp:{}", comp);
-        let oid = err_at!(FailGitapi, odb.write(git2::ObjectType::Blob, data))?;
-        err_at!(
-            FailGitapi,
-            builder.insert(comp, oid, git2::FileMode::Blob.into())
-        )?;
-        let oid = err_at!(FailGitapi, builder.write())?;
-
-        let object = err_at!(FailGitapi, self.index.repo.find_object(oid, None))?;
-        Ok(object.into_tree().unwrap())
-    }
-
-    fn insert_tree(
-        &self,
-        tree: Option<&git2::Tree>,
-        comp: &str,
-        oid: git2::Oid,
-    ) -> Result<git2::Tree<'a>> {
-        let mut builder = err_at!(FailGitapi, self.index.repo.treebuilder(tree))?;
-
-        let o = self.index.repo.find_object(oid, None).unwrap();
-        println!("insert_tree comp:{} kind:{:?}", comp, o.kind());
-        err_at!(
-            FailGitapi,
-            builder.insert(comp, oid, git2::FileMode::Tree.into())
-        )?;
-        let oid = err_at!(FailGitapi, builder.write())?;
-
-        let object = err_at!(FailGitapi, self.index.repo.find_object(oid, None))?;
-        Ok(object.as_tree().unwrap().clone())
-    }
-
-    fn do_remove(
-        &self,
-        tree: git2::Tree<'a>,
-        comps: &[String],
-    ) -> Result<git2::Tree<'a>> {
-        let comp = comps.first();
-        let comps = &comps[1..];
-
-        match comp {
-            Some(comp) if comps.is_empty() => self.remove_entry(&tree, comp),
-            Some(comp) => match tree.get_name(comp) {
-                Some(te) => match te.kind() {
-                    Some(git2::ObjectType::Tree) => {
-                        let obj = err_at!(FailGitapi, te.to_object(&self.index.repo))?;
-                        self.do_remove(obj.into_tree().unwrap(), comps)
-                    }
-                    Some(_) | None => err_at!(NotFound, msg: "missing key"),
-                },
-                None => err_at!(NotFound, msg: "missing key"),
-            },
-            None => unreachable!(),
-        }
-    }
-
-    fn remove_entry(&self, tree: &git2::Tree, comp: &str) -> Result<git2::Tree<'a>> {
-        let mut builder = err_at!(FailGitapi, self.index.repo.treebuilder(Some(tree)))?;
-
-        err_at!(FailGitapi, builder.remove(comp))?;
-        let oid = err_at!(FailGitapi, builder.write())?;
-
-        let object = err_at!(FailGitapi, self.index.repo.find_object(oid, None))?;
-        Ok(object.as_tree().unwrap().clone())
     }
 }
 

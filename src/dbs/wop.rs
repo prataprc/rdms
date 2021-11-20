@@ -1,11 +1,8 @@
 use arbitrary::Arbitrary;
 
-#[allow(unused_imports)]
-use crate::Index;
-
 use crate::dbs;
 
-/// Write operations allowed on [Index] index, refer to [Index::write] method.
+/// Write operations allowed on index.
 ///
 /// * Optional `cas`, when supplied, should match with key's current
 ///   sequence-number. If key is missing from index, `cas` must be supplied

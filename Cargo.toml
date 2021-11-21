@@ -34,8 +34,9 @@ maintenance = { status = "actively-developed" }
 travis-ci = { repository = "bnclabs/rdms" }
 
 [dependencies]
-cbordata = { version = "0.5.4" }
 xorfilter-rs = { path = "../xorfilter", features = ["cbordata"] }
+cbordata = { path = "../cbordata", version = "0.5.4" }
+cmap = { path = "../cmap", version = "0.3.0" }
 arbitrary = { version = "1", features = ["derive"] }
 toml = "0.5.8"
 lazy_static = "1.2.0"

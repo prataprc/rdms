@@ -101,6 +101,7 @@ pub mod robt;
 #[macro_use]
 pub mod util;
 pub mod bitmaps;
+pub mod clru;
 pub mod git;
 mod index;
 pub mod wral;

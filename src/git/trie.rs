@@ -1,3 +1,4 @@
+#[derive(Default)]
 pub struct Trie {
     root: Node,
 }
@@ -22,6 +23,7 @@ impl Trie {
     }
 }
 
+#[derive(Default)]
 pub struct Node {
     comp: String,
     children: Vec<Node>,

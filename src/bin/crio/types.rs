@@ -41,42 +41,6 @@ impl Crate {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Badge {
-    attributes: String,
-    badge_type: String,
-    crate_id: u64,
-}
-
-pub const BADGE_RECORD_EXT: &str = ".json";
-pub const BADGE_TABLE: &str = "table:badges";
-pub const BADGE_KEY_LEVELS: usize = 3;
-impl Badge {
-    pub fn to_key(&self) -> Option<String> {
-        let name = self.crate_id.to_string();
-        assert!(!name.contains('/'));
-
-        let mut full_key = BADGE_TABLE.to_string();
-
-        match dba::to_content_key(&name, BADGE_KEY_LEVELS) {
-            Some(key) => {
-                full_key.push('/');
-                full_key.push_str(&key);
-                full_key.push('/');
-                full_key.push_str(&self.badge_type);
-                full_key.push_str(BADGE_RECORD_EXT);
-                Some(full_key)
-            }
-            None => None,
-        }
-    }
-
-    #[allow(dead_code)] // TODO
-    pub fn to_attributes(&self) -> Result<serde_json::Value> {
-        err_at!(FailConvert, serde_json::from_str(&self.attributes))
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
 pub struct Category {
     category: String,
     crates_cnt: usize,
@@ -133,38 +97,6 @@ impl Keyword {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Metadata {
-    total_downloads: usize,
-}
-
-impl Metadata {
-    pub fn to_key(&self) -> Option<String> {
-        Some("metadata.json".to_string())
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ReservedCrateName {
-    name: String,
-}
-
-pub const RESERVED_CRATE_NAME_RECORD_EXT: &str = ".json";
-pub const RESERVED_CRATE_NAME_TABLE: &str = "table:reserved_crate_names";
-impl ReservedCrateName {
-    pub fn to_key(&self) -> Option<String> {
-        assert!(!self.name.contains('/'));
-
-        let mut full_key = RESERVED_CRATE_NAME_TABLE.to_string();
-
-        full_key.push('/');
-        full_key.push_str(&self.name);
-        full_key.push_str(RESERVED_CRATE_NAME_RECORD_EXT);
-
-        Some(full_key)
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
 pub struct User {
     gh_avatar: String,
     gh_id: i64,
@@ -199,6 +131,7 @@ impl User {
     }
 }
 
+/// Secondary table, table:versions
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Version {
     crate_id: u64,
@@ -216,35 +149,41 @@ pub struct Version {
     yanked: char,
 }
 
-pub const VERSION_RECORD_EXT: &str = ".json";
-pub const VERSION_TABLE: &str = "table:versions";
-pub const VERSION_KEY_LEVELS: usize = 3;
 impl Version {
-    pub fn to_key(&self) -> Option<String> {
-        let name = self.crate_id.to_string();
-        assert!(!name.contains('/'));
-
-        let mut full_key = VERSION_TABLE.to_string();
-
-        match dba::to_content_key(&name, VERSION_KEY_LEVELS) {
-            Some(key) => {
-                full_key.push('/');
-                full_key.push_str(&key);
-                full_key.push('/');
-                full_key.push_str(&self.num);
-                full_key.push_str(VERSION_RECORD_EXT);
-                Some(full_key)
-            }
-            None => None,
-        }
-    }
-
     #[allow(dead_code)] // TODO
     pub fn to_features(&self) -> Result<serde_json::Value> {
         err_at!(FailConvert, serde_json::from_str(&self.features))
     }
 }
 
+/// Secondary table, table:badges
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Badge {
+    attributes: String,
+    badge_type: String,
+    crate_id: u64,
+}
+
+impl Badge {
+    #[allow(dead_code)] // TODO
+    pub fn to_attributes(&self) -> Result<serde_json::Value> {
+        err_at!(FailConvert, serde_json::from_str(&self.attributes))
+    }
+}
+
+/// Secondary table, table:metadata
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Metadata {
+    total_downloads: usize,
+}
+
+/// Secondary table, table:reserved_crate_names
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ReservedCrateName {
+    name: String,
+}
+
+/// Secondary table, table:version_downloads
 #[derive(Debug, Serialize, Deserialize)]
 pub struct VersionDownloads {
     version_id: u64,
@@ -252,29 +191,7 @@ pub struct VersionDownloads {
     downloads: usize,
 }
 
-pub const VERSION_DOWNLOADS_RECORD_EXT: &str = ".json";
-pub const VERSION_DOWNLOADS_TABLE: &str = "table:version_downloads";
-impl VersionDownloads {
-    pub fn to_key(&self) -> Option<String> {
-        let name = self.version_id.to_string();
-        assert!(!name.contains('/'));
-
-        let mut full_key = VERSION_DOWNLOADS_TABLE.to_string();
-
-        match dba::to_content_key(&name, VERSION_KEY_LEVELS) {
-            Some(key) => {
-                full_key.push('/');
-                full_key.push_str(&key);
-                full_key.push('/');
-                full_key.push_str(&self.date);
-                full_key.push_str(VERSION_DOWNLOADS_RECORD_EXT);
-                Some(full_key)
-            }
-            None => None,
-        }
-    }
-}
-
+/// Secondary table, table:crate_owners
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CrateOwners {
     crate_id: u64,
@@ -285,91 +202,16 @@ pub struct CrateOwners {
     owner_kind: u64,
 }
 
-pub const CRATE_OWNERS_RECORD_EXT: &str = ".json";
-pub const CRATE_OWNERS_TABLE: &str = "table:crate_owners";
-pub const CRATE_OWNERS_KEY_LEVELS: usize = 3;
-impl CrateOwners {
-    pub fn to_key(&self) -> Option<String> {
-        let name = self.crate_id.to_string();
-        assert!(!name.contains('/'));
-
-        let mut full_key = CRATE_OWNERS_TABLE.to_string();
-        //let owner_id = self
-        //    .owner_id
-        //    .as_ref()
-        //    .map(|x| x.to_string())
-        //    .unwrap_or("anonymous".to_string());
-
-        match dba::to_content_key(&name, CRATE_OWNERS_KEY_LEVELS) {
-            Some(key) => {
-                full_key.push('/');
-                full_key.push_str(&key);
-                full_key.push('/');
-                full_key.push_str(&self.owner_id.to_string());
-                full_key.push_str(CRATE_OWNERS_RECORD_EXT);
-                Some(full_key)
-            }
-            None => None,
-        }
-    }
-}
-
+/// Secondary table, table:crates_categories
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CrateCategories {
     crate_id: u64,
     category_id: u64,
 }
 
-pub const CRATE_CATEGORIES_RECORD_EXT: &str = ".json";
-pub const CRATE_CATEGORIES_TABLE: &str = "table:crate_categories";
-pub const CRATE_CATEGORIES_KEY_LEVELS: usize = 3;
-impl CrateCategories {
-    pub fn to_key(&self) -> Option<String> {
-        let name = self.crate_id.to_string();
-        assert!(!name.contains('/'));
-
-        let mut full_key = CRATE_CATEGORIES_TABLE.to_string();
-
-        match dba::to_content_key(&name, CRATE_CATEGORIES_KEY_LEVELS) {
-            Some(key) => {
-                full_key.push('/');
-                full_key.push_str(&key);
-                full_key.push('/');
-                full_key.push_str(&self.category_id.to_string());
-                full_key.push_str(CRATE_CATEGORIES_RECORD_EXT);
-                Some(full_key)
-            }
-            None => None,
-        }
-    }
-}
-
+/// Secondary table, table:crates_keywords
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CrateKeywords {
     crate_id: u64,
     keyword_id: u64,
-}
-
-pub const CRATE_KEYWORDS_RECORD_EXT: &str = ".json";
-pub const CRATE_KEYWORDS_TABLE: &str = "table:crate_keywords";
-pub const CRATE_KEYWORDS_KEY_LEVELS: usize = 3;
-impl CrateKeywords {
-    pub fn to_key(&self) -> Option<String> {
-        let name = self.crate_id.to_string();
-        assert!(!name.contains('/'));
-
-        let mut full_key = CRATE_KEYWORDS_TABLE.to_string();
-
-        match dba::to_content_key(&name, CRATE_KEYWORDS_KEY_LEVELS) {
-            Some(key) => {
-                full_key.push('/');
-                full_key.push_str(&key);
-                full_key.push('/');
-                full_key.push_str(&self.keyword_id.to_string());
-                full_key.push_str(CRATE_KEYWORDS_RECORD_EXT);
-                Some(full_key)
-            }
-            None => None,
-        }
-    }
 }

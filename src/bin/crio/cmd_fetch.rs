@@ -1,11 +1,11 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use std::{env, ffi, fs, path, result, time};
 
 use crate::types;
 use rdms::{err_at, git, util, Error, Result};
 
-macro_rules! unpack_table {
+macro_rules! unpack_primary_table {
     ($profile:ident, $file:expr, $txn:ident, $tbl:expr, $type:ty) => {{
         let file_loc: path::PathBuf = [crates_io_untar_dir($profile)?, $file.into()]
             .iter()
@@ -48,6 +48,39 @@ macro_rules! unpack_table {
             n
         };
         n
+    }};
+}
+
+macro_rules! unpack_secondary_table {
+    ($profile:ident, $tbl:expr, $src:expr, $dst:expr, $txn:ident, $type:ty) => {{
+        let start = time::Instant::now();
+        let untar_dir = crates_io_untar_dir($profile)?;
+
+        let src_loc: path::PathBuf =
+            [untar_dir, "data".into(), $src.into()].iter().collect();
+        let key: path::PathBuf = [$tbl, $dst].iter().collect();
+
+        let mut fd = err_at!(IOError, fs::OpenOptions::new().read(true).open(&src_loc))?;
+        let mut rdr = csv::Reader::from_reader(&mut fd);
+        let iter = rdr
+            .deserialize()
+            .map(|r: result::Result<$type, csv::Error>| err_at!(InvalidFormat, r));
+
+        let mut items = vec![];
+        for (i, item) in iter.enumerate() {
+            items.push(item?);
+            print!("{} {}\r", $tbl, i);
+        }
+        let s = err_at!(FailConvert, serde_json::to_string_pretty(&items))?;
+
+        $txn.insert(key.clone(), s.as_bytes())?;
+
+        println!(
+            "copied {:?} -> {:?}, took {:?}",
+            src_loc,
+            key,
+            start.elapsed()
+        );
     }};
 }
 
@@ -110,8 +143,8 @@ pub fn handle(opts: Opt) -> Result<()> {
     match opts.nocopy {
         true => (),
         false => {
-            crates_io_metadata(&opts, &profile)?;
-            unpack_csv_tables(&opts, &profile)?;
+            let metadata = crates_io_metadata(&opts, &profile)?;
+            unpack_csv_tables(&opts, &profile, &metadata)?;
         }
     };
 
@@ -234,7 +267,9 @@ fn crates_io_untar_dir(profile: &Profile) -> Result<path::PathBuf> {
     err_at!(Fatal, msg: "missing valid untar-ed directory in {:?}", parent)
 }
 
-fn crates_io_metadata(_opts: &Opt, profile: &Profile) -> Result<()> {
+fn crates_io_metadata(_opts: &Opt, profile: &Profile) -> Result<Metadata> {
+    use std::str::from_utf8;
+
     let src_loc: path::PathBuf = [crates_io_untar_dir(profile)?, "metadata.json".into()]
         .iter()
         .collect();
@@ -243,48 +278,56 @@ fn crates_io_metadata(_opts: &Opt, profile: &Profile) -> Result<()> {
         .collect();
 
     let data = err_at!(IOError, fs::read(&src_loc))?;
-    err_at!(IOError, fs::write(&dst_loc, &data))?;
+    err_at!(IOError, fs::write(&dst_loc, &data), "{:?}", dst_loc)?;
 
     println!("copied {:?} -> {:?} ... ok", src_loc, dst_loc);
 
-    Ok(())
+    let s = err_at!(FailConvert, from_utf8(&data))?;
+    err_at!(FailConvert, serde_json::from_str(&s))
 }
 
-fn unpack_csv_tables(_opts: &Opt, profile: &Profile) -> Result<()> {
+fn unpack_csv_tables(_opts: &Opt, profile: &Profile, metadata: &Metadata) -> Result<()> {
     let mut index = git::Index::open(profile.git.clone())?;
 
-    {
-        let dir_date = crates_io_untar_dir(profile)?;
+    let txn = {
         let mut txn = index.transaction()?;
 
         // TODO: depedencies.csv and teams.csv to be upacked.
-        //unpack_crates_csv(profile, &mut txn)?;
-        //unpack_badges_csv(profile, &mut txn)?;
-        //unpack_categories_csv(profile, &mut txn)?;
-        //unpack_users_csv(profile, &mut txn)?;
-        //unpack_keywords_csv(profile, &mut txn)?;
-        //unpack_metadata_csv(profile, &mut txn)?;
-        //unpack_reserved_crate_names_csv(profile, &mut txn)?;
-        //unpack_versions_csv(profile, &mut txn)?;
-        unpack_version_downloads_csv(profile, &mut txn)?;
-        unpack_crate_owners_csv(profile, &mut txn)?;
-        unpack_crate_categories_csv(profile, &mut txn)?;
-        unpack_crate_keywords_csv(profile, &mut txn)?;
 
-        txn.commit(dir_date.file_name().unwrap().to_str())?;
+        // Primary tables
+        unpack_crates_csv(profile, &mut txn)?;
+        unpack_categories_csv(profile, &mut txn)?;
+        unpack_users_csv(profile, &mut txn)?;
+        unpack_keywords_csv(profile, &mut txn)?;
+
+        // Secondary tables
+        unpack_secondary_csv(profile, &mut txn)?;
+
+        txn
+    };
+
+    {
+        print!("commiting transaction, ");
+        let start = time::Instant::now();
+        let message = err_at!(FailConvert, serde_json::to_string_pretty(&metadata))?;
+        txn.commit(&message)?;
+        println!("took {:?}", start.elapsed());
     }
 
-    print!("checking out ... ");
-    let mut cb = git2::build::CheckoutBuilder::new();
-    cb.recreate_missing(true);
-    index.checkout_head(Some(&mut cb))?;
-    println!("ok");
+    {
+        print!("checking out, ");
+        let start = time::Instant::now();
+        let mut cb = git2::build::CheckoutBuilder::new();
+        cb.recreate_missing(true);
+        index.checkout_head(Some(&mut cb))?;
+        println!("took {:?}", start.elapsed());
+    }
 
     Ok(())
 }
 
 fn unpack_crates_csv(profile: &Profile, txn: &mut git::Txn) -> Result<usize> {
-    let n = unpack_table!(
+    let n = unpack_primary_table!(
         profile,
         "data/crates.csv",
         txn,
@@ -295,20 +338,8 @@ fn unpack_crates_csv(profile: &Profile, txn: &mut git::Txn) -> Result<usize> {
     Ok(n)
 }
 
-fn unpack_badges_csv(profile: &Profile, txn: &mut git::Txn) -> Result<usize> {
-    let n = unpack_table!(
-        profile,
-        "data/badges.csv",
-        txn,
-        types::BADGE_TABLE,
-        types::Badge
-    );
-
-    Ok(n)
-}
-
 fn unpack_categories_csv(profile: &Profile, txn: &mut git::Txn) -> Result<usize> {
-    let n = unpack_table!(
+    let n = unpack_primary_table!(
         profile,
         "data/categories.csv",
         txn,
@@ -320,7 +351,7 @@ fn unpack_categories_csv(profile: &Profile, txn: &mut git::Txn) -> Result<usize>
 }
 
 fn unpack_users_csv(profile: &Profile, txn: &mut git::Txn) -> Result<usize> {
-    let n = unpack_table!(
+    let n = unpack_primary_table!(
         profile,
         "data/users.csv",
         txn,
@@ -332,7 +363,7 @@ fn unpack_users_csv(profile: &Profile, txn: &mut git::Txn) -> Result<usize> {
 }
 
 fn unpack_keywords_csv(profile: &Profile, txn: &mut git::Txn) -> Result<usize> {
-    let n = unpack_table!(
+    let n = unpack_primary_table!(
         profile,
         "data/keywords.csv",
         txn,
@@ -343,89 +374,77 @@ fn unpack_keywords_csv(profile: &Profile, txn: &mut git::Txn) -> Result<usize> {
     Ok(n)
 }
 
-fn unpack_metadata_csv(profile: &Profile, txn: &mut git::Txn) -> Result<usize> {
-    let n = unpack_table!(
+fn unpack_secondary_csv(profile: &Profile, txn: &mut git::Txn) -> Result<()> {
+    unpack_secondary_table!(
         profile,
-        "data/metadata.csv",
+        "table:versions",
+        "versions.csv",
+        "versions.json",
         txn,
-        "metadata",
-        types::Metadata
-    );
-
-    Ok(n)
-}
-
-fn unpack_reserved_crate_names_csv(
-    profile: &Profile,
-    txn: &mut git::Txn,
-) -> Result<usize> {
-    let n = unpack_table!(
-        profile,
-        "data/reserved_crate_names.csv",
-        txn,
-        types::RESERVED_CRATE_NAME_TABLE,
-        types::ReservedCrateName
-    );
-
-    Ok(n)
-}
-
-fn unpack_versions_csv(profile: &Profile, txn: &mut git::Txn) -> Result<usize> {
-    let n = unpack_table!(
-        profile,
-        "data/versions.csv",
-        txn,
-        types::VERSION_TABLE,
         types::Version
     );
-
-    Ok(n)
-}
-
-fn unpack_version_downloads_csv(profile: &Profile, txn: &mut git::Txn) -> Result<usize> {
-    let n = unpack_table!(
+    unpack_secondary_table!(
         profile,
-        "data/version_downloads.csv",
+        "table:badges",
+        "badges.csv",
+        "badges.json",
         txn,
-        types::VERSION_DOWNLOADS_TABLE,
+        types::Badge
+    );
+    unpack_secondary_table!(
+        profile,
+        "table:metadata",
+        "metadata.csv",
+        "metadata.json",
+        txn,
+        types::Metadata
+    );
+    unpack_secondary_table!(
+        profile,
+        "table:reserved_crate_names",
+        "reserved_crate_names.csv",
+        "reserved_crate_names.json",
+        txn,
+        types::ReservedCrateName
+    );
+    unpack_secondary_table!(
+        profile,
+        "table:version_downloads",
+        "version_downloads.csv",
+        "version_downloads.json",
+        txn,
         types::VersionDownloads
     );
-
-    Ok(n)
-}
-
-fn unpack_crate_owners_csv(profile: &Profile, txn: &mut git::Txn) -> Result<usize> {
-    let n = unpack_table!(
+    unpack_secondary_table!(
         profile,
-        "data/crate_owners.csv",
+        "table:crate_owners",
+        "crate_owners.csv",
+        "crate_owners.json",
         txn,
-        types::CRATE_OWNERS_TABLE,
         types::CrateOwners
     );
-
-    Ok(n)
-}
-
-fn unpack_crate_categories_csv(profile: &Profile, txn: &mut git::Txn) -> Result<usize> {
-    let n = unpack_table!(
+    unpack_secondary_table!(
         profile,
-        "data/crates_categories.csv",
+        "table:crates_categories",
+        "crates_categories.csv",
+        "crates_categories.json",
         txn,
-        types::CRATE_CATEGORIES_TABLE,
         types::CrateCategories
     );
-
-    Ok(n)
-}
-
-fn unpack_crate_keywords_csv(profile: &Profile, txn: &mut git::Txn) -> Result<usize> {
-    let n = unpack_table!(
+    unpack_secondary_table!(
         profile,
-        "data/crates_keywords.csv",
+        "table:crates_keywords",
+        "crates_keywords.csv",
+        "crates_keywords.json",
         txn,
-        types::CRATE_KEYWORDS_TABLE,
         types::CrateKeywords
     );
 
-    Ok(n)
+    Ok(())
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Metadata {
+    timestamp: String,
+    crates_io_commit: String,
 }

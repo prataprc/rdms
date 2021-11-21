@@ -237,9 +237,7 @@ impl Index {
         V: AsRef<[u8]>,
         I: Iterator<Item = git::WriteOp<K, V>>,
     {
-        let mut odb = err_at!(FailGitapi, self.repo.odb())?;
-        let mut trie = git::Trie::new();
-        let mut n_ops = 0;
+        let (mut trie, mut n_ops) = (git::Trie::new(), 0);
         for w in ops {
             match w {
                 git::WriteOp::Ins { key, value } => {
@@ -250,6 +248,29 @@ impl Index {
             n_ops += 1;
         }
 
+        self.trie_commit(message, trie, n_ops)
+    }
+
+    pub fn transaction(&mut self) -> Result<Txn> {
+        let txn = Txn {
+            index: self,
+            trie: git::Trie::new(),
+            n_ops: 0,
+        };
+        Ok(txn)
+    }
+
+    pub fn checkout_head(
+        &mut self,
+        cb: Option<&mut git2::build::CheckoutBuilder>,
+    ) -> Result<()> {
+        err_at!(FailGitapi, self.repo.checkout_head(cb))
+    }
+}
+
+impl Index {
+    fn trie_commit(&mut self, message: &str, trie: git::Trie, n: usize) -> Result<usize> {
+        let mut odb = err_at!(FailGitapi, self.repo.odb())?;
         let root = trie.as_root();
         let tree = self.get_db_root()?;
 
@@ -280,27 +301,9 @@ impl Index {
             )
         )?;
 
-        Ok(n_ops)
+        Ok(n)
     }
 
-    pub fn transaction(&mut self) -> Result<Txn> {
-        let txn = Txn {
-            index: self,
-            trie: git::Trie::new(),
-            n_ops: 0,
-        };
-        Ok(txn)
-    }
-
-    pub fn checkout_head(
-        &mut self,
-        cb: Option<&mut git2::build::CheckoutBuilder>,
-    ) -> Result<()> {
-        err_at!(FailGitapi, self.repo.checkout_head(cb))
-    }
-}
-
-impl Index {
     fn do_commit(
         &self,
         odb: &mut git2::Odb,
@@ -357,7 +360,10 @@ impl Index {
             };
             match oid {
                 Some(oid) => {
-                    err_at!(FailGitapi, builder.insert(comp, oid, tree_mode))?;
+                    let tree = err_at!(FailGitapi, self.repo.find_tree(oid))?;
+                    if !tree.is_empty() {
+                        err_at!(FailGitapi, builder.insert(comp, oid, tree_mode))?;
+                    }
                 }
                 None => (),
             }
@@ -759,7 +765,7 @@ impl<'a> Iterator for IterLevel<'a> {
 }
 
 pub struct Txn<'a> {
-    index: &'a Index,
+    index: &'a mut Index,
     trie: git::Trie,
     n_ops: usize,
 }
@@ -784,39 +790,8 @@ impl<'a> Txn<'a> {
         Ok(())
     }
 
-    pub fn commit(&mut self, message: &str) -> Result<()> {
-        let mut odb = err_at!(FailGitapi, self.index.repo.odb())?;
-        let root = self.trie.as_root();
-        let tree = self.index.get_db_root()?;
-
-        let tree = self.index.do_commit(&mut odb, Some(tree), root)?;
-
-        // actual commit
-        let elapsed_from_epoch = {
-            let dur = err_at!(Fatal, time::UNIX_EPOCH.elapsed())?;
-            git2::Time::new(dur.as_secs() as i64, 0)
-        };
-        let update_ref = Some("HEAD");
-        let author = self.index.to_signature(&elapsed_from_epoch)?;
-        let committer = self.index.to_signature(&elapsed_from_epoch)?;
-        let parent = {
-            let refn = err_at!(FailGitapi, self.index.repo.find_reference("HEAD"))?;
-            err_at!(FailGitapi, refn.peel_to_commit())?
-        };
-
-        err_at!(
-            FailGitapi,
-            self.index.repo.commit(
-                update_ref,
-                &author,
-                &committer,
-                message,
-                &tree,
-                vec![&parent].as_slice(),
-            )
-        )?;
-
-        Ok(())
+    pub fn commit(self, message: &str) -> Result<usize> {
+        self.index.trie_commit(message, self.trie, self.n_ops)
     }
 }
 

@@ -6,7 +6,14 @@ git_analytics_dir = "analytics"
 [git]
 loc_repo = "/media/prataprc/hdd1.4tb/db-rdms-crio"
 loc_db = ""
-permissions = "shared_umask"
-description = "repository holds data from crates.io db dump"
 user_name = "prataprc"
 user_email = "prataprc@gmail.com"
+
+[git.init]
+bare = false
+no_reinit = true
+permissions = "shared_umask"
+description = "repository holds data from crates.io db dump"
+
+[git.open]
+no_search = true

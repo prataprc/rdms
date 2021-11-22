@@ -9,102 +9,135 @@ use std::{
         atomic::{AtomicBool, AtomicPtr, Ordering::SeqCst},
         Arc,
     },
-    time::{self, Duration},
+    time,
 };
 
-// S - Sentinel
-// T - Access time-stamp
-// N - None
 pub enum Access<K> {
-    S {
+    T {
         next: AtomicPtr<Access<K>>,
     },
-    T {
+    N {
         key: K,
-        born: Duration, // elapsed time in uS since UNIX_EPOCH.
+        born: time::Instant,
         deleted: AtomicBool,
-        next: Option<Box<Access<K>>>,
+        next: AtomicPtr<Access<K>>,
     },
-    N,
+    H {
+        prev: AtomicPtr<Access<K>>,
+    },
 }
 
 impl<K> Access<K> {
-    /// Create a new access-list.
+    /// Create a new access-list. An empty access list is maintained as,
+    /// `Access::H.prev -> `Access::T`
+    /// `Access::T.next -> `Access::H`
     ///
-    /// An empty access list is maintained as Access::S.next -> Access::N. That is,
-    /// a sentinel node pointing to end-node.
-    pub fn new_list() -> Arc<Access<K>> {
-        Arc::new(Access::S {
-            next: AtomicPtr::new(Box::leak(Box::new(Access::N))),
-        })
+    /// return (head, tail)
+    pub fn new_list() -> (Arc<Access<K>>, Arc<Access<K>>) {
+        // create head
+        let head = Arc::new(Access::H {
+            prev: AtomicPtr::new(std::ptr::null::<Access<K>>() as *mut Access<K>),
+        });
+        // create tail
+        let tail = Arc::new(Access::T {
+            next: AtomicPtr::new(Arc::as_ptr(&head) as *mut Access<K>),
+        });
+        // link them back to back
+        match head.as_ref() {
+            Access::H { prev } => {
+                prev.store(Arc::as_ptr(&tail) as *mut Access<K>, SeqCst)
+            }
+            _ => unreachable!(),
+        };
+
+        (head, tail)
     }
 
-    /// Create a new access-node, always of type Access::T. Subsequently the list
-    /// will be maintained as,
-    ///
-    /// Access::S.next -> Access::T.next -> ... -> Access::N
-    pub fn new(key: K) -> Box<Access<K>> {
-        Box::new(Access::T {
-            key,
-            born: time::UNIX_EPOCH.elapsed().unwrap(),
-            deleted: AtomicBool::new(false),
-            next: None,
-        })
-    }
-
-    /// Mark the node as deleted.
-    ///
-    /// Note that evictor will remove an access node if,
-    /// * Node is marked as deleted.
-    /// * Number of nodes in the access list exceeds the cache-limit. In this case,
-    ///   evictor shall first deleted the entry from the cache before removing it
-    ///   from the list.
-    pub fn delete(&self) {
+    pub fn into_key(self) -> K {
         match self {
-            Access::T { deleted, .. } => deleted.store(true, SeqCst),
+            Access::N { key, .. } => key,
             _ => unreachable!(),
         }
     }
 
-    pub fn get_next_mut(&mut self) -> &mut Access<K> {
+    pub fn get_next(&self) -> &Access<K> {
         match self {
-            Access::S { next } => unsafe { next.load(SeqCst).as_mut().unwrap() },
-            Access::T { next, .. } => next.as_mut().unwrap(),
-            Access::N => unreachable!(),
+            Access::T { next } => unsafe { next.load(SeqCst).as_ref().unwrap() },
+            Access::N { next, .. } => unsafe { next.load(SeqCst).as_ref().unwrap() },
+            Access::H { .. } => unreachable!(),
         }
     }
 
-    pub fn set_next(&mut self, access: Box<Access<K>>) {
+    pub fn set_next(&self, node: &Access<K>) {
+        let next_ptr = node as *const Access<K> as *mut Access<K>;
         match self {
-            Access::T { next, .. } => *next = Some(access),
+            Access::T { next } => next.store(next_ptr, SeqCst),
+            Access::N { next, .. } => next.store(next_ptr, SeqCst),
+            Access::H { .. } => unreachable!(),
+        }
+    }
+
+    pub fn delete_next(&self) -> K {
+        let next = match self {
+            Access::T { next } => next,
+            Access::N { next, .. } => next,
             _ => unreachable!(),
-        }
+        };
+        let node = unsafe { Box::from_raw(next.load(SeqCst)) };
+        next.store(
+            node.get_next() as *const Access<K> as *mut Access<K>,
+            SeqCst,
+        );
+
+        node.into_key()
     }
 
-    pub fn take_next(&mut self) -> Box<Access<K>> {
-        match self {
-            Access::T { next, .. } => next.take().unwrap(),
-            _ => unreachable!(),
-        }
-    }
-
-    pub fn prepend(&self, mut node: Box<Access<K>>) {
+    /// Append to head of the list.
+    pub fn append(&self, key: &K)
+    where
+        K: Clone,
+    {
+        let head_ptr = self as *const Access<K> as *mut Access<K>;
+        // self is head !!
         loop {
+            let node = Box::new(Access::N {
+                key: key.clone(),
+                born: time::Instant::now(),
+                deleted: AtomicBool::new(false),
+                next: AtomicPtr::new(head_ptr),
+            });
+            let new = Box::leak(node);
+
             match self {
-                Access::S { next } => {
-                    let old = next.load(SeqCst);
-                    node.set_next(unsafe { Box::from_raw(old) });
-                    let new = Box::leak(node);
-                    match next.compare_exchange(old, new, SeqCst, SeqCst) {
-                        Ok(_) => break,
+                Access::H { prev } => {
+                    let old = prev.load(SeqCst);
+                    match prev.compare_exchange(old, new, SeqCst, SeqCst) {
+                        Ok(_) => {
+                            let next = match unsafe { old.as_ref().unwrap() } {
+                                Access::T { next } => next,
+                                Access::N { next, .. } => next,
+                                _ => unreachable!(),
+                            };
+                            match next.compare_exchange(head_ptr, new, SeqCst, SeqCst) {
+                                Ok(_) => break,
+                                Err(_) => unreachable!(),
+                            }
+                        }
                         Err(_) => {
-                            node = unsafe { Box::from_raw(new) };
-                            Box::leak(node.take_next());
+                            let _node = unsafe { Box::from_raw(new) };
                         }
                     }
                 }
                 _ => unreachable!(),
             }
+        }
+    }
+
+    /// Mark the node as deleted.
+    pub fn delete(&self) {
+        match self {
+            Access::N { deleted, .. } => deleted.store(true, SeqCst),
+            _ => unreachable!(),
         }
     }
 }

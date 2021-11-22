@@ -9,7 +9,10 @@ use std::{
     time::Duration,
 };
 
-use crate::clru::{self, Access, Evictor};
+use crate::{
+    clru::{self, Access, Evictor},
+    Result,
+};
 
 pub struct Lru<K, V, H = cmap::DefaultHasher>
 where
@@ -19,23 +22,12 @@ where
 {
     max_count: usize,
     max_old: Duration,
-    hash_builder: H,
 
-    maps: Vec<cmap::Map<K, clru::Value<K, V>, H>>,
-    access_lists: Vec<Arc<Access<K>>>,
-
+    map: cmap::Map<K, clru::Value<K, V>, H>,
+    access_list: Arc<Access<K>>,
+    evictor: Arc<thread::JoinHandle<Result<Evictor<K, V, H>>>>,
+    // writer: Arc<thread::JoinHandle<Result<Writer>>>,
     close: Arc<AtomicBool>,
-}
-
-impl<K, V, H> Drop for Lru<K, V, H>
-where
-    K: Clone + PartialEq + Hash,
-    V: Clone,
-    H: BuildHasher,
-{
-    fn drop(&mut self) {
-        self.close.store(true, SeqCst);
-    }
 }
 
 impl<K, V, H> Clone for Lru<K, V, H>
@@ -48,11 +40,11 @@ where
         Lru {
             max_count: self.max_count,
             max_old: self.max_old,
-            hash_builder: self.hash_builder.clone(),
 
-            maps: self.maps.iter().map(|m| m.clone()).collect(),
-            access_lists: self.access_lists.iter().map(|a| Arc::clone(a)).collect(),
-
+            map: self.map.clone(),
+            access_list: Arc::clone(&self.access_list),
+            evictor: Arc::clone(&self.evictor),
+            // writer: Arc<thread::JoinHandle<Result<Writer>>>,
             close: Arc::clone(&self.close),
         }
     }
@@ -63,16 +55,10 @@ where
     K: 'static + Send + Sync + Clone + PartialEq + Hash,
     V: 'static + Send + Sync + Clone,
 {
-    pub fn new(
-        max_count: usize,
-        max_old: Duration,
-        shards: usize,
-        concurrency: usize,
-    ) -> Self {
+    pub fn new(max_count: usize, max_old: Duration, concurrency: usize) -> Self {
         Self::with_hash(
             max_count,
             max_old,
-            shards,
             concurrency,
             cmap::DefaultHasher::default(),
         )
@@ -88,62 +74,73 @@ where
     pub fn with_hash(
         max_count: usize,
         max_old: Duration,
-        shards: usize,
         concurrency: usize,
         hash_builder: H,
     ) -> Lru<K, V, H> {
-        let maps: Vec<cmap::Map<K, clru::Value<K, V>, H>> = {
-            let concurrency = concurrency + 1;
-            let iter =
-                (0..shards).map(|_| cmap::Map::new(concurrency, hash_builder.clone()));
-            iter.collect()
-        };
-
+        let map: cmap::Map<K, clru::Value<K, V>, H> =
+            { cmap::Map::new(concurrency + 1, hash_builder) };
+        let access_list = Access::new_list();
         let close = Arc::new(AtomicBool::new(false));
+
+        let evictor = {
+            let mut evictor = Evictor::new(
+                max_count,
+                map.clone(),
+                Arc::clone(&close),
+                Arc::clone(&access_list),
+            );
+            evictor.set_max_old(max_old);
+            Arc::new(thread::spawn(move || evictor.run()))
+        };
 
         let val = Lru {
             max_count,
             max_old,
-            hash_builder,
 
-            maps,
-            access_lists: (0..shards).map(|_| Access::new_list()).collect(),
+            map,
+            access_list,
+            evictor,
+
             close,
         };
-
-        for (i, map) in val.maps.iter().enumerate() {
-            let map = map.clone();
-            let close = Arc::clone(&val.close);
-            let access_list = Arc::clone(&val.access_lists[i]);
-            let mut evtor = Evictor::new(max_count, map, close, access_list);
-            evtor.set_max_old(max_old);
-            thread::spawn(move || evtor.run());
-        }
 
         val
     }
 
+    fn close(self) -> Result<()> {
+        self.close.store(true, SeqCst);
+        match Arc::try_unwrap(self.evictor) {
+            Ok(evictor) => {
+                evictor.join().ok(); // TODO: update Stats
+            }
+            Err(_evictor) => (), // drop reference count
+        }
+
+        Ok(())
+    }
+}
+
+impl<K, V, H> Lru<K, V, H>
+where
+    K: 'static + Send + Sync + Clone + PartialEq + Hash,
+    V: 'static + Send + Sync + Clone,
+    H: 'static + Send + Sync + Clone + BuildHasher,
+{
     pub fn get<Q>(&self, key: &Q) -> Option<V>
     where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + PartialEq + ?Sized + Hash,
     {
-        let shard = {
-            let hasher = self.hash_builder.build_hasher();
-            (key_to_hash32(key, hasher) % (self.maps.len() as u32)) as usize
-        };
-
         loop {
-            let (map, access_list) = (&self.maps[shard], &self.access_lists[shard]);
             let new_ptr = Box::leak(Access::new(key.to_owned())) as *const Access<K>;
 
-            let res = map.get_with(key, |cval: &clru::Value<K, V>| {
+            let res = self.map.get_with(key, |cval: &clru::Value<K, V>| {
                 let old = cval.access.load(SeqCst);
                 let new = new_ptr as *mut Access<K>;
                 match cval.access.compare_exchange(old, new, SeqCst, SeqCst) {
                     Ok(_) => {
                         unsafe { old.as_ref().unwrap() }.delete();
-                        access_list.prepend(unsafe { Box::from_raw(new) });
+                        self.access_list.prepend(unsafe { Box::from_raw(new) });
                         AccessResult::Ok(cval.value.as_ref().clone())
                     }
                     Err(_) => {
@@ -161,50 +158,40 @@ where
         }
     }
 
-    pub fn set(&mut self, key: K, value: V) {
-        let shard = {
-            let hasher = self.hash_builder.build_hasher();
-            (key_to_hash32(&key, hasher) % (self.maps.len() as u32)) as usize
-        };
+    //pub fn set(&mut self, key: K, value: V) {
+    //    let (map, access_list) = (&mut self.maps[shard], &self.access_lists[shard]);
+    //    let new_ptr = Box::leak(Access::new(key.to_owned()));
 
-        let (map, access_list) = (&mut self.maps[shard], &self.access_lists[shard]);
-        let access_ptr = Box::leak(Access::new(key.to_owned()));
+    //    let value = clru::Value {
+    //        value: Arc::new(value),
+    //        access: AtomicPtr::new(new_ptr),
+    //    };
 
-        let value = clru::Value {
-            value: Arc::new(value),
-            access: AtomicPtr::new(access_ptr),
-        };
+    //    access_list.prepend(unsafe { Box::from_raw(new_ptr) });
+    //    match map.set(key, value) {
+    //        Some(clru::Value { access, .. }) => {
+    //            let access = unsafe { access.load(SeqCst).as_ref().unwrap() };
+    //            access.delete()
+    //        }
+    //        None => (),
+    //    }
+    //}
 
-        access_list.prepend(unsafe { Box::from_raw(access_ptr) });
-        match map.set(key, value) {
-            Some(clru::Value { access, .. }) => {
-                let access = unsafe { access.load(SeqCst).as_ref().unwrap() };
-                access.delete()
-            }
-            None => (),
-        }
-    }
+    //pub fn remove<Q>(&mut self, key: &Q)
+    //where
+    //    K: Borrow<Q>,
+    //    Q: ?Sized + PartialEq + Hash,
+    //{
+    //    let map = &mut self.maps[shard];
 
-    pub fn remove<Q>(&mut self, key: &Q)
-    where
-        K: Borrow<Q>,
-        Q: ?Sized + PartialEq + Hash,
-    {
-        let shard = {
-            let hasher = self.hash_builder.build_hasher();
-            (key_to_hash32(&key, hasher) % (self.maps.len() as u32)) as usize
-        };
-
-        let map = &mut self.maps[shard];
-
-        match map.remove(key) {
-            Some(clru::Value { access, .. }) => {
-                let access = unsafe { access.load(SeqCst).as_ref().unwrap() };
-                access.delete()
-            }
-            None => (),
-        }
-    }
+    //    match map.remove(key) {
+    //        Some(clru::Value { access, .. }) => {
+    //            let access = unsafe { access.load(SeqCst).as_ref().unwrap() };
+    //            access.delete()
+    //        }
+    //        None => (),
+    //    }
+    //}
 }
 
 fn key_to_hash32<K, H>(key: &K, mut hasher: H) -> u32

@@ -1,125 +1,188 @@
-use cmap::Map;
-
 use std::{
-    hash::{BuildHasher, Hash},
     sync::{
-        atomic::{AtomicBool, Ordering::SeqCst},
-        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst},
+        mpsc, Arc,
     },
-    time::{self, Duration},
+    time,
 };
 
-use crate::{
-    clru::{self, Access},
-    Result,
-};
+use crate::{clru::Access, Result};
 
-pub struct Evictor<K, V, H>
-where
-    K: Clone + PartialEq + Hash,
-    V: Clone,
-    H: BuildHasher,
-{
-    max_count: usize,
-    max_old: Duration,
-    map: Map<K, clru::Value<K, V>, H>,
+/// Note that evictor will remove an access node if,
+///
+/// * Node is marked as deleted.
+/// * Node is older than configured elapsed time, optional.
+/// * Number of nodes in the access list exceed the count-limit, optional.
+/// * Cummulative size of values held in cache exceeds size-limit, optional.
+pub struct Evictor<K> {
+    max_size: Option<usize>,
+    cur_size: Option<Arc<AtomicUsize>>,
+    max_count: Option<usize>,
+    cur_count: Option<Arc<AtomicUsize>>,
+    max_old: Option<time::Duration>,
+
     close: Arc<AtomicBool>,
-    access_list: Arc<Access<K>>,
+    access_tail: Arc<Access<K>>,
+    tx_writer: mpsc::SyncSender<()>,
+
+    n_evicted: usize,
+    n_deleted: usize,
 }
 
-impl<K, V, H> Evictor<K, V, H>
-where
-    K: Clone + PartialEq + Hash,
-    V: Clone,
-    H: BuildHasher,
-{
-    /// Create a new evictor,
-    ///
-    /// max_count: evict nodes to keep them under max_count.
-    /// max_old: nodes older than max_old shall be evicted.
-    /// close: sync data to signal that map invalidated and access_list can be dropped.
+enum Evict {
+    Deleted,
+    Ok,
+    None,
+}
+
+impl<K> Evictor<K> {
+    /// Create a new evictor.
     pub fn new(
-        max_count: usize,
-        map: Map<K, clru::Value<K, V>, H>,
         close: Arc<AtomicBool>,
-        access_list: Arc<Access<K>>,
+        access_tail: Arc<Access<K>>,
+        tx_writer: mpsc::SyncSender<()>,
     ) -> Self {
         Evictor {
-            max_count,
-            max_old: time::UNIX_EPOCH.elapsed().unwrap(),
-            map,
+            max_size: None,
+            cur_size: None,
+            max_count: None,
+            cur_count: None,
+            max_old: None,
+
             close,
-            access_list,
+            access_tail,
+            tx_writer,
+
+            n_evicted: 0,
+            n_deleted: 0,
         }
     }
 
-    pub fn set_max_old(&mut self, max_old: Duration) -> &mut Self {
-        self.max_old = max_old;
+    pub fn set_max_size(
+        &mut self,
+        max_size: usize,
+        cur_size: Arc<AtomicUsize>,
+    ) -> &mut Self {
+        self.max_size = Some(max_size);
+        self.cur_size = Some(cur_size);
+        self
+    }
+
+    pub fn set_max_count(
+        &mut self,
+        max_count: usize,
+        cur_count: Arc<AtomicUsize>,
+    ) -> &mut Self {
+        self.max_count = Some(max_count);
+        self.cur_count = Some(cur_count);
+        self
+    }
+
+    pub fn set_max_old(&mut self, max_old: time::Duration) -> &mut Self {
+        self.max_old = Some(max_old);
         self
     }
 }
 
-impl<K, V, H> Evictor<K, V, H>
-where
-    K: Clone + PartialEq + Hash,
-    V: Clone,
-    H: BuildHasher,
-{
-    pub fn run(mut self) -> Result<()> {
+impl<K> Evictor<K> {
+    pub fn run(mut self) -> Result<Self> {
         loop {
             if self.close.load(SeqCst) {
                 break;
             }
-
-            // initialize vars for this iteration.
-            self.do_eviction().ok(); // TODO: is it okay to ignore this error
+            self.do_eviction()?;
         }
 
-        let _node: Box<Access<K>> = match self.access_list.as_ref() {
-            Access::S { next } => unsafe { Box::from_raw(next.load(SeqCst)) },
+        Ok(self)
+    }
+
+    fn to_evict(&self, node: &Access<K>) -> Evict {
+        match node {
+            Access::N {
+                deleted,
+                born,
+                next,
+                ..
+            } => {
+                match deleted.load(SeqCst) {
+                    true => return Evict::Deleted,
+                    false => (),
+                }
+
+                let cur_size = self.cur_size.as_ref().map(|x| x.load(SeqCst));
+                let mut evicta = match cur_size {
+                    Some(cur_size) if cur_size > self.max_size.unwrap() => true,
+                    Some(_) | None => false,
+                };
+
+                let cur_count = self.cur_count.as_ref().map(|x| x.load(SeqCst));
+                evicta = evicta
+                    || match cur_count {
+                        Some(cur_count) if cur_count > self.max_count.unwrap() => true,
+                        Some(_) | None => false,
+                    };
+
+                evicta = evicta
+                    || match self.max_old.clone() {
+                        Some(max_old) if born.elapsed() > max_old => true,
+                        Some(_) | None => false,
+                    };
+
+                match evicta {
+                    true => Evict::Ok,
+                    false => Evict::None,
+                }
+            }
             _ => unreachable!(),
-        };
-
-        // _node drop the entire chain of access list.
-
-        Ok(())
+        }
     }
 
     fn do_eviction(&mut self) -> Result<()> {
-        let mut count = 0;
-        let mut evict = false;
-        let epoch = time::UNIX_EPOCH.elapsed().unwrap() - self.max_old;
+        // delay-pointer iteration
+        let mut n = 5;
+        let mut behind: &Access<K> = self.access_tail.as_ref();
 
-        // skip the sentinel.
-        let mut node: &mut Access<K> = match self.access_list.as_ref() {
-            Access::S { next } => unsafe { next.load(SeqCst).as_mut().unwrap() },
-            _ => unreachable!(),
-        };
-        // iterate on the access-list.
-        loop {
-            evict = evict || count > self.max_count;
-            node = match *node.take_next() {
-                Access::T { next, deleted, .. } if deleted.load(SeqCst) => {
-                    node.set_next(next.unwrap());
-                    node.get_next_mut()
+        let mut ahead: Option<&Access<K>> = Some(behind);
+        let ahead: Option<&Access<K>> = loop {
+            ahead = match ahead {
+                Some(Access::N { next, .. }) if n > 0 => {
+                    n -= 1;
+                    Some(unsafe { next.load(SeqCst).as_ref().unwrap() })
                 }
-                Access::T {
-                    key, born, next, ..
-                } if evict || born < epoch => {
-                    // IMPORTANT: Don't change the following sequence.
-                    self.map.remove(&key);
-                    node.set_next(next.unwrap());
-                    node.get_next_mut()
+                Some(Access::N { .. }) => break ahead,
+                Some(Access::T { next }) => {
+                    Some(unsafe { next.load(SeqCst).as_ref().unwrap() })
                 }
-                Access::T { .. } => {
-                    count += 1;
-                    node.get_next_mut()
-                }
-                Access::N => break,
-                _ => unreachable!(),
+                Some(Access::H { .. }) | None => break None,
             }
-        }
+        };
 
-        Ok(())
+        match ahead {
+            Some(mut ahead) => loop {
+                ahead = match ahead {
+                    Access::N { next, .. } => {
+                        behind = match self.to_evict(behind.get_next()) {
+                            Evict::Deleted => {
+                                self.n_deleted += 1;
+                                let _key = behind.delete_next();
+                                behind
+                            }
+                            Evict::Ok => {
+                                self.n_evicted += 1;
+                                let key = behind.delete_next();
+                                // TODO: key to be removed from the cache.
+                                behind
+                            }
+                            Evict::None => behind.get_next(),
+                        };
+
+                        unsafe { next.load(SeqCst).as_ref().unwrap() }
+                    }
+                    Access::H { .. } => break Ok(()),
+                    _ => unreachable!(),
+                }
+            },
+            None => Ok(()),
+        }
     }
 }

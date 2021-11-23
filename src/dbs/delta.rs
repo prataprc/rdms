@@ -19,10 +19,8 @@ where
     fn footprint(&self) -> Result<isize> {
         use std::{convert::TryFrom, mem::size_of};
 
-        let mut size = {
-            err_at!(FailConvert, isize::try_from(size_of::<Delta<D>>()))?
-                - err_at!(FailConvert, isize::try_from(size_of::<D>()))?
-        };
+        let mut size = err_at!(FailConvert, isize::try_from(size_of::<Delta<D>>()))?;
+        size -= err_at!(FailConvert, isize::try_from(size_of::<D>()))?;
 
         size += match self {
             Delta::U { delta, .. } => delta.footprint()?,

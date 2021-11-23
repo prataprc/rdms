@@ -6,8 +6,9 @@ use std::{borrow::Borrow, hash::Hash};
 use crate::Result;
 
 // trait-defs: Diff, Footprint, Bloom Replay, WalWriter,
-// type-defs : Entry, Value, Delta, Cutoff, NoDiff, Binary
+// type-defs : Cutoff, Delta, NoDiff, Entry, Binary, Value, Wr, Write
 
+mod binary;
 mod compact;
 mod delta;
 mod diff;
@@ -16,12 +17,12 @@ mod types;
 mod value;
 mod wop;
 
+pub use binary::Binary;
 pub use compact::Cutoff;
-pub(crate) use delta::Delta;
+pub use delta::Delta;
 pub use diff::{Diff, NoDiff};
 pub use entry::Entry;
-pub use types::Binary;
-pub(crate) use value::Value;
+pub use value::Value;
 pub use wop::{Wr, Write};
 
 /// A Key can decompose into path-like components.

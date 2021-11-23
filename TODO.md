@@ -18,3 +18,28 @@
 
 (a) review 5c71164f6d9e57ce60ed0030f1fa7dba7d5056b5
         fix errors before refactoring llrb out into ppom
+
+rdms-clru:
+
+Concurrent access to least-recently-used-cache need its backing datastructure
+like a disk-btree to be immutable. Otherwise, we may have to deal with
+synchronization problem in building the cache and evicting the entries.
+
+Access-1:
+    Get(cache) fail
+        Get(disk-btree)
+        Set(cache)
+
+Access-2:
+    Set(disk-btree)
+    Set(cache)
+
+Access-3:
+    Remove(disk-btree)
+    Remove(cache)
+
+Access-4:
+    Evict(cache)
+
+There will synchronization issues when above listed access scenarios happen
+concurrently on the disk-btree and the cache.

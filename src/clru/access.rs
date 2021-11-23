@@ -5,6 +5,7 @@
 // there is no older node)
 
 use std::{
+    borrow::Borrow,
     sync::{
         atomic::{AtomicBool, AtomicPtr, Ordering::SeqCst},
         Arc,
@@ -68,15 +69,6 @@ impl<K> Access<K> {
         }
     }
 
-    pub fn set_next(&self, node: &Access<K>) {
-        let next_ptr = node as *const Access<K> as *mut Access<K>;
-        match self {
-            Access::T { next } => next.store(next_ptr, SeqCst),
-            Access::N { next, .. } => next.store(next_ptr, SeqCst),
-            Access::H { .. } => unreachable!(),
-        }
-    }
-
     pub fn delete_next(&self) -> K {
         let next = match self {
             Access::T { next } => next,
@@ -93,15 +85,16 @@ impl<K> Access<K> {
     }
 
     /// Append to head of the list.
-    pub fn append(&self, key: &K)
+    pub fn append<Q>(&self, key: &Q) -> *mut Access<K>
     where
-        K: Clone,
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + PartialEq + ?Sized,
     {
         let head_ptr = self as *const Access<K> as *mut Access<K>;
         // self is head !!
         loop {
             let node = Box::new(Access::N {
-                key: key.clone(),
+                key: key.to_owned(),
                 born: time::Instant::now(),
                 deleted: AtomicBool::new(false),
                 next: AtomicPtr::new(head_ptr),
@@ -119,7 +112,7 @@ impl<K> Access<K> {
                                 _ => unreachable!(),
                             };
                             match next.compare_exchange(head_ptr, new, SeqCst, SeqCst) {
-                                Ok(_) => break,
+                                Ok(_) => break new,
                                 Err(_) => unreachable!(),
                             }
                         }

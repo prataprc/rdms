@@ -3,13 +3,15 @@ use std::sync::{
     Arc,
 };
 
+use crate::{dbs, Result};
+
 mod access;
 mod evictor;
-// mod lru;
+mod lru;
 
 use access::Access;
 use evictor::Evictor;
-// pub use lru::Lru;
+pub use lru::{Config, Lru};
 
 // wrap the value parameter.
 pub struct Value<K, V> {
@@ -34,5 +36,16 @@ impl<K, V> Drop for Value<K, V> {
         // mark this as deleted so that evictor will remove this at some point.
         let access = self.access.load(SeqCst);
         unsafe { access.as_ref().unwrap() }.delete();
+    }
+}
+
+impl<K, V> dbs::Footprint for Value<K, V>
+where
+    V: dbs::Footprint,
+{
+    fn footprint(&self) -> Result<isize> {
+        let mut size = std::mem::size_of_val(self) as isize;
+        size += self.value.footprint()?;
+        Ok(size)
     }
 }

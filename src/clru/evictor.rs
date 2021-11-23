@@ -1,12 +1,17 @@
 use std::{
+    hash::{BuildHasher, Hash},
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst},
-        mpsc, Arc,
+        Arc,
     },
     time,
 };
 
-use crate::{clru::Access, Result};
+use crate::{
+    clru::{self, Access, Config},
+    dbs::{self, Footprint},
+    Result,
+};
 
 /// Note that evictor will remove an access node if,
 ///
@@ -14,19 +19,19 @@ use crate::{clru::Access, Result};
 /// * Node is older than configured elapsed time, optional.
 /// * Number of nodes in the access list exceed the count-limit, optional.
 /// * Cummulative size of values held in cache exceeds size-limit, optional.
-pub struct Evictor<K> {
+pub struct Evictor<K, V, H> {
     max_size: Option<usize>,
     cur_size: Option<Arc<AtomicUsize>>,
-    max_count: Option<usize>,
-    cur_count: Option<Arc<AtomicUsize>>,
+    max_count: usize,
+    cur_count: Arc<AtomicUsize>,
     max_old: Option<time::Duration>,
 
-    close: Arc<AtomicBool>,
+    map: cmap::Map<K, clru::Value<K, V>, H>,
     access_tail: Arc<Access<K>>,
-    tx_writer: mpsc::SyncSender<()>,
+    close: Arc<AtomicBool>,
 
-    n_evicted: usize,
-    n_deleted: usize,
+    pub(crate) n_evicted: usize,
+    pub(crate) n_deleted: usize,
 }
 
 enum Evict {
@@ -35,56 +40,37 @@ enum Evict {
     None,
 }
 
-impl<K> Evictor<K> {
+impl<K, V, H> Evictor<K, V, H> {
     /// Create a new evictor.
     pub fn new(
+        config: &Config,
         close: Arc<AtomicBool>,
         access_tail: Arc<Access<K>>,
-        tx_writer: mpsc::SyncSender<()>,
+        map: cmap::Map<K, clru::Value<K, V>, H>,
     ) -> Self {
         Evictor {
-            max_size: None,
-            cur_size: None,
-            max_count: None,
-            cur_count: None,
-            max_old: None,
+            max_size: config.max_size.clone(),
+            cur_size: config.cur_size.clone(),
+            max_count: config.max_count,
+            cur_count: Arc::clone(&config.cur_count),
+            max_old: config.max_old.map(time::Duration::from_secs),
 
-            close,
+            map,
             access_tail,
-            tx_writer,
+            close,
 
             n_evicted: 0,
             n_deleted: 0,
         }
     }
-
-    pub fn set_max_size(
-        &mut self,
-        max_size: usize,
-        cur_size: Arc<AtomicUsize>,
-    ) -> &mut Self {
-        self.max_size = Some(max_size);
-        self.cur_size = Some(cur_size);
-        self
-    }
-
-    pub fn set_max_count(
-        &mut self,
-        max_count: usize,
-        cur_count: Arc<AtomicUsize>,
-    ) -> &mut Self {
-        self.max_count = Some(max_count);
-        self.cur_count = Some(cur_count);
-        self
-    }
-
-    pub fn set_max_old(&mut self, max_old: time::Duration) -> &mut Self {
-        self.max_old = Some(max_old);
-        self
-    }
 }
 
-impl<K> Evictor<K> {
+impl<K, V, H> Evictor<K, V, H>
+where
+    K: Clone + PartialEq + Hash,
+    V: Clone + dbs::Footprint,
+    H: BuildHasher,
+{
     pub fn run(mut self) -> Result<Self> {
         loop {
             if self.close.load(SeqCst) {
@@ -98,12 +84,7 @@ impl<K> Evictor<K> {
 
     fn to_evict(&self, node: &Access<K>) -> Evict {
         match node {
-            Access::N {
-                deleted,
-                born,
-                next,
-                ..
-            } => {
+            Access::N { deleted, born, .. } => {
                 match deleted.load(SeqCst) {
                     true => return Evict::Deleted,
                     false => (),
@@ -115,12 +96,7 @@ impl<K> Evictor<K> {
                     Some(_) | None => false,
                 };
 
-                let cur_count = self.cur_count.as_ref().map(|x| x.load(SeqCst));
-                evicta = evicta
-                    || match cur_count {
-                        Some(cur_count) if cur_count > self.max_count.unwrap() => true,
-                        Some(_) | None => false,
-                    };
+                evicta = evicta || self.cur_count.load(SeqCst) > self.max_count;
 
                 evicta = evicta
                     || match self.max_old.clone() {
@@ -170,7 +146,18 @@ impl<K> Evictor<K> {
                             Evict::Ok => {
                                 self.n_evicted += 1;
                                 let key = behind.delete_next();
-                                // TODO: key to be removed from the cache.
+                                let size = match self.map.remove(&key) {
+                                    Some(value) => value.footprint()?,
+                                    None => 0,
+                                };
+                                self.cur_size.as_ref().map(|x| {
+                                    if size < 0 {
+                                        x.fetch_sub(size.abs() as usize, SeqCst);
+                                    } else {
+                                        x.fetch_add(size as usize, SeqCst);
+                                    }
+                                });
+                                self.cur_count.fetch_sub(1, SeqCst);
                                 behind
                             }
                             Evict::None => behind.get_next(),

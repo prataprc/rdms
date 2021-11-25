@@ -9,7 +9,7 @@ mod config;
 mod index;
 mod trie;
 
-pub use config::{Config, Permissions};
+pub use config::{Config, InitConfig, OpenConfig, Permissions};
 pub use index::{Index, IterLevel, Txn};
 use trie::{Node, Op, Trie};
 

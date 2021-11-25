@@ -14,13 +14,36 @@ use crate::{
 };
 
 pub struct Config {
-    pub pool_size: usize,
-    pub write_buffer: usize,
+    pub thread_pool_size: usize,
     pub max_size: Option<usize>,
     pub max_count: usize,
     pub max_old: Option<u64>, // in seconds.
     pub(crate) cur_size: Option<Arc<AtomicUsize>>,
     pub(crate) cur_count: Arc<AtomicUsize>,
+}
+
+impl Config {
+    pub fn new(thread_pool_size: usize, max_count: usize) -> Config {
+        Config {
+            thread_pool_size,
+            max_size: None,
+            max_count,
+            max_old: None,
+            cur_size: None,
+            cur_count: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    pub fn set_max_size(&mut self, max_size: usize) -> &mut Self {
+        self.max_size = Some(max_size);
+        self.cur_size = Some(Arc::new(AtomicUsize::new(0)));
+        self
+    }
+
+    pub fn set_max_old(&mut self, max_old: u64) -> &mut Self {
+        self.max_old = Some(max_old);
+        self
+    }
 }
 
 pub struct Lru<K, V, H = cmap::DefaultHasher> {
@@ -86,7 +109,7 @@ where
         let close = Arc::new(AtomicBool::new(false));
 
         let map: cmap::Map<K, clru::Value<K, V>, H> =
-            { cmap::Map::new(config.pool_size + 1, hash_builder) };
+            { cmap::Map::new(config.thread_pool_size + 1, hash_builder) };
 
         let evictor = {
             let evictor = Evictor::new(
@@ -201,3 +224,7 @@ pub struct Stats {
     pub n_deleted: usize,
     pub n_access: usize,
 }
+
+#[cfg(test)]
+#[path = "lru_test.rs"]
+mod lru_test;

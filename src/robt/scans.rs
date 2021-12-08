@@ -8,8 +8,8 @@ use crate::{dbs, robt, Error, Result};
 
 // BuildScan, BitmappedScan, CompactScan
 
-// Iterator wrapper, to wrap full-table scanners and count seqno,
-// index-items, deleted items and epoch.
+/// Iterator wrapper, to wrap full-table scanners and count seqno,
+/// index-items, deleted items and epoch.
 pub struct BuildScan<K, V, I, E>
 where
     V: dbs::Diff,
@@ -99,10 +99,10 @@ where
     }
 }
 
-// Iterator wrapper, to wrap full-table scanners and generate bitmap index.
-//
-// Computes a bitmap of all keys iterated over the index `I`. Bitmap type
-// is parameterised as `B`.
+/// Iterator wrapper, to wrap full-table scanners and generate bitmap index.
+///
+/// Computes a bitmap of all keys iterated over the index `I`. Bitmap type
+/// is parameterised as `B`.
 pub struct BitmappedScan<K, V, B, I>
 where
     V: dbs::Diff,
@@ -156,8 +156,8 @@ where
     }
 }
 
-// Iterator type, for continuous full table iteration filtering out
-// older mutations.
+/// Iterator type, for continuous full table iteration filtering out
+/// older mutations.
 pub struct CompactScan<K, V, I>
 where
     V: dbs::Diff,

@@ -1,7 +1,4 @@
-use std::sync::{
-    atomic::{AtomicPtr, Ordering::SeqCst},
-    Arc,
-};
+use std::{fmt, sync::atomic::AtomicPtr};
 
 use crate::{dbs, Result};
 
@@ -11,36 +8,20 @@ mod lru;
 
 use access::Access;
 use evictor::Evictor;
-pub use lru::{Config, Lru};
+pub use lru::{Config, Lru, Stats};
 
 // wrap the value parameter.
-pub struct Value<K, V> {
-    value: Arc<V>,
-    access: AtomicPtr<Access<K>>,
-}
-
-impl<K, V> Clone for Value<K, V>
+pub struct Value<K, V>
 where
-    V: Clone,
+    K: fmt::Debug,
 {
-    fn clone(&self) -> Self {
-        Value {
-            value: Arc::clone(&self.value),
-            access: AtomicPtr::new(self.access.load(SeqCst)),
-        }
-    }
-}
-
-impl<K, V> Drop for Value<K, V> {
-    fn drop(&mut self) {
-        // mark this as deleted so that evictor will remove this at some point.
-        let access = self.access.load(SeqCst);
-        unsafe { access.as_ref().unwrap() }.delete();
-    }
+    value: V,
+    access: AtomicPtr<Access<K>>,
 }
 
 impl<K, V> dbs::Footprint for Value<K, V>
 where
+    K: fmt::Debug,
     V: dbs::Footprint,
 {
     fn footprint(&self) -> Result<isize> {

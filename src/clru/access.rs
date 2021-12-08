@@ -21,6 +21,7 @@ pub enum Access<K> {
         key: K,
         born: time::Instant,
         deleted: AtomicBool,
+        epoch: u64,
         next: AtomicPtr<Access<K>>,
     },
     H {
@@ -54,11 +55,38 @@ impl<K> Access<K> {
         (head, tail)
     }
 
-    pub fn into_key(self) -> K {
+    pub fn new<Q>(&self, key: &Q) -> Box<Self>
+    where
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + PartialEq + ?Sized,
+    {
+        let head_ptr = self as *const Access<K> as *mut Access<K>;
+
+        let val = Access::N {
+            key: key.to_owned(),
+            born: time::Instant::now(),
+            deleted: AtomicBool::new(false),
+            epoch: u64::MAX,
+            next: AtomicPtr::new(head_ptr),
+        };
+
+        Box::new(val)
+    }
+
+    pub fn as_key(&self) -> &K {
         match self {
             Access::N { key, .. } => key,
             _ => unreachable!(),
         }
+    }
+
+    pub fn next_key(&self) -> &K {
+        let next = match self {
+            Access::T { next } => unsafe { next.load(SeqCst).as_ref().unwrap() },
+            Access::N { next, .. } => unsafe { next.load(SeqCst).as_ref().unwrap() },
+            _ => unreachable!(),
+        };
+        next.as_key()
     }
 
     pub fn get_next(&self) -> &Access<K> {
@@ -69,7 +97,7 @@ impl<K> Access<K> {
         }
     }
 
-    pub fn delete_next(&self) -> K {
+    pub fn delete_next(&self) -> Box<Access<K>> {
         let next = match self {
             Access::T { next } => next,
             Access::N { next, .. } => next,
@@ -81,29 +109,43 @@ impl<K> Access<K> {
             SeqCst,
         );
 
-        node.into_key()
+        node
+    }
+
+    pub fn set_epoch(&mut self, seqno: u64) {
+        match self {
+            Access::N { epoch, .. } => *epoch = seqno,
+            _ => unreachable!(),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn to_epoch(&self) -> u64 {
+        match self {
+            Access::N { epoch, .. } => *epoch,
+            _ => unreachable!(),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn is_deleted(&self) -> bool {
+        match self {
+            Access::N { deleted, .. } => deleted.load(SeqCst),
+            _ => unreachable!(),
+        }
     }
 
     /// Append to head of the list.
-    pub fn append<Q>(&self, key: &Q) -> *mut Access<K>
-    where
-        K: Borrow<Q>,
-        Q: ToOwned<Owned = K> + PartialEq + ?Sized,
-    {
+    pub fn append(&self, node: Box<Access<K>>) {
         let head_ptr = self as *const Access<K> as *mut Access<K>;
+        let new = Box::leak(node);
+
         // self is head !!
         loop {
-            let node = Box::new(Access::N {
-                key: key.to_owned(),
-                born: time::Instant::now(),
-                deleted: AtomicBool::new(false),
-                next: AtomicPtr::new(head_ptr),
-            });
-            let new = Box::leak(node);
-
             match self {
                 Access::H { prev } => {
                     let old = prev.load(SeqCst);
+                    // println!("append new access old:{:p} new:{:p}", old, new);
                     match prev.compare_exchange(old, new, SeqCst, SeqCst) {
                         Ok(_) => {
                             let next = match unsafe { old.as_ref().unwrap() } {
@@ -112,12 +154,12 @@ impl<K> Access<K> {
                                 _ => unreachable!(),
                             };
                             match next.compare_exchange(head_ptr, new, SeqCst, SeqCst) {
-                                Ok(_) => break new,
+                                Ok(_) => break,
                                 Err(_) => unreachable!(),
                             }
                         }
                         Err(_) => {
-                            let _node = unsafe { Box::from_raw(new) };
+                            // println!("access append loop {:p}", new);
                         }
                     }
                 }
@@ -127,9 +169,13 @@ impl<K> Access<K> {
     }
 
     /// Mark the node as deleted.
+    #[allow(unreachable_patterns)]
     pub fn delete(&self) {
+        // println!("delete access {:p}", self);
         match self {
             Access::N { deleted, .. } => deleted.store(true, SeqCst),
+            Access::T { .. } => unreachable!(),
+            Access::H { .. } => unreachable!(),
             _ => unreachable!(),
         }
     }

@@ -1,5 +1,6 @@
 use std::{
     borrow::Borrow,
+    fmt,
     hash::{BuildHasher, Hash},
     sync::{
         atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering::SeqCst},
@@ -46,23 +47,30 @@ impl Config {
     }
 }
 
-pub struct Lru<K, V, H = cmap::DefaultHasher> {
+pub struct Lru<K, V, H = cmap::DefaultHasher>
+where
+    K: fmt::Debug,
+{
     max_size: Option<usize>,
     cur_size: Option<Arc<AtomicUsize>>,
     max_count: usize,
     cur_count: Arc<AtomicUsize>,
     max_old: Option<time::Duration>,
 
-    map: cmap::Map<K, clru::Value<K, V>, H>,
+    map: cmap::Map<K, Arc<clru::Value<K, V>>, H>,
     access_head: Arc<Access<K>>,
     access_tail: Arc<Access<K>>,
     evictor: Option<thread::JoinHandle<Result<Evictor<K, V, H>>>>,
     close: Arc<AtomicBool>,
 
-    n_access: Arc<AtomicUsize>,
+    n_gets: Arc<AtomicUsize>,
+    n_sets: Arc<AtomicUsize>,
 }
 
-impl<K, V, H> Clone for Lru<K, V, H> {
+impl<K, V, H> Clone for Lru<K, V, H>
+where
+    K: fmt::Debug,
+{
     fn clone(&self) -> Self {
         Lru {
             max_size: self.max_size.clone(),
@@ -77,14 +85,15 @@ impl<K, V, H> Clone for Lru<K, V, H> {
             evictor: None,
             close: Arc::clone(&self.close),
 
-            n_access: Arc::clone(&self.n_access),
+            n_gets: Arc::clone(&self.n_gets),
+            n_sets: Arc::clone(&self.n_sets),
         }
     }
 }
 
 impl<K, V> Lru<K, V, cmap::DefaultHasher>
 where
-    K: 'static + Send + Sync + Clone + PartialEq + Hash,
+    K: 'static + Send + Sync + Clone + PartialEq + Hash + fmt::Debug,
     V: 'static + Send + Sync + Clone + dbs::Footprint,
 {
     pub fn from_config(config: Config) -> Self {
@@ -94,7 +103,7 @@ where
 
 impl<K, V, H> Lru<K, V, H>
 where
-    K: 'static + Send + Sync + Clone + PartialEq + Hash,
+    K: 'static + Send + Sync + Clone + PartialEq + Hash + fmt::Debug,
     V: 'static + Send + Sync + Clone + dbs::Footprint,
     H: 'static + Send + Sync + Clone + BuildHasher,
 {
@@ -108,7 +117,7 @@ where
         let (access_head, access_tail) = Access::new_list();
         let close = Arc::new(AtomicBool::new(false));
 
-        let map: cmap::Map<K, clru::Value<K, V>, H> =
+        let map: cmap::Map<K, Arc<clru::Value<K, V>>, H> =
             { cmap::Map::new(config.thread_pool_size + 1, hash_builder) };
 
         let evictor = {
@@ -134,12 +143,19 @@ where
             evictor,
             close,
 
-            n_access: Arc::new(AtomicUsize::new(0)),
+            n_gets: Arc::new(AtomicUsize::new(0)),
+            n_sets: Arc::new(AtomicUsize::new(0)),
         }
     }
 
     pub fn close(mut self) -> Result<Option<Stats>> {
-        match self.evictor.take() {
+        let _access_head = loop {
+            if let Some(_) = Arc::get_mut(&mut self.access_head) {
+                break Arc::try_unwrap(self.access_head).ok().unwrap();
+            }
+        };
+
+        let stats = match self.evictor.take() {
             Some(evictor) => {
                 self.close.store(true, SeqCst);
                 let evictor = match evictor.join() {
@@ -147,19 +163,29 @@ where
                     Err(err) => std::panic::resume_unwind(err),
                 };
                 let stats = Stats {
+                    n_gets: self.n_gets.load(SeqCst),
+                    n_sets: self.n_sets.load(SeqCst),
                     n_evicted: evictor.n_evicted,
                     n_deleted: evictor.n_deleted,
-                    n_access: self.n_access.load(SeqCst),
+                    n_gc: evictor.n_gc,
+                    n_access_gc: evictor.n_access_gc,
                 };
 
-                Ok(Some(stats))
+                Some(stats)
             }
-            None => Ok(None),
-        }
+            None => None,
+        };
+
+        let _access_tail = Arc::try_unwrap(self.access_tail).ok().unwrap();
+
+        Ok(stats)
     }
 }
 
-impl<K, V, H> Lru<K, V, H> {
+impl<K, V, H> Lru<K, V, H>
+where
+    K: fmt::Debug,
+{
     pub fn get<Q>(&self, key: &Q) -> Option<V>
     where
         K: Borrow<Q>,
@@ -167,18 +193,24 @@ impl<K, V, H> Lru<K, V, H> {
         Q: ToOwned<Owned = K> + PartialEq + ?Sized + Hash,
         H: BuildHasher,
     {
-        let new_ptr = self.access_head.append(key);
-        self.n_access.fetch_add(1, SeqCst);
+        self.n_gets.fetch_add(1, SeqCst);
 
         loop {
-            let res = self.map.get_with(key, |cval: &clru::Value<K, V>| {
+            let res = self.map.get_with(key, |cval: &Arc<clru::Value<K, V>>| {
+                let new_ptr = Box::leak(self.access_head.new(key));
                 let old = cval.access.load(SeqCst);
                 match cval.access.compare_exchange(old, new_ptr, SeqCst, SeqCst) {
                     Ok(_) => {
+                        // println!("lru.get::get_with old:{:p}", old);
                         unsafe { old.as_ref().unwrap() }.delete();
-                        AccessResult::Ok(cval.value.as_ref().clone())
+                        self.access_head.append(unsafe { Box::from_raw(new_ptr) });
+                        AccessResult::Ok(cval.value.clone())
                     }
-                    Err(_) => AccessResult::Retry,
+                    Err(_) => {
+                        // println!("lru.get::get_with loop back {:p}", old);
+                        let _drop_node = unsafe { Box::from_raw(new_ptr) };
+                        AccessResult::Retry
+                    }
                 }
             });
 
@@ -187,6 +219,7 @@ impl<K, V, H> Lru<K, V, H> {
                 Some(AccessResult::Retry) => (),
                 None => break None,
             }
+            // println!("get looping back");
         }
     }
 
@@ -196,21 +229,34 @@ impl<K, V, H> Lru<K, V, H> {
         V: Clone,
         H: BuildHasher,
     {
-        let new_ptr = self.access_head.append(&key);
-        self.n_access.fetch_add(1, SeqCst);
+        self.n_sets.fetch_add(1, SeqCst);
 
-        let value = clru::Value {
-            value: Arc::new(value),
+        let new_ptr = Box::leak(self.access_head.new(&key));
+
+        let value = Arc::new(clru::Value {
+            value: value,
             access: AtomicPtr::new(new_ptr),
-        };
-        match &self.map.set(key, value) {
+        });
+
+        let res = match self.map.set(key, value).as_ref().map(|x| x.as_ref()) {
             Some(clru::Value { access, value }) => {
                 let access = unsafe { access.load(SeqCst).as_ref().unwrap() };
                 access.delete();
-                Some(value.as_ref().clone())
+                Some(value.clone())
             }
-            None => None,
-        }
+            None => {
+                self.cur_count.fetch_add(1, SeqCst);
+                None
+            }
+        };
+
+        self.access_head.append(unsafe { Box::from_raw(new_ptr) });
+
+        res
+    }
+
+    pub fn len(&self) -> usize {
+        self.map.len()
     }
 }
 
@@ -219,10 +265,15 @@ enum AccessResult<V> {
     Retry,
 }
 
+#[derive(Debug)]
 pub struct Stats {
+    pub n_gets: usize,
+    pub n_sets: usize,
+    // evictor stats
     pub n_evicted: usize,
     pub n_deleted: usize,
-    pub n_access: usize,
+    pub n_gc: usize,
+    pub n_access_gc: usize,
 }
 
 #[cfg(test)]

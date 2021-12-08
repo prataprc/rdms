@@ -1742,20 +1742,6 @@ fn random_ops_keys(seed: u64, ops_limit: i64, key_limit: i64) -> (i64, i64) {
     (n_ops, i64::max(i64::abs(max_key), n_ops / 10) + 1)
 }
 
-#[allow(dead_code)] // TODO: clean this up latter.
-fn log_entry(e: &Entry<i64, i64>) {
-    println!(
-        "key: {} value: {:?}, seqno: {}, deleted: {}",
-        e.to_key(),
-        e.to_native_value(),
-        e.to_seqno(),
-        e.is_deleted()
-    );
-    for d in e.as_deltas() {
-        println!("seqno: {}, deleted: {}", d.to_seqno(), d.is_deleted());
-    }
-}
-
 fn random_low_high(size: usize) -> (Bound<i64>, Bound<i64>) {
     let size: u64 = size.try_into().unwrap();
     let low: i64 = (random::<u64>() % size) as i64;

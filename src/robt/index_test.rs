@@ -59,9 +59,7 @@ impl Delta for dbs::Binary {}
 
 #[test]
 fn test_robt_build_read() {
-    // TODO: passing the same seed down the functions shall repeat the randomness.
     let seed: u64 = [419111650579980006, random()][random::<usize>() % 2];
-    // let seed: u64 = 419111650579980006;
     println!("test_robt_read {}", seed);
 
     do_robt_build_read::<u16, u64, _>("u16,nobitmap", seed, NoBitmap);

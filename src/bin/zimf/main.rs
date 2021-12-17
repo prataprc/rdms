@@ -1,8 +1,8 @@
 use structopt::StructOpt;
 
-use std::{ffi, str::from_utf8, sync::Arc, thread, time};
+use std::{ffi, io::Write, sync::Arc, thread, time};
 
-use rdms::zimf::Zimf;
+use rdms::zimf::{self, Zimf};
 
 mod print;
 
@@ -17,11 +17,14 @@ pub struct Opt {
     #[structopt(long = "url")]
     url: Option<String>,
 
-    #[structopt(short = "n")]
-    n: Option<usize>,
+    #[structopt(long = "namespace")]
+    namespace: Option<zimf::Namespace>,
+
+    #[structopt(long = "namespaces")]
+    namespaces: bool,
 
     #[structopt(long = "dump")]
-    dump: bool,
+    dump: Option<String>,
 
     #[structopt(long = "dump-all")]
     dump_all: bool,
@@ -39,7 +42,7 @@ pub struct Opt {
 }
 
 fn main() {
-    let mut opts = Opt::from_args();
+    let opts = Opt::from_args();
 
     let z = Zimf::open(opts.zim_file.clone(), opts.pool_size).unwrap();
 
@@ -55,63 +58,88 @@ fn main() {
         print::make_namespace_table(&z).print_tty(opts.color);
     }
 
-    if opts.urls {
-        for entry in z.entries.iter() {
-            println!("{}/{:-30}", entry.namespace as char, entry.url);
-            if !entry.title.is_empty() {
-                println!("    {}", entry.title);
-            }
+    if opts.namespaces {
+        let mut namespaces: Vec<zimf::Namespace> = z
+            .entries
+            .iter()
+            .map(|e| e.to_namespace().unwrap())
+            .collect();
+        namespaces.dedup();
+        println!("Namespaces: {:?}", namespaces);
+    } else if opts.urls {
+        let entries: Box<dyn Iterator<Item = &Arc<zimf::Entry>>> =
+            if let Some(namespace) = opts.namespace {
+                Box::new(
+                    z.entries
+                        .iter()
+                        .filter(move |e| namespace == e.to_namespace().unwrap()),
+                )
+            } else {
+                Box::new(z.entries.iter().filter(|_| true))
+            };
+
+        for entry in entries {
+            let title = if entry.title.is_empty() {
+                "-"
+            } else {
+                &entry.title
+            };
+            println!("{}/{:-30} ({})", entry.namespace as char, entry.url, title);
         }
     }
 
-    opts.n = match opts.url {
+    match opts.url {
         Some(url) => match z.entries.binary_search_by_key(&url, |e| e.url.clone()) {
-            Ok(n) => Some(n),
+            Ok(n) => {
+                let entry = z.get_entry(n).as_ref().clone();
+                print::make_entry_table(&entry, &z).print_tty(opts.color);
+            }
             Err(_) => {
                 println!("Missing url {:?}", url);
-                opts.n
             }
         },
-        None => opts.n,
+        None => (),
     };
 
-    match opts.n {
-        Some(n) if opts.dump => {
-            let (_entry, data) = z.get_entry_content(n).unwrap();
-            println!("{}", from_utf8(&data).unwrap());
-        }
-        Some(n) => {
-            let entry = z.get_entry(n).as_ref().clone();
-            print::make_entry_table(&entry, &z).print_tty(opts.color);
-        }
-        None if opts.dump_all => {
-            let z = Arc::new(z);
-            let mut handles = vec![];
-            let offs: Vec<usize> = (0..z.clusters.len()).collect();
-            for offs in offs.chunks(z.clusters.len() / 32) {
-                // println!("{:?}", offs);
-                let (z, offs) = (Arc::clone(&z), offs.to_vec());
-                handles.push(thread::spawn(move || {
-                    let mut index = vec![];
-                    for c in offs {
-                        let blobs = z.get_blobs(c).unwrap();
-                        let n = blobs.len();
-                        index.push((c, vec![0; n]));
-                    }
-                    index
-                }));
+    match opts.dump {
+        Some(url) => match z.entries.binary_search_by_key(&url, |e| e.url.clone()) {
+            Ok(n) => {
+                let (_entry, data) = z.get_entry_content(n).unwrap();
+                std::io::stdout().write(&data).unwrap();
             }
-
-            let mut indices = vec![];
-            for handle in handles.into_iter() {
-                indices.extend(handle.join().unwrap())
+            Err(_) => {
+                println!("Missing url {:?}", url);
             }
-            indices.sort_by_key(|x| x.0);
-
-            let n: usize = indices.iter().map(|x| x.1.len()).sum();
-            println!("decompressed {} entries", n);
-        }
+        },
         None => (),
+    }
+
+    if opts.dump_all {
+        let z = Arc::new(z);
+        let mut handles = vec![];
+        let offs: Vec<usize> = (0..z.clusters.len()).collect();
+        for offs in offs.chunks(z.clusters.len() / 32) {
+            // println!("{:?}", offs);
+            let (z, offs) = (Arc::clone(&z), offs.to_vec());
+            handles.push(thread::spawn(move || {
+                let mut index = vec![];
+                for c in offs {
+                    let blobs = z.get_blobs(c).unwrap();
+                    let n = blobs.len();
+                    index.push((c, vec![0; n]));
+                }
+                index
+            }));
+        }
+
+        let mut indices = vec![];
+        for handle in handles.into_iter() {
+            indices.extend(handle.join().unwrap())
+        }
+        indices.sort_by_key(|x| x.0);
+
+        let n: usize = indices.iter().map(|x| x.1.len()).sum();
+        println!("decompressed {} entries", n);
     }
 }
 

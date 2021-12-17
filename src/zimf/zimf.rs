@@ -2,10 +2,11 @@ use binread::{BinRead, BinReaderExt};
 
 use std::{
     collections::BTreeMap,
-    convert::TryInto,
+    convert::{TryFrom, TryInto},
     ffi, fmt, fs,
     io::{self, Read, Seek},
     path, result,
+    str::FromStr,
     sync::mpsc,
     sync::Arc,
 };
@@ -54,8 +55,10 @@ impl fmt::Debug for Compression {
 }
 
 /// Namespaces supported by zim archive.
-#[derive(Clone)]
+#[derive(Copy, Clone, PartialEq)]
 pub enum Namespace {
+    I,
+    A,
     /// User content entries [Article Format](https://openzim.org/wiki/Article_Format)
     C,
     /// ZIM metadata - see [Metadata](https://openzim.org/wiki/Metadata)
@@ -65,15 +68,54 @@ pub enum Namespace {
     W,
     /// search indexes - see [Search indexes](https://openzim.org/wiki/Search_indexes)
     X,
+    /// No namepsace
+    None,
+}
+
+impl FromStr for Namespace {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s {
+            "I" | "i" => Ok(Namespace::I),
+            "A" | "a" => Ok(Namespace::A),
+            "C" | "c" => Ok(Namespace::C),
+            "M" | "m" => Ok(Namespace::M),
+            "W" | "w" => Ok(Namespace::W),
+            "X" | "x" => Ok(Namespace::X),
+            "-" => Ok(Namespace::None),
+            _ => err_at!(InvalidInput, msg: "invalid namespace {:?}", s),
+        }
+    }
+}
+
+impl TryFrom<char> for Namespace {
+    type Error = Error;
+
+    fn try_from(ch: char) -> Result<Self> {
+        match ch {
+            'I' | 'i' => Ok(Namespace::I),
+            'A' | 'a' => Ok(Namespace::A),
+            'C' | 'c' => Ok(Namespace::C),
+            'M' | 'm' => Ok(Namespace::M),
+            'W' | 'w' => Ok(Namespace::W),
+            'X' | 'x' => Ok(Namespace::X),
+            '-' => Ok(Namespace::None),
+            _ => err_at!(InvalidInput, msg: "invalid namespace {:?}", ch),
+        }
+    }
 }
 
 impl fmt::Display for Namespace {
     fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
         match self {
+            Namespace::I => write!(f, "I??"),
+            Namespace::A => write!(f, "A??"),
             Namespace::C => write!(f, "Content"),
             Namespace::M => write!(f, "Metadata"),
             Namespace::W => write!(f, "Wellknown"),
             Namespace::X => write!(f, "indeX"),
+            Namespace::None => write!(f, "None"),
         }
     }
 }
@@ -145,7 +187,7 @@ impl Zimf {
             xs.dedup();
             assert!(xs == entry_offsets);
         }
-        let entries: Vec<Arc<Entry>> = {
+        let mut entries: Vec<Arc<Entry>> = {
             let (start, len) = match (entry_offsets.first(), entry_offsets.last()) {
                 (Some(first), Some(last)) => {
                     let len = (last - first) + (MAX_ENTRY_SIZE as u64);
@@ -164,6 +206,7 @@ impl Zimf {
             }
             entries
         };
+        entries.sort_by(|e1, e2| e1.url.cmp(&e2.url));
 
         let title_list: Vec<Arc<Entry>> = {
             let mut buf: Vec<u8> = vec![0; (header.entry_count * 4) as usize];
@@ -437,7 +480,7 @@ impl Mime {
 /// Entry corresponds to a single url and its content.
 /// Refer [here](https://openzim.org/wiki/ZIM_file_format#Directory_Entries)
 /// for details.
-#[derive(Clone, BinRead)]
+#[derive(Clone, Debug, BinRead)]
 pub struct Entry {
     pub mime_type: u16,
     pub param_len: u8,
@@ -454,7 +497,7 @@ pub struct Entry {
 }
 
 /// Entry can directly point to the content or redirect to another entry.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum EE {
     D { cluster_num: u32, blob_num: u32 },
     R { redirect_index: u32 },
@@ -528,6 +571,11 @@ impl Entry {
         entry.param = param;
 
         Ok(entry)
+    }
+
+    /// Return the namespace, the entry belongs to
+    pub fn to_namespace(&self) -> Result<Namespace> {
+        (self.namespace as char).try_into()
     }
 
     /// Return the cluster number in which the entry is stored.

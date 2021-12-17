@@ -103,6 +103,7 @@ pub mod util;
 pub mod bitmaps;
 pub mod clru;
 pub mod git;
+pub mod html;
 mod index;
 pub mod wral;
 pub mod zimf;

@@ -105,6 +105,7 @@ pub mod clru;
 pub mod git;
 pub mod html;
 mod index;
+pub mod parsec;
 pub mod wral;
 pub mod zimf;
 

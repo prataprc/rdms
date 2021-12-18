@@ -1,4 +1,4 @@
-use crate::html::Node;
+use crate::parsec::Node;
 
 pub enum Dom {
     Doctype { legacy: String },

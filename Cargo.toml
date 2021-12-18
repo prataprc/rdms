@@ -29,6 +29,10 @@ required-features = ["crio"]
 name = "zimf"
 required-features = ["zimf"]
 
+[[bin]]
+name = "html"
+required-features = ["html"]
+
 [badges]
 maintenance = { status = "actively-developed" }
 travis-ci = { repository = "bnclabs/rdms" }
@@ -79,3 +83,4 @@ crc = "2.1.0"
 rdms = ["structopt", "lmdb", "sha-1"]
 crio = ["structopt", "csv", "url", "ureq", "tar", "flate2", "serde_json"]
 zimf = ["structopt", "prettytable-rs"]
+html = ["structopt", "prettytable-rs"]

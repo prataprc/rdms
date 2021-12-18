@@ -1,6 +1,8 @@
 use std::rc::Rc;
 
-use crate::{atom, html::Parser, maybe_ws, re, Result};
+use crate::{
+    and, atom, html, kleene, many, maybe, maybe_ws, or, parsec::Parsec, re, Result,
+};
 
 pub fn prepare_text(text: String) -> String {
     // ASCII whitespace before the html element, at the start of the html element
@@ -23,92 +25,121 @@ pub fn prepare_text(text: String) -> String {
     text[a..=b].to_string()
 }
 
-pub fn new_parser() -> Result<Parser> {
-    Ok(parse_doc_type()?
-        .maybe()
-        .and(Rc::new(parse_element()?.many("ROOT_ELEMENTS"))))
-}
-
-fn parse_doc_type() -> Result<Parser> {
-    let p = atom!("<!DOCTYPE", "DOCTYPE")
-        .and(Rc::new(maybe_ws!()))
-        .and(Rc::new(atom!("html")))
-        .and(Rc::new(re!(r"[^>\s]*")))
-        .and(Rc::new(maybe_ws!()))
-        .and(Rc::new(atom!(">")));
+pub fn new_parser() -> Result<Rc<Parsec<html::Parsec>>> {
+    let p = and!(
+        "DOC",
+        maybe!(parse_doc_type()?),
+        many!("ROOT_ELEMENTS", parse_element()?)
+    );
 
     Ok(p)
 }
 
-fn parse_element() -> Result<Parser> {
-    let maybe_text1 = re!("TEXT", r"[^<]*").maybe();
-    let maybe_text2 = re!("TEXT", r"[^<]*").maybe();
+fn parse_doc_type() -> Result<Rc<Parsec<html::Parsec>>> {
+    let p = and!(
+        "DOC_TYPE",
+        atom!("DOCTYPE_OPEN", "<!DOCTYPE"),
+        maybe_ws!(),
+        atom!("DOCTYPE_HTML", "html"),
+        re!("DOCTYPE_TEXT", r"[^>\s]*"),
+        maybe_ws!(),
+        atom!("DOCTYPE_CLOSE", ">")
+    );
 
-    let element_ref = Rc::new(Parser::new_ref("ELEMENT"));
+    Ok(p)
+}
 
-    let element_multi = start_tag()?
-        .and(Rc::new(
-            maybe_text1
-                .and(element_ref.clone())
-                .aas("TEXT_ELEMENT")
-                .kleene("TEXT_ELEMENTS"),
-        ))
-        .and(Rc::new(maybe_text2))
-        .and(Rc::new(end_tag()?));
+fn parse_element() -> Result<Rc<Parsec<html::Parsec>>> {
+    let maybe_text1 = maybe!(re!("TEXT", r"[^<]*"));
+    let maybe_text2 = maybe!(re!("TEXT", r"[^<]*"));
 
-    let element = Rc::new(element_inline()?.or(Rc::new(element_multi)));
+    let element_ref = Parsec::new_ref()?;
+
+    let element_multi = and!(
+        "ELEMENT",
+        start_tag()?,
+        kleene!(
+            "TEXT_ELEMENTS",
+            and!("TEXT_ELEMENT", maybe_text1, element_ref.clone())
+        ),
+        maybe_text2,
+        end_tag()?
+    );
+
+    let element = or!("ELEMENT", element_inline()?, element_multi);
 
     element_ref.update_ref(element.clone());
 
-    Ok(Rc::try_unwrap(element).ok().unwrap())
+    Ok(element)
 }
 
-fn element_inline() -> Result<Parser> {
-    let p = atom!("<", "TAG_INLINE")
-        .and(Rc::new(atom!("[a-zA-Z][a-zA-Z0-9]*")))
-        .and(Rc::new(atom!("/>")));
+fn element_inline() -> Result<Rc<Parsec<html::Parsec>>> {
+    let p = and!(
+        "TAG_INLINE",
+        atom!("TAG_INLINE", "<"),
+        re!("TAG_NAME", "[a-zA-Z][a-zA-Z0-9]*"),
+        atom!("TAG_CLOSE", "/>")
+    );
 
     Ok(p)
 }
 
-fn start_tag() -> Result<Parser> {
-    let tag = atom!("<", "TAG")
-        .and(Rc::new(atom!("[a-zA-Z][a-zA-Z0-9]*")))
-        .and(Rc::new(atom!(">")));
+fn start_tag() -> Result<Rc<Parsec<html::Parsec>>> {
+    let tag = and!(
+        "START_TAG",
+        atom!("TAG_OPEN", "<"),
+        re!("TAG_NAME", "[a-zA-Z][a-zA-Z0-9]*"),
+        atom!("TAG_CLOSE", ">")
+    );
 
-    let attrs = maybe_ws!()
-        .and(Rc::new(attributes()?))
-        .aas("ATTRIBUTE")
-        .kleene("ATTRIBUTES");
+    let attrs = kleene!(
+        "ATTRIBUTES",
+        and!("WS_ATTRIBUTE", maybe_ws!(), attribute()?)
+    );
 
-    let tag_attrs = atom!("<", "TAG_ATTRS")
-        .and(Rc::new(atom!("[a-zA-Z][a-zA-Z0-9]*")))
-        .and(Rc::new(attrs))
-        .and(Rc::new(atom!(">")));
+    let tag_attrs = and!(
+        "START_TAG_ATTRS",
+        atom!("TAG_OPEN", "<"),
+        re!("TAG_NAME", "[a-zA-Z][a-zA-Z0-9]*"),
+        attrs,
+        atom!("TAG_CLOSE", ">")
+    );
 
-    Ok(tag.or(Rc::new(tag_attrs)))
+    Ok(or!("TAG_START", tag, tag_attrs))
 }
 
-fn end_tag() -> Result<Parser> {
-    let p = atom!("</", "END_TAG")
-        .and(Rc::new(atom!("[a-zA-Z][a-zA-Z0-9]*")))
-        .and(Rc::new(maybe_ws!()))
-        .and(Rc::new(atom!(">")));
+fn end_tag() -> Result<Rc<Parsec<html::Parsec>>> {
+    let p = and!(
+        "END_TAG",
+        atom!("TAG_OPEN", "</"),
+        re!("TAG_NAME", "[a-zA-Z][a-zA-Z0-9]*"),
+        maybe_ws!(),
+        atom!("TAG_CLOSE", ">")
+    );
 
     Ok(p)
 }
 
-fn attributes() -> Result<Parser> {
-    let attr_values = atom!("ATTR_VALUE", r#"[^\s'"=<>`]+"#)
-        .or(Rc::new(Parser::new_attribute_value("ATTR_VALUE_STR")));
+fn attribute() -> Result<Rc<Parsec<html::Parsec>>> {
+    let key = atom!(r"[^\s>]+", "ATTR_KEY_TOK");
 
-    let key = atom!(r"[^\s>]+", "ATTR_KEY");
+    let attr_value = or!(
+        "ATTR_VALUE",
+        atom!("ATTR_VALUE_TOK", r#"[^\s'"=<>`]+"#),
+        Parsec::with_parser(
+            "ATTR_VALUE_STR",
+            html::Parsec::new_attribute_value("ATTR_VALUE_STR")?
+        )?
+    );
 
-    let key_value = atom!(r"[^\s>]+", "ATTR_KEY_VALUE")
-        .and(Rc::new(maybe_ws!()))
-        .and(Rc::new(atom!("=")))
-        .and(Rc::new(maybe_ws!()))
-        .and(Rc::new(attr_values));
+    let key_value = and!(
+        "ATTR_KEY_VALUE",
+        atom!("ATTR_KEY", r"[^\s>]+"),
+        maybe_ws!(),
+        atom!("EQ", "="),
+        maybe_ws!(),
+        attr_value
+    );
 
-    Ok(key.or(Rc::new(key_value)))
+    Ok(or!("ATTRIBUTE", key, key_value))
 }

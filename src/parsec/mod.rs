@@ -16,7 +16,7 @@ impl fmt::Display for Position {
 }
 
 pub use lex::Lex;
-pub use parsec::{parse, Parsec, S};
+pub use parsec::{Parsec, S};
 
 /// Trait implemented by lexer types.
 pub trait Lexer {
@@ -88,25 +88,24 @@ impl Node {
         }
     }
 
-    pub fn pretty_print(&self, prefix: &str) -> String {
+    pub fn pretty_print(&self, prefix: &str) {
         match self {
-            Node::Maybe { name, node } => {
-                let mut s = format!("{}Maybe({:?})", prefix, name);
+            Node::Maybe { name, node } if node.is_some() => {
+                println!("{}Maybe#{} ok", prefix, name);
                 let prefix = prefix.to_string() + "  ";
-                node.as_ref().map(|n| s.push_str(&n.pretty_print(&prefix)));
-                s
+                node.as_ref().map(|n| n.pretty_print(&prefix));
             }
+            Node::Maybe { name, .. } => println!("{}Maybe#{}", prefix, name),
             Node::Token { name, text } => {
-                format!("{}Token({:?}, {})", prefix, name, text)
+                println!("{}Token#{} {:?}", prefix, name, text)
             }
-            Node::Ws { name, text } => format!("{}Ws({:?}, {:?})", prefix, name, text),
+            Node::Ws { name, text } => println!("{}Ws#{} {:?}", prefix, name, text),
             Node::M { name, children } => {
-                let mut s = format!("{}M({:?})", prefix, name);
+                println!("{}M#{} children:{}", prefix, name, children.len());
                 let prefix = prefix.to_string() + "  ";
                 for child in children.iter() {
-                    s.push_str(&child.pretty_print(&prefix));
+                    child.pretty_print(&prefix);
                 }
-                s
             }
         }
     }

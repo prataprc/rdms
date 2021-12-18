@@ -11,33 +11,6 @@ use crate::{
 };
 
 #[macro_export]
-macro_rules! maybe_ws {
-    () => {
-        Parsec::new_regx("WS", r#"\s+"#.to_string()).unwrap()
-    };
-}
-
-#[macro_export]
-macro_rules! atom {
-    ($s:expr) => {
-        Parsec::new_atom($s, $s.to_string()).unwrap()
-    };
-    ($n:expr, $s:expr) => {
-        Parsec::new_atom($n, $s.to_string()).unwrap()
-    };
-}
-
-#[macro_export]
-macro_rules! re {
-    ($s:expr) => {
-        Parsec::new_regx($s, $s.to_string()).unwrap()
-    };
-    ($n:expr, $s:expr) => {
-        Parsec::new_regx($n, $s.to_string()).unwrap()
-    };
-}
-
-#[macro_export]
 macro_rules! kleene {
     ($parser:expr) => {{
         let p = Parsec::Kleene {
@@ -114,6 +87,33 @@ macro_rules! aas {
     }};
 }
 
+#[macro_export]
+macro_rules! maybe_ws {
+    () => {
+        maybe!(Parsec::new_regx("WS", r#"\s+"#.to_string()).unwrap())
+    };
+}
+
+#[macro_export]
+macro_rules! atom {
+    ($s:expr) => {
+        Parsec::new_atom($s, $s.to_string()).unwrap()
+    };
+    ($n:expr, $s:expr) => {
+        Parsec::new_atom($n, $s.to_string()).unwrap()
+    };
+}
+
+#[macro_export]
+macro_rules! re {
+    ($s:expr) => {
+        Parsec::new_regx($s, $s.to_string()).unwrap()
+    };
+    ($n:expr, $s:expr) => {
+        Parsec::new_regx($n, $s.to_string()).unwrap()
+    };
+}
+
 #[derive(Clone)]
 pub enum Parsec<P>
 where
@@ -122,7 +122,6 @@ where
     Atom {
         name: String,
         tok: String,
-        n: usize,
     },
     Regx {
         name: String,
@@ -166,8 +165,7 @@ where
 {
     pub fn new_atom(name: &str, tok: String) -> Result<Rc<Self>> {
         let name = name.to_string();
-        let n = tok.len();
-        let p = Parsec::Atom { name, tok, n };
+        let p = Parsec::Atom { name, tok };
 
         Ok(Rc::new(p))
     }
@@ -230,19 +228,30 @@ where
         L: Lexer,
     {
         let node = match self {
-            Parsec::Atom { name, tok, n } if tok == &lex.as_str()[..*n] => {
-                lex.move_cursor(*n);
-                let node = Node::Token {
-                    name: name.to_string(),
-                    text: tok.to_string(),
+            Parsec::Atom { name, tok } => {
+                let n = tok.len();
+                let text = {
+                    let text = lex.as_str();
+                    if text.len() >= n && tok == &text[..n] {
+                        Some(text[..n].to_string())
+                    } else {
+                        None
+                    }
                 };
-                Some(node)
+
+                text.map(|text| {
+                    // println!("atom {} tok:{:?}", name, tok);
+                    lex.move_cursor(text[..n].chars().collect::<Vec<char>>().len());
+                    Node::Token {
+                        name: name.to_string(),
+                        text: tok.to_string(),
+                    }
+                })
             }
-            Parsec::Atom { .. } => None,
             Parsec::Regx { name, re } => match re.find(lex.as_str()) {
                 Some(m) => {
                     let text = m.as_str().to_string();
-                    lex.move_cursor(text.len());
+                    lex.move_cursor(text.chars().collect::<Vec<char>>().len());
                     let node = Node::Token {
                         name: name.to_string(),
                         text,
@@ -266,7 +275,11 @@ where
                     match iter.next() {
                         Some(parser) => match parser.parse(lex)? {
                             Some(node) => children.push(node),
-                            None => break None,
+                            None => err_at!(
+                                InvalidInput,
+                                msg: "parse fail at cursor:{} coord:{}",
+                                lex.to_cursor(), lex.to_position()
+                            )?,
                         },
                         None => {
                             let node = Node::M {
@@ -301,7 +314,8 @@ where
                 }
             }
             Parsec::Maybe { parser } => {
-                let node = parser.parse(lex)?.map(Box::new);
+                let node = parser.parse(lex).ok().flatten().map(Box::new);
+                // println!("maybe {} ok:{:?}", parser.to_name(), node.is_some());
                 Some(Node::Maybe {
                     name: parser.to_name(),
                     node,
@@ -309,7 +323,7 @@ where
             }
             Parsec::Kleene { name, parser } => {
                 let mut children = vec![];
-                while let Some(node) = parser.parse(lex)? {
+                while let Some(node) = parser.parse(lex).ok().flatten() {
                     children.push(node)
                 }
                 let node = Node::M {
@@ -370,7 +384,7 @@ where
 
     pub fn pretty_print(&self, prefix: &str) {
         match self {
-            Parsec::Atom { name, tok, .. } => {
+            Parsec::Atom { name, tok } => {
                 println!("{}Atom#{:15}  {:?}", prefix, name, tok)
             }
             Parsec::Regx { name, re } => {
@@ -433,17 +447,4 @@ impl<L> S<L> {
     pub fn unwrap(self) -> (L, Node) {
         (self.lex, self.root)
     }
-}
-
-pub fn parse<P, L>(parser: Parsec<P>, mut lex: L) -> Result<Option<S<L>>>
-where
-    P: Parser,
-    L: Lexer,
-{
-    let s = match parser.parse(&mut lex)? {
-        Some(root) => Some(S { lex, root }),
-        None => None,
-    };
-
-    Ok(s)
 }

@@ -1,8 +1,6 @@
 use std::rc::Rc;
 
-use crate::{
-    and, atom, html, kleene, many, maybe, maybe_ws, or, parsec::Parsec, re, Result,
-};
+use crate::{and, atom, html, kleene, maybe, maybe_ws, or, parsec::Parsec, re, Result};
 
 pub fn prepare_text(text: String) -> String {
     // ASCII whitespace before the html element, at the start of the html element
@@ -29,7 +27,7 @@ pub fn new_parser() -> Result<Rc<Parsec<html::Parsec>>> {
     let p = and!(
         "DOC",
         maybe!(parse_doc_type()?),
-        many!("ROOT_ELEMENTS", parse_element()?)
+        kleene!("ROOT_ELEMENTS", parse_element()?)
     );
 
     Ok(p)
@@ -41,7 +39,7 @@ fn parse_doc_type() -> Result<Rc<Parsec<html::Parsec>>> {
         atom!("DOCTYPE_OPEN", "<!DOCTYPE"),
         maybe_ws!(),
         atom!("DOCTYPE_HTML", "html"),
-        re!("DOCTYPE_TEXT", r"[^>\s]*"),
+        maybe!(re!("DOCTYPE_TEXT", r"[^>\s]+")),
         maybe_ws!(),
         atom!("DOCTYPE_CLOSE", ">")
     );

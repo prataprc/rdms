@@ -27,7 +27,10 @@ pub fn new_parser() -> Result<Rc<Parsec<html::Parsec>>> {
     let p = and!(
         "DOC",
         maybe!(parse_doc_type()?),
-        kleene!("ROOT_ELEMENTS", parse_element()?)
+        kleene!(
+            "ROOT_ELEMENTS",
+            and!("ROOT_ELEMENT", maybe_ws!(), parse_element()?)
+        )
     );
 
     Ok(p)
@@ -55,7 +58,7 @@ fn parse_element() -> Result<Rc<Parsec<html::Parsec>>> {
 
     let element_multi = and!(
         "ELEMENT",
-        start_tag()?,
+        start_tag_attrs()?,
         kleene!(
             "TEXT_ELEMENTS",
             and!("TEXT_ELEMENT", maybe_text1, element_ref.clone())
@@ -64,7 +67,18 @@ fn parse_element() -> Result<Rc<Parsec<html::Parsec>>> {
         end_tag()?
     );
 
-    let element = or!("ELEMENT", element_inline()?, element_multi);
+    let element_comment =
+        Parsec::with_parser("COMMENT", html::Parsec::new_comment("COMMENT")?)?;
+    let element_cdata = Parsec::with_parser("CDATA", html::Parsec::new_cdata("CDATA")?)?;
+
+    let element = or!(
+        "OR_ELEMENT",
+        element_inline()?,
+        element_inline_tag_attrs()?,
+        element_multi,
+        element_comment,
+        element_cdata
+    );
 
     element_ref.update_ref(element.clone());
 
@@ -73,8 +87,8 @@ fn parse_element() -> Result<Rc<Parsec<html::Parsec>>> {
 
 fn element_inline() -> Result<Rc<Parsec<html::Parsec>>> {
     let p = and!(
-        "TAG_INLINE",
-        atom!("TAG_INLINE", "<"),
+        "ELEMENT_INLINE",
+        atom!("TAG_OPEN", "<"),
         re!("TAG_NAME", "[a-zA-Z][a-zA-Z0-9]*"),
         atom!("TAG_CLOSE", "/>")
     );
@@ -82,7 +96,24 @@ fn element_inline() -> Result<Rc<Parsec<html::Parsec>>> {
     Ok(p)
 }
 
-fn start_tag() -> Result<Rc<Parsec<html::Parsec>>> {
+fn element_inline_tag_attrs() -> Result<Rc<Parsec<html::Parsec>>> {
+    let attrs = kleene!(
+        "ATTRIBUTES",
+        and!("WS_ATTRIBUTE", maybe_ws!(), attribute()?)
+    );
+
+    let p = and!(
+        "ELEMENT_INLINE_TAG_ATTRS",
+        atom!("TAG_OPEN", "<"),
+        re!("TAG_NAME", "[a-zA-Z][a-zA-Z0-9]*"),
+        attrs,
+        atom!("TAG_CLOSE", "/>")
+    );
+
+    Ok(p)
+}
+
+fn start_tag_attrs() -> Result<Rc<Parsec<html::Parsec>>> {
     let tag = and!(
         "START_TAG",
         atom!("TAG_OPEN", "<"),
@@ -103,7 +134,7 @@ fn start_tag() -> Result<Rc<Parsec<html::Parsec>>> {
         atom!("TAG_CLOSE", ">")
     );
 
-    Ok(or!("TAG_START", tag, tag_attrs))
+    Ok(or!("OR_TAG", tag, tag_attrs))
 }
 
 fn end_tag() -> Result<Rc<Parsec<html::Parsec>>> {
@@ -119,25 +150,25 @@ fn end_tag() -> Result<Rc<Parsec<html::Parsec>>> {
 }
 
 fn attribute() -> Result<Rc<Parsec<html::Parsec>>> {
-    let key = atom!(r"[^\s>]+", "ATTR_KEY_TOK");
+    let key = re!("ATTR_KEY_TOK", r"[^\s/>]+");
 
     let attr_value = or!(
-        "ATTR_VALUE",
+        "OR_ATTR_VALUE",
         atom!("ATTR_VALUE_TOK", r#"[^\s'"=<>`]+"#),
         Parsec::with_parser(
             "ATTR_VALUE_STR",
-            html::Parsec::new_attribute_value("ATTR_VALUE_STR")?
+            html::Parsec::new_attribute_value("HTML_ATTR_STR")?
         )?
     );
 
     let key_value = and!(
         "ATTR_KEY_VALUE",
-        atom!("ATTR_KEY", r"[^\s>]+"),
+        key.clone(),
         maybe_ws!(),
         atom!("EQ", "="),
         maybe_ws!(),
         attr_value
     );
 
-    Ok(or!("ATTRIBUTE", key, key_value))
+    Ok(or!("OR_ATTR", key_value, key))
 }

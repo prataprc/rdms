@@ -1,6 +1,7 @@
 use crate::parsec::{Lexer, Position};
 
 /// Lex type implementing a lexer compatible with rdms/parsec.
+#[derive(Clone, Debug)]
 pub struct Lex {
     text: String,
     row_no: usize, // start from ZERO
@@ -45,5 +46,26 @@ impl Lexer for Lex {
 
     fn as_str(&self) -> &str {
         &self.text[self.cursor..]
+    }
+
+    fn save(&self) -> Lex {
+        #[cfg(feature = "debug")]
+        println!(">>> save-lex @{}", self.to_position());
+
+        Lex {
+            text: String::default(),
+            row_no: self.row_no,
+            col_no: self.col_no,
+            cursor: self.cursor,
+        }
+    }
+
+    fn restore(&mut self, other: Self) {
+        #[cfg(feature = "debug")]
+        println!(">>> restore-lex @{}", other.to_position());
+
+        self.row_no = other.row_no;
+        self.col_no = other.col_no;
+        self.cursor = other.cursor;
     }
 }

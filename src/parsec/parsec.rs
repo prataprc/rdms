@@ -172,6 +172,7 @@ where
 
     pub fn new_regx(name: &str, expr: String) -> Result<Rc<Self>> {
         let name = name.to_string();
+        let expr = "^".to_string() + &expr;
         let re = err_at!(InvalidInput, Regex::new(&expr), "bad re:{:?}", expr)?;
         let p = Parsec::Regx { name, re };
 
@@ -225,8 +226,12 @@ where
 {
     pub fn parse<L>(&self, lex: &mut L) -> Result<Option<Node>>
     where
-        L: Lexer,
+        L: Lexer + Clone,
     {
+        #[cfg(feature = "debug")]
+        self.debug_print();
+
+        let mut saved_lex = lex.save();
         let node = match self {
             Parsec::Atom { name, tok } => {
                 let n = tok.len();
@@ -240,7 +245,9 @@ where
                 };
 
                 text.map(|text| {
-                    // println!("atom {} tok:{:?}", name, tok);
+                    #[cfg(feature = "debug")]
+                    println!("atom {} tok:{:?}", name, tok);
+
                     lex.move_cursor(text[..n].chars().collect::<Vec<char>>().len());
                     Node::Token {
                         name: name.to_string(),
@@ -260,7 +267,13 @@ where
                 }
                 None => None,
             },
-            Parsec::Ext { parser, .. } => parser.parse(lex)?,
+            Parsec::Ext { parser, .. } => match parser.parse(lex) {
+                Err(err) => {
+                    lex.restore(saved_lex.clone());
+                    Err(err)
+                }
+                res => res,
+            }?,
             Parsec::P { name, parser } => match parser.parse(lex)? {
                 Some(mut node) => {
                     node.set_name(name.as_str());
@@ -272,14 +285,22 @@ where
                 let mut children = vec![];
                 let mut iter = parsers.iter();
                 loop {
+                    saved_lex = lex.save();
                     match iter.next() {
-                        Some(parser) => match parser.parse(lex)? {
-                            Some(node) => children.push(node),
-                            None => err_at!(
-                                InvalidInput,
-                                msg: "parse fail at cursor:{} coord:{}",
-                                lex.to_cursor(), lex.to_position()
-                            )?,
+                        Some(parser) => match parser.parse(lex) {
+                            Ok(Some(node)) => children.push(node),
+                            Ok(None) => {
+                                lex.restore(saved_lex.clone());
+                                err_at!(
+                                    InvalidInput,
+                                    msg: "and-parsec fail at cursor:{} coord:{}",
+                                    lex.to_cursor(), lex.to_position()
+                                )?
+                            }
+                            Err(err) => {
+                                lex.restore(saved_lex.clone());
+                                Err(err)?
+                            }
                         },
                         None => {
                             let node = Node::M {
@@ -291,41 +312,89 @@ where
                     }
                 }
             }
-            Parsec::Or { parsers, .. } if parsers.iter().all(|p| p.is_literal()) => {
+            Parsec::Or { name: _n, parsers }
+                if parsers.iter().all(|p| p.is_literal()) =>
+            {
                 let re = RegexSet::new(parsers.iter().map(|p| p.to_pattern())).unwrap();
                 match re.matches(lex.as_str()).iter().next() {
-                    Some(n) => match parsers[n].parse(lex)? {
-                        Some(node) => Some(node),
-                        None => None,
+                    Some(n) => match parsers[n].parse(lex) {
+                        Ok(Some(node)) => Some(node),
+                        Ok(None) => None,
+                        Err(err) => Err(err)?,
                     },
-                    None => None,
-                }
-            }
-            Parsec::Or { parsers, .. } => {
-                let mut iter = parsers.iter();
-                loop {
-                    match iter.next() {
-                        Some(parser) => match parser.parse(lex)? {
-                            Some(node) => break Some(node),
-                            None => (),
-                        },
-                        None => break None,
+                    None => {
+                        #[cfg(feature = "debug")]
+                        println!("Parsec::Or failed all alternatives {}", _n);
+
+                        None
                     }
                 }
             }
+            Parsec::Or { name: _n, parsers } => {
+                let mut iter = parsers.iter();
+                let node = loop {
+                    match iter.next() {
+                        Some(parser) => {
+                            #[cfg(feature = "debug")]
+                            println!("Parsec::Or trying {}", parser.to_name());
+
+                            match parser.parse(lex) {
+                                Ok(Some(node)) => break Some(node),
+                                Ok(None) => {
+                                    lex.restore(saved_lex.clone());
+                                }
+                                Err(_) => {
+                                    lex.restore(saved_lex.clone());
+                                }
+                            }
+                        }
+                        None => {
+                            #[cfg(feature = "debug")]
+                            println!("Parsec::Or failed all alternatives {}", _n);
+
+                            break None;
+                        }
+                    }
+                };
+
+                #[cfg(feature = "debug")]
+                node.as_ref().map(|n| println!("{:?}", n));
+
+                node
+            }
             Parsec::Maybe { parser } => {
-                let node = parser.parse(lex).ok().flatten().map(Box::new);
-                // println!("maybe {} ok:{:?}", parser.to_name(), node.is_some());
+                let child = match parser.parse(lex) {
+                    Ok(Some(node)) => Some(Box::new(node)),
+                    Ok(None) => None,
+                    Err(_) => {
+                        lex.restore(saved_lex.clone());
+                        None
+                    }
+                };
+
                 Some(Node::Maybe {
                     name: parser.to_name(),
-                    node,
+                    child,
                 })
             }
             Parsec::Kleene { name, parser } => {
                 let mut children = vec![];
-                while let Some(node) = parser.parse(lex).ok().flatten() {
-                    children.push(node)
+
+                loop {
+                    saved_lex = lex.save();
+                    match parser.parse(lex) {
+                        Ok(Some(node)) => children.push(node),
+                        Ok(None) => {
+                            lex.restore(saved_lex.clone());
+                            break;
+                        }
+                        Err(_) => {
+                            lex.restore(saved_lex.clone());
+                            break;
+                        }
+                    }
                 }
+
                 let node = Node::M {
                     name: name.to_string(),
                     children,
@@ -334,11 +403,40 @@ where
             }
             Parsec::Many { name, parser } => {
                 let mut children = vec![];
-                while let Some(node) = parser.parse(lex)? {
-                    children.push(node)
+
+                loop {
+                    saved_lex = lex.save();
+                    match parser.parse(lex) {
+                        Ok(Some(node)) => children.push(node),
+                        Ok(None) if children.len() < 1 => {
+                            lex.restore(saved_lex.clone());
+                            err_at!(
+                                InvalidInput,
+                                msg: "many-parsec fail at cursor:{} coord:{}",
+                                lex.to_cursor(), lex.to_position()
+                            )?
+                        }
+                        Ok(None) => {
+                            lex.restore(saved_lex.clone());
+                            break;
+                        }
+                        Err(_) if children.len() < 1 => {
+                            lex.restore(saved_lex.clone());
+                            err_at!(
+                                InvalidInput,
+                                msg: "many-parsec fail at cursor:{} coord:{}",
+                                lex.to_cursor(), lex.to_position()
+                            )?
+                        }
+                        Err(_) => {
+                            lex.restore(saved_lex.clone());
+                            break;
+                        }
+                    }
                 }
+
                 match children.len() {
-                    0 => None,
+                    0 => err_at!(Fatal, msg: "invalid many-parsec construction")?,
                     _ => {
                         let node = Node::M {
                             name: name.to_string(),
@@ -433,6 +531,28 @@ where
                     prefix,
                     parser.borrow().upgrade().unwrap().to_name()
                 )
+            }
+        }
+    }
+
+    #[cfg(feature = "debug")]
+    fn debug_print(&self) {
+        match self {
+            Parsec::Atom { name, .. } => println!("Parsec::Atom {}", name),
+            Parsec::Regx { name, .. } => println!("Parsec::Regx {}", name),
+            Parsec::Ext { name, .. } => println!("Parsec::Ext {}", name),
+            Parsec::P { name, .. } => println!("Parsec::P {}", name),
+            Parsec::And { name, .. } => println!("Parsec::And {}", name),
+            Parsec::Or { name, parsers } if parsers.iter().all(|p| p.is_literal()) => {
+                println!("Parsec::Or-literal {}", name)
+            }
+            Parsec::Or { name, .. } => println!("Parsec::Or {}", name),
+            Parsec::Maybe { parser } => println!("Parsec::Maybe {}", parser.to_name()),
+            Parsec::Kleene { name, .. } => println!("Parsec::Kleene {}", name),
+            Parsec::Many { name, .. } => println!("Parsec::Many {}", name),
+            Parsec::Ref { parser } => {
+                let parser = parser.borrow().upgrade().unwrap();
+                println!("Parsec::Ref {}", parser.to_name())
             }
         }
     }

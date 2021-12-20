@@ -11,7 +11,7 @@ pub struct Position(usize, usize);
 
 impl fmt::Display for Position {
     fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
-        write!(f, "@({},{})", self.0, self.1)
+        write!(f, "({},{})", self.0, self.1)
     }
 }
 
@@ -31,6 +31,12 @@ pub trait Lexer {
 
     /// Return the remaining text as string.
     fn as_str(&self) -> &str;
+
+    /// Save current lexer state, typically a shallow clone for later `restore`.
+    fn save(&self) -> Self;
+
+    /// Update lexer state with saved lexer state.
+    fn restore(&mut self, other: Self);
 }
 
 pub trait Parser {
@@ -43,11 +49,11 @@ pub trait Parser {
         L: Lexer;
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Node {
     Maybe {
         name: String,
-        node: Option<Box<Node>>,
+        child: Option<Box<Node>>,
     },
     Token {
         name: String,
@@ -63,6 +69,23 @@ pub enum Node {
     },
 }
 
+impl ToString for Node {
+    fn to_string(&self) -> String {
+        match self {
+            Node::Maybe { child, .. } => child
+                .as_ref()
+                .map(|n| n.to_string())
+                .unwrap_or("".to_string()),
+            Node::Token { text, .. } => text.to_string(),
+            Node::Ws { text, .. } => text.to_string(),
+            Node::M { children, .. } => {
+                let ss: Vec<String> = children.iter().map(|n| n.to_string()).collect();
+                ss.join("")
+            }
+        }
+    }
+}
+
 impl Node {
     pub fn set_name(&mut self, nm: &str) {
         let nm = nm.to_string();
@@ -74,26 +97,43 @@ impl Node {
         }
     }
 
-    pub fn to_text(&self) -> String {
+    pub fn into_child(self) -> Option<Node> {
         match self {
-            Node::Maybe { node, .. } => {
-                node.as_ref().map(|n| n.to_text()).unwrap_or("".to_string())
-            }
-            Node::Token { text, .. } => text.to_string(),
-            Node::Ws { text, .. } => text.to_string(),
-            Node::M { children, .. } => {
-                let ss: Vec<String> = children.iter().map(|n| n.to_text()).collect();
-                ss.join("")
-            }
+            Node::Maybe { child, .. } => child.map(|x| *x),
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn into_children(self) -> Vec<Node> {
+        match self {
+            Node::M { children, .. } => children,
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn into_text(self) -> String {
+        match self {
+            Node::Token { text, .. } => text,
+            Node::Ws { text, .. } => text,
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn to_name(&self) -> String {
+        match self {
+            Node::Maybe { name, .. } => name.clone(),
+            Node::Token { name, .. } => name.clone(),
+            Node::Ws { name, .. } => name.clone(),
+            Node::M { name, .. } => name.clone(),
         }
     }
 
     pub fn pretty_print(&self, prefix: &str) {
         match self {
-            Node::Maybe { name, node } if node.is_some() => {
+            Node::Maybe { name, child } if child.is_some() => {
                 println!("{}Maybe#{} ok", prefix, name);
                 let prefix = prefix.to_string() + "  ";
-                node.as_ref().map(|n| n.pretty_print(&prefix));
+                child.as_ref().map(|n| n.pretty_print(&prefix));
             }
             Node::Maybe { name, .. } => println!("{}Maybe#{}", prefix, name),
             Node::Token { name, text } => {

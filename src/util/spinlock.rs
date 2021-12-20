@@ -38,9 +38,6 @@
 //! [rw-lock]: https://en.wikipedia.org/wiki/Readers–writer_lock
 //!
 
-#[cfg(feature = "debug")]
-use log::debug;
-
 use std::convert::TryFrom;
 use std::{
     fmt,
@@ -68,13 +65,6 @@ pub struct Spinlock<T> {
     conflicts: AtomicU32,
 
     value: T,
-}
-
-#[cfg(feature = "debug")]
-impl<T> Drop for Spinlock<T> {
-    fn drop(&mut self) {
-        debug!("{}", self.to_stats().unwrap());
-    }
 }
 
 impl<T> Spinlock<T> {

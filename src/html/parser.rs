@@ -19,6 +19,22 @@ impl Parsec {
 
         Ok(p)
     }
+
+    pub fn new_cdata(name: &str) -> Result<Self> {
+        let p = Parsec::Cdata {
+            name: name.to_string(),
+        };
+
+        Ok(p)
+    }
+
+    pub fn new_comment(name: &str) -> Result<Self> {
+        let p = Parsec::Comment {
+            name: name.to_string(),
+        };
+
+        Ok(p)
+    }
 }
 
 impl Parser for Parsec {
@@ -35,20 +51,19 @@ impl Parser for Parsec {
         L: Lexer,
     {
         let text = lex.as_str();
-        let cursor = lex.to_cursor();
         let text = match self {
             Parsec::AttrValue { .. } => {
                 let bads = ['\'', '"', '=', '<', '>', '`'];
                 let quotes = ['"', '\''];
                 let mut q = '"';
-                let mut iter = text[cursor..].chars().enumerate();
+                let mut iter = text.chars().enumerate();
                 loop {
                     match iter.next() {
                         Some((0, ch)) if quotes.contains(&ch) => q = ch,
                         Some((0, _)) => break None,
                         Some((n, ch)) if ch == q && n > 0 => {
-                            let text = String::from_iter(text[cursor..].chars().take(n));
-                            break Some(text);
+                            let t = String::from_iter(text.chars().take(n + 1));
+                            break Some(t);
                         }
                         Some((_, ch))
                             if ch.is_ascii_whitespace() || bads.contains(&ch) =>
@@ -66,19 +81,18 @@ impl Parser for Parsec {
                     }
                 }
             }
-            Parsec::Comment { .. } if text[cursor..].len() <= 4 => None,
+            Parsec::Comment { .. } if text.len() <= 4 => None,
             Parsec::Comment { .. } => {
-                if &text[cursor..(cursor + 4)] == "<!--" {
+                // println!("comment *** {:?}", &text[..4]);
+                if &text[..4] == "<!--" {
                     let mut end = "";
-                    let mut iter = text[cursor..].chars().enumerate();
+                    let mut iter = text.chars().enumerate();
                     loop {
                         end = match iter.next() {
                             Some((_, '-')) if end == "" => "-",
                             Some((_, '-')) if end == "-" => "--",
                             Some((n, '>')) if end == "--" => {
-                                let text =
-                                    String::from_iter(text[cursor..].chars().take(n));
-                                break Some(text);
+                                break Some(String::from_iter(text.chars().take(n + 1)));
                             }
                             Some((_, _)) => "",
                             None => err_at!(
@@ -92,19 +106,17 @@ impl Parser for Parsec {
                     None
                 }
             }
-            Parsec::Cdata { .. } if text[cursor..].len() <= 9 => None,
+            Parsec::Cdata { .. } if text.len() <= 9 => None,
             Parsec::Cdata { .. } => {
-                if &text[cursor..(cursor + 9)] == "<![CDATA[" {
+                if &text[..9] == "<![CDATA[" {
                     let mut end = "";
-                    let mut iter = text[cursor..].chars().enumerate();
+                    let mut iter = text.chars().enumerate();
                     loop {
                         end = match iter.next() {
                             Some((_, ']')) if end == "" => "]",
                             Some((_, ']')) if end == "]" => "]]",
                             Some((n, '>')) if end == "]]" => {
-                                let text =
-                                    String::from_iter(text[cursor..].chars().take(n));
-                                break Some(text);
+                                break Some(String::from_iter(text.chars().take(n)));
                             }
                             Some((_, _)) => "",
                             None => err_at!(

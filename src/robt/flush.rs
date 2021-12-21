@@ -35,13 +35,14 @@ impl Flusher {
         };
 
         let ffpp = loc.to_os_string();
-        let (th, tx) = util::Thread::new_sync(
+        let th = util::Thread::new_sync(
             "flusher",
             chan_size,
             move |rx: util::thread::Rx<Vec<u8>, u64>| {
                 move || thread_flush(ffpp, fd, rx, fpos)
             },
         );
+        let tx = th.to_tx();
 
         let val = Flusher::File {
             loc: loc.to_os_string(),

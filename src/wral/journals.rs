@@ -59,7 +59,7 @@ impl<S> Journals<S> {
         }));
         let name = format!("wral-journals-{}", config.name);
         let thread_w = Arc::clone(&journals);
-        let (t, tx) = thread::Thread::new_sync(
+        let th = thread::Thread::new_sync(
             &name,
             wral::SYNC_BUFFER,
             move |rx: thread::Rx<Req, Res>| {
@@ -74,8 +74,9 @@ impl<S> Journals<S> {
                 }
             },
         );
+        let tx = th.to_tx();
 
-        (journals, t, tx)
+        (journals, th, tx)
     }
 
     pub fn close(&self) -> Result<u64> {

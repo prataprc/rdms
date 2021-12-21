@@ -29,7 +29,7 @@ pub struct Wal<S = wral::NoState> {
     config: Config,
 
     w: Arc<RwLock<Journals<S>>>,
-    t: Arc<thread::Thread<Req, Res, Result<u64>>>,
+    th: Arc<thread::Thread<Req, Res, Result<u64>>>,
     tx: thread::Tx<Req, Res>,
 }
 
@@ -39,7 +39,7 @@ impl<S> Clone for Wal<S> {
             config: self.config.clone(),
 
             w: Arc::clone(&self.w),
-            t: Arc::clone(&self.t),
+            th: Arc::clone(&self.th),
             tx: self.tx.clone(),
         }
     }
@@ -72,13 +72,13 @@ impl<S> Wal<S> {
         let journal = Journal::start(&config.dir, &config.name, num, state)?;
 
         let seqno = 1;
-        let (w, t, tx) = Journals::start(config.clone(), seqno, vec![], journal);
+        let (w, th, tx) = Journals::start(config.clone(), seqno, vec![], journal);
 
         let val = Wal {
             config,
 
             w,
-            t: Arc::new(t),
+            th: Arc::new(th),
             tx,
         };
 
@@ -120,13 +120,13 @@ impl<S> Wal<S> {
         let journal = Journal::start(&config.dir, &config.name, num, state)?;
 
         let journals: Vec<Journal<S>> = journals.into_iter().map(|(j, _, _)| j).collect();
-        let (w, t, tx) = Journals::start(config.clone(), seqno, journals, journal);
+        let (w, th, tx) = Journals::start(config.clone(), seqno, journals, journal);
 
         let val = Wal {
             config,
 
             w,
-            t: Arc::new(t),
+            th: Arc::new(th),
             tx,
         };
 
@@ -135,10 +135,10 @@ impl<S> Wal<S> {
 
     /// Close the [Wal] instance.
     pub fn close(self) -> Result<Option<u64>> {
-        match Arc::try_unwrap(self.t) {
-            Ok(t) => {
+        match Arc::try_unwrap(self.th) {
+            Ok(th) => {
                 mem::drop(self.tx);
-                t.join()??;
+                th.join()??;
 
                 match Arc::try_unwrap(self.w) {
                     Ok(w) => Ok(Some(err_at!(IPCFail, w.into_inner())?.close()?)),
@@ -151,10 +151,10 @@ impl<S> Wal<S> {
 
     /// Close the [Wal] instance and purge it.
     pub fn purge(self) -> Result<Option<u64>> {
-        match Arc::try_unwrap(self.t) {
-            Ok(t) => {
+        match Arc::try_unwrap(self.th) {
+            Ok(th) => {
                 mem::drop(self.tx);
-                t.join()??;
+                th.join()??;
 
                 match Arc::try_unwrap(self.w) {
                     Ok(w) => Ok(Some(err_at!(IPCFail, w.into_inner())?.purge()?)),

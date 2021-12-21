@@ -4,9 +4,111 @@
 //! expected to hold onto its own state, and handle all inter-thread communication
 //! via channels and message queues.
 
-use std::{marker::PhantomData, sync::mpsc, thread};
+use std::{mem, sync::mpsc, thread};
 
 use crate::{Error, Result};
+
+/// Thread type, providing gen-server pattern to do multi-threading.
+///
+/// NOTE: When a thread value is dropped, it is made sure that there are no dangling
+/// thread routines. To achieve this following requirements need to be satisfied:
+///
+/// * The thread's main loop should handle _disconnect_ signal on its [Rx] channel.
+/// * Call `close_wait()` on the [Thread] instance.
+pub struct Thread<Q, R = (), T = ()> {
+    name: String,
+    inner: Option<Inner<Q, R, T>>,
+}
+
+struct Inner<Q, R, T> {
+    handle: thread::JoinHandle<T>,
+    tx: Option<Tx<Q, R>>,
+}
+
+impl<Q, R, T> Inner<Q, R, T> {
+    fn join(mut self) -> Result<T> {
+        mem::drop(self.tx.take());
+
+        match self.handle.join() {
+            Ok(val) => Ok(val),
+            Err(err) => err_at!(ThreadFail, msg: "fail {:?}", err),
+        }
+    }
+}
+
+impl<Q, R, T> Drop for Thread<Q, R, T> {
+    fn drop(&mut self) {
+        if let Some(inner) = self.inner.take() {
+            inner.join().ok();
+        }
+    }
+}
+
+impl<Q, R, T> Thread<Q, R, T> {
+    /// Create a new Thread instance, using asynchronous channel with infinite buffer.
+    /// `main_loop` shall be called with the rx side of the channel and shall return
+    /// a function that can be spawned using thread::spawn.
+    pub fn new<F, N>(name: &str, main_loop: F) -> Thread<Q, R, T>
+    where
+        F: 'static + FnOnce(Rx<Q, R>) -> N + Send,
+        N: 'static + Send + FnOnce() -> T,
+        T: 'static + Send,
+    {
+        let (tx, rx) = mpsc::channel();
+        let handle = thread::spawn(main_loop(rx));
+
+        let tx = Some(Tx::N(tx));
+        let th = Thread {
+            name: name.to_string(),
+            inner: Some(Inner { handle, tx }),
+        };
+
+        th
+    }
+
+    /// Create a new Thread instance, using synchronous channel with
+    /// finite buffer.
+    pub fn new_sync<F, N>(name: &str, chan_size: usize, main_loop: F) -> Thread<Q, R, T>
+    where
+        F: 'static + FnOnce(Rx<Q, R>) -> N + Send,
+        N: 'static + Send + FnOnce() -> T,
+        T: 'static + Send,
+    {
+        let (tx, rx) = mpsc::sync_channel(chan_size);
+        let handle = thread::spawn(main_loop(rx));
+
+        let tx = Some(Tx::S(tx));
+        let th = Thread {
+            name: name.to_string(),
+            inner: Some(Inner { handle, tx }),
+        };
+
+        th
+    }
+
+    /// Recommended way to exit/shutdown the thread. Note that all [Tx]
+    /// clones of this thread must also be dropped for this call to return.
+    ///
+    /// Even otherwise, when Thread value goes out of scope its drop
+    /// implementation shall call this method to exit the thread, except
+    /// that any errors are ignored.
+    pub fn join(mut self) -> Result<T> {
+        self.inner.take().unwrap().join()
+    }
+
+    /// Return name of this thread.
+    pub fn to_name(&self) -> String {
+        self.name.to_string()
+    }
+
+    /// Return a clone of tx channel.
+    pub fn to_tx(&self) -> Tx<Q, R> {
+        match self.inner.as_ref() {
+            Some(inner) => inner.tx.as_ref().unwrap().clone(),
+            None => unreachable!(),
+        }
+    }
+}
 
 /// IPC type, that enumerates as either [mpsc::Sender] or, [mpsc::SyncSender]
 /// channel.
@@ -51,104 +153,3 @@ impl<Q, R> Tx<Q, R> {
 ///
 /// Refer to [Thread::new] for details.
 pub type Rx<Q, R = ()> = mpsc::Receiver<(Q, Option<mpsc::Sender<R>>)>;
-
-/// Thread type, providing gen-server pattern to do multi-threading.
-///
-/// When a thread value is dropped, it is made sure that there are
-/// no dangling thread routines. To achieve this following requirements
-/// need to be satisfied:
-///
-/// * The thread's main loop should handle _disconnect_ signal on its
-///   [Rx] channel.
-/// * Call `close_wait()` on the [Thread] instance.
-pub struct Thread<Q, R = (), T = ()> {
-    _name: String,
-    inner: Option<Inner<Q, R, T>>,
-}
-
-struct Inner<Q, R, T> {
-    handle: thread::JoinHandle<T>,
-    _req: PhantomData<Q>,
-    _res: PhantomData<R>,
-}
-
-impl<Q, R, T> Inner<Q, R, T> {
-    fn join(self) -> Result<T> {
-        match self.handle.join() {
-            Ok(val) => Ok(val),
-            Err(err) => err_at!(ThreadFail, msg: "fail {:?}", err),
-        }
-    }
-}
-
-impl<Q, R, T> Drop for Thread<Q, R, T> {
-    fn drop(&mut self) {
-        if let Some(inner) = self.inner.take() {
-            inner.join().ok();
-        }
-    }
-}
-
-impl<Q, R, T> Thread<Q, R, T> {
-    /// Create a new Thread instance, using asynchronous channel with
-    /// infinite buffer. `main_loop` shall be called with the rx side
-    /// of the channel and shall return a function that can be spawned
-    /// using thread::spawn.
-    pub fn new<F, N>(name: &str, main_loop: F) -> (Thread<Q, R, T>, Tx<Q, R>)
-    where
-        F: 'static + FnOnce(Rx<Q, R>) -> N + Send,
-        N: 'static + Send + FnOnce() -> T,
-        T: 'static + Send,
-    {
-        let (tx, rx) = mpsc::channel();
-        let handle = thread::spawn(main_loop(rx));
-
-        let th = Thread {
-            _name: name.to_string(),
-            inner: Some(Inner {
-                handle,
-                _req: PhantomData,
-                _res: PhantomData,
-            }),
-        };
-
-        (th, Tx::N(tx))
-    }
-
-    /// Create a new Thread instance, using synchronous channel with
-    /// finite buffer.
-    pub fn new_sync<F, N>(
-        name: &str,
-        channel_size: usize,
-        main_loop: F,
-    ) -> (Thread<Q, R, T>, Tx<Q, R>)
-    where
-        F: 'static + FnOnce(Rx<Q, R>) -> N + Send,
-        N: 'static + Send + FnOnce() -> T,
-        T: 'static + Send,
-    {
-        let (tx, rx) = mpsc::sync_channel(channel_size);
-        let handle = thread::spawn(main_loop(rx));
-
-        let th = Thread {
-            _name: name.to_string(),
-            inner: Some(Inner {
-                handle,
-                _req: PhantomData,
-                _res: PhantomData,
-            }),
-        };
-
-        (th, Tx::S(tx))
-    }
-
-    /// Recommended way to exit/shutdown the thread. Note that all [Tx]
-    /// clones of this thread must also be dropped for this call to return.
-    ///
-    /// Even otherwise, when Thread value goes out of scope its drop
-    /// implementation shall call this method to exit the thread, except
-    /// that any errors are ignored.
-    pub fn join(mut self) -> Result<T> {
-        self.inner.take().unwrap().join()
-    }
-}

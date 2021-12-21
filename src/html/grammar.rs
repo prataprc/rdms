@@ -150,11 +150,11 @@ fn end_tag() -> Result<Rc<Parsec<html::Parsec>>> {
 }
 
 fn attribute() -> Result<Rc<Parsec<html::Parsec>>> {
-    let key = re!("ATTR_KEY_TOK", r"[^\s/>]+");
+    let key = re!("ATTR_KEY_TOK", r"[^\s/>=]+");
 
     let attr_value = or!(
         "OR_ATTR_VALUE",
-        atom!("ATTR_VALUE_TOK", r#"[^\s'"=<>`]+"#),
+        re!("ATTR_VALUE_TOK", r#"[^\s'"=<>`]+"#),
         Parsec::with_parser(
             "ATTR_VALUE_STR",
             html::Parsec::new_attribute_value("HTML_ATTR_STR")?

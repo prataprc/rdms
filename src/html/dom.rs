@@ -1,3 +1,8 @@
+use std::{
+    cell::RefCell,
+    rc::{Rc, Weak},
+};
+
 use crate::parsec::Node;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -101,30 +106,75 @@ impl Attribute {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum Dom {
     Doc {
         doc_type: Option<Doctype>,
-        root_elements: Vec<Dom>,
+        root_elements: Vec<Rc<Dom>>,
     },
     Tag {
         tag_name: String,
         attrs: Vec<Attribute>,
-        tag_children: Vec<Dom>,
+        tag_children: Vec<Rc<Dom>>,
+        parent: RefCell<Weak<Dom>>,
     },
     TagEnd {
         tag_name: String,
+        parent: RefCell<Weak<Dom>>,
     },
     Text {
         text: String,
+        parent: RefCell<Weak<Dom>>,
     },
     Comment {
         text: String,
+        parent: RefCell<Weak<Dom>>,
     },
 }
 
+impl PartialEq for Dom {
+    fn eq(&self, other: &Dom) -> bool {
+        use Dom::{Comment, Doc, Tag, TagEnd, Text};
+
+        match (self, other) {
+            (
+                Doc {
+                    doc_type,
+                    root_elements,
+                },
+                Doc {
+                    doc_type: d,
+                    root_elements: r,
+                },
+            ) => {
+                doc_type == d
+                    && root_elements.len() == r.len()
+                    && root_elements.iter().zip(r.iter()).all(|(a, b)| a == b)
+            }
+            (
+                Tag {
+                    tag_name,
+                    attrs,
+                    tag_children,
+                    ..
+                },
+                Tag {
+                    tag_name: t,
+                    attrs: a,
+                    tag_children: c,
+                    ..
+                },
+            ) => tag_name == t && attrs == a && tag_children == c,
+            (TagEnd { tag_name, .. }, TagEnd { tag_name: t, .. }) => tag_name == t,
+            (Text { text, .. }, Text { text: t, .. }) => text == t,
+            (Comment { text, .. }, Comment { text: t, .. }) => text == t,
+            _ => false,
+        }
+    }
+}
+
 impl Dom {
-    pub fn from_node(node: Node) -> Option<Dom> {
+    pub fn from_node(node: Node) -> Option<Rc<Dom>> {
         #[cfg(feature = "debug")]
         println!("Dom for node {}", node.to_name());
         #[cfg(feature = "debug")]
@@ -142,22 +192,22 @@ impl Dom {
 
         let mut root_elements = vec![];
         while items.len() > 0 {
-            match Dom::build_dom(&mut items) {
+            match Dom::build_doms(&mut items) {
                 Some(doms) => root_elements.extend_from_slice(&doms),
                 None => (),
             }
         }
-        let dom = Dom::Doc {
+        let dom = Rc::new(Dom::Doc {
             doc_type,
             root_elements,
-        };
+        });
         Some(dom)
     }
 
-    fn build_dom(items: &mut Vec<Node>) -> Option<Vec<Dom>> {
+    fn build_doms(items: &mut Vec<Node>) -> Option<Vec<Rc<Dom>>> {
         #[cfg(feature = "debug")]
         println!(
-            "build_dom: items:{} {:?}",
+            "build_doms: items:{} {:?}",
             items.len(),
             items.first().map(|n| n.to_name())
         );
@@ -176,11 +226,12 @@ impl Dom {
                     None => vec![],
                 };
 
-                let dom = Dom::Tag {
+                let dom = Rc::new(Dom::Tag {
                     tag_name,
                     attrs,
                     tag_children: Vec::default(),
-                };
+                    parent: RefCell::new(Weak::new()),
+                });
                 Some(vec![dom])
             }
             "TAG_START" => {
@@ -205,12 +256,25 @@ impl Dom {
                     doms.as_ref().map(|x| x.len())
                 );
 
-                let dom = Dom::Tag {
+                let dom = Rc::new(Dom::Tag {
                     tag_name,
                     attrs,
                     tag_children,
-                };
+                    parent: RefCell::new(Weak::new()),
+                });
 
+                // Set parent for each dom.
+                let parent = Rc::downgrade(&dom);
+                match dom.as_ref() {
+                    Dom::Tag { tag_children, .. } => {
+                        for x in tag_children.iter() {
+                            x.set_parent(parent.clone())
+                        }
+                    }
+                    _ => unreachable!(),
+                }
+
+                // wire up doms.
                 match doms {
                     Some(mut doms) => {
                         doms.insert(0, dom);
@@ -221,19 +285,24 @@ impl Dom {
             }
             "TAG_END" => {
                 let tag_name = node.into_children().remove(1).into_text();
-                let dom = Dom::TagEnd { tag_name };
+                let dom = Rc::new(Dom::TagEnd {
+                    tag_name,
+                    parent: RefCell::new(Weak::new()),
+                });
                 Some(vec![dom])
             }
             "TEXT" => {
-                let dom = Dom::Text {
+                let dom = Rc::new(Dom::Text {
                     text: node.into_text(),
-                };
+                    parent: RefCell::new(Weak::new()),
+                });
                 Some(vec![dom])
             }
             "COMMENT" => {
-                let dom = Dom::Comment {
+                let dom = Rc::new(Dom::Comment {
                     text: node.into_text(),
-                };
+                    parent: RefCell::new(Weak::new()),
+                });
                 Some(vec![dom])
             }
             "CDATA" => unimplemented!(),
@@ -244,32 +313,47 @@ impl Dom {
     fn build_children(
         tname: &str,
         items: &mut Vec<Node>,
-        children: &mut Vec<Dom>,
-    ) -> Option<Vec<Dom>> {
+        children: &mut Vec<Rc<Dom>>,
+    ) -> Option<Vec<Rc<Dom>>> {
         #[cfg(feature = "debug")]
         println!("build_children-enter: tag:{} items:{}", tname, items.len(),);
 
         while items.len() > 0 {
-            if let Some(doms) = Dom::build_dom(items) {
+            if let Some(doms) = Dom::build_doms(items) {
                 let mut iter = doms.into_iter();
                 loop {
                     match iter.next() {
-                        Some(Dom::TagEnd { tag_name }) if &tag_name == tname => {
-                            return None;
-                        }
-                        Some(dom @ Dom::TagEnd { .. }) => {
-                            children.push(dom);
-                            return Some(children.drain(..).collect());
-                        }
-                        Some(dom) => children.push(dom),
+                        Some(dom) => match Rc::try_unwrap(dom).unwrap() {
+                            Dom::TagEnd { tag_name, .. } if &tag_name == tname => {
+                                return None;
+                            }
+                            dom @ Dom::TagEnd { .. } => {
+                                children.push(Rc::new(dom));
+                                return Some(children.drain(..).collect());
+                            }
+                            dom => children.push(Rc::new(dom)),
+                        },
                         None => break,
                     }
                 }
             }
         }
 
-        let doms: Vec<Dom> = children.drain(..).collect();
+        let doms: Vec<Rc<Dom>> = children.drain(..).collect();
         Some(doms)
+    }
+}
+
+impl Dom {
+    pub fn set_parent(&self, par: Weak<Dom>) {
+        use Dom::{Comment, Doc, Tag, TagEnd, Text};
+        match self {
+            Doc { .. } => (),
+            Text { parent, .. } => *parent.borrow_mut() = par,
+            Comment { parent, .. } => *parent.borrow_mut() = par,
+            Tag { parent, .. } => *parent.borrow_mut() = par,
+            TagEnd { parent, .. } => *parent.borrow_mut() = par,
+        }
     }
 
     pub fn pretty_print(&self, prefix: &str, oneline: bool) {
@@ -291,6 +375,7 @@ impl Dom {
                 tag_name,
                 attrs,
                 tag_children,
+                ..
             } => {
                 if attrs.is_empty() {
                     println!("{}<{}>", prefix, tag_name);
@@ -307,18 +392,18 @@ impl Dom {
                     .iter()
                     .for_each(|t| t.pretty_print(&prefix, oneline));
             }
-            Dom::Text { text } if text.trim().is_empty() => (),
-            Dom::Text { text } => match text.lines().next() {
+            Dom::Text { text, .. } if text.trim().is_empty() => (),
+            Dom::Text { text, .. } => match text.lines().next() {
                 Some(text) if text.len() < 20 => println!("{}{}", prefix, text),
                 Some(text) => println!("{}{}", prefix, &text[..20]),
                 None => (),
             },
-            Dom::Comment { text } => match text.lines().next() {
+            Dom::Comment { text, .. } => match text.lines().next() {
                 Some(text) if text.len() < 20 => println!("{}<Comment {}>", prefix, text),
                 Some(text) => println!("{}<Comment {}>", prefix, &text[..20]),
                 None => println!("{}<Comment>", prefix),
             },
-            Dom::TagEnd { tag_name } => println!("{}</{}>", prefix, tag_name),
+            Dom::TagEnd { tag_name, .. } => println!("{}</{}>", prefix, tag_name),
         }
     }
 }

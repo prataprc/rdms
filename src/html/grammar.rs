@@ -2,28 +2,7 @@ use std::rc::Rc;
 
 use crate::{and, atom, html, kleene, maybe, maybe_ws, or, parsec::Parsec, re, Result};
 
-pub fn prepare_text(text: String) -> String {
-    // ASCII whitespace before the html element, at the start of the html element
-    // and before the head element, will be dropped when the document is parsed;
-    // ASCII whitespace after the html element will be parsed as if it were at the
-    // end of the body element. Thus, ASCII whitespace around the document element
-    // does not round-trip.
-    let a: usize = text
-        .chars()
-        .take_while(|ch| ch.is_ascii_whitespace())
-        .map(|ch| ch.len_utf8())
-        .sum();
-    let b: usize = text
-        .chars()
-        .rev()
-        .take_while(|ch| ch.is_ascii_whitespace())
-        .map(|ch| ch.len_utf8())
-        .sum();
-    let b = text.len() - b;
-    text[a..b].to_string()
-}
-
-pub fn new_parser() -> Result<Rc<Parsec<html::Parsec>>> {
+pub fn new_html_parser() -> Result<Rc<Parsec<html::Parsec>>> {
     let p = kleene!("ROOT_ITEMS", parse_item()?);
 
     Ok(p)

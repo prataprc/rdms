@@ -1,3 +1,8 @@
+use std::{
+    cell::RefCell,
+    rc::{Rc, Weak},
+};
+
 use crate::html::{Doctype, Dom};
 use crate::parsec::Lex;
 
@@ -9,15 +14,15 @@ fn test_html1() {
 
     let mut lex = Lex::new(text.to_string());
 
-    let parser = new_parser().unwrap();
+    let parser = new_html_parser().unwrap();
     let node = parser.parse(&mut lex).unwrap().unwrap();
     assert_eq!(node.to_string(), text);
     let dom = Dom::from_node(node).unwrap();
 
-    let ref_dom = Dom::Doc {
+    let ref_dom = Rc::new(Dom::Doc {
         doc_type: Some(Doctype { legacy: None }),
         root_elements: Vec::default(),
-    };
+    });
     assert_eq!(dom, ref_dom);
 }
 
@@ -33,53 +38,70 @@ const TEST_HTML2_TEXT: &'static str = r#"
 fn test_html2() {
     let mut lex = Lex::new(TEST_HTML2_TEXT.to_string());
 
-    let parser = new_parser().unwrap();
+    let parser = new_html_parser().unwrap();
     let node = parser.parse(&mut lex).unwrap().unwrap();
     assert_eq!(node.to_string(), TEST_HTML2_TEXT);
     let dom = Dom::from_node(node).unwrap();
 
-    let ref_dom = Dom::Doc {
+    let ref_dom = Rc::new(Dom::Doc {
         doc_type: None,
-        root_elements: vec![Dom::Tag {
-            tag_name: "p".to_string(),
-            attrs: vec![],
-            tag_children: vec![
-                Dom::Text {
-                    text: "\n ".to_string(),
-                },
-                Dom::Tag {
-                    tag_name: "svg".to_string(),
-                    attrs: vec![],
-                    tag_children: vec![
-                        Dom::Text {
-                            text: "\n  ".to_string(),
-                        },
-                        Dom::Tag {
-                            tag_name: "metadata".to_string(),
-                            attrs: vec![],
-                            tag_children: vec![
-                                Dom::Text {
-                                    text: "\n   ".to_string(),
-                                },
-                                Dom::Comment {
-                                    text: "<!-- this is comment -->".to_string(),
-                                },
-                                Dom::Text {
-                                    text: "\n  ".to_string(),
-                                },
-                            ],
-                        },
-                        Dom::Text {
-                            text: "\n ".to_string(),
-                        },
-                    ],
-                },
-                Dom::Text {
-                    text: "\n".to_string(),
-                },
-            ],
-        }],
-    };
+        root_elements: vec![
+            Rc::new(Dom::Text {
+                text: "\n".to_string(),
+                parent: RefCell::new(Weak::new()),
+            }),
+            Rc::new(Dom::Tag {
+                tag_name: "p".to_string(),
+                attrs: vec![],
+                tag_children: vec![
+                    Rc::new(Dom::Text {
+                        text: "\n ".to_string(),
+                        parent: RefCell::new(Weak::new()),
+                    }),
+                    Rc::new(Dom::Tag {
+                        tag_name: "svg".to_string(),
+                        attrs: vec![],
+                        tag_children: vec![
+                            Rc::new(Dom::Text {
+                                text: "\n  ".to_string(),
+                                parent: RefCell::new(Weak::new()),
+                            }),
+                            Rc::new(Dom::Tag {
+                                tag_name: "metadata".to_string(),
+                                attrs: vec![],
+                                tag_children: vec![
+                                    Rc::new(Dom::Text {
+                                        text: "\n   ".to_string(),
+                                        parent: RefCell::new(Weak::new()),
+                                    }),
+                                    Rc::new(Dom::Comment {
+                                        text: "<!-- this is comment -->".to_string(),
+                                        parent: RefCell::new(Weak::new()),
+                                    }),
+                                    Rc::new(Dom::Text {
+                                        text: "\n  ".to_string(),
+                                        parent: RefCell::new(Weak::new()),
+                                    }),
+                                ],
+                                parent: RefCell::new(Weak::new()),
+                            }),
+                            Rc::new(Dom::Text {
+                                text: "\n ".to_string(),
+                                parent: RefCell::new(Weak::new()),
+                            }),
+                        ],
+                        parent: RefCell::new(Weak::new()),
+                    }),
+                    Rc::new(Dom::Text {
+                        text: "\n".to_string(),
+                        parent: RefCell::new(Weak::new()),
+                    }),
+                ],
+                parent: RefCell::new(Weak::new()),
+            }),
+        ],
+    });
+
     assert_eq!(dom, ref_dom);
 }
 
@@ -89,22 +111,23 @@ fn test_html3() {
 
     let mut lex = Lex::new(text.to_string());
 
-    let parser = new_parser().unwrap();
+    let parser = new_html_parser().unwrap();
     let node = parser.parse(&mut lex).unwrap().unwrap();
     assert_eq!(node.to_string(), text);
     let dom = Dom::from_node(node).unwrap();
 
-    let ref_dom = Dom::Doc {
+    let ref_dom = Rc::new(Dom::Doc {
         doc_type: None,
-        root_elements: vec![Dom::Tag {
+        root_elements: vec![Rc::new(Dom::Tag {
             tag_name: "input".to_string(),
             attrs: vec![Attribute {
                 key: "disabled".to_string(),
                 value: None,
             }],
             tag_children: vec![],
-        }],
-    };
+            parent: RefCell::new(Weak::new()),
+        })],
+    });
 
     assert_eq!(dom, ref_dom);
 }
@@ -115,24 +138,23 @@ fn test_html4() {
 
     let mut lex = Lex::new(text.to_string());
 
-    let parser = new_parser().unwrap();
+    let parser = new_html_parser().unwrap();
     let node = parser.parse(&mut lex).unwrap().unwrap();
     assert_eq!(node.to_string(), text);
     let dom = Dom::from_node(node).unwrap();
 
-    let ref_dom = Dom::Doc {
+    let ref_dom = Rc::new(Dom::Doc {
         doc_type: None,
-        root_elements: vec![Dom::Tag {
+        root_elements: vec![Rc::new(Dom::Tag {
             tag_name: "input".to_string(),
             attrs: vec![Attribute {
                 key: "value".to_string(),
                 value: Some("yes".to_string()),
             }],
-            tag_children: vec![Dom::Text {
-                text: "".to_string(),
-            }],
-        }],
-    };
+            tag_children: vec![],
+            parent: RefCell::new(Weak::new()),
+        })],
+    });
 
     assert_eq!(dom, ref_dom);
 }
@@ -143,22 +165,23 @@ fn test_html5() {
 
     let mut lex = Lex::new(text.to_string());
 
-    let parser = new_parser().unwrap();
+    let parser = new_html_parser().unwrap();
     let node = parser.parse(&mut lex).unwrap().unwrap();
     assert_eq!(node.to_string(), text);
     let dom = Dom::from_node(node).unwrap();
 
-    let ref_dom = Dom::Doc {
+    let ref_dom = Rc::new(Dom::Doc {
         doc_type: None,
-        root_elements: vec![Dom::Tag {
+        root_elements: vec![Rc::new(Dom::Tag {
             tag_name: "input".to_string(),
             attrs: vec![Attribute {
                 key: "type".to_string(),
                 value: Some("'checkbox'".to_string()),
             }],
             tag_children: vec![],
-        }],
-    };
+            parent: RefCell::new(Weak::new()),
+        })],
+    });
 
     assert_eq!(dom, ref_dom);
 }
@@ -169,22 +192,23 @@ fn test_html6() {
 
     let mut lex = Lex::new(text.to_string());
 
-    let parser = new_parser().unwrap();
+    let parser = new_html_parser().unwrap();
     let node = parser.parse(&mut lex).unwrap().unwrap();
     assert_eq!(node.to_string(), text);
     let dom = Dom::from_node(node).unwrap();
 
-    let ref_dom = Dom::Doc {
+    let ref_dom = Rc::new(Dom::Doc {
         doc_type: None,
-        root_elements: vec![Dom::Tag {
+        root_elements: vec![Rc::new(Dom::Tag {
             tag_name: "input".to_string(),
             attrs: vec![Attribute {
                 key: "name".to_string(),
                 value: Some(r#""be evil""#.to_string()),
             }],
             tag_children: vec![],
-        }],
-    };
+            parent: RefCell::new(Weak::new()),
+        })],
+    });
 
     assert_eq!(dom, ref_dom);
 }

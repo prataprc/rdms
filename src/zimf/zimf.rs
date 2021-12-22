@@ -7,11 +7,10 @@ use std::{
     io::{self, Read, Seek},
     path, result,
     str::FromStr,
-    sync::mpsc,
-    sync::Arc,
+    sync::{mpsc, Arc},
 };
 
-use crate::{zimf::workers, Error, Result};
+use crate::{util, zimf::workers, Error, Result};
 
 // TODO: Metadata
 
@@ -144,7 +143,7 @@ pub struct Zimf {
     pub clusters: Vec<Cluster>,
 
     index_cluster: BTreeMap<u32, Vec<Arc<Entry>>>,
-    workers: workers::Workers,
+    pool: util::thread::Pool<workers::Req, workers::Res, Result<()>>,
 }
 
 impl Zimf {
@@ -162,7 +161,7 @@ impl Zimf {
             loc.as_os_str().to_os_string()
         };
 
-        let workers = workers::Workers::new_pool(loc.clone(), pool_size)?;
+        let pool = workers::new_pool(loc.clone(), pool_size);
 
         let header: Header = {
             let mut buf: Vec<u8> = vec![0; 80];
@@ -240,7 +239,7 @@ impl Zimf {
             let (tx, rx) = mpsc::channel();
             for (_num, off) in cluster_offsets.into_iter().enumerate() {
                 // println!("cluster num:{} off:{}", _num, off);
-                workers.read_cluster_header(off, tx.clone())?;
+                workers::read_cluster_header(&pool, off, tx.clone())?;
             }
             mem::drop(tx);
 
@@ -268,7 +267,7 @@ impl Zimf {
             clusters,
 
             index_cluster: BTreeMap::new(),
-            workers,
+            pool,
         };
 
         {
@@ -326,7 +325,7 @@ impl Zimf {
                 //    "get_entry cluster_num:{} blob_num:{} cluster_off:{}",
                 //    cluster_num, blob_num, cluster.off
                 //);
-                self.workers.read_cluster_blobs(cluster, tx)?;
+                workers::read_cluster_blobs(&self.pool, cluster, tx)?;
 
                 let blob = match err_at!(IPCFail, rx.recv())?? {
                     workers::Res::Blocks { blobs } => blobs[blob_num as usize].to_vec(),
@@ -344,7 +343,7 @@ impl Zimf {
         let cluster = self.clusters[cluster_num].clone();
         let (tx, rx) = mpsc::channel();
 
-        self.workers.read_cluster_blobs(cluster, tx)?;
+        workers::read_cluster_blobs(&self.pool, cluster, tx)?;
 
         let blobs = match err_at!(IPCFail, rx.recv())?? {
             workers::Res::Blocks { blobs } => blobs,

@@ -4,7 +4,11 @@
 //! expected to hold onto its own state, and handle all inter-thread communication
 //! via channels and message queues.
 
-use std::{mem, sync::mpsc, thread};
+use std::{
+    mem,
+    sync::{mpsc, Arc, Mutex},
+    thread,
+};
 
 use crate::{Error, Result};
 
@@ -14,7 +18,7 @@ use crate::{Error, Result};
 /// thread routines. To achieve this following requirements need to be satisfied:
 ///
 /// * The thread's main loop should handle _disconnect_ signal on its [Rx] channel.
-/// * Call `close_wait()` on the [Thread] instance.
+/// * Call `join()` on the [Thread] instance.
 pub struct Thread<Q, R = (), T = ()> {
     name: String,
     inner: Option<Inner<Q, R, T>>,
@@ -22,7 +26,7 @@ pub struct Thread<Q, R = (), T = ()> {
 
 struct Inner<Q, R, T> {
     handle: thread::JoinHandle<T>,
-    tx: Option<Tx<Q, R>>,
+    tx: Option<Arc<Mutex<Tx<Q, R>>>>,
 }
 
 impl<Q, R, T> Inner<Q, R, T> {
@@ -57,7 +61,7 @@ impl<Q, R, T> Thread<Q, R, T> {
         let (tx, rx) = mpsc::channel();
         let handle = thread::spawn(main_loop(rx));
 
-        let tx = Some(Tx::N(tx));
+        let tx = Some(Arc::new(Mutex::new(Tx::N(tx))));
         let th = Thread {
             name: name.to_string(),
             inner: Some(Inner { handle, tx }),
@@ -77,7 +81,7 @@ impl<Q, R, T> Thread<Q, R, T> {
         let (tx, rx) = mpsc::sync_channel(chan_size);
         let handle = thread::spawn(main_loop(rx));
 
-        let tx = Some(Tx::S(tx));
+        let tx = Some(Arc::new(Mutex::new(Tx::S(tx))));
         let th = Thread {
             name: name.to_string(),
             inner: Some(Inner { handle, tx }),
@@ -104,7 +108,7 @@ impl<Q, R, T> Thread<Q, R, T> {
     /// Return a clone of tx channel.
     pub fn to_tx(&self) -> Tx<Q, R> {
         match self.inner.as_ref() {
-            Some(inner) => inner.tx.as_ref().unwrap().clone(),
+            Some(inner) => inner.tx.as_ref().unwrap().lock().unwrap().clone(),
             None => unreachable!(),
         }
     }
@@ -153,3 +157,81 @@ impl<Q, R> Tx<Q, R> {
 ///
 /// Refer to [Thread::new] for details.
 pub type Rx<Q, R = ()> = mpsc::Receiver<(Q, Option<mpsc::Sender<R>>)>;
+
+pub struct Pool<Q, R = (), T = ()> {
+    name: String,
+    threads: Vec<Thread<Q, R, T>>,
+}
+
+impl<Q, R, T> Pool<Q, R, T> {
+    pub fn new<F, N>(name: &str, pool_size: usize, main_loop: F) -> Pool<Q, R, T>
+    where
+        F: 'static + FnOnce(Rx<Q, R>) -> N + Send + Clone,
+        N: 'static + Send + FnOnce() -> T,
+        T: 'static + Send,
+    {
+        let mut threads = vec![];
+        for i in 0..pool_size {
+            let name = format!("{}-{}", name, i);
+            threads.push(Thread::new(&name, main_loop.clone()));
+        }
+
+        Pool {
+            name: name.to_string(),
+            threads,
+        }
+    }
+
+    pub fn new_sync<F, N>(
+        name: &str,
+        pool_size: usize,
+        chan_size: usize,
+        main_loop: F,
+    ) -> Pool<Q, R, T>
+    where
+        F: 'static + FnOnce(Rx<Q, R>) -> N + Send + Clone,
+        N: 'static + Send + FnOnce() -> T,
+        T: 'static + Send,
+    {
+        let mut threads = vec![];
+        for i in 0..pool_size {
+            let name = format!("{}-{}", name, i);
+            threads.push(Thread::new_sync(&name, chan_size, main_loop.clone()));
+        }
+
+        Pool {
+            name: name.to_string(),
+            threads,
+        }
+    }
+
+    pub fn to_name(&self) -> String {
+        self.name.to_string()
+    }
+
+    pub fn close_wait(self) -> Result<Vec<T>> {
+        let mut results = vec![];
+        for th in self.threads.into_iter() {
+            results.push(th.join()?)
+        }
+        Ok(results)
+    }
+}
+
+impl<Q, R, T> Pool<Q, R, T> {
+    /// Post a message to thread and don't wait for response.
+    pub fn post(&self, msg: Q) -> Result<()> {
+        let n: usize = rand::random::<usize>() % self.threads.len();
+        let th: &Thread<Q, R, T> = &self.threads[n];
+
+        th.to_tx().post(msg)
+    }
+
+    /// Send a request message to thread and wait for a response.
+    pub fn request(&self, request: Q) -> Result<R> {
+        let n: usize = rand::random::<usize>() % self.threads.len();
+        let th: &Thread<Q, R, T> = &self.threads[n];
+
+        th.to_tx().request(request)
+    }
+}

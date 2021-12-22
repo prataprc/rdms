@@ -16,7 +16,7 @@ pub mod thread;
 
 pub use cmdline::parse_os_args;
 pub use spinlock::Spinlock;
-pub use thread::Thread;
+pub use thread::{Pool, Thread};
 
 #[macro_export]
 macro_rules! check_remaining {

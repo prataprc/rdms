@@ -1,25 +1,6 @@
 use crate::parsec::Node;
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum Dom {
-    Doc {
-        doc_type: Option<Doctype>,
-        root_elements: Vec<Dom>,
-    },
-    Tag {
-        tag_name: String,
-        attrs: Vec<Attribute>,
-        tag_children: Vec<Dom>,
-    },
-    Comment {
-        text: String,
-    },
-    Text {
-        text: String,
-    },
-}
-
-#[derive(Clone, Debug, PartialEq)]
 pub struct Doctype {
     pub legacy: Option<String>,
 }
@@ -45,6 +26,14 @@ impl Doctype {
             },
         };
         val
+    }
+
+    fn pretty_string(&self, _oneline: bool) -> String {
+        match &self.legacy {
+            Some(legacy) if legacy.len() < 20 => format!("<Doctype {}>", legacy),
+            Some(legacy) => format!("<Doctype {}..>", &legacy[..20]),
+            None => format!("<Doctype>"),
+        }
     }
 }
 
@@ -102,166 +91,234 @@ impl Attribute {
         };
         (self.key, value)
     }
+
+    fn pretty_string(&self, _oneline: bool) -> String {
+        match &self.value {
+            Some(value) if value.len() < 20 => format!("{}={}", self.key, value),
+            Some(value) => format!("{}={}..", self.key, &value[..20]),
+            None => format!("{}", self.key),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Dom {
+    Doc {
+        doc_type: Option<Doctype>,
+        root_elements: Vec<Dom>,
+    },
+    Tag {
+        tag_name: String,
+        attrs: Vec<Attribute>,
+        tag_children: Vec<Dom>,
+    },
+    TagEnd {
+        tag_name: String,
+    },
+    Text {
+        text: String,
+    },
+    Comment {
+        text: String,
+    },
 }
 
 impl Dom {
     pub fn from_node(node: Node) -> Option<Dom> {
         #[cfg(feature = "debug")]
         println!("Dom for node {}", node.to_name());
+        #[cfg(feature = "debug")]
+        assert_eq!(node.to_name().as_str(), "ROOT_ITEMS");
 
+        let mut items = node.into_children();
+
+        let doc_type = match items.len() {
+            0 => None,
+            _ if items[0].to_name().as_str() == "DOC_TYPE" => {
+                Some(Doctype::from_node(items.remove(0)))
+            }
+            _ => None,
+        };
+
+        let mut root_elements = vec![];
+        while items.len() > 0 {
+            match Dom::build_dom(&mut items) {
+                Some(doms) => root_elements.extend_from_slice(&doms),
+                None => (),
+            }
+        }
+        let dom = Dom::Doc {
+            doc_type,
+            root_elements,
+        };
+        Some(dom)
+    }
+
+    fn build_dom(items: &mut Vec<Node>) -> Option<Vec<Dom>> {
+        #[cfg(feature = "debug")]
+        println!(
+            "build_dom: items:{} {:?}",
+            items.len(),
+            items.first().map(|n| n.to_name())
+        );
+
+        let node = items.remove(0);
         match node.to_name().as_str() {
-            "DOC" => {
+            "TAG_INLINE" => {
                 let mut children = node.into_children();
-                let doc_type = children.remove(0).into_child().map(Doctype::from_node);
-
-                let dom = Dom::Doc {
-                    doc_type,
-                    root_elements: children
-                        .remove(0)
+                let tag_name = children.remove(1).into_text();
+                let attrs: Vec<Attribute> = match children.remove(1).into_child() {
+                    Some(node) => node
                         .into_children()
                         .into_iter()
-                        .filter_map(|cs| Dom::from_node(cs.into_children().remove(1)))
+                        .filter_map(|n| Some(Attribute::from_node(n)))
                         .collect(),
+                    None => vec![],
                 };
-                Some(dom)
-            }
-            "ELEMENT_INLINE" => {
-                let dom = Dom::Tag {
-                    tag_name: node.into_children().remove(1).into_text(),
-                    attrs: Vec::default(),
-                    tag_children: Vec::default(),
-                };
-                Some(dom)
-            }
-            "ELEMENT_INLINE_TAG_ATTRS" => {
-                let mut children = node.into_children();
-
-                let tag_name = children.remove(1).into_text();
-                let attrs: Vec<Attribute> = children
-                    .remove(1)
-                    .into_children()
-                    .into_iter()
-                    .filter_map(|n| Some(Attribute::from_node(n)))
-                    .collect();
 
                 let dom = Dom::Tag {
                     tag_name,
                     attrs,
                     tag_children: Vec::default(),
                 };
-                Some(dom)
+                Some(vec![dom])
             }
-            "ELEMENT" => {
-                let mut children = node.into_children();
-                let mut tag = Dom::from_node(children.remove(0))?;
-
-                let mut tag_children: Vec<Dom> = children
-                    .remove(0)
-                    .into_children()
-                    .into_iter()
-                    .filter_map(|n| {
-                        Some(n.into_children().into_iter().filter_map(Dom::from_node))
-                    })
-                    .flatten()
-                    .collect();
-
-                Dom::from_node(children.remove(0)).map(|n| tag_children.push(n));
-
-                let end_tag = Dom::from_node(children.remove(0)).unwrap();
-
-                assert_eq!(end_tag.to_tag_name(), tag.to_tag_name());
-
-                tag.set_tag_chilren(tag_children);
-                Some(tag)
-            }
-            "START_TAG" => {
-                let dom = Dom::Tag {
-                    tag_name: node.into_children().remove(1).into_text(),
-                    attrs: Vec::default(),
-                    tag_children: Vec::default(),
-                };
-                Some(dom)
-            }
-            "START_TAG_ATTRS" => {
+            "TAG_START" => {
                 let mut children = node.into_children();
                 let tag_name = children.remove(1).into_text();
-                let attrs: Vec<Attribute> = children
-                    .remove(1)
-                    .into_children()
-                    .into_iter()
-                    .filter_map(|n| Some(Attribute::from_node(n)))
-                    .collect();
+                let attrs: Vec<Attribute> = match children.remove(1).into_child() {
+                    Some(node) => node
+                        .into_children()
+                        .into_iter()
+                        .filter_map(|n| Some(Attribute::from_node(n)))
+                        .collect(),
+                    None => vec![],
+                };
+
+                let mut tag_children = vec![];
+                let doms = Dom::build_children(&tag_name, items, &mut tag_children);
+                #[cfg(feature = "debug")]
+                println!(
+                    "build_children: tag:{} children:{}, doms:{:?}",
+                    tag_name,
+                    tag_children.len(),
+                    doms.as_ref().map(|x| x.len())
+                );
 
                 let dom = Dom::Tag {
                     tag_name,
                     attrs,
-                    tag_children: Vec::default(),
+                    tag_children,
                 };
-                Some(dom)
+
+                match doms {
+                    Some(mut doms) => {
+                        doms.insert(0, dom);
+                        Some(doms)
+                    }
+                    None => Some(vec![dom]),
+                }
             }
-            "END_TAG" => {
-                let dom = Dom::Tag {
-                    tag_name: node.into_children().remove(1).into_text(),
-                    attrs: Vec::default(),
-                    tag_children: Vec::default(),
+            "TAG_END" => {
+                let tag_name = node.into_children().remove(1).into_text();
+                let dom = Dom::TagEnd { tag_name };
+                Some(vec![dom])
+            }
+            "TEXT" => {
+                let dom = Dom::Text {
+                    text: node.into_text(),
                 };
-                Some(dom)
+                Some(vec![dom])
             }
-            "TEXT" => node.into_child().map(|n| Dom::Text {
-                text: n.into_text(),
-            }),
             "COMMENT" => {
                 let dom = Dom::Comment {
                     text: node.into_text(),
                 };
-                Some(dom)
+                Some(vec![dom])
             }
+            "CDATA" => unimplemented!(),
             name => panic!("{}", name),
         }
     }
 
-    fn to_tag_name(&self) -> String {
-        match self {
-            Dom::Tag { tag_name, .. } => tag_name.to_string(),
-            _ => unreachable!(),
+    fn build_children(
+        tname: &str,
+        items: &mut Vec<Node>,
+        children: &mut Vec<Dom>,
+    ) -> Option<Vec<Dom>> {
+        #[cfg(feature = "debug")]
+        println!("build_children-enter: tag:{} items:{}", tname, items.len(),);
+
+        while items.len() > 0 {
+            if let Some(doms) = Dom::build_dom(items) {
+                let mut iter = doms.into_iter();
+                loop {
+                    match iter.next() {
+                        Some(Dom::TagEnd { tag_name }) if &tag_name == tname => {
+                            return None;
+                        }
+                        Some(dom @ Dom::TagEnd { .. }) => {
+                            children.push(dom);
+                            return Some(children.drain(..).collect());
+                        }
+                        Some(dom) => children.push(dom),
+                        None => break,
+                    }
+                }
+            }
         }
+
+        let doms: Vec<Dom> = children.drain(..).collect();
+        Some(doms)
     }
 
-    fn set_tag_chilren(&mut self, children: Vec<Dom>) {
-        match self {
-            Dom::Tag { tag_children, .. } => *tag_children = children,
-            _ => unreachable!(),
-        }
-    }
-
-    pub fn pretty_print(&self, prefix: &str) {
+    pub fn pretty_print(&self, prefix: &str, oneline: bool) {
         match self {
             Dom::Doc {
                 doc_type,
                 root_elements,
             } => {
                 match doc_type {
-                    Some(dt) => println!("{}Doctype {}", prefix, dt.to_string()),
+                    Some(dt) => println!("{}{}", prefix, dt.pretty_string(oneline)),
                     None => (),
                 }
+                let prefix = prefix.to_string() + "  ";
                 root_elements
                     .iter()
-                    .for_each(|dom| dom.pretty_print(prefix));
+                    .for_each(|dom| dom.pretty_print(&prefix, oneline));
             }
             Dom::Tag {
                 tag_name,
                 attrs,
                 tag_children,
             } => {
-                let ss: Vec<String> = attrs.iter().map(|a| a.to_string()).collect();
-                println!("{}<{} {}>", prefix, tag_name, ss.join(" "));
+                if attrs.is_empty() {
+                    println!("{}<{}>", prefix, tag_name);
+                } else {
+                    let attrs = attrs
+                        .iter()
+                        .map(|a| a.pretty_string(oneline))
+                        .collect::<Vec<String>>()
+                        .join(" ");
+                    println!("{}<{} {}>", prefix, tag_name, attrs);
+                };
                 let prefix = prefix.to_string() + "  ";
-                tag_children.iter().for_each(|t| t.pretty_print(&prefix));
+                tag_children
+                    .iter()
+                    .for_each(|t| t.pretty_print(&prefix, oneline));
             }
-            Dom::Text { text } if text.len() < 20 => println!("{}{}", prefix, text),
-            Dom::Text { text } => println!("{}{}", prefix, &text[..20]),
-            Dom::Comment { text } if text.len() < 20 => println!("{}{}", prefix, text),
-            Dom::Comment { text } => println!("{}{}", prefix, &text[..20]),
+            Dom::Text { text } if text.trim().is_empty() => (),
+            Dom::Text { text } => match text.lines().next() {
+                Some(text) if text.len() < 20 => println!("{}{}", prefix, text),
+                Some(text) => println!("{}{}", prefix, &text[..20]),
+                None => (),
+            },
+            Dom::Comment { text } => match text.lines().next() {
+                Some(text) if text.len() < 20 => println!("{}<Comment {}>", prefix, text),
+                Some(text) => println!("{}<Comment {}>", prefix, &text[..20]),
+                None => println!("{}<Comment>", prefix),
+            },
+            Dom::TagEnd { tag_name } => println!("{}</{}>", prefix, tag_name),
         }
     }
 }

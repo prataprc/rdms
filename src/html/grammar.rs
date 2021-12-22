@@ -20,23 +20,35 @@ pub fn prepare_text(text: String) -> String {
         .map(|ch| ch.len_utf8())
         .sum();
     let b = text.len() - b;
-    text[a..=b].to_string()
+    text[a..b].to_string()
 }
 
 pub fn new_parser() -> Result<Rc<Parsec<html::Parsec>>> {
-    let p = and!(
-        "DOC",
-        maybe!(parse_doc_type()?),
-        kleene!(
-            "ROOT_ELEMENTS",
-            and!("ROOT_ELEMENT", maybe_ws!(), parse_element()?)
-        )
-    );
+    let p = kleene!("ROOT_ITEMS", parse_item()?);
 
     Ok(p)
 }
 
-fn parse_doc_type() -> Result<Rc<Parsec<html::Parsec>>> {
+fn parse_item() -> Result<Rc<Parsec<html::Parsec>>> {
+    let text = re!("TEXT", r"[^<]+");
+    let comment = Parsec::with_parser("COMMENT", html::Parsec::new_comment("COMMENT")?)?;
+    let cdata = Parsec::with_parser("CDATA", html::Parsec::new_cdata("CDATA")?)?;
+
+    let item = or!(
+        "OR_ITEM",
+        text,
+        tag_inline()?,
+        tag_start()?,
+        tag_end()?,
+        doc_type()?,
+        comment,
+        cdata
+    );
+
+    Ok(item)
+}
+
+fn doc_type() -> Result<Rc<Parsec<html::Parsec>>> {
     let p = and!(
         "DOC_TYPE",
         atom!("DOCTYPE_OPEN", "<!DOCTYPE"),
@@ -50,96 +62,45 @@ fn parse_doc_type() -> Result<Rc<Parsec<html::Parsec>>> {
     Ok(p)
 }
 
-fn parse_element() -> Result<Rc<Parsec<html::Parsec>>> {
-    let maybe_text1 = maybe!(re!("TEXT", r"[^<]*"));
-    let maybe_text2 = maybe!(re!("TEXT", r"[^<]*"));
-
-    let element_ref = Parsec::new_ref()?;
-
-    let element_multi = and!(
-        "ELEMENT",
-        start_tag_attrs()?,
-        kleene!(
-            "TEXT_ELEMENTS",
-            and!("TEXT_ELEMENT", maybe_text1, element_ref.clone())
-        ),
-        maybe_text2,
-        end_tag()?
-    );
-
-    let element_comment =
-        Parsec::with_parser("COMMENT", html::Parsec::new_comment("COMMENT")?)?;
-    let element_cdata = Parsec::with_parser("CDATA", html::Parsec::new_cdata("CDATA")?)?;
-
-    let element = or!(
-        "OR_ELEMENT",
-        element_inline()?,
-        element_inline_tag_attrs()?,
-        element_multi,
-        element_comment,
-        element_cdata
-    );
-
-    element_ref.update_ref(element.clone());
-
-    Ok(element)
-}
-
-fn element_inline() -> Result<Rc<Parsec<html::Parsec>>> {
-    let p = and!(
-        "ELEMENT_INLINE",
-        atom!("TAG_OPEN", "<"),
-        re!("TAG_NAME", "[a-zA-Z][a-zA-Z0-9]*"),
-        atom!("TAG_CLOSE", "/>")
-    );
-
-    Ok(p)
-}
-
-fn element_inline_tag_attrs() -> Result<Rc<Parsec<html::Parsec>>> {
+fn tag_inline() -> Result<Rc<Parsec<html::Parsec>>> {
     let attrs = kleene!(
         "ATTRIBUTES",
         and!("WS_ATTRIBUTE", maybe_ws!(), attribute()?)
     );
 
     let p = and!(
-        "ELEMENT_INLINE_TAG_ATTRS",
+        "TAG_INLINE",
         atom!("TAG_OPEN", "<"),
         re!("TAG_NAME", "[a-zA-Z][a-zA-Z0-9]*"),
-        attrs,
+        maybe!(attrs),
+        maybe_ws!(),
         atom!("TAG_CLOSE", "/>")
     );
 
     Ok(p)
 }
 
-fn start_tag_attrs() -> Result<Rc<Parsec<html::Parsec>>> {
-    let tag = and!(
-        "START_TAG",
-        atom!("TAG_OPEN", "<"),
-        re!("TAG_NAME", "[a-zA-Z][a-zA-Z0-9]*"),
-        atom!("TAG_CLOSE", ">")
-    );
-
+fn tag_start() -> Result<Rc<Parsec<html::Parsec>>> {
     let attrs = kleene!(
         "ATTRIBUTES",
         and!("WS_ATTRIBUTE", maybe_ws!(), attribute()?)
     );
 
-    let tag_attrs = and!(
-        "START_TAG_ATTRS",
+    let p = and!(
+        "TAG_START",
         atom!("TAG_OPEN", "<"),
         re!("TAG_NAME", "[a-zA-Z][a-zA-Z0-9]*"),
-        attrs,
+        maybe!(attrs),
+        maybe_ws!(),
         atom!("TAG_CLOSE", ">")
     );
 
-    Ok(or!("OR_TAG", tag, tag_attrs))
+    Ok(p)
 }
 
-fn end_tag() -> Result<Rc<Parsec<html::Parsec>>> {
+fn tag_end() -> Result<Rc<Parsec<html::Parsec>>> {
     let p = and!(
-        "END_TAG",
+        "TAG_END",
         atom!("TAG_OPEN", "</"),
         re!("TAG_NAME", "[a-zA-Z][a-zA-Z0-9]*"),
         maybe_ws!(),

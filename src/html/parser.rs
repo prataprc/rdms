@@ -53,7 +53,7 @@ impl Parser for Parsec {
         let text = lex.as_str();
         let text = match self {
             Parsec::AttrValue { .. } => {
-                let bads = ['\'', '"', '=', '<', '>', '`'];
+                let bads = ['\'', '"', '<', '>', '`'];
                 let quotes = ['"', '\''];
                 let mut q = '"';
                 let mut iter = text.chars().enumerate();
@@ -65,10 +65,15 @@ impl Parser for Parsec {
                             let t = String::from_iter(text.chars().take(n + 1));
                             break Some(t);
                         }
-                        Some((_, ch)) if bads.contains(&ch) => err_at!(
-                            InvalidInput,
-                            msg: "bad attribute value {}", lex.to_position()
-                        )?,
+                        Some((_, ch)) if bads.contains(&ch) => {
+                            #[cfg(feature = "debug")]
+                            println!("Contains bad attribute char {:?}", ch);
+
+                            err_at!(
+                                InvalidInput,
+                                msg: "bad attribute value {}", lex.to_position()
+                            )?
+                        }
                         Some((_, _)) => (),
                         None => err_at!(
                             InvalidInput,

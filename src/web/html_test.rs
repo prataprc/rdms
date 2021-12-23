@@ -3,8 +3,8 @@ use std::{
     rc::{Rc, Weak},
 };
 
-use crate::html::{Doctype, Dom};
 use crate::parsec::Lex;
+use crate::web::html::{Doctype, Dom};
 
 use super::*;
 
@@ -14,7 +14,7 @@ fn test_html1() {
 
     let mut lex = Lex::new(text.to_string());
 
-    let parser = new_html_parser().unwrap();
+    let parser = new_parser().unwrap();
     let node = parser.parse(&mut lex).unwrap().unwrap();
     assert_eq!(node.to_string(), text);
     let dom = Dom::from_node(node).unwrap();
@@ -38,7 +38,7 @@ const TEST_HTML2_TEXT: &'static str = r#"
 fn test_html2() {
     let mut lex = Lex::new(TEST_HTML2_TEXT.to_string());
 
-    let parser = new_html_parser().unwrap();
+    let parser = new_parser().unwrap();
     let node = parser.parse(&mut lex).unwrap().unwrap();
     assert_eq!(node.to_string(), TEST_HTML2_TEXT);
     let dom = Dom::from_node(node).unwrap();
@@ -111,7 +111,7 @@ fn test_html3() {
 
     let mut lex = Lex::new(text.to_string());
 
-    let parser = new_html_parser().unwrap();
+    let parser = new_parser().unwrap();
     let node = parser.parse(&mut lex).unwrap().unwrap();
     assert_eq!(node.to_string(), text);
     let dom = Dom::from_node(node).unwrap();
@@ -138,7 +138,7 @@ fn test_html4() {
 
     let mut lex = Lex::new(text.to_string());
 
-    let parser = new_html_parser().unwrap();
+    let parser = new_parser().unwrap();
     let node = parser.parse(&mut lex).unwrap().unwrap();
     assert_eq!(node.to_string(), text);
     let dom = Dom::from_node(node).unwrap();
@@ -165,7 +165,7 @@ fn test_html5() {
 
     let mut lex = Lex::new(text.to_string());
 
-    let parser = new_html_parser().unwrap();
+    let parser = new_parser().unwrap();
     let node = parser.parse(&mut lex).unwrap().unwrap();
     assert_eq!(node.to_string(), text);
     let dom = Dom::from_node(node).unwrap();
@@ -192,7 +192,7 @@ fn test_html6() {
 
     let mut lex = Lex::new(text.to_string());
 
-    let parser = new_html_parser().unwrap();
+    let parser = new_parser().unwrap();
     let node = parser.parse(&mut lex).unwrap().unwrap();
     assert_eq!(node.to_string(), text);
     let dom = Dom::from_node(node).unwrap();

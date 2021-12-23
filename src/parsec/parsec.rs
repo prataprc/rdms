@@ -13,14 +13,14 @@ use crate::{
 #[macro_export]
 macro_rules! kleene {
     ($parser:expr) => {{
-        let p = Parsec::Kleene {
+        let p = crate::parsec::Parsec::Kleene {
             name: $parser.to_name(),
             parser: $parser,
         };
         Rc::new(p)
     }};
     ($name:expr, $parser:expr) => {{
-        let p = Parsec::Kleene {
+        let p = crate::parsec::Parsec::Kleene {
             name: $name.to_string(),
             parser: $parser,
         };
@@ -31,14 +31,14 @@ macro_rules! kleene {
 #[macro_export]
 macro_rules! many {
     ($parser:expr) => {{
-        let p = Parsec::Many {
+        let p = crate::parsec::Parsec::Many {
             name: $parser.to_name(),
             parser: $parser,
         };
         Rc::new(p)
     }};
     ($name:expr, $parser:expr) => {{
-        let p = Parsec::Many {
+        let p = crate::parsec::Parsec::Many {
             name: $name.to_string(),
             parser: $parser,
         };
@@ -49,7 +49,7 @@ macro_rules! many {
 #[macro_export]
 macro_rules! maybe {
     ($parser:expr) => {{
-        let p = Parsec::Maybe { parser: $parser };
+        let p = crate::parsec::Parsec::Maybe { parser: $parser };
         Rc::new(p)
     }};
 }
@@ -57,7 +57,7 @@ macro_rules! maybe {
 #[macro_export]
 macro_rules! and {
     ($name:expr, $($parser:expr),+) => {{
-        let p = Parsec::And {
+        let p = crate::parsec::Parsec::And {
             name: $name.to_string(),
             parsers: vec![ $($parser),+ ],
         };
@@ -68,7 +68,7 @@ macro_rules! and {
 #[macro_export]
 macro_rules! or {
     ($name:expr, $($parser:expr),+) => {{
-        let p = Parsec::Or {
+        let p = crate::parsec::Parsec::Or {
             name: $name.to_string(),
             parsers: vec![ $($parser),+ ],
         };
@@ -79,7 +79,7 @@ macro_rules! or {
 #[macro_export]
 macro_rules! aas {
     ($name:expr, $parser:expr) => {{
-        let p = Parsec::P {
+        let p = crate::parsec::Parsec::P {
             name: $name.to_string(),
             parser: $parser,
         };
@@ -90,27 +90,27 @@ macro_rules! aas {
 #[macro_export]
 macro_rules! maybe_ws {
     () => {
-        maybe!(Parsec::new_regx("WS", r#"\s+"#.to_string()).unwrap())
+        maybe!(crate::parsec::Parsec::new_regx("WS", r#"\s+"#.to_string()).unwrap())
     };
 }
 
 #[macro_export]
 macro_rules! atom {
     ($s:expr) => {
-        Parsec::new_atom($s, $s.to_string()).unwrap()
+        crate::parsec::Parsec::new_atom($s, $s.to_string()).unwrap()
     };
     ($n:expr, $s:expr) => {
-        Parsec::new_atom($n, $s.to_string()).unwrap()
+        crate::parsec::Parsec::new_atom($n, $s.to_string()).unwrap()
     };
 }
 
 #[macro_export]
 macro_rules! re {
     ($s:expr) => {
-        Parsec::new_regx($s, $s.to_string()).unwrap()
+        crate::parsec::Parsec::new_regx($s, $s.to_string()).unwrap()
     };
     ($n:expr, $s:expr) => {
-        Parsec::new_regx($n, $s.to_string()).unwrap()
+        crate::parsec::Parsec::new_regx($n, $s.to_string()).unwrap()
     };
 }
 

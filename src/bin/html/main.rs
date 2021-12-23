@@ -2,7 +2,7 @@ use structopt::StructOpt;
 
 use std::{ffi, fs};
 
-use rdms::{err_at, html, parsec, Error, Result};
+use rdms::{err_at, parsec, web::html, Error, Result};
 
 pub const TEMP_DIR_CRIO: &str = "crio";
 
@@ -41,7 +41,7 @@ fn main() {
     let opts = Opt::from_iter(std::env::args_os());
 
     let res = if opts.parsec {
-        let parser = html::new_html_parser().unwrap();
+        let parser = html::new_parser().unwrap();
         parser.pretty_print("");
         Ok(())
     } else if let Some(file) = opts.file.clone() {
@@ -64,7 +64,7 @@ fn dom_list(file: ffi::OsString, _opts: Opt) -> Result<()> {
     };
     let mut lex = parsec::Lex::new(text.to_string());
 
-    let parser = html::new_html_parser().unwrap();
+    let parser = html::new_parser().unwrap();
     let node = html::parse_full(&parser, &mut lex)?.unwrap();
 
     let dom = match html::Dom::from_node(node) {

@@ -1,9 +1,271 @@
 use std::{
     cell::RefCell,
+    iter::FromIterator,
     rc::{Rc, Weak},
 };
 
-use crate::parsec::Node;
+use crate::{and, atom, kleene, maybe, maybe_ws, or, re};
+use crate::{
+    parsec::{self, Lexer, Node, Parser},
+    Error, Result,
+};
+
+pub enum Parsec {
+    AttrValue { name: String },
+    Comment { name: String },
+    Cdata { name: String },
+}
+
+impl Parsec {
+    pub fn new_attribute_value(name: &str) -> Result<Self> {
+        let p = Parsec::AttrValue {
+            name: name.to_string(),
+        };
+
+        Ok(p)
+    }
+
+    pub fn new_cdata(name: &str) -> Result<Self> {
+        let p = Parsec::Cdata {
+            name: name.to_string(),
+        };
+
+        Ok(p)
+    }
+
+    pub fn new_comment(name: &str) -> Result<Self> {
+        let p = Parsec::Comment {
+            name: name.to_string(),
+        };
+
+        Ok(p)
+    }
+}
+
+impl Parser for Parsec {
+    fn to_name(&self) -> String {
+        match self {
+            Parsec::AttrValue { name } => name.clone(),
+            Parsec::Comment { name } => name.clone(),
+            Parsec::Cdata { name } => name.clone(),
+        }
+    }
+
+    fn parse<L>(&self, lex: &mut L) -> Result<Option<Node>>
+    where
+        L: Lexer,
+    {
+        let text = lex.as_str();
+        let text = match self {
+            Parsec::AttrValue { .. } => {
+                let bads = ['\'', '"', '<', '>', '`'];
+                let quotes = ['"', '\''];
+                let mut q = '"';
+                let mut iter = text.chars().enumerate();
+                loop {
+                    match iter.next() {
+                        Some((0, ch)) if quotes.contains(&ch) => q = ch,
+                        Some((0, _)) => break None,
+                        Some((n, ch)) if ch == q && n > 0 => {
+                            let t = String::from_iter(text.chars().take(n + 1));
+                            break Some(t);
+                        }
+                        Some((_, ch)) if bads.contains(&ch) => {
+                            #[cfg(feature = "debug")]
+                            println!("Contains bad attribute char {:?}", ch);
+
+                            err_at!(
+                                InvalidInput,
+                                msg: "bad attribute value {}", lex.to_position()
+                            )?
+                        }
+                        Some((_, _)) => (),
+                        None => err_at!(
+                            InvalidInput,
+                            msg: "unexpected EOF for attribute value {}", lex.to_position()
+                        )?,
+                    }
+                }
+            }
+            Parsec::Comment { .. } if text.len() <= 4 => None,
+            Parsec::Comment { .. } => {
+                // println!("comment *** {:?}", &text[..4]);
+                if &text[..4] == "<!--" {
+                    let mut end = "";
+                    let mut iter = text.chars().enumerate();
+                    loop {
+                        end = match iter.next() {
+                            Some((_, '-')) if end == "" => "-",
+                            Some((_, '-')) if end == "-" => "--",
+                            Some((n, '>')) if end == "--" => {
+                                break Some(String::from_iter(text.chars().take(n + 1)));
+                            }
+                            Some((_, _)) => "",
+                            None => err_at!(
+                                InvalidInput,
+                                msg: "unexpected EOF for attribute value {}",
+                                lex.to_position()
+                            )?,
+                        }
+                    }
+                } else {
+                    None
+                }
+            }
+            Parsec::Cdata { .. } if text.len() <= 9 => None,
+            Parsec::Cdata { .. } => {
+                if &text[..9] == "<![CDATA[" {
+                    let mut end = "";
+                    let mut iter = text.chars().enumerate();
+                    loop {
+                        end = match iter.next() {
+                            Some((_, ']')) if end == "" => "]",
+                            Some((_, ']')) if end == "]" => "]]",
+                            Some((n, '>')) if end == "]]" => {
+                                break Some(String::from_iter(text.chars().take(n)));
+                            }
+                            Some((_, _)) => "",
+                            None => err_at!(
+                                InvalidInput,
+                                msg: "unexpected EOF for attribute value {}",
+                                lex.to_position()
+                            )?,
+                        }
+                    }
+                } else {
+                    None
+                }
+            }
+        };
+
+        let node = text.map(|text| {
+            lex.move_cursor(text.len());
+            let node = Node::Token {
+                name: self.to_name(),
+                text,
+            };
+            node
+        });
+
+        Ok(node)
+    }
+}
+
+/**************** GRAMMAR ******************/
+
+pub fn new_parser() -> Result<Rc<parsec::Parsec<Parsec>>> {
+    let p = kleene!("ROOT_ITEMS", parse_item()?);
+
+    Ok(p)
+}
+
+fn parse_item() -> Result<Rc<parsec::Parsec<Parsec>>> {
+    let text = re!("TEXT", r"[^<]+");
+    let comment =
+        parsec::Parsec::with_parser("COMMENT", Parsec::new_comment("COMMENT")?)?;
+    let cdata = parsec::Parsec::with_parser("CDATA", Parsec::new_cdata("CDATA")?)?;
+
+    let item = or!(
+        "OR_ITEM",
+        text,
+        tag_inline()?,
+        tag_start()?,
+        tag_end()?,
+        doc_type()?,
+        comment,
+        cdata
+    );
+
+    Ok(item)
+}
+
+fn doc_type() -> Result<Rc<parsec::Parsec<Parsec>>> {
+    let p = and!(
+        "DOC_TYPE",
+        atom!("DOCTYPE_OPEN", "<!DOCTYPE"),
+        maybe_ws!(),
+        atom!("DOCTYPE_HTML", "html"),
+        maybe!(re!("DOCTYPE_TEXT", r"[^>\s]+")),
+        maybe_ws!(),
+        atom!("DOCTYPE_CLOSE", ">")
+    );
+
+    Ok(p)
+}
+
+fn tag_inline() -> Result<Rc<parsec::Parsec<Parsec>>> {
+    let attrs = kleene!(
+        "ATTRIBUTES",
+        and!("WS_ATTRIBUTE", maybe_ws!(), attribute()?)
+    );
+
+    let p = and!(
+        "TAG_INLINE",
+        atom!("TAG_OPEN", "<"),
+        re!("TAG_NAME", "[a-zA-Z][a-zA-Z0-9]*"),
+        maybe!(attrs),
+        maybe_ws!(),
+        atom!("TAG_CLOSE", "/>")
+    );
+
+    Ok(p)
+}
+
+fn tag_start() -> Result<Rc<parsec::Parsec<Parsec>>> {
+    let attrs = kleene!(
+        "ATTRIBUTES",
+        and!("WS_ATTRIBUTE", maybe_ws!(), attribute()?)
+    );
+
+    let p = and!(
+        "TAG_START",
+        atom!("TAG_OPEN", "<"),
+        re!("TAG_NAME", "[a-zA-Z][a-zA-Z0-9]*"),
+        maybe!(attrs),
+        maybe_ws!(),
+        atom!("TAG_CLOSE", ">")
+    );
+
+    Ok(p)
+}
+
+fn tag_end() -> Result<Rc<parsec::Parsec<Parsec>>> {
+    let p = and!(
+        "TAG_END",
+        atom!("TAG_OPEN", "</"),
+        re!("TAG_NAME", "[a-zA-Z][a-zA-Z0-9]*"),
+        maybe_ws!(),
+        atom!("TAG_CLOSE", ">")
+    );
+
+    Ok(p)
+}
+
+fn attribute() -> Result<Rc<parsec::Parsec<Parsec>>> {
+    let key = re!("ATTR_KEY_TOK", r"[^\s/>=]+");
+
+    let attr_value = or!(
+        "OR_ATTR_VALUE",
+        re!("ATTR_VALUE_TOK", r#"[^\s'"=<>`]+"#),
+        parsec::Parsec::with_parser(
+            "ATTR_VALUE_STR",
+            Parsec::new_attribute_value("HTML_ATTR_STR")?
+        )?
+    );
+
+    let key_value = and!(
+        "ATTR_KEY_VALUE",
+        key.clone(),
+        maybe_ws!(),
+        atom!("EQ", "="),
+        maybe_ws!(),
+        attr_value
+    );
+
+    Ok(or!("OR_ATTR", key_value, key))
+}
+
+/********************* DOM **********************/
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Doctype {
@@ -407,3 +669,40 @@ impl Dom {
         }
     }
 }
+
+pub fn parse<L>(parser: &parsec::Parsec<Parsec>, lex: &mut L) -> Result<Option<Node>>
+where
+    L: Lexer + Clone,
+{
+    match parser.parse(lex)? {
+        Some(node) => Ok(Some(node)),
+        None => {
+            let pos = lex.to_position();
+            let cur = lex.to_cursor();
+            err_at!(InvalidInput, msg: "parse failed at {} cursor:{}", pos, cur)
+        }
+    }
+}
+
+pub fn parse_full<L>(parser: &parsec::Parsec<Parsec>, lex: &mut L) -> Result<Option<Node>>
+where
+    L: Lexer + Clone,
+{
+    match parser.parse(lex)? {
+        Some(node) if lex.as_str().len() == 0 => Ok(Some(node)),
+        Some(_) => {
+            let pos = lex.to_position();
+            let cur = lex.to_cursor();
+            err_at!(InvalidInput, msg: "partial parse till {} cursor:{}", pos, cur)
+        }
+        None => {
+            let pos = lex.to_position();
+            let cur = lex.to_cursor();
+            err_at!(InvalidInput, msg: "parse failed at {} cursor:{}", pos, cur)
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "html_test.rs"]
+mod html_test;

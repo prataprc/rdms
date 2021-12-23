@@ -95,6 +95,13 @@ macro_rules! maybe_ws {
 }
 
 #[macro_export]
+macro_rules! ws {
+    () => {
+        crate::parsec::Parsec::new_regx("WS", r#"\s+"#.to_string()).unwrap()
+    };
+}
+
+#[macro_export]
 macro_rules! atom {
     ($s:expr) => {
         crate::parsec::Parsec::new_atom($s, $s.to_string()).unwrap()

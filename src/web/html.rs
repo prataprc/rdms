@@ -7,6 +7,7 @@ use std::{
 use crate::{and, atom, kleene, maybe, maybe_ws, or, re};
 use crate::{
     parsec::{self, Lexer, Node, Parser},
+    web::selector,
     Error, Result,
 };
 
@@ -359,6 +360,27 @@ impl Attribute {
         (self.key, value)
     }
 
+    fn has_key_value(&self, op: Option<String>, key: &str, value: &str) -> bool {
+        match (
+            op.as_ref().map(|s| s.as_str()).unwrap_or(" "),
+            self.value.as_ref(),
+        ) {
+            ("~", Some(aval)) => &self.key == key && aval.split(' ').any(|v| v == value),
+            ("~", None) => false,
+            ("^", Some(aval)) => &self.key == key && aval.split(' ').any(|v| v == value),
+            ("^", None) => false,
+            ("$", Some(aval)) => &self.key == key && aval.split(' ').any(|v| v == value),
+            ("$", None) => false,
+            ("|", Some(aval)) => &self.key == key && aval.split(' ').any(|v| v == value),
+            ("|", None) => false,
+            ("*", Some(aval)) => &self.key == key && aval.split(' ').any(|v| v == value),
+            ("*", None) => false,
+            (" ", Some(aval)) => &self.key == key && aval == value,
+            (" ", None) => false,
+            (_, _) => unreachable!(),
+        }
+    }
+
     fn pretty_string(&self, _oneline: bool) -> String {
         match &self.value {
             Some(value) if value.len() < 20 => format!("{}={}", self.key, value),
@@ -375,6 +397,7 @@ pub enum Dom {
         root_elements: Vec<Rc<Dom>>,
     },
     Tag {
+        root: bool,
         tag_name: String,
         attrs: Vec<Attribute>,
         tag_children: Vec<Rc<Dom>>,
@@ -459,6 +482,10 @@ impl Dom {
                 None => (),
             }
         }
+        root_elements
+            .iter_mut()
+            .for_each(|e| Rc::get_mut(e).unwrap().set_root(true));
+
         let dom = Rc::new(Dom::Doc {
             doc_type,
             root_elements,
@@ -489,6 +516,7 @@ impl Dom {
                 };
 
                 let dom = Rc::new(Dom::Tag {
+                    root: false,
                     tag_name,
                     attrs,
                     tag_children: Vec::default(),
@@ -519,6 +547,7 @@ impl Dom {
                 );
 
                 let dom = Rc::new(Dom::Tag {
+                    root: false,
                     tag_name,
                     attrs,
                     tag_children,
@@ -604,17 +633,104 @@ impl Dom {
         let doms: Vec<Rc<Dom>> = children.drain(..).collect();
         Some(doms)
     }
+
+    pub fn set_parent(&self, par: Weak<Dom>) {
+        match self {
+            Dom::Doc { .. } => (),
+            Dom::Text { parent, .. } => *parent.borrow_mut() = par,
+            Dom::Comment { parent, .. } => *parent.borrow_mut() = par,
+            Dom::Tag { parent, .. } => *parent.borrow_mut() = par,
+            Dom::TagEnd { parent, .. } => *parent.borrow_mut() = par,
+        }
+    }
+
+    fn set_root(&mut self, r: bool) {
+        match self {
+            Dom::Doc { .. } => (),
+            Dom::Text { .. } => (),
+            Dom::Comment { .. } => (),
+            Dom::Tag { root, .. } => *root = r,
+            Dom::TagEnd { .. } => (),
+        }
+    }
 }
 
 impl Dom {
-    pub fn set_parent(&self, par: Weak<Dom>) {
-        use Dom::{Comment, Doc, Tag, TagEnd, Text};
+    pub fn to_tag_name(&self) -> Option<String> {
         match self {
-            Doc { .. } => (),
-            Text { parent, .. } => *parent.borrow_mut() = par,
-            Comment { parent, .. } => *parent.borrow_mut() = par,
-            Tag { parent, .. } => *parent.borrow_mut() = par,
-            TagEnd { parent, .. } => *parent.borrow_mut() = par,
+            Dom::Tag { tag_name, .. } => Some(tag_name.clone()),
+            _ => None,
+        }
+    }
+
+    pub fn to_children(&self) -> Option<Vec<Rc<Dom>>> {
+        match self {
+            Dom::Doc { .. }
+            | Dom::Text { .. }
+            | Dom::Comment { .. }
+            | Dom::TagEnd { .. } => None,
+            Dom::Tag { tag_children, .. } => Some(tag_children.clone()),
+        }
+    }
+
+    pub fn as_tag(&self) -> Option<(&str, &[Attribute])> {
+        match self {
+            Dom::Doc { .. }
+            | Dom::Text { .. }
+            | Dom::Comment { .. }
+            | Dom::TagEnd { .. } => None,
+            Dom::Tag {
+                tag_name, attrs, ..
+            } => Some((tag_name, &attrs)),
+        }
+    }
+
+    pub fn filter(dom: Rc<Dom>, selector: &selector::Selector) -> Option<Rc<Dom>> {
+        use selector::Selector::{
+            Any, AsAttrVal, Child, Class, Colonizer, Descendant, Id, Lang, Order,
+            Precede, Tag, WithAttr,
+        };
+
+        let (tag_name, attrs) = dom.as_tag()?;
+        match selector {
+            Any => Some(dom),
+            Tag { name } if tag_name == name => Some(dom),
+            Tag { .. } => None,
+            WithAttr { tag, key } => {
+                let with_key = attrs.iter().any(|a| &a.key == key);
+                match tag {
+                    Some(name) if tag_name == name && with_key => Some(dom),
+                    None if with_key => Some(dom),
+                    _ => None,
+                }
+            }
+            AsAttrVal {
+                tag,
+                key,
+                op,
+                value,
+            } => {
+                let hkv = attrs
+                    .iter()
+                    .any(|a| a.has_key_value(op.clone(), key, value));
+
+                match tag {
+                    Some(name) if tag_name == name && hkv => Some(dom),
+                    None if hkv => Some(dom),
+                    _ => None,
+                }
+            }
+            Colonizer { tag, picker, n } => todo!(),
+            Lang { tag, lang } => unimplemented!(),
+            Class { tag, class } => todo!(),
+            Id { tag, id } => todo!(),
+            Descendant {
+                ancestor,
+                descendant,
+            } => todo!(),
+            Child { parent, child } => todo!(),
+            Precede { first, second } => todo!(),
+            Order { before, after } => todo!(),
         }
     }
 
@@ -670,6 +786,18 @@ impl Dom {
     }
 }
 
+impl Dom {
+    pub fn select(
+        dom: Rc<Dom>,
+        selector: Rc<selector::Selector>,
+    ) -> impl Iterator<Item = Rc<Dom>> {
+        DomSelector {
+            stack: vec![vec![dom]],
+            selector,
+        }
+    }
+}
+
 pub fn parse<L>(parser: &parsec::Parsec<Parsec>, lex: &mut L) -> Result<Option<Node>>
 where
     L: Lexer + Clone,
@@ -699,6 +827,43 @@ where
             let pos = lex.to_position();
             let cur = lex.to_cursor();
             err_at!(InvalidInput, msg: "parse failed at {} cursor:{}", pos, cur)
+        }
+    }
+}
+
+pub struct DomSelector {
+    stack: Vec<Vec<Rc<Dom>>>,
+    selector: Rc<selector::Selector>,
+}
+
+impl Iterator for DomSelector {
+    type Item = Rc<Dom>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            match self.stack.pop() {
+                Some(children) if children.is_empty() => break None,
+                Some(mut children) => {
+                    let dom = children.pop().unwrap();
+                    match dom.to_children() {
+                        Some(mut dom_children) => {
+                            children.push(dom);
+                            self.stack.push(children);
+
+                            dom_children.reverse();
+                            self.stack.push(dom_children);
+                        }
+                        None => match Dom::filter(dom, &self.selector) {
+                            Some(dom) => {
+                                self.stack.push(children);
+                                break Some(dom);
+                            }
+                            None => self.stack.push(children),
+                        },
+                    };
+                }
+                None => break None,
+            }
         }
     }
 }

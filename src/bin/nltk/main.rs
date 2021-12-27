@@ -8,10 +8,15 @@ pub const TEMP_DIR_CRIO: &str = "crio";
 
 #[derive(Clone, StructOpt)]
 struct Opt {
-    #[structopt(long = "parsec")]
-    parsec: bool,
+    #[structopt(long = "words")]
+    words: bool,
 
-    file: Option<ffi::OsString>,
+    #[structopt(long = "zimf")]
+    zimf: Option<ffi::OsString>,
+
+    #[structopt(long = "threads", default_value = "64")]
+    pool_size: usize,
+
     //#[structopt(subcommand)]
     //subcmd: SubCommand,
 }
@@ -40,20 +45,18 @@ struct Opt {
 fn main() {
     let opts = Opt::from_iter(std::env::args_os());
 
-    let res = if opts.parsec {
-        //let parser = html::new_parser().unwrap();
-        //parser.pretty_print("");
-        Ok(())
-    } else if let Some(file) = opts.file.clone() {
-        dom_list(file, opts)
-    } else {
-        Ok(())
+    let res = if let Some(zim_file) => opts.zimf {
+        work_zimf(zim_file.clone(), opts)
     };
 
     match res {
         Ok(()) => (),
         Err(err) => println!("Error: {}", err),
     }
+}
+
+fn work_zimf(zim_file: ffi::OsString, opts: Opt) -> Result<()> {
+    let z = Zimf::open(zim_file.clone(), opts.pool_size).unwrap();
 }
 
 fn dom_list(file: ffi::OsString, _opts: Opt) -> Result<()> {

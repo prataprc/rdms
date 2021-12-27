@@ -105,7 +105,7 @@ pub mod clru;
 pub mod git;
 mod index;
 pub mod parsec;
-pub mod web;
+// pub mod web; TODO: incomplete
 pub mod wral;
 pub mod zimf;
 

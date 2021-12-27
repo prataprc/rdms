@@ -14,17 +14,15 @@ pub fn make_info_table(z: &Zimf) -> prettytable::Table {
     let mut table = prettytable::Table::new();
     table.set_titles(row![Fy => "Info", "Value"]);
 
-    let n_redirects: usize = z
-        .entries
-        .iter()
-        .filter(|e| e.is_redirect())
-        .map(|_| 1)
-        .sum();
+    let entries = z.as_entries();
+    let title_list = z.as_title_list();
 
-    table.add_row(row!["file_loc", format!("{:?}", z.loc)]);
-    table.add_row(row!["entries_count", z.entries.len() - n_redirects]);
+    let n_redirects: usize = entries.iter().filter(|e| e.is_redirect()).map(|_| 1).sum();
+
+    table.add_row(row!["file_loc", format!("{:?}", z.to_location())]);
+    table.add_row(row!["entries_count", entries.len() - n_redirects]);
     table.add_row(row!["redirect_count", n_redirects]);
-    table.add_row(row!["title_list_count", z.title_list.len()]);
+    table.add_row(row!["title_list_count", title_list.len()]);
 
     table.set_format(*prettytable::format::consts::FORMAT_CLEAN);
     table
@@ -58,15 +56,18 @@ pub fn make_mimes_table(z: &Zimf) -> prettytable::Table {
     let mut table = prettytable::Table::new();
     table.set_titles(row![Fy => "Mime", "num-files"]);
 
-    let mut mimes_count = vec![0; z.mimes.len()];
-    for entry in z.entries.iter() {
+    let mimes = z.as_mimes();
+    let entries = z.as_entries();
+
+    let mut mimes_count = vec![0; mimes.len()];
+    for entry in entries.iter() {
         let i = entry.mime_type as usize;
         if i < mimes_count.len() {
             mimes_count[i] += 1;
         }
     }
 
-    for (i, mime) in z.mimes.iter().enumerate() {
+    for (i, mime) in mimes.iter().enumerate() {
         table.add_row(row![mime, mimes_count[i]]);
     }
 
@@ -78,8 +79,10 @@ pub fn make_namespace_table(z: &Zimf) -> prettytable::Table {
     let mut table = prettytable::Table::new();
     table.set_titles(row![Fy => "Namespace", "num-files"]);
 
+    let entries = z.as_entries();
+
     let mut nm_count = vec![0; 256];
-    for entry in z.entries.iter() {
+    for entry in entries.iter() {
         nm_count[entry.namespace as usize] += 1;
     }
 
@@ -97,9 +100,11 @@ pub fn make_entry_table(entry: &zimf::Entry, z: &Zimf) -> prettytable::Table {
     let mut table = prettytable::Table::new();
     table.set_titles(row![Fy => "Field", "Value"]);
 
+    let mimes = z.as_mimes();
+
     table.add_row(row!["url", entry.url]);
     table.add_row(row!["title", entry.title]);
-    table.add_row(row!["mime_type", z.mimes[entry.mime_type as usize]]);
+    table.add_row(row!["mime_type", mimes[entry.mime_type as usize]]);
     table.add_row(row!["namespace", entry.namespace as char]);
     table.add_row(row!["revision", entry.revision]);
     table.add_row(row!["param", format!("{:?}", entry.param)]);

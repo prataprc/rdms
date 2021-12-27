@@ -29,19 +29,6 @@ impl TryFrom<Res> for Cluster {
     }
 }
 
-pub fn new_pool(
-    zim_loc: ffi::OsString,
-    n_threads: usize,
-) -> util::thread::Pool<Req, Res, Result<()>> {
-    let zim_loc = zim_loc.clone();
-    util::thread::Pool::new_sync(
-        "zimf-parser",
-        n_threads,
-        1024,
-        |rx: util::thread::Rx<Req, Res>| || worker(zim_loc, rx),
-    )
-}
-
 pub fn read_cluster_header(
     pool: &util::thread::Pool<Req, Res, Result<()>>,
     off: u64, // cluster start fpos
@@ -60,7 +47,7 @@ pub fn read_cluster_blobs(
     pool.post(req)
 }
 
-fn worker(zim_loc: ffi::OsString, rx: util::thread::Rx<Req, Res>) -> Result<()> {
+pub fn worker(zim_loc: ffi::OsString, rx: util::thread::Rx<Req, Res>) -> Result<()> {
     let mut fd = err_at!(IOError, fs::OpenOptions::new().read(true).open(&zim_loc))?;
     for msg in rx {
         // println!("worker id:{} received msg", _id);

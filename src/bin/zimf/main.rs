@@ -35,8 +35,8 @@ pub struct Opt {
     #[structopt(long = "json")]
     json: bool,
 
-    #[structopt(long = "threads", default_value = "64")]
-    pool_size: usize,
+    #[structopt(long = "threads")]
+    pool_size: Option<usize>,
 
     zim_file: ffi::OsString,
 }
@@ -44,38 +44,43 @@ pub struct Opt {
 fn main() {
     let opts = Opt::from_args();
 
-    let z = Zimf::open(opts.zim_file.clone(), opts.pool_size).unwrap();
+    let mut z = Zimf::open(opts.zim_file.clone()).unwrap();
+    match opts.pool_size {
+        Some(pool_size) => {
+            z.set_pool_size(pool_size).unwrap();
+        }
+        None => (),
+    }
 
     if opts.info && opts.json {
         println!("{}", z.to_json());
     } else if opts.info {
         print::make_info_table(&z).print_tty(opts.color);
         println!();
-        print::make_header_table(&z.header).print_tty(opts.color);
+        print::make_header_table(z.as_header()).print_tty(opts.color);
         println!();
         print::make_mimes_table(&z).print_tty(opts.color);
         println!();
         print::make_namespace_table(&z).print_tty(opts.color);
     }
 
+    let entries = z.as_entries();
+
     if opts.namespaces {
-        let mut namespaces: Vec<zimf::Namespace> = z
-            .entries
-            .iter()
-            .map(|e| e.to_namespace().unwrap())
-            .collect();
+        let mut namespaces: Vec<zimf::Namespace> =
+            entries.iter().map(|e| e.to_namespace().unwrap()).collect();
         namespaces.dedup();
         println!("Namespaces: {:?}", namespaces);
     } else if opts.urls {
         let entries: Box<dyn Iterator<Item = &Arc<zimf::Entry>>> =
             if let Some(namespace) = opts.namespace {
                 Box::new(
-                    z.entries
+                    entries
                         .iter()
                         .filter(move |e| namespace == e.to_namespace().unwrap()),
                 )
             } else {
-                Box::new(z.entries.iter().filter(|_| true))
+                Box::new(entries.iter().filter(|_| true))
             };
 
         for entry in entries {
@@ -89,7 +94,7 @@ fn main() {
     }
 
     match opts.url {
-        Some(url) => match z.entries.binary_search_by_key(&url, |e| e.url.clone()) {
+        Some(url) => match entries.binary_search_by_key(&url, |e| e.url.clone()) {
             Ok(n) => {
                 let entry = z.get_entry(n).as_ref().clone();
                 print::make_entry_table(&entry, &z).print_tty(opts.color);
@@ -102,7 +107,7 @@ fn main() {
     };
 
     match opts.dump {
-        Some(url) => match z.entries.binary_search_by_key(&url, |e| e.url.clone()) {
+        Some(url) => match entries.binary_search_by_key(&url, |e| e.url.clone()) {
             Ok(n) => {
                 let (_entry, data) = z.get_entry_content(n).unwrap();
                 std::io::stdout().write(&data).unwrap();
@@ -116,9 +121,11 @@ fn main() {
 
     if opts.dump_all {
         let z = Arc::new(z);
+        let clusters = z.as_clusters();
+
         let mut handles = vec![];
-        let offs: Vec<usize> = (0..z.clusters.len()).collect();
-        for offs in offs.chunks(z.clusters.len() / 32) {
+        let offs: Vec<usize> = (0..clusters.len()).collect();
+        for offs in offs.chunks(clusters.len() / 32) {
             // println!("{:?}", offs);
             let (z, offs) = (Arc::clone(&z), offs.to_vec());
             handles.push(thread::spawn(move || {
@@ -145,7 +152,7 @@ fn main() {
 
 #[allow(dead_code)]
 fn load_clusters(z: &Zimf) {
-    for cnum in 0..z.clusters.len() {
+    for cnum in 0..z.as_clusters().len() {
         let start = time::Instant::now();
         let blobs = z.get_blobs(cnum).unwrap();
         println!(

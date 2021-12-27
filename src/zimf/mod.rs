@@ -1,5 +1,6 @@
+//! Module implement zim web-archive parser.
+
 mod workers;
 mod zimf;
 
-use zimf::Cluster;
-pub use zimf::{Compression, Entry, Header, Namespace, Zimf};
+pub use zimf::{Cluster, Compression, Entry, Header, Namespace, Zimf};

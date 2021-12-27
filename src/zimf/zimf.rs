@@ -125,8 +125,105 @@ impl fmt::Debug for Namespace {
     }
 }
 
-/// Handle to Zim archive.
+/// Handle to Zim archive. Maintains a thread pool locally can be cloned and used
+/// by concurrent threads.
 pub struct Zimf {
+    inner: Inner,
+}
+
+impl Zimf {
+    /// Open a zim-archive file in `loc`. `pool_size` thread pool size to be used
+    /// for processing zim-archive content.
+    pub fn open<P>(loc: P) -> Result<Zimf>
+    where
+        P: AsRef<path::Path>,
+    {
+        let inner = Inner::open(loc)?;
+        Ok(Zimf { inner })
+    }
+
+    pub fn set_pool_size(&mut self, pool_size: usize) -> Result<&mut Self> {
+        self.inner.set_pool_size(pool_size)?;
+        Ok(self)
+    }
+}
+
+impl Zimf {
+    /// Return the zim-header
+    pub fn to_location(&self) -> ffi::OsString {
+        self.inner.loc.clone()
+    }
+
+    /// Return the zim-header
+    pub fn as_header(&self) -> &Header {
+        &self.inner.header
+    }
+
+    /// Return the full list of mime-types found in this zim file.
+    pub fn as_mimes(&self) -> &[Mime] {
+        &self.inner.mimes
+    }
+
+    /// Return list of all the entry details found in this zim file, sorted by url.
+    pub fn as_entries(&self) -> &[Arc<Entry>] {
+        &self.inner.entries
+    }
+
+    /// Return list of all the entry details found in this zim file, sorted by title.
+    pub fn as_title_list(&self) -> &[Arc<Entry>] {
+        &self.inner.title_list
+    }
+
+    /// Return list of all the cluster details
+    pub fn as_clusters(&self) -> &[Cluster] {
+        &self.inner.clusters
+    }
+
+    /// Return the Entry at `index`, follows the redirection link.
+    pub fn get_entry(&self, index: usize) -> &Arc<Entry> {
+        self.inner.get_entry(index)
+    }
+
+    /// Fetch entry corresponding to `cluster_num` and `blob_num`.
+    pub fn index_to_entry(&self, cluster_num: usize, blob_num: usize) -> &Arc<Entry> {
+        self.inner.index_to_entry(cluster_num, blob_num)
+    }
+
+    /// Return the Entry at `index` along with its content as a blob, follows the
+    /// redirection link.
+    pub fn get_entry_content(&self, index: usize) -> Result<(Entry, Vec<u8>)> {
+        self.inner.get_entry_content(index)
+    }
+
+    /// Get all blobs archived in cluster identified by `cluster_num`.
+    pub fn get_blobs(&self, cluster_num: usize) -> Result<Vec<Vec<u8>>> {
+        self.inner.get_blobs(cluster_num)
+    }
+}
+
+impl Zimf {
+    /// Return the zimf information in json formatted string.
+    pub fn to_json(&self) -> String {
+        format!(
+            concat!(
+                "{{ ",
+                r#""file_loc": {:?}, "#,
+                r#""header": {}, "#,
+                r#""mimes": {:?}, "#,
+                r#""entries_count": {}, "#,
+                r#""title_list_count": {} "#,
+                "}} "
+            ),
+            self.inner.loc,
+            self.inner.header.to_json(),
+            self.inner.mimes,
+            self.inner.entries.len(),
+            self.inner.title_list.len(),
+        )
+    }
+}
+
+struct Inner {
     /// Location of the zim archive file.
     pub loc: ffi::OsString,
     /// Zim archive header.
@@ -143,13 +240,11 @@ pub struct Zimf {
     pub clusters: Vec<Cluster>,
 
     index_cluster: BTreeMap<u32, Vec<Arc<Entry>>>,
-    pool: util::thread::Pool<workers::Req, workers::Res, Result<()>>,
+    pool: Option<util::thread::Pool<workers::Req, workers::Res, Result<()>>>,
 }
 
-impl Zimf {
-    /// Open a zim-archive file in `loc`. `pool_size` thread pool size to be used
-    /// for processing zim-archive content.
-    pub fn open<P>(loc: P, pool_size: usize) -> Result<Zimf>
+impl Inner {
+    fn open<P>(loc: P) -> Result<Inner>
     where
         P: AsRef<path::Path>,
     {
@@ -161,7 +256,11 @@ impl Zimf {
             loc.as_os_str().to_os_string()
         };
 
-        let pool = workers::new_pool(loc.clone(), pool_size);
+        let mut pool = util::thread::Pool::new_sync("zimf-parser", 1024);
+        let zim_loc = loc.clone();
+        pool.spawn(|rx: util::thread::Rx<workers::Req, workers::Res>| {
+            || workers::worker(zim_loc, rx)
+        });
 
         let header: Header = {
             let mut buf: Vec<u8> = vec![0; 80];
@@ -258,7 +357,7 @@ impl Zimf {
             clusters
         };
 
-        let mut zim = Zimf {
+        let mut inner = Inner {
             loc,
             header,
             mimes,
@@ -267,27 +366,40 @@ impl Zimf {
             clusters,
 
             index_cluster: BTreeMap::new(),
-            pool,
+            pool: Some(pool),
         };
 
         {
-            (0..zim.header.cluster_count).for_each(|cn| {
-                zim.index_cluster.insert(cn, vec![]);
+            (0..inner.header.cluster_count).for_each(|cn| {
+                inner.index_cluster.insert(cn, vec![]);
             });
-            let n = zim.entries.len();
+            let n = inner.entries.len();
             for index in 0..n {
-                let entry = Arc::clone(zim.get_entry(index));
-                zim.index_cluster
+                let entry = Arc::clone(inner.get_entry(index));
+                inner
+                    .index_cluster
                     .get_mut(&entry.to_cluster_num().unwrap())
                     .map(|value| value.push(entry));
             }
         }
 
-        Ok(zim)
+        Ok(inner)
     }
 
-    /// Return the Entry at `index`, follows the redirection link.
-    pub fn get_entry(&self, index: usize) -> &Arc<Entry> {
+    fn set_pool_size(&mut self, pool_size: usize) -> Result<()> {
+        self.pool.take().unwrap().close_wait()?;
+        let mut pool = util::thread::Pool::new_sync("zimf-parser", 1024);
+        pool.set_pool_size(pool_size);
+        let zim_loc = self.loc.clone();
+        pool.spawn(|rx: util::thread::Rx<workers::Req, workers::Res>| {
+            || workers::worker(zim_loc, rx)
+        });
+        self.pool = Some(pool);
+
+        Ok(())
+    }
+
+    fn get_entry(&self, index: usize) -> &Arc<Entry> {
         // println!("get_entry index:{}", index);
         match self.entries[index].ee.clone() {
             EE::D { .. } => &self.entries[index],
@@ -295,7 +407,7 @@ impl Zimf {
         }
     }
 
-    pub fn index_to_entry(&self, cluster_num: usize, blob_num: usize) -> &Arc<Entry> {
+    fn index_to_entry(&self, cluster_num: usize, blob_num: usize) -> &Arc<Entry> {
         for (i, e) in self.entries.iter().enumerate() {
             match e.to_blob_num() {
                 Some((c, b)) => {
@@ -309,9 +421,7 @@ impl Zimf {
         unreachable!()
     }
 
-    /// Return the Entry at `index` along with its content as a blob, follows the
-    /// redirection link.
-    pub fn get_entry_content(&self, index: usize) -> Result<(Entry, Vec<u8>)> {
+    fn get_entry_content(&self, index: usize) -> Result<(Entry, Vec<u8>)> {
         // println!("get_entry index:{}", index);
         let entry = self.entries[index].clone();
         match entry.ee.clone() {
@@ -325,7 +435,7 @@ impl Zimf {
                 //    "get_entry cluster_num:{} blob_num:{} cluster_off:{}",
                 //    cluster_num, blob_num, cluster.off
                 //);
-                workers::read_cluster_blobs(&self.pool, cluster, tx)?;
+                workers::read_cluster_blobs(self.pool.as_ref().unwrap(), cluster, tx)?;
 
                 let blob = match err_at!(IPCFail, rx.recv())?? {
                     workers::Res::Blocks { blobs } => blobs[blob_num as usize].to_vec(),
@@ -338,40 +448,17 @@ impl Zimf {
         }
     }
 
-    /// Get all blobs archived in cluster identified by `cluster_num`.
     pub fn get_blobs(&self, cluster_num: usize) -> Result<Vec<Vec<u8>>> {
         let cluster = self.clusters[cluster_num].clone();
         let (tx, rx) = mpsc::channel();
 
-        workers::read_cluster_blobs(&self.pool, cluster, tx)?;
+        workers::read_cluster_blobs(self.pool.as_ref().unwrap(), cluster, tx)?;
 
         let blobs = match err_at!(IPCFail, rx.recv())?? {
             workers::Res::Blocks { blobs } => blobs,
             _ => unreachable!(),
         };
         Ok(blobs)
-    }
-}
-
-impl Zimf {
-    /// Return the zimf information in json formatted string.
-    pub fn to_json(&self) -> String {
-        format!(
-            concat!(
-                "{{ ",
-                r#""file_loc": {:?}, "#,
-                r#""header": {}, "#,
-                r#""mimes": {:?}, "#,
-                r#""entries_count": {}, "#,
-                r#""title_list_count": {} "#,
-                "}} "
-            ),
-            self.loc,
-            self.header.to_json(),
-            self.mimes,
-            self.entries.len(),
-            self.title_list.len(),
-        )
     }
 }
 
@@ -608,10 +695,10 @@ impl Entry {
 /// Refer [here](https://openzim.org/wiki/ZIM_file_format#Clusters) for details.
 #[derive(Clone, Debug)]
 pub struct Cluster {
-    off: u64,
-    size: Option<usize>,
-    compression: Compression,
-    boff_size: usize,
+    pub off: u64,
+    pub size: Option<usize>,
+    pub compression: Compression,
+    pub boff_size: usize,
 }
 
 impl Cluster {

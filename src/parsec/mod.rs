@@ -1,3 +1,5 @@
+//! Module implement parser-combinator library.
+
 use std::{fmt, result};
 
 use crate::Result;

@@ -1,5 +1,4 @@
-//! Traits and Types, related to core-database. The kind of database that follows
-//! asynchronous distribution of data, uses content addressing.
+//! Traits and Types, related to core-database for asynchronous distribution of data.
 
 use crate::Result;
 

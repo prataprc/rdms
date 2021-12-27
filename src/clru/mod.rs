@@ -1,3 +1,5 @@
+//! Module implement concurrent LRU cache.
+
 use std::{fmt, sync::atomic::AtomicPtr};
 
 use crate::{dbs, Result};

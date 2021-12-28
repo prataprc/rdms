@@ -70,8 +70,7 @@ impl<Q, R, T> Thread<Q, R, T> {
         th
     }
 
-    /// Create a new Thread instance, using synchronous channel with
-    /// finite buffer.
+    /// Create a new Thread instance, using synchronous channel with finite buffer.
     pub fn new_sync<F, N>(name: &str, chan_size: usize, main_loop: F) -> Thread<Q, R, T>
     where
         F: 'static + FnOnce(Rx<Q, R>) -> N + Send,
@@ -90,12 +89,11 @@ impl<Q, R, T> Thread<Q, R, T> {
         th
     }
 
-    /// Recommended way to exit/shutdown the thread. Note that all [Tx]
-    /// clones of this thread must also be dropped for this call to return.
+    /// Recommended way to exit/shutdown the thread. Note that all [Tx] clones of this
+    /// thread must also be dropped for this call to return.
     ///
-    /// Even otherwise, when Thread value goes out of scope its drop
-    /// implementation shall call this method to exit the thread, except
-    /// that any errors are ignored.
+    /// Even otherwise, when Thread value goes out of scope its drop implementation
+    /// shall call this method to exit the thread, except that any errors are ignored.
     pub fn join(mut self) -> Result<T> {
         self.inner.take().unwrap().join()
     }

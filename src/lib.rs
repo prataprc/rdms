@@ -86,6 +86,7 @@
 
 #![feature(drain_filter)]
 #![feature(concat_idents)]
+#![feature(deadline_api)]
 
 use std::result;
 
@@ -106,6 +107,7 @@ pub mod git;
 mod index;
 pub mod parsec;
 // pub mod web; TODO: incomplete
+pub mod mq;
 pub mod wral;
 pub mod zimf;
 

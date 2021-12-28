@@ -22,6 +22,8 @@ pub enum Error {
     ThreadFail(String, String),
     /// System level failure.
     SystemFail(String, String),
+    /// Timeout error from channel
+    Timeout(String, String),
     /// Invalid input from application, like function arguments,
     /// file input etc..
     InvalidInput(String, String),
@@ -139,6 +141,7 @@ impl fmt::Display for Error {
             Error::IPCFail(p, m) => write!(f, "{} IPCFail:{}", p, m),
             Error::ThreadFail(p, m) => write!(f, "{} ThreadFail:{}", p, m),
             Error::SystemFail(p, m) => write!(f, "{} SystemFail:{}", p, m),
+            Error::Timeout(p, m) => write!(f, "{} Timeout:{}", p, m),
             Error::InvalidInput(p, m) => write!(f, "{} InvalidInput:{}", p, m),
             Error::InvalidFormat(p, m) => write!(f, "{} InvalidFormat:{}", p, m),
             Error::APIMisuse(p, m) => write!(f, "{} APIMisuse:{}", p, m),

@@ -2,37 +2,33 @@ use std::{sync::mpsc, thread, time};
 
 use crate::{mq, Error, Result};
 
-pub struct FilterMap<Q, R, F>
+pub struct Split<Q>
 where
-    Q: 'static + Send,
-    R: 'static + Send,
-    F: 'static + Send + FnMut(Q) -> Result<Option<R>>,
+    Q: 'static + Send + Clone,
 {
     name: String,
     chan_size: usize,
     deadline: Option<time::Instant>,
     timeout: Option<time::Duration>,
+    n: usize,
 
     input: Option<mpsc::Receiver<Q>>,
-    filter_map: Option<F>,
     handle: Option<thread::JoinHandle<Result<()>>>,
 }
 
-impl<Q, R, F> FilterMap<Q, R, F>
+impl<Q> Split<Q>
 where
-    Q: 'static + Send,
-    R: 'static + Send,
-    F: 'static + Send + FnMut(Q) -> Result<Option<R>>,
+    Q: 'static + Send + Clone,
 {
-    pub fn new(name: String, input: mpsc::Receiver<Q>, filter_map: F) -> Self {
-        FilterMap {
+    pub fn new(name: String, input: mpsc::Receiver<Q>, n: usize) -> Self {
+        Split {
             name,
             chan_size: mq::DEFAULT_CHAN_SIZE,
             deadline: None,
             timeout: None,
+            n,
 
             input: Some(input),
-            filter_map: Some(filter_map),
             handle: None,
         }
     }
@@ -52,18 +48,22 @@ where
         self
     }
 
-    pub fn spawn(&mut self) -> mpsc::Receiver<R> {
+    pub fn spawn(&mut self) -> Vec<mpsc::Receiver<Q>> {
         let name = self.name.clone();
         let (deadline, timeout) = (self.deadline.clone(), self.timeout.clone());
-        let (tx, output) = mpsc::sync_channel(self.chan_size);
+        let (mut txs, mut outputs) = (vec![], vec![]);
+        (0..self.n).for_each(|_| {
+            let (tx, output) = mpsc::sync_channel(self.chan_size);
+            txs.push(tx);
+            outputs.push(output);
+        });
 
         let input = self.input.take().unwrap();
-        let filter_map = self.filter_map.take().unwrap();
         self.handle = Some(thread::spawn(move || {
-            action(name, deadline, timeout, input, tx, filter_map)
+            action(name, deadline, timeout, input, txs)
         }));
 
-        output
+        outputs
     }
 
     pub fn close_wait(self) -> Result<()> {
@@ -71,7 +71,7 @@ where
             Some(handle) => match handle.join() {
                 Ok(res) => res,
                 Err(_) => {
-                    err_at!(ThreadFail, msg: "thread fail FilterMap<{:?}>", self.name)
+                    err_at!(ThreadFail, msg: "thread fail Split<{:?}>", self.name)
                 }
             },
             None => Ok(()),
@@ -79,18 +79,15 @@ where
     }
 }
 
-fn action<Q, R, F>(
+fn action<Q>(
     name: String,
     deadline: Option<time::Instant>,
     timeout: Option<time::Duration>,
     input: mpsc::Receiver<Q>,
-    tx: mpsc::SyncSender<R>,
-    mut filter_map: F,
+    txs: Vec<mpsc::SyncSender<Q>>,
 ) -> Result<()>
 where
-    R: 'static + Send,
-    Q: 'static + Send,
-    F: 'static + Send + FnMut(Q) -> Result<Option<R>>,
+    Q: 'static + Send + Clone,
 {
     loop {
         let res = if let Some(deadline) = deadline {
@@ -105,15 +102,14 @@ where
         };
 
         match res {
-            Ok(msg) => match filter_map(msg)? {
-                Some(resp) => {
-                    err_at!(IPCFail, tx.send(resp), "thread FilterMap<{:?}>", name)?
+            Ok(msg) => {
+                for tx in txs.iter() {
+                    err_at!(IPCFail, tx.send(msg.clone()), "thread Split<{:?}>", name)?;
                 }
-                None => (),
-            },
+            }
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                err_at!(Timeout, msg: "thread FilterMap<{:?}>", name)?
+                err_at!(Timeout, msg: "thread Split<{:?}>", name)?
             }
         }
     }

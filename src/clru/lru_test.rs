@@ -164,11 +164,11 @@ where
         loop {
             let key: K = rng.gen();
             let value: u128 = rng.gen::<u128>();
-            match index.insert(key, value).unwrap() {
-                dbs::Wr {
-                    old_entry: None, ..
-                } => break,
-                _ => (),
+            if let dbs::Wr {
+                old_entry: None, ..
+            } = index.insert(key, value).unwrap()
+            {
+                break;
             }
         }
     }

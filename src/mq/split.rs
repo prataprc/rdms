@@ -50,7 +50,7 @@ where
 
     pub fn spawn(&mut self) -> Vec<mpsc::Receiver<Q>> {
         let name = self.name.clone();
-        let (deadline, timeout) = (self.deadline.clone(), self.timeout.clone());
+        let (deadline, timeout) = (self.deadline, self.timeout);
         let (mut txs, mut outputs) = (vec![], vec![]);
         (0..self.n).for_each(|_| {
             let (tx, output) = mpsc::sync_channel(self.chan_size);

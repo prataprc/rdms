@@ -59,7 +59,7 @@ where
         map: cmap::Map<K, Arc<clru::Value<K, V>>, H>,
     ) -> Self {
         Evictor {
-            max_size: config.max_size.clone(),
+            max_size: config.max_size,
             cur_size: config.cur_size.clone(),
             max_count: config.max_count,
             cur_count: Arc::clone(&config.cur_count),
@@ -106,7 +106,7 @@ where
         }
 
         // actually free all evictions and deletions.
-        while garbage_access.len() > 0 {
+        while !garbage_access.is_empty() {
             garbage_access = self.gc(garbage_access, self.map.gc_epoch(seqno), true)
         }
 
@@ -141,7 +141,6 @@ where
             match access.as_ref() {
                 Access::N { epoch, .. } if force || (*epoch < gc_epoch) => {
                     // drop access here, collected as garbage.
-                    ()
                 }
                 Access::N { .. } => rems.push(access),
                 _ => unreachable!(),
@@ -164,7 +163,7 @@ where
                     evicta = evicta || self.cur_count.load(SeqCst) > self.max_count;
 
                     evicta = evicta
-                        || match self.max_old.clone() {
+                        || match self.max_old {
                             Some(max_old) if born.elapsed() > max_old => true,
                             Some(_) | None => false,
                         };
@@ -249,13 +248,13 @@ where
                                 //);
                                 garbage_access.push(next_access);
 
-                                self.cur_size.as_ref().map(|x| {
+                                if let Some(x) = self.cur_size.as_ref() {
                                     if size < 0 {
                                         x.fetch_sub(size.abs() as usize, SeqCst);
                                     } else {
                                         x.fetch_add(size as usize, SeqCst);
                                     }
-                                });
+                                }
                                 self.cur_count.fetch_sub(remok, SeqCst);
                                 //println!(
                                 //    "evict:ok, behind_next:{:p} ahead:{:p}",

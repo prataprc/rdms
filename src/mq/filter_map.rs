@@ -54,7 +54,7 @@ where
 
     pub fn spawn(&mut self) -> mpsc::Receiver<R> {
         let name = self.name.clone();
-        let (deadline, timeout) = (self.deadline.clone(), self.timeout.clone());
+        let (deadline, timeout) = (self.deadline, self.timeout);
         let (tx, output) = mpsc::sync_channel(self.chan_size);
 
         let input = self.input.take().unwrap();
@@ -105,12 +105,11 @@ where
         };
 
         match res {
-            Ok(msg) => match filter_map(msg)? {
-                Some(resp) => {
+            Ok(msg) => {
+                if let Some(resp) = filter_map(msg)? {
                     err_at!(IPCFail, tx.send(resp), "thread FilterMap<{:?}>", name)?
                 }
-                None => (),
-            },
+            }
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 err_at!(Timeout, msg: "thread FilterMap<{:?}>", name)?

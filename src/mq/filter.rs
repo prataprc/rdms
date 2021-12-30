@@ -52,7 +52,7 @@ where
 
     pub fn spawn(&mut self) -> mpsc::Receiver<Q> {
         let name = self.name.clone();
-        let (deadline, timeout) = (self.deadline.clone(), self.timeout.clone());
+        let (deadline, timeout) = (self.deadline, self.timeout);
         let (tx, output) = mpsc::sync_channel(self.chan_size);
 
         let (input, filter) = (self.input.take().unwrap(), self.filter.take().unwrap());

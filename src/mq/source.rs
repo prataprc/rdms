@@ -94,16 +94,13 @@ where
     }
 }
 
-fn action_iter<R, I>(name: String, tx: mpsc::SyncSender<R>, mut iter: I) -> Result<()>
+fn action_iter<R, I>(name: String, tx: mpsc::SyncSender<R>, iter: I) -> Result<()>
 where
     R: 'static + Send,
     I: 'static + Send + Iterator<Item = R>,
 {
-    loop {
-        match iter.next() {
-            Some(msg) => err_at!(IPCFail, tx.send(msg), "thread Source<{:?}>", name)?,
-            None => break,
-        }
+    for msg in iter {
+        err_at!(IPCFail, tx.send(msg), "thread Source<{:?}>", name)?
     }
 
     // tx shall be dropped here.
@@ -115,11 +112,8 @@ where
     R: 'static + Send,
     F: 'static + Send + FnMut() -> Result<Option<R>>,
 {
-    loop {
-        match gen()? {
-            Some(msg) => err_at!(IPCFail, tx.send(msg), "thread Source<{:?}>", name)?,
-            None => break,
-        }
+    while let Some(msg) = gen()? {
+        err_at!(IPCFail, tx.send(msg), "thread Source<{:?}>", name)?
     }
 
     // tx shall be dropped here.

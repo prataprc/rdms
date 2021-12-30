@@ -283,7 +283,7 @@ fn crates_io_metadata(_opts: &Opt, profile: &Profile) -> Result<Metadata> {
     println!("copied {:?} -> {:?} ... ok", src_loc, dst_loc);
 
     let s = err_at!(FailConvert, from_utf8(&data))?;
-    err_at!(FailConvert, serde_json::from_str(&s))
+    err_at!(FailConvert, serde_json::from_str(s))
 }
 
 fn unpack_csv_tables(_opts: &Opt, profile: &Profile, metadata: &Metadata) -> Result<()> {

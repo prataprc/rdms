@@ -211,11 +211,7 @@ where
     }
 
     pub fn is_literal(&self) -> bool {
-        match self {
-            Parsec::Atom { .. } => true,
-            Parsec::Regx { .. } => true,
-            _ => false,
-        }
+        matches!(self, Parsec::Atom { .. } | Parsec::Regx { .. })
     }
 
     pub fn to_pattern(&self) -> String {
@@ -255,7 +251,7 @@ where
                     #[cfg(feature = "debug")]
                     println!("atom {} tok:{:?}", name, tok);
 
-                    lex.move_cursor(text[..n].chars().collect::<Vec<char>>().len());
+                    lex.move_cursor(text[..n].chars().count());
                     Node::Token {
                         name: name.to_string(),
                         text: tok.to_string(),
@@ -265,7 +261,7 @@ where
             Parsec::Regx { name, re } => match re.find(lex.as_str()) {
                 Some(m) => {
                     let text = m.as_str().to_string();
-                    lex.move_cursor(text.chars().collect::<Vec<char>>().len());
+                    lex.move_cursor(text.chars().count());
                     let node = Node::Token {
                         name: name.to_string(),
                         text,
@@ -276,7 +272,7 @@ where
             },
             Parsec::Ext { parser, .. } => match parser.parse(lex) {
                 Err(err) => {
-                    lex.restore(saved_lex.clone());
+                    lex.restore(saved_lex);
                     Err(err)
                 }
                 res => res,
@@ -297,7 +293,7 @@ where
                         Some(parser) => match parser.parse(lex) {
                             Ok(Some(node)) => children.push(node),
                             Ok(None) => {
-                                lex.restore(saved_lex.clone());
+                                lex.restore(saved_lex);
                                 err_at!(
                                     InvalidInput,
                                     msg: "and-parsec fail at cursor:{} coord:{}",
@@ -305,8 +301,8 @@ where
                                 )?
                             }
                             Err(err) => {
-                                lex.restore(saved_lex.clone());
-                                Err(err)?
+                                lex.restore(saved_lex);
+                                return Err(err);
                             }
                         },
                         None => {
@@ -327,7 +323,7 @@ where
                     Some(n) => match parsers[n].parse(lex) {
                         Ok(Some(node)) => Some(node),
                         Ok(None) => None,
-                        Err(err) => Err(err)?,
+                        Err(err) => return Err(err),
                     },
                     None => {
                         #[cfg(feature = "debug")]
@@ -365,7 +361,9 @@ where
                 };
 
                 #[cfg(feature = "debug")]
-                node.as_ref().map(|n| println!("{:?}", n));
+                if let Some(n) = node.as_ref() {
+                    println!("{:?}", n)
+                };
 
                 node
             }
@@ -374,7 +372,7 @@ where
                     Ok(Some(node)) => Some(Box::new(node)),
                     Ok(None) => None,
                     Err(_) => {
-                        lex.restore(saved_lex.clone());
+                        lex.restore(saved_lex);
                         None
                     }
                 };
@@ -392,11 +390,11 @@ where
                     match parser.parse(lex) {
                         Ok(Some(node)) => children.push(node),
                         Ok(None) => {
-                            lex.restore(saved_lex.clone());
+                            lex.restore(saved_lex);
                             break;
                         }
                         Err(_) => {
-                            lex.restore(saved_lex.clone());
+                            lex.restore(saved_lex);
                             break;
                         }
                     }
@@ -415,7 +413,7 @@ where
                     saved_lex = lex.save();
                     match parser.parse(lex) {
                         Ok(Some(node)) => children.push(node),
-                        Ok(None) if children.len() < 1 => {
+                        Ok(None) if children.is_empty() => {
                             lex.restore(saved_lex.clone());
                             err_at!(
                                 InvalidInput,
@@ -424,10 +422,10 @@ where
                             )?
                         }
                         Ok(None) => {
-                            lex.restore(saved_lex.clone());
+                            lex.restore(saved_lex);
                             break;
                         }
-                        Err(_) if children.len() < 1 => {
+                        Err(_) if children.is_empty() => {
                             lex.restore(saved_lex.clone());
                             err_at!(
                                 InvalidInput,
@@ -436,7 +434,7 @@ where
                             )?
                         }
                         Err(_) => {
-                            lex.restore(saved_lex.clone());
+                            lex.restore(saved_lex);
                             break;
                         }
                     }
@@ -455,10 +453,7 @@ where
             }
             Parsec::Ref { parser } => {
                 let parser = parser.borrow().upgrade().unwrap();
-                match parser.parse(lex)? {
-                    Some(node) => Some(node),
-                    None => None,
-                }
+                parser.parse(lex)?
             }
         };
 

@@ -73,11 +73,11 @@ where
 {
     fn clone(&self) -> Self {
         Lru {
-            max_size: self.max_size.clone(),
+            max_size: self.max_size,
             cur_size: self.cur_size.as_ref().map(Arc::clone),
-            max_count: self.max_count.clone(),
+            max_count: self.max_count,
             cur_count: Arc::clone(&self.cur_count),
-            max_old: self.max_old.clone(),
+            max_old: self.max_old,
 
             map: self.map.clone(),
             access_head: Arc::clone(&self.access_head),
@@ -108,10 +108,7 @@ where
     H: 'static + Send + Sync + Clone + BuildHasher,
 {
     pub fn with_hash(hash_builder: H, mut config: Config) -> Lru<K, V, H> {
-        config.cur_size = match config.max_size.clone() {
-            Some(_) => Some(Arc::new(AtomicUsize::new(0))),
-            None => None,
-        };
+        config.cur_size = config.max_size.map(|_| Arc::new(AtomicUsize::new(0)));
         config.cur_count = Arc::new(AtomicUsize::new(0));
 
         let (access_head, access_tail) = Access::new_list();
@@ -131,8 +128,8 @@ where
         };
 
         Lru {
-            max_size: config.max_size.clone(),
-            cur_size: config.cur_size.clone(),
+            max_size: config.max_size,
+            cur_size: config.cur_size,
             max_count: config.max_count,
             cur_count: Arc::clone(&config.cur_count),
             max_old: config.max_old.map(time::Duration::from_secs),
@@ -150,7 +147,7 @@ where
 
     pub fn close(mut self) -> Result<Option<Stats>> {
         let _access_head = loop {
-            if let Some(_) = Arc::get_mut(&mut self.access_head) {
+            if Arc::get_mut(&mut self.access_head).is_some() {
                 break Arc::try_unwrap(self.access_head).ok().unwrap();
             }
         };
@@ -215,7 +212,7 @@ where
             });
 
             match res {
-                Some(AccessResult::Ok(value)) => break Some(value.clone()),
+                Some(AccessResult::Ok(value)) => break Some(value),
                 Some(AccessResult::Retry) => (),
                 None => break None,
             }
@@ -234,7 +231,7 @@ where
         let new_ptr = Box::leak(self.access_head.new(&key));
 
         let value = Arc::new(clru::Value {
-            value: value,
+            value,
             access: AtomicPtr::new(new_ptr),
         });
 
@@ -257,6 +254,10 @@ where
 
     pub fn len(&self) -> usize {
         self.map.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.map.len() == 0
     }
 }
 

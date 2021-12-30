@@ -281,7 +281,7 @@ impl Inner {
         };
         {
             let mut xs = entry_offsets.clone();
-            xs.sort();
+            xs.sort_unstable();
             xs.dedup();
             assert!(xs == entry_offsets);
         }
@@ -329,7 +329,7 @@ impl Inner {
         };
         {
             let mut xs = cluster_offsets.clone();
-            xs.sort();
+            xs.sort_unstable();
             xs.dedup();
             assert!(xs == cluster_offsets);
         }
@@ -376,10 +376,12 @@ impl Inner {
             let n = inner.entries.len();
             for index in 0..n {
                 let entry = Arc::clone(inner.get_entry(index));
-                inner
+                if let Some(value) = inner
                     .index_cluster
                     .get_mut(&entry.to_cluster_num().unwrap())
-                    .map(|value| value.push(entry));
+                {
+                    value.push(entry)
+                }
             }
         }
 
@@ -409,13 +411,10 @@ impl Inner {
 
     fn index_to_entry(&self, cluster_num: usize, blob_num: usize) -> &Arc<Entry> {
         for (i, e) in self.entries.iter().enumerate() {
-            match e.to_blob_num() {
-                Some((c, b)) => {
-                    if (c as usize) == cluster_num && (b as usize) == blob_num {
-                        return &self.entries[i];
-                    }
+            if let Some((c, b)) = e.to_blob_num() {
+                if (c as usize) == cluster_num && (b as usize) == blob_num {
+                    return &self.entries[i];
                 }
-                None => (),
             }
         }
         unreachable!()
@@ -547,7 +546,7 @@ impl Mime {
         let mut iter = fd.bytes().enumerate();
         loop {
             match iter.next() {
-                Some((n, Ok(0))) if bs.len() == 0 => break Ok((mimes, (n + 1) as u64)),
+                Some((n, Ok(0))) if bs.is_empty() => break Ok((mimes, (n + 1) as u64)),
                 Some((_, Ok(0))) => {
                     let s: &str = err_at!(InvalidFormat, from_utf8(&bs), "bad-mime")?;
                     mimes.push(Mime(s.to_string()));
@@ -740,7 +739,7 @@ impl Cluster {
             Compression::Lzma2 => {
                 use xz2::read::XzDecoder;
 
-                let size = self.size.clone().unwrap_or(MAX_CLUSTER_SIZE) - 1;
+                let size = self.size.unwrap_or(MAX_CLUSTER_SIZE) - 1;
                 // println!("lzma2 off:{} size:{}", self.off, size);
                 let mut indata = vec![0; size];
                 let n = err_at!(IOError, fd.read(&mut indata))?;
@@ -754,7 +753,7 @@ impl Cluster {
             Compression::Zstd => {
                 use zstd::stream::read::Decoder;
 
-                let size = self.size.clone().unwrap_or(MAX_CLUSTER_SIZE) - 1;
+                let size = self.size.unwrap_or(MAX_CLUSTER_SIZE) - 1;
                 // println!("zstd off:{} size:{}", self.off, size);
                 let mut indata = vec![0; size];
                 let n = err_at!(IOError, fd.read(&mut indata))?;

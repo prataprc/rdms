@@ -45,11 +45,8 @@ fn main() {
     let opts = Opt::from_args();
 
     let mut z = Zimf::open(opts.zim_file.clone()).unwrap();
-    match opts.pool_size {
-        Some(pool_size) => {
-            z.set_pool_size(pool_size).unwrap();
-        }
-        None => (),
+    if let Some(pool_size) = opts.pool_size {
+        z.set_pool_size(pool_size).unwrap();
     }
 
     if opts.info && opts.json {
@@ -93,8 +90,8 @@ fn main() {
         }
     }
 
-    match opts.url {
-        Some(url) => match entries.binary_search_by_key(&url, |e| e.url.clone()) {
+    if let Some(url) = opts.url {
+        match entries.binary_search_by_key(&url, |e| e.url.clone()) {
             Ok(n) => {
                 let entry = z.get_entry(n).as_ref().clone();
                 print::make_entry_table(&entry, &z).print_tty(opts.color);
@@ -102,21 +99,19 @@ fn main() {
             Err(_) => {
                 println!("Missing url {:?}", url);
             }
-        },
-        None => (),
-    };
+        }
+    }
 
-    match opts.dump {
-        Some(url) => match entries.binary_search_by_key(&url, |e| e.url.clone()) {
+    if let Some(url) = opts.dump {
+        match entries.binary_search_by_key(&url, |e| e.url.clone()) {
             Ok(n) => {
                 let (_entry, data) = z.get_entry_content(n).unwrap();
-                std::io::stdout().write(&data).unwrap();
+                debug_assert!(data.len() == std::io::stdout().write(&data).unwrap());
             }
             Err(_) => {
                 println!("Missing url {:?}", url);
             }
-        },
-        None => (),
+        }
     }
 
     if opts.dump_all {

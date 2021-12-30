@@ -65,7 +65,7 @@ where
 
     pub fn spawn(&mut self) {
         let name = self.name.clone();
-        let (deadline, timeout) = (self.deadline.clone(), self.timeout.clone());
+        let (deadline, timeout) = (self.deadline, self.timeout);
 
         let input = self.input.take().unwrap();
         self.handle = match self.callb.take() {

@@ -5,7 +5,7 @@ use std::{fmt, result};
 use crate::Result;
 
 mod lex;
-mod parsec;
+mod parse;
 
 /// Type position in (line_no, col_no) format within the text. Both `line_no`
 /// and `col_no` start from 1.
@@ -18,7 +18,7 @@ impl fmt::Display for Position {
 }
 
 pub use lex::Lex;
-pub use parsec::{Parsec, S};
+pub use parse::{Parsec, S};
 
 /// Trait implemented by lexer types.
 pub trait Lexer {
@@ -77,7 +77,7 @@ impl ToString for Node {
             Node::Maybe { child, .. } => child
                 .as_ref()
                 .map(|n| n.to_string())
-                .unwrap_or("".to_string()),
+                .unwrap_or_else(|| "".to_string()),
             Node::Token { text, .. } => text.to_string(),
             Node::Ws { text, .. } => text.to_string(),
             Node::M { children, .. } => {
@@ -135,7 +135,9 @@ impl Node {
             Node::Maybe { name, child } if child.is_some() => {
                 println!("{}Maybe#{} ok", prefix, name);
                 let prefix = prefix.to_string() + "  ";
-                child.as_ref().map(|n| n.pretty_print(&prefix));
+                if let Some(n) = child.as_ref() {
+                    n.pretty_print(&prefix)
+                }
             }
             Node::Maybe { name, .. } => println!("{}Maybe#{}", prefix, name),
             Node::Token { name, text } => {

@@ -128,7 +128,7 @@ impl Index {
             git2::Signature::new(
                 &self.config.user_name,
                 &self.config.user_email,
-                &timestamp
+                timestamp
             )
         )
     }
@@ -358,14 +358,11 @@ impl Index {
                     Some(self.do_commit(odb, None, child)?.id())
                 }
             };
-            match oid {
-                Some(oid) => {
-                    let tree = err_at!(FailGitapi, self.repo.find_tree(oid))?;
-                    if !tree.is_empty() {
-                        err_at!(FailGitapi, builder.insert(comp, oid, tree_mode))?;
-                    }
+            if let Some(oid) = oid {
+                let tree = err_at!(FailGitapi, self.repo.find_tree(oid))?;
+                if !tree.is_empty() {
+                    err_at!(FailGitapi, builder.insert(comp, oid, tree_mode))?;
                 }
-                None => (),
             }
         }
 
@@ -385,12 +382,12 @@ impl Index {
             Bound::Included(key) => key
                 .to_key_path()?
                 .into_iter()
-                .map(|s| Bound::Included(s.to_string()))
+                .map(Bound::Included)
                 .collect(),
             Bound::Excluded(key) => key
                 .to_key_path()?
                 .into_iter()
-                .map(|s| Bound::Excluded(s.to_string()))
+                .map(Bound::Excluded)
                 .collect(),
         };
 
@@ -802,7 +799,7 @@ fn te_to_entry(
 ) -> Result<dba::Entry<path::PathBuf>> {
     let key: path::PathBuf = {
         rloc.push(te.name().unwrap());
-        rloc.into()
+        rloc
     };
 
     let obj: dba::Object = err_at!(FailGitapi, te.to_object(repo))?.try_into()?;

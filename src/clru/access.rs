@@ -159,7 +159,8 @@ impl<K> Access<K> {
                             }
                         }
                         Err(_) => {
-                            // println!("access append loop {:p}", new);
+                            #[cfg(feature = "debug")]
+                            println!("access append loop {:p}", new);
                         }
                     }
                 }

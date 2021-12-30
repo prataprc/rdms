@@ -62,12 +62,11 @@ impl<Q, R, T> Thread<Q, R, T> {
         let handle = thread::spawn(main_loop(rx));
 
         let tx = Some(Arc::new(Mutex::new(Tx::N(tx))));
-        let th = Thread {
+
+        Thread {
             name: name.to_string(),
             inner: Some(Inner { handle, tx }),
-        };
-
-        th
+        }
     }
 
     /// Create a new Thread instance, using synchronous channel with finite buffer.
@@ -81,12 +80,11 @@ impl<Q, R, T> Thread<Q, R, T> {
         let handle = thread::spawn(main_loop(rx));
 
         let tx = Some(Arc::new(Mutex::new(Tx::S(tx))));
-        let th = Thread {
+
+        Thread {
             name: name.to_string(),
             inner: Some(Inner { handle, tx }),
-        };
-
-        th
+        }
     }
 
     /// Recommended way to exit/shutdown the thread. Note that all [Tx] clones of this
@@ -203,7 +201,7 @@ impl<Q, R, T> Pool<Q, R, T> {
     {
         for i in 0..self.pool_size {
             let (name, main_loop) = (format!("{}-{}", self.name, i), main_loop.clone());
-            let thread = match self.chan_size.clone() {
+            let thread = match self.chan_size {
                 Some(chan_size) => Thread::new_sync(&name, chan_size, main_loop),
                 None => Thread::new(&name, main_loop),
             };

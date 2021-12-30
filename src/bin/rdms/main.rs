@@ -20,6 +20,7 @@ pub struct Opt {
 
 #[derive(Clone, StructOpt)]
 pub enum SubCommand {
+    /// perf-subcommand, to execute a performance profile, to measure algorithms.
     Perf {
         #[structopt(long = "seed", default_value = "0")]
         seed: u64,
@@ -30,14 +31,22 @@ pub enum SubCommand {
         #[structopt(short = "m", long = "module", default_value = "llrb")]
         module: String,
     },
+    /// git-subcommand, to play with git and dba systems.
     Git {
-        #[structopt(long = "db")]
+        #[structopt(long = "repo", help = "location of git repository")]
+        loc_repo: Option<ffi::OsString>,
+
+        #[structopt(
+            long = "db",
+            help = "db-path within git repository, refer <loc_repo>"
+        )]
         loc_db: Option<ffi::OsString>,
 
-        #[structopt(long = "hash-file")]
-        hash_file: Option<ffi::OsString>,
+        #[structopt(long = "sha1-file", help = "generate SHA1 hash for file's content")]
+        sha1_file: Option<ffi::OsString>,
 
-        loc_repo: Option<ffi::OsString>,
+        #[structopt(long = "sha1", help = "generate SHA1 hash for text")]
+        sha1_text: Option<String>,
     },
 }
 

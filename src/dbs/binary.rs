@@ -58,7 +58,6 @@ impl<'a> arbitrary::Arbitrary<'a> for Binary {
     }
 }
 
-#[cfg(any(test, feature = "rand"))]
 impl rand::distributions::Distribution<Binary> for rand::distributions::Standard {
     fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> Binary {
         let (val, size) = (rng.gen::<u64>(), rng.gen::<usize>() % 1024);

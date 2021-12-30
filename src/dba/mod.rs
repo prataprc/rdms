@@ -7,7 +7,7 @@
 //! cryptographically strong. For example, below we compute address for JSON object
 //! using SHA1:
 //!
-//! ```
+//! ```ignore
 //! content: "{ "planet": "earth", "size": 6371 }"
 //! address: eefb77629ed77802247c30e9462ff8886e9cbcf6
 //! ```

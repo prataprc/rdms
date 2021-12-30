@@ -18,7 +18,6 @@ impl<'a> From<git2::Blob<'a>> for dba::Object {
     fn from(blob: git2::Blob) -> dba::Object {
         dba::Object::Blob {
             hash: dba::Oid::from_sha1(blob.id().as_bytes()),
-            older: Vec::default(),
             value: blob.content().to_vec(),
         }
     }

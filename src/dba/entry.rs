@@ -2,20 +2,47 @@ use std::{fmt, result};
 
 use crate::dba;
 
+/// Oid is object id, which is a hash digest of object's content.
+#[derive(Clone)]
+pub enum Oid {
+    Sha1 { hash: [u8; 20] },
+}
+
+impl Oid {
+    /// Create a new Oid from digest.
+    pub fn from_sha1(digest: &[u8]) -> Oid {
+        let mut hash = [0; 20];
+        hash[..].copy_from_slice(digest);
+        Oid::Sha1 { hash }
+    }
+
+    /// Return the raw-bytes of sha1 hash.
+    pub fn to_sha1(&self) -> Option<&[u8]> {
+        match self {
+            Oid::Sha1 { hash } => Some(hash),
+        }
+    }
+}
+
+/// Type of an object.
+#[derive(Clone)]
+pub enum Type {
+    /// Object is a binary blob, a leaf node in the commit-tree.
+    Blob,
+    /// Object is sub-tree in the commit-tree. Holds onto a collection of other objects.
+    Tree,
+    /// A commit object, aka root object from which entire merkel-tree was constructed.
+    Commit,
+}
+
+/// Object type forms the core of `dba` design.
 #[derive(Clone)]
 pub enum Object {
-    Oid {
-        hash: Oid,
-    },
-    Blob {
-        hash: Oid,
-        older: Vec<Oid>,
-        value: Vec<u8>,
-    },
-    Tree {
-        hash: Oid,
-        edges: Vec<Edge>,
-    },
+    /// A leaf object is called `blob`, it just a binary-blob of data.
+    Blob { hash: Oid, value: Vec<u8> },
+    /// An intermediate object, holds onto a collection of other objects.
+    Tree { hash: Oid, edges: Vec<Edge> },
+    /// A root object from which entire merkel-tree was constructed.
     Commit {
         hash: Oid,
         tree: Box<Object>,
@@ -23,9 +50,22 @@ pub enum Object {
         author: User,
         committer: User,
     },
+    /// Holds a reference to an actual object.
+    Oid { hash: Oid },
+}
+
+/// Edge represents a connection between parent node and one of its child node in
+/// the merkel-tree
+#[derive(Clone)]
+pub struct Edge {
+    pub file_mode: i32,
+    pub obj_type: Type,
+    pub obj_hash: Oid,
+    pub name: String,
 }
 
 impl Object {
+    /// Return object's Oid, its hash-digest.
     pub fn to_oid(&self) -> Oid {
         match self {
             Object::Oid { hash } => hash.clone(),
@@ -35,7 +75,8 @@ impl Object {
         }
     }
 
-    pub fn as_value(&self) -> Option<&[u8]> {
+    /// If object is a blob, return the content of the object.
+    pub fn as_content(&self) -> Option<&[u8]> {
         match self {
             Object::Blob { value, .. } => Some(value),
             _ => None,
@@ -78,45 +119,12 @@ impl Object {
     }
 }
 
-#[derive(Clone)]
-pub struct Edge {
-    pub file_mode: i32,
-    pub obj_type: Type,
-    pub obj_hash: Oid,
-    pub name: String,
-}
-
-#[derive(Clone)]
-pub enum Type {
-    Blob,
-    Tree,
-    Commit,
-}
-
+/// User detail to create a commit object.
 #[derive(Clone)]
 pub struct User {
     pub name: String,
     pub email: String,
     pub timestamp: u64, // utc timestamp from epoch.
-}
-
-#[derive(Clone)]
-pub enum Oid {
-    Sha1 { hash: [u8; 20] },
-}
-
-impl Oid {
-    pub fn from_sha1(bytes: &[u8]) -> Oid {
-        let mut hash = [0; 20];
-        hash[..].copy_from_slice(bytes);
-        Oid::Sha1 { hash }
-    }
-
-    pub fn to_shah1(&self) -> &[u8] {
-        match self {
-            Oid::Sha1 { hash } => hash,
-        }
-    }
 }
 
 #[derive(Clone)]

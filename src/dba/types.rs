@@ -1,3 +1,11 @@
+//! Module implement [dba::AsKey] trait for [String], [path::Path] [path::PathBuf]
+//!
+//! **AsKey implementations**
+//!
+//! * *String* type
+//!
+//!
+
 use std::path;
 
 use crate::{dba, Error, Result};

@@ -147,6 +147,14 @@ impl<Q, R> Tx<Q, R> {
         }
         err_at!(IPCFail, srx.recv())
     }
+
+    /// Send a request message to thread and wait for a response.
+    pub fn request_tx(&self, request: Q, rt_tx: mpsc::Sender<R>) -> Result<()> {
+        match self {
+            Tx::N(tx) => err_at!(IPCFail, tx.send((request, Some(rt_tx)))),
+            Tx::S(tx) => err_at!(IPCFail, tx.send((request, Some(rt_tx)))),
+        }
+    }
 }
 
 /// IPC type, that shall be passed to the thread's main loop.
@@ -239,5 +247,13 @@ impl<Q, R, T> Pool<Q, R, T> {
         let th: &Thread<Q, R, T> = &self.threads[n];
 
         th.to_tx().request(request)
+    }
+
+    /// Send a request message to thread and wait for a response.
+    pub fn request_tx(&self, request: Q, rt_tx: mpsc::Sender<R>) -> Result<()> {
+        let n: usize = rand::random::<usize>() % self.threads.len();
+        let th: &Thread<Q, R, T> = &self.threads[n];
+
+        th.to_tx().request_tx(request, rt_tx)
     }
 }

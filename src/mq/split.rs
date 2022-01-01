@@ -1,4 +1,4 @@
-use std::{sync::mpsc, thread, time};
+use std::{sync::mpsc, thread};
 
 use crate::{mq, Error, Result};
 
@@ -8,8 +8,6 @@ where
 {
     name: String,
     chan_size: usize,
-    deadline: Option<time::Instant>,
-    timeout: Option<time::Duration>,
     n: usize,
 
     input: Option<mpsc::Receiver<Q>>,
@@ -24,8 +22,6 @@ where
         Split {
             name,
             chan_size: mq::DEFAULT_CHAN_SIZE,
-            deadline: None,
-            timeout: None,
             n,
 
             input: Some(input),
@@ -38,20 +34,10 @@ where
         self
     }
 
-    pub fn set_deadline(&mut self, deadline: time::Instant) -> &mut Self {
-        self.deadline = Some(deadline);
-        self
-    }
-
-    pub fn set_timeout(&mut self, timeout: time::Duration) -> &mut Self {
-        self.timeout = Some(timeout);
-        self
-    }
-
     pub fn spawn(&mut self) -> Vec<mpsc::Receiver<Q>> {
-        let name = self.name.clone();
-        let (deadline, timeout) = (self.deadline, self.timeout);
+        let (name, chan_size) = (self.name.clone(), self.chan_size);
         let (mut txs, mut outputs) = (vec![], vec![]);
+
         (0..self.n).for_each(|_| {
             let (tx, output) = mpsc::sync_channel(self.chan_size);
             txs.push(tx);
@@ -59,9 +45,7 @@ where
         });
 
         let input = self.input.take().unwrap();
-        self.handle = Some(thread::spawn(move || {
-            action(name, deadline, timeout, input, txs)
-        }));
+        self.handle = Some(thread::spawn(move || action(name, chan_size, input, txs)));
 
         outputs
     }
@@ -81,8 +65,7 @@ where
 
 fn action<Q>(
     name: String,
-    deadline: Option<time::Instant>,
-    timeout: Option<time::Duration>,
+    chan_size: usize,
     input: mpsc::Receiver<Q>,
     txs: Vec<mpsc::SyncSender<Q>>,
 ) -> Result<()>
@@ -90,30 +73,23 @@ where
     Q: 'static + Send + Clone,
 {
     loop {
-        let res = if let Some(deadline) = deadline {
-            input.recv_deadline(deadline)
-        } else if let Some(timeout) = timeout {
-            input.recv_timeout(timeout)
-        } else {
-            match input.recv() {
-                Ok(msg) => Ok(msg),
-                Err(_) => Err(mpsc::RecvTimeoutError::Disconnected),
-            }
-        };
-
-        match res {
-            Ok(msg) => {
-                for tx in txs.iter() {
-                    err_at!(IPCFail, tx.send(msg.clone()), "thread Split<{:?}>", name)?;
+        match mq::get_messages(&input, chan_size) {
+            Ok(qmsgs) => {
+                for qmsg in qmsgs.into_iter() {
+                    for tx in txs.iter() {
+                        err_at!(
+                            IPCFail,
+                            tx.send(qmsg.clone()),
+                            "thread Split<{:?}>",
+                            name
+                        )?;
+                    }
                 }
             }
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                err_at!(Timeout, msg: "thread Split<{:?}>", name)?
-            }
+            Err(mpsc::TryRecvError::Disconnected) => break,
+            _ => unreachable!(),
         }
     }
 
-    // tx shall be dropped here.
     Ok(())
 }

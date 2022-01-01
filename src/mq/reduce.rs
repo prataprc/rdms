@@ -1,47 +1,37 @@
-use std::{sync::mpsc, thread, time};
+use rayon::prelude::*;
+
+use std::{sync::mpsc, thread};
 
 use crate::{mq, Error, Result};
 
-#[derive(Clone)]
-pub struct Config {
-    pub name: String,
-    pub chan_size: usize,
-    pub deadline: Option<time::Instant>,
-    pub timeout: Option<time::Duration>,
-}
-
-pub struct Reduce<Q, R, F>
+pub struct Reduce<Q, ID, F>
 where
-    Q: 'static + Send,
-    R: 'static + Send,
-    F: 'static + Send + FnMut(R, Q) -> Result<R>,
+    Q: 'static + Sync + Send,
+    ID: 'static + Sync + Send + Clone + Fn() -> Q,
+    F: 'static + Sync + Send + Fn(Q, Q) -> Q,
 {
     name: String,
     chan_size: usize,
-    deadline: Option<time::Instant>,
-    timeout: Option<time::Duration>,
 
     input: Option<mpsc::Receiver<Q>>,
-    initial: Option<R>,
+    identity: Option<ID>,
     reduce: Option<F>,
     handle: Option<thread::JoinHandle<Result<()>>>,
 }
 
-impl<Q, R, F> Reduce<Q, R, F>
+impl<Q, ID, F> Reduce<Q, ID, F>
 where
-    Q: 'static + Send,
-    R: 'static + Send,
-    F: 'static + Send + FnMut(R, Q) -> Result<R>,
+    Q: 'static + Sync + Send,
+    ID: 'static + Sync + Send + Clone + Fn() -> Q,
+    F: 'static + Sync + Send + Fn(Q, Q) -> Q,
 {
-    pub fn new(name: String, input: mpsc::Receiver<Q>, initial: R, reduce: F) -> Self {
+    pub fn new(name: String, input: mpsc::Receiver<Q>, identity: ID, reduce: F) -> Self {
         Reduce {
             name,
             chan_size: mq::DEFAULT_CHAN_SIZE,
-            deadline: None,
-            timeout: None,
 
             input: Some(input),
-            initial: Some(initial),
+            identity: Some(identity),
             reduce: Some(reduce),
             handle: None,
         }
@@ -52,26 +42,16 @@ where
         self
     }
 
-    pub fn set_deadline(&mut self, deadline: time::Instant) -> &mut Self {
-        self.deadline = Some(deadline);
-        self
-    }
-
-    pub fn set_timeout(&mut self, timeout: time::Duration) -> &mut Self {
-        self.timeout = Some(timeout);
-        self
-    }
-
-    pub fn spawn(&mut self) -> mpsc::Receiver<R> {
-        let name = self.name.clone();
-        let (deadline, timeout) = (self.deadline, self.timeout);
+    pub fn spawn(&mut self) -> mpsc::Receiver<Q> {
+        let (name, chan_size) = (self.name.clone(), self.chan_size);
         let (tx, output) = mpsc::sync_channel(self.chan_size);
 
         let input = self.input.take().unwrap();
-        let initial = self.initial.take().unwrap();
+        let identity = self.identity.take().unwrap();
         let reduce = self.reduce.take().unwrap();
+
         self.handle = Some(thread::spawn(move || {
-            action(name, deadline, timeout, input, tx, initial, reduce)
+            action(name, chan_size, input, tx, identity, reduce)
         }));
 
         output
@@ -90,45 +70,37 @@ where
     }
 }
 
-fn action<Q, R, F>(
+fn action<Q, ID, F>(
     name: String,
-    deadline: Option<time::Instant>,
-    timeout: Option<time::Duration>,
+    chan_size: usize,
     input: mpsc::Receiver<Q>,
-    tx: mpsc::SyncSender<R>,
-    mut initial: R,
-    mut reduce: F,
+    tx: mpsc::SyncSender<Q>,
+    identity: ID,
+    reduce: F,
 ) -> Result<()>
 where
-    R: 'static + Send,
-    Q: 'static + Send,
-    F: 'static + Send + FnMut(R, Q) -> Result<R>,
+    Q: 'static + Sync + Send,
+    ID: 'static + Sync + Send + Clone + Fn() -> Q,
+    F: 'static + Sync + Send + Fn(Q, Q) -> Q,
 {
+    let mut qmsg = None;
     loop {
-        let res = if let Some(deadline) = deadline {
-            input.recv_deadline(deadline)
-        } else if let Some(timeout) = timeout {
-            input.recv_timeout(timeout)
-        } else {
-            match input.recv() {
-                Ok(msg) => Ok(msg),
-                Err(_) => Err(mpsc::RecvTimeoutError::Disconnected),
+        match mq::get_messages(&input, chan_size) {
+            Ok(mut qmsgs) => {
+                qmsg.map(|qmsg| qmsgs.insert(0, qmsg));
+                qmsg = Some(
+                    qmsgs
+                        .into_par_iter()
+                        .reduce(identity.clone(), |a, b| reduce(a, b)),
+                );
             }
-        };
-
-        match res {
-            Ok(msg) => {
-                initial = reduce(initial, msg)?;
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                err_at!(Timeout, msg: "thread Reduce<{:?}>", name)?
-            }
+            Err(mpsc::TryRecvError::Disconnected) => break,
+            _ => unreachable!(),
         }
     }
 
-    err_at!(IPCFail, tx.send(initial), "thread Reduce<{:?}>", name)?;
-
-    // tx shall be dropped here.
-    Ok(())
+    match qmsg {
+        Some(rmsg) => err_at!(IPCFail, tx.send(rmsg), "thread Reduce<{:?}", name),
+        None => Ok(()),
+    }
 }

@@ -1,17 +1,17 @@
-use std::{sync::mpsc, thread, time};
+use rayon::prelude::*;
+
+use std::{sync::mpsc, thread};
 
 use crate::{mq, Error, Result};
 
 pub struct FilterMap<Q, R, F>
 where
-    Q: 'static + Send,
-    R: 'static + Send,
-    F: 'static + Send + FnMut(Q) -> Result<Option<R>>,
+    Q: 'static + Sync + Send,
+    R: 'static + Sync + Send,
+    F: 'static + Sync + Send + Fn(Q) -> Option<R>,
 {
     name: String,
     chan_size: usize,
-    deadline: Option<time::Instant>,
-    timeout: Option<time::Duration>,
 
     input: Option<mpsc::Receiver<Q>>,
     filter_map: Option<F>,
@@ -20,16 +20,14 @@ where
 
 impl<Q, R, F> FilterMap<Q, R, F>
 where
-    Q: 'static + Send,
-    R: 'static + Send,
-    F: 'static + Send + FnMut(Q) -> Result<Option<R>>,
+    Q: 'static + Sync + Send,
+    R: 'static + Sync + Send,
+    F: 'static + Sync + Send + Fn(Q) -> Option<R>,
 {
     pub fn new(name: String, input: mpsc::Receiver<Q>, filter_map: F) -> Self {
         FilterMap {
             name,
             chan_size: mq::DEFAULT_CHAN_SIZE,
-            deadline: None,
-            timeout: None,
 
             input: Some(input),
             filter_map: Some(filter_map),
@@ -42,25 +40,15 @@ where
         self
     }
 
-    pub fn set_deadline(&mut self, deadline: time::Instant) -> &mut Self {
-        self.deadline = Some(deadline);
-        self
-    }
-
-    pub fn set_timeout(&mut self, timeout: time::Duration) -> &mut Self {
-        self.timeout = Some(timeout);
-        self
-    }
-
     pub fn spawn(&mut self) -> mpsc::Receiver<R> {
-        let name = self.name.clone();
-        let (deadline, timeout) = (self.deadline, self.timeout);
+        let (name, chan_size) = (self.name.clone(), self.chan_size);
         let (tx, output) = mpsc::sync_channel(self.chan_size);
 
         let input = self.input.take().unwrap();
         let filter_map = self.filter_map.take().unwrap();
+
         self.handle = Some(thread::spawn(move || {
-            action(name, deadline, timeout, input, tx, filter_map)
+            action(name, chan_size, input, tx, filter_map)
         }));
 
         output
@@ -81,42 +69,31 @@ where
 
 fn action<Q, R, F>(
     name: String,
-    deadline: Option<time::Instant>,
-    timeout: Option<time::Duration>,
+    chan_size: usize,
     input: mpsc::Receiver<Q>,
     tx: mpsc::SyncSender<R>,
-    mut filter_map: F,
+    filter_map: F,
 ) -> Result<()>
 where
-    R: 'static + Send,
-    Q: 'static + Send,
-    F: 'static + Send + FnMut(Q) -> Result<Option<R>>,
+    R: 'static + Sync + Send,
+    Q: 'static + Sync + Send,
+    F: 'static + Sync + Send + Fn(Q) -> Option<R>,
 {
     loop {
-        let res = if let Some(deadline) = deadline {
-            input.recv_deadline(deadline)
-        } else if let Some(timeout) = timeout {
-            input.recv_timeout(timeout)
-        } else {
-            match input.recv() {
-                Ok(msg) => Ok(msg),
-                Err(_) => Err(mpsc::RecvTimeoutError::Disconnected),
-            }
-        };
-
-        match res {
-            Ok(msg) => {
-                if let Some(resp) = filter_map(msg)? {
-                    err_at!(IPCFail, tx.send(resp), "thread FilterMap<{:?}>", name)?
+        match mq::get_messages(&input, chan_size) {
+            Ok(qmsgs) => {
+                for rmsg in qmsgs
+                    .into_par_iter()
+                    .filter_map(&filter_map)
+                    .collect::<Vec<R>>()
+                {
+                    err_at!(IPCFail, tx.send(rmsg), "thread FilterMap<{:?}", name)?
                 }
             }
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                err_at!(Timeout, msg: "thread FilterMap<{:?}>", name)?
-            }
+            Err(mpsc::TryRecvError::Disconnected) => break,
+            _ => unreachable!(),
         }
     }
 
-    // tx shall be dropped here.
     Ok(())
 }

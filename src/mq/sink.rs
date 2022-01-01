@@ -1,16 +1,14 @@
-use std::{sync::mpsc, thread, time};
+use std::{sync::mpsc, thread};
 
 use crate::{mq, Error, Result};
 
 pub struct Sink<Q, F>
 where
     Q: 'static + Send + mq::Message,
-    F: 'static + Send + FnMut(Q) -> Result<bool>,
+    F: 'static + Send + Fn(Q) -> Result<bool>,
 {
     name: String,
     chan_size: usize,
-    deadline: Option<time::Instant>,
-    timeout: Option<time::Duration>,
 
     input: Option<mpsc::Receiver<Q>>,
     callb: Option<F>,
@@ -20,14 +18,12 @@ where
 impl<Q, F> Sink<Q, F>
 where
     Q: 'static + Send + mq::Message,
-    F: 'static + Send + FnMut(Q) -> Result<bool>,
+    F: 'static + Send + Fn(Q) -> Result<bool>,
 {
     pub fn new_null(name: String, input: mpsc::Receiver<Q>) -> Self {
         Sink {
             name,
             chan_size: mq::DEFAULT_CHAN_SIZE,
-            deadline: None,
-            timeout: None,
 
             input: Some(input),
             callb: None,
@@ -39,8 +35,6 @@ where
         Sink {
             name,
             chan_size: mq::DEFAULT_CHAN_SIZE,
-            deadline: None,
-            timeout: None,
 
             input: Some(input),
             callb: Some(callb),
@@ -53,28 +47,15 @@ where
         self
     }
 
-    pub fn set_deadline(&mut self, deadline: time::Instant) -> &mut Self {
-        self.deadline = Some(deadline);
-        self
-    }
-
-    pub fn set_timeout(&mut self, timeout: time::Duration) -> &mut Self {
-        self.timeout = Some(timeout);
-        self
-    }
-
     pub fn spawn(&mut self) {
-        let name = self.name.clone();
-        let (deadline, timeout) = (self.deadline, self.timeout);
+        let chan_size = self.chan_size;
 
         let input = self.input.take().unwrap();
         self.handle = match self.callb.take() {
-            Some(callb) => Some(thread::spawn(move || {
-                action_callb(name, deadline, timeout, input, callb)
-            })),
-            None => Some(thread::spawn(move || {
-                action_null(name, deadline, timeout, input)
-            })),
+            Some(callb) => {
+                Some(thread::spawn(move || action_callb(chan_size, input, callb)))
+            }
+            None => Some(thread::spawn(move || action_null(chan_size, input))),
         };
     }
 
@@ -92,74 +73,42 @@ where
     }
 }
 
-fn action_null<Q>(
-    name: String,
-    deadline: Option<time::Instant>,
-    timeout: Option<time::Duration>,
-    input: mpsc::Receiver<Q>,
-) -> Result<()>
+fn action_null<Q>(chan_size: usize, input: mpsc::Receiver<Q>) -> Result<()>
 where
     Q: 'static + Send,
 {
     loop {
-        let res = if let Some(deadline) = deadline {
-            input.recv_deadline(deadline)
-        } else if let Some(timeout) = timeout {
-            input.recv_timeout(timeout)
-        } else {
-            match input.recv() {
-                Ok(msg) => Ok(msg),
-                Err(_) => Err(mpsc::RecvTimeoutError::Disconnected),
-            }
-        };
-
-        match res {
-            Ok(_msg) => (),
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                err_at!(Timeout, msg: "thread Sink<{:?}>", name)?
-            }
+        match mq::get_messages(&input, chan_size) {
+            Ok(_qmsgs) => (),
+            Err(mpsc::TryRecvError::Disconnected) => break,
+            _ => unreachable!(),
         }
     }
 
     Ok(())
 }
 
-fn action_callb<Q, F>(
-    name: String,
-    deadline: Option<time::Instant>,
-    timeout: Option<time::Duration>,
-    input: mpsc::Receiver<Q>,
-    mut callb: F,
-) -> Result<()>
+fn action_callb<Q, F>(chan_size: usize, input: mpsc::Receiver<Q>, callb: F) -> Result<()>
 where
     Q: 'static + Send + mq::Message,
-    F: 'static + Send + FnMut(Q) -> Result<bool>,
+    F: 'static + Send + Fn(Q) -> Result<bool>,
 {
-    loop {
-        let res = if let Some(deadline) = deadline {
-            input.recv_deadline(deadline)
-        } else if let Some(timeout) = timeout {
-            input.recv_timeout(timeout)
-        } else {
-            match input.recv() {
-                Ok(msg) => Ok(msg),
-                Err(_) => Err(mpsc::RecvTimeoutError::Disconnected),
+    let res = 'outer: loop {
+        match mq::get_messages(&input, chan_size) {
+            Ok(qmsgs) => {
+                for qmsg in qmsgs.into_iter() {
+                    match callb(qmsg) {
+                        Ok(true) => (),
+                        Ok(false) => break 'outer Ok(()),
+                        Err(err) => break 'outer Err(err),
+                    }
+                }
             }
-        };
-
-        match res {
-            Ok(msg) => match callb(msg)? {
-                true => (),
-                false => break,
-            },
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                err_at!(Timeout, msg: "thread Sink<{:?}>", name)?
-            }
+            Err(mpsc::TryRecvError::Disconnected) => break Ok(()),
+            _ => unreachable!(),
         }
-    }
+    };
 
     callb(Q::finish())?;
-    Ok(())
+    res
 }

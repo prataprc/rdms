@@ -7,7 +7,7 @@ pub struct Source<R, I, F>
 where
     R: 'static + Send,
     I: 'static + Send + Iterator<Item = R>,
-    F: 'static + Send + FnMut() -> Result<Option<R>>,
+    F: 'static + Send + Fn() -> Result<Option<R>>,
 {
     name: String,
     chan_size: usize,
@@ -20,7 +20,7 @@ enum Inner<R, I, F>
 where
     R: 'static + Send,
     I: 'static + Send + Iterator<Item = R>,
-    F: 'static + Send + FnMut() -> Result<Option<R>>,
+    F: 'static + Send + Fn() -> Result<Option<R>>,
 {
     Iter { iter: I },
     Gen { gen: F },
@@ -30,7 +30,7 @@ impl<R, I, F> Source<R, I, F>
 where
     R: 'static + Send,
     I: 'static + Send + Iterator<Item = R>,
-    F: 'static + Send + FnMut() -> Result<Option<R>>,
+    F: 'static + Send + Fn() -> Result<Option<R>>,
 {
     /// Create a new source from iterator.
     pub fn from_iter(name: String, iter: I) -> Self {
@@ -107,10 +107,10 @@ where
     Ok(())
 }
 
-fn action_gen<R, F>(name: String, tx: mpsc::SyncSender<R>, mut gen: F) -> Result<()>
+fn action_gen<R, F>(name: String, tx: mpsc::SyncSender<R>, gen: F) -> Result<()>
 where
     R: 'static + Send,
-    F: 'static + Send + FnMut() -> Result<Option<R>>,
+    F: 'static + Send + Fn() -> Result<Option<R>>,
 {
     while let Some(msg) = gen()? {
         err_at!(IPCFail, tx.send(msg), "thread Source<{:?}>", name)?

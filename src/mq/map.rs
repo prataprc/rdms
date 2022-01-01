@@ -89,16 +89,6 @@ where
     }
 }
 
-struct Req<Q> {
-    seqno: u64,
-    qmsg: Q,
-}
-
-struct Res<R> {
-    seqno: u64,
-    rmsg: R,
-}
-
 fn action<Q, R, F>(
     name: String,
     chan_size: usize,
@@ -114,92 +104,10 @@ where
     R: 'static + Send,
     F: 'static + Send + Clone + Fn(Q) -> Result<R>,
 {
-    let pool = pool_size.map(|pool_size| {
-        let mut pool = util::thread::Pool::new_sync(&name, chan_size);
-        pool.set_pool_size(pool_size);
-        let (map, name) = (map.clone(), name.clone());
-        pool.spawn(|rx: util::thread::Rx<Req<Q>, Res<R>>| {
-            move || -> Result<()> {
-                loop {
-                    let (msg, tx) = err_at!(IPCFail, rx.recv())?;
-                    let resp = Res {
-                        seqno: msg.seqno,
-                        rmsg: map(msg.qmsg)?,
-                    };
-                    err_at!(IPCFail, tx.unwrap().send(resp), "thread Map<{:?}>", name)?;
-                }
-            }
-        });
-        pool
-    });
+    let pool = pool_size
+        .map(|pool_size| make_thread_pool(&name, pool_size, chan_size, map.clone()));
 
-    let (mut qseqno, mut rseqno) = (1, 1);
-    let mut rmsgs = vec![];
-    let (tx_pool, rx_pool) = mpsc::channel();
-
-    let res = 'outer: loop {
-        let res = if let Some(deadline) = deadline {
-            input.recv_deadline(deadline)
-        } else if let Some(timeout) = timeout {
-            input.recv_timeout(timeout)
-        } else {
-            match input.recv() {
-                Ok(msg) => Ok(msg),
-                Err(_) => Err(mpsc::RecvTimeoutError::Disconnected),
-            }
-        };
-
-        match (res, &pool) {
-            (Ok(msg), Some(pool)) => {
-                while let Ok(rmsg) = rx_pool.try_recv() {
-                    rmsgs.push(rmsg)
-                }
-                let res = pool.request_tx(
-                    Req {
-                        seqno: qseqno,
-                        qmsg: msg,
-                    },
-                    tx_pool.clone(),
-                );
-                match res {
-                    Ok(_) => (),
-                    Err(err) => break Err(err),
-                }
-            }
-            (Ok(msg), _) => match map(msg) {
-                Ok(rmsg) => rmsgs.push(Res {
-                    seqno: qseqno,
-                    rmsg,
-                }),
-                Err(err) => break Err(err),
-            },
-            (Err(mpsc::RecvTimeoutError::Disconnected), _) => break Ok(()),
-            (Err(mpsc::RecvTimeoutError::Timeout), _) => {
-                break err_at!(Timeout, msg: "thread Map<{:?}>", name)
-            }
-        };
-
-        rmsgs.sort_unstable_by_key(|m| m.seqno);
-        rmsgs.reverse();
-        loop {
-            if let Some(rmsg) = rmsgs.pop() {
-                if rmsg.seqno == rseqno {
-                    rseqno += 1;
-                    match tx.send(rmsg.rmsg) {
-                        Ok(()) => (),
-                        err => {
-                            break 'outer err_at!(IPCFail, err, "thread Map<{:?}>", name)
-                        }
-                    }
-                } else {
-                    rmsgs.push(rmsg);
-                    break;
-                }
-            }
-        }
-
-        qseqno += 1;
-    };
+    let res = action_loop(&name, deadline, timeout, pool.as_ref(), input, tx, map);
 
     if let Some(pool) = pool {
         pool.close_wait()?;
@@ -207,4 +115,79 @@ where
 
     // tx shall be dropped here.
     res
+}
+
+fn action_loop<Q, R, F>(
+    name: &str,
+    deadline: Option<time::Instant>,
+    timeout: Option<time::Duration>,
+    pool: Option<&util::thread::Pool<mq::Req<Q>, mq::Res<R>, Result<()>>>,
+    input: mpsc::Receiver<Q>,
+    tx: mpsc::SyncSender<R>,
+    map: F,
+) -> Result<()>
+where
+    Q: 'static + Send,
+    R: 'static + Send,
+    F: 'static + Send + Clone + Fn(Q) -> Result<R>,
+{
+    let (tx_pool, rx_pool) = mpsc::channel();
+    let mut rmsgs = vec![];
+
+    let (mut qseqno, mut rseqno) = (1, 1);
+
+    loop {
+        let res = mq::get_message(&input, deadline, timeout);
+
+        match (res, &pool) {
+            (Ok(qmsg), None) => rmsgs.push(mq::Res::new(qseqno, map(qmsg)?)),
+            (Ok(qmsg), Some(pool)) => {
+                // first drain out response-messages (processed by the pool)
+                while let Ok(rmsg) = rx_pool.try_recv() {
+                    rmsgs.push(rmsg)
+                }
+                // then request message-processing from thread-pool
+                pool.request_tx(mq::Req::<Q>::new(qseqno, qmsg), tx_pool.clone())?;
+            }
+            (Err(mpsc::RecvTimeoutError::Disconnected), _) => break Ok(()),
+            (Err(mpsc::RecvTimeoutError::Timeout), _) => {
+                break err_at!(Timeout, msg: "thread Map<{:?}>", name)
+            }
+        };
+
+        rseqno = err_at!(IPCFail, mq::put_messages(&mut rmsgs, rseqno, &tx))?;
+        qseqno += 1;
+    }
+}
+
+fn make_thread_pool<Q, R, F>(
+    name: &str,
+    pool_size: usize,
+    chan_size: usize,
+    map: F,
+) -> util::thread::Pool<mq::Req<Q>, mq::Res<R>, Result<()>>
+where
+    Q: 'static + Send,
+    R: 'static + Send,
+    F: 'static + Send + Clone + Fn(Q) -> Result<R>,
+{
+    let mut pool = util::thread::Pool::new_sync(name, chan_size);
+    pool.set_pool_size(pool_size);
+
+    let (map, name) = (map.clone(), name.to_string());
+
+    pool.spawn(|rx: util::thread::Rx<mq::Req<Q>, mq::Res<R>>| {
+        move || -> Result<()> {
+            loop {
+                let (req, tx) = err_at!(IPCFail, rx.recv())?;
+                let resp = mq::Res {
+                    seqno: req.seqno,
+                    rmsg: map(req.qmsg)?,
+                };
+                err_at!(IPCFail, tx.unwrap().send(resp), "thread Map<{:?}>", name)?;
+            }
+        }
+    });
+
+    pool
 }

@@ -87,7 +87,9 @@ where
     loop {
         match mq::get_messages(&input, chan_size) {
             Ok(mut qmsgs) => {
-                qmsg.map(|qmsg| qmsgs.insert(0, qmsg));
+                if let Some(qmsg) = qmsg {
+                    qmsgs.insert(0, qmsg)
+                }
                 qmsg = Some(
                     qmsgs
                         .into_par_iter()

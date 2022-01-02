@@ -1,6 +1,6 @@
 //! Module implement Write-Ahead-Logging.
 //!
-//! Write-Ahead-Logging is implemented by [Wal] type, to get started create
+//! Write-Ahead-Logging is implemented by [Wal] type. To get started create
 //! first a configuration [Config] value. Subsequently, a fresh Wal instance can be
 //! created or existing Wal from disk can be loaded, using the configuration.
 //! Wal optionally takes a type parameter `S` for state, that can be used by
@@ -55,7 +55,7 @@ pub use crate::wral::wal::Wal;
 
 /// Default journal file limit is set at 1GB.
 pub const JOURNAL_LIMIT: usize = 1024 * 1024 * 1024;
-/// Default channel buffer for flush thread.
+/// Default channel buffer for flush thread, set at 1024.
 pub const SYNC_BUFFER: usize = 1024;
 
 /// Configuration for [Wal] type.
@@ -102,12 +102,12 @@ impl Config {
         }
     }
 
-    pub fn set_journal_limit(&mut self, journal_limit: usize) -> &mut Self {
+    pub fn set_journal_limit(mut self, journal_limit: usize) -> Self {
         self.journal_limit = journal_limit;
         self
     }
 
-    pub fn set_fsync(&mut self, fsync: bool) -> &mut Self {
+    pub fn set_fsync(mut self, fsync: bool) -> Self {
         self.fsync = fsync;
         self
     }

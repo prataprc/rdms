@@ -7,7 +7,14 @@ use std::{
     result,
 };
 
-/// Single Op-entry in Write-ahead-log
+#[allow(unused_imports)]
+use crate::wral::Wal;
+
+/// Single Op-entry in Write-ahead-log.
+///
+/// The actual operation is serialized and opaque to [Wal] instance. Applications
+/// can iterate over the [Wal] instance for each entry, that is, an Entry value
+/// is typically read-only for applications.
 #[derive(Debug, Clone, Eq, Default, Cborize, Arbitrary)]
 pub struct Entry {
     pub seqno: u64,  // Seqno for this entry, Monotonically increasing number.
@@ -46,11 +53,13 @@ impl Entry {
         Entry { seqno, op }
     }
 
+    /// Return the entry's seqno.
     #[inline]
     pub fn to_seqno(&self) -> u64 {
         self.seqno
     }
 
+    /// Unwrap entry's seqno and serialized operation.
     #[inline]
     pub fn unwrap(self) -> (u64, Vec<u8>) {
         (self.seqno, self.op)

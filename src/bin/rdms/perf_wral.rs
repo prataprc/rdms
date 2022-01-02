@@ -38,16 +38,19 @@ pub fn perf(opts: Opt) -> Result<()> {
 fn load_and_spawn(opts: Opt, p: Profile) -> Result<()> {
     use std::{env, path::PathBuf};
 
-    let dir: PathBuf = vec![env::temp_dir(), "wral-perf".into()]
-        .into_iter()
-        .collect();
-    let mut config = wral::Config::new(dir.as_os_str(), &p.name);
-    config
-        .set_journal_limit(p.journal_limit)
-        .set_fsync(!p.nosync);
-    println!("{:?}", config);
+    let wal = {
+        let dir: PathBuf = vec![env::temp_dir(), "wral-perf".into()]
+            .into_iter()
+            .collect();
 
-    let wal = wral::Wal::create(config, wral::NoState).unwrap();
+        let config = wral::Config::new(dir.as_os_str(), &p.name)
+            .set_journal_limit(p.journal_limit)
+            .set_fsync(!p.nosync);
+
+        println!("{:?}", config);
+
+        wral::Wal::create(config, wral::NoState).unwrap()
+    };
 
     let mut writers = vec![];
     for id in 0..p.threads {

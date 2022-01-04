@@ -40,7 +40,7 @@ enum InnerJournal<S> {
     // Active journal, the latest journal, in the journal-set.
     Working {
         worker: batch::Worker<S>,
-        file: fs::File,
+        file: Option<fs::File>,
     },
     // All journals except lastest journal are archives, which means only
     // the metadata for each batch shall be stored.
@@ -71,18 +71,13 @@ impl<S> Journal<S> {
 
         fs::remove_file(&location).ok(); // cleanup a single journal file
 
-        let file = {
-            let mut opts = fs::OpenOptions::new();
-            err_at!(IOError, opts.append(true).create_new(true).open(&location))?
-        };
-
         Ok(Journal {
             name: name.to_string(),
             num,
             location: location.into_os_string(),
             inner: InnerJournal::Working {
                 worker: batch::Worker::new(state),
-                file,
+                file: None,
             },
         })
     }
@@ -180,7 +175,9 @@ impl<S> Journal<S> {
     }
 
     pub fn purge(self) -> Result<()> {
-        err_at!(IOError, fs::remove_file(&self.location))?;
+        if self.is_open() || self.is_cold() {
+            err_at!(IOError, fs::remove_file(&self.location))?;
+        }
         Ok(())
     }
 }
@@ -202,10 +199,21 @@ impl<S> Journal<S> {
         S: state::State,
     {
         match &mut self.inner {
-            InnerJournal::Working { worker, file } => {
-                worker.flush(file)?;
+            InnerJournal::Working { worker, file } if file.is_some() => {
+                worker.flush(file.as_mut().unwrap())?;
                 Ok(())
             }
+            InnerJournal::Working { worker, file } if worker.is_flush_required() => {
+                let jfile = {
+                    let mut opts = fs::OpenOptions::new();
+                    let location = self.location.clone();
+                    err_at!(IOError, opts.append(true).create_new(true).open(&location))?
+                };
+                *file = Some(jfile);
+                worker.flush(file.as_mut().unwrap())?;
+                Ok(())
+            }
+            InnerJournal::Working { .. } => Ok(()),
             InnerJournal::Archive { .. } => unreachable!(),
             InnerJournal::Cold { .. } => unreachable!(),
         }
@@ -238,8 +246,9 @@ impl<S> Journal<S> {
 
     pub fn file_size(&self) -> Result<usize> {
         let n = match &self.inner {
+            InnerJournal::Working { file: None, .. } => 0,
             InnerJournal::Working { file, .. } => {
-                let m = err_at!(IOError, file.metadata())?;
+                let m = err_at!(IOError, file.as_ref().unwrap().metadata())?;
                 err_at!(FailConvert, usize::try_from(m.len()))?
             }
             InnerJournal::Archive { .. } => unreachable!(),
@@ -258,6 +267,23 @@ impl<S> Journal<S> {
 
     pub fn to_location(&self) -> ffi::OsString {
         self.location.clone()
+    }
+
+    pub fn is_open(&self) -> bool {
+        match &self.inner {
+            InnerJournal::Working { file: None, .. } => false,
+            InnerJournal::Working { .. } => true,
+            InnerJournal::Archive { .. } => true,
+            InnerJournal::Cold { .. } => false,
+        }
+    }
+
+    pub fn is_cold(&self) -> bool {
+        match &self.inner {
+            InnerJournal::Working { .. } => false,
+            InnerJournal::Archive { .. } => false,
+            InnerJournal::Cold { .. } => true,
+        }
     }
 }
 

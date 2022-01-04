@@ -1,6 +1,6 @@
 use serde::Deserialize;
 
-use std::time;
+use std::{env, path::PathBuf, time};
 
 use rdms::{util, wral, Result};
 
@@ -36,18 +36,45 @@ pub fn perf(opts: Opt) -> Result<()> {
 }
 
 fn load_and_spawn(opts: Opt, p: Profile) -> Result<()> {
-    use std::{env, path::PathBuf};
+    let name = "wral-perf";
+    let entries = spawn_writers(name, &opts, &p)?;
+    spawn_readers(name, &opts, &p)?;
 
     let wal = {
-        let dir: PathBuf = vec![env::temp_dir(), "wral-perf".into()]
-            .into_iter()
-            .collect();
+        let dir: PathBuf = vec![env::temp_dir(), name.into()].into_iter().collect();
 
         let config = wral::Config::new(dir.as_os_str(), &p.name)
             .set_journal_limit(p.journal_limit)
             .set_fsync(!p.nosync);
 
         println!("{:?}", config);
+
+        wral::Wal::<wral::NoState>::load(config).unwrap()
+    };
+
+    // validation
+    {
+        let n = entries.len() as u64;
+        let sum = entries.iter().map(|e| e.to_seqno()).sum::<u64>();
+        assert_eq!(sum, (n * (n + 1)) / 2);
+    }
+
+    let items: Vec<wral::Entry> = wal.iter().unwrap().map(|x| x.unwrap()).collect();
+    assert_eq!(items, entries);
+
+    println!("Validation ok !!");
+
+    wal.purge().unwrap();
+    Ok(())
+}
+
+fn spawn_writers(name: &str, opts: &Opt, p: &Profile) -> Result<Vec<wral::Entry>> {
+    let wal = {
+        let dir: PathBuf = vec![env::temp_dir(), name.into()].into_iter().collect();
+
+        let config = wral::Config::new(dir.as_os_str(), &p.name)
+            .set_journal_limit(p.journal_limit)
+            .set_fsync(!p.nosync);
 
         wral::Wal::create(config, wral::NoState).unwrap()
     };
@@ -58,33 +85,21 @@ fn load_and_spawn(opts: Opt, p: Profile) -> Result<()> {
         writers.push(std::thread::spawn(move || writer(id, wal, p, seed)));
     }
 
+    wal.close()?;
+
     let mut entries: Vec<Vec<wral::Entry>> = vec![];
     for handle in writers {
-        entries.push(handle.join().unwrap());
+        entries.push(handle.join().unwrap().unwrap());
     }
     let mut entries: Vec<wral::Entry> = entries.into_iter().flatten().collect();
     entries.sort_by_key(|a| a.to_seqno());
 
-    let n = entries.len() as u64;
-    let sum = entries.iter().map(|e| e.to_seqno()).sum::<u64>();
-    assert_eq!(sum, (n * (n + 1)) / 2);
+    println!("writes completed!!");
 
-    let mut readers = vec![];
-    for id in 0..p.threads {
-        let wal = wal.clone();
-        let entries = entries.clone();
-        readers.push(std::thread::spawn(move || reader(id, wal, entries)));
-    }
-
-    for handle in readers {
-        handle.join().unwrap();
-    }
-
-    wal.purge().unwrap();
-    Ok(())
+    Ok(entries)
 }
 
-fn writer(id: usize, wal: wral::Wal, p: Profile, _seed: u64) -> Vec<wral::Entry> {
+fn writer(id: usize, wal: wral::Wal, p: Profile, _seed: u64) -> Result<Vec<wral::Entry>> {
     let start = time::Instant::now();
 
     let mut entries = vec![];
@@ -94,19 +109,51 @@ fn writer(id: usize, wal: wral::Wal, p: Profile, _seed: u64) -> Vec<wral::Entry>
         entries.push(wral::Entry::new(seqno, op.clone()));
     }
 
+    wal.close()?;
+
     println!(
         "w-{:02} took {:?} to write {} ops",
         id,
         start.elapsed(),
         p.ops
     );
-    entries
+
+    Ok(entries)
 }
 
-fn reader(id: usize, wal: wral::Wal, entries: Vec<wral::Entry>) {
+fn spawn_readers(name: &str, _opts: &Opt, p: &Profile) -> Result<()> {
+    let wal = {
+        let dir: PathBuf = vec![env::temp_dir(), name.into()].into_iter().collect();
+
+        let config = wral::Config::new(dir.as_os_str(), &p.name)
+            .set_journal_limit(p.journal_limit)
+            .set_fsync(!p.nosync);
+
+        wral::Wal::load(config).unwrap()
+    };
+
+    // read operations
+    let mut readers = vec![];
+    for id in 0..p.threads {
+        let wal = wal.clone();
+        readers.push(std::thread::spawn(move || reader(id, wal)));
+    }
+    for handle in readers {
+        handle.join().unwrap().unwrap();
+    }
+
+    println!("reads completed!!");
+    wal.close()?;
+
+    Ok(())
+}
+
+fn reader(id: usize, wal: wral::Wal) -> Result<()> {
     let start = time::Instant::now();
+    #[allow(clippy::needless_collect)]
     let items: Vec<wral::Entry> = wal.iter().unwrap().map(|x| x.unwrap()).collect();
-    assert_eq!(items, entries);
+
+    wal.close()?;
 
     println!(
         "r-{:02} took {:?} to iter {} ops",
@@ -114,4 +161,6 @@ fn reader(id: usize, wal: wral::Wal, entries: Vec<wral::Entry>) {
         start.elapsed(),
         items.len()
     );
+
+    Ok(())
 }

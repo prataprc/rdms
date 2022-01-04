@@ -8,7 +8,10 @@ fn test_wral_wal() {
     use crate::wral::state;
     use std::env;
 
-    let seed: u64 = random();
+    let seed: u64 =
+        [4285628235488288451, 4686907263384396610, random()][random::<usize>() % 3];
+    // let seed: u64 = 4686907263384396610;
+
     let mut rng = SmallRng::seed_from_u64(seed);
     println!("test_wral_wal {}", seed);
 
@@ -18,18 +21,28 @@ fn test_wral_wal() {
         uns.arbitrary().unwrap()
     };
     config.name = "test-wral-wal".to_string();
-    config.dir = env::temp_dir().into();
+    config.dir = {
+        let dir: path::PathBuf = vec![env::temp_dir(), config.name.clone().into()]
+            .into_iter()
+            .collect();
+        dir.into()
+    };
 
-    println!("test_wral_wal {:?}", config);
-    let val = Wal::create(config, state::NoState).unwrap();
+    let n_threads = [1, 2, 4, 8][rng.gen::<usize>() % 4];
+    let w_ops = [1, 10, 100, 1_000, 10_000][rng.gen::<usize>() % 5];
+    config.journal_limit = std::cmp::max(1000, (n_threads * w_ops) / 1000);
+    println!(
+        "test_wral_wal config:{:?} n_threads:{} w_ops:{}",
+        config, n_threads, w_ops
+    );
 
-    let n_threads = 1;
+    let wal = Wal::create(config.clone(), state::NoState).unwrap();
 
     let mut writers = vec![];
     for id in 0..n_threads {
-        let wal = val.clone();
+        let wal = wal.clone();
         writers.push(std::thread::spawn(move || {
-            writer(id, wal, 1000, seed + (id as u64))
+            writer(id, wal, w_ops, seed + (id as u64 * 100))
         }));
     }
 
@@ -37,7 +50,10 @@ fn test_wral_wal() {
     for handle in writers {
         entries.push(handle.join().unwrap());
     }
-    let entries: Vec<wral::Entry> = entries.into_iter().flatten().collect();
+    let mut entries: Vec<wral::Entry> = entries.into_iter().flatten().collect();
+    entries.sort_unstable_by_key(|e| e.seqno);
+
+    wal.commit().unwrap();
 
     let n = entries.len() as u64;
     let sum = entries.iter().map(|e| e.to_seqno()).sum::<u64>();
@@ -45,10 +61,11 @@ fn test_wral_wal() {
 
     let mut readers = vec![];
     for id in 0..n_threads {
-        let wal = val.clone();
+        let wal = wal.clone();
         let entries = entries.clone();
+        let n_ops = 10;
         readers.push(std::thread::spawn(move || {
-            reader(id, wal, 10, seed + (id as u64), entries)
+            reader(id, wal, n_ops, seed + (id as u64), entries)
         }));
     }
 
@@ -56,14 +73,14 @@ fn test_wral_wal() {
         handle.join().unwrap();
     }
 
-    val.purge().unwrap();
+    wal.purge().unwrap();
 }
 
-fn writer(_id: u128, wal: Wal, ops: usize, seed: u64) -> Vec<wral::Entry> {
+fn writer(_id: usize, wal: Wal, ops: usize, seed: u64) -> Vec<wral::Entry> {
     let mut rng = SmallRng::seed_from_u64(seed);
 
     let mut entries = vec![];
-    for _i in 1..ops {
+    for _i in 0..ops {
         let op: Vec<u8> = {
             let bytes = rng.gen::<[u8; 32]>();
             let mut uns = Unstructured::new(&bytes);
@@ -73,17 +90,20 @@ fn writer(_id: u128, wal: Wal, ops: usize, seed: u64) -> Vec<wral::Entry> {
         entries.push(wral::Entry::new(seqno, op));
     }
 
+    wal.close().unwrap();
+
     entries
 }
 
-fn reader(_id: u128, wal: Wal, ops: usize, seed: u64, entries: Vec<wral::Entry>) {
+fn reader(_id: usize, wal: Wal, ops: usize, seed: u64, entries: Vec<wral::Entry>) {
     let mut rng = SmallRng::seed_from_u64(seed);
 
     for _i in 0..ops {
         match rng.gen::<u8>() % 2 {
             0 => {
                 let items: Vec<wral::Entry> =
-                    wal.iter().unwrap().map(|x| x.unwrap()).collect();
+                    wal.iter().unwrap().filter_map(|x| x.ok()).collect();
+                assert_eq!(items.len(), entries.len());
                 assert_eq!(items, entries);
             }
             1 => {
@@ -97,4 +117,6 @@ fn reader(_id: u128, wal: Wal, ops: usize, seed: u64, entries: Vec<wral::Entry>)
             _ => unreachable!(),
         }
     }
+
+    wal.close().unwrap();
 }

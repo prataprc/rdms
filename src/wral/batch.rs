@@ -30,6 +30,10 @@ impl<S> Worker<S> {
         }
     }
 
+    pub fn is_flush_required(&self) -> bool {
+        !self.entries.is_empty()
+    }
+
     pub fn add_entry(&mut self, entry: wral::Entry) -> Result<()>
     where
         S: state::State,

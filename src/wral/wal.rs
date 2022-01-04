@@ -14,7 +14,7 @@ use std::{
 };
 
 use crate::{
-    util::thread,
+    util,
     wral::{
         self,
         journal::{IterJournal, Journal},
@@ -29,8 +29,8 @@ pub struct Wal<S = wral::NoState> {
     config: Config,
 
     w: Arc<RwLock<Journals<S>>>,
-    th: Arc<thread::Thread<Req, Res, Result<u64>>>,
-    tx: thread::Tx<Req, Res>,
+    th: Arc<util::thread::Thread<Req, Res, Result<u64>>>,
+    tx: util::thread::Tx<Req, Res>,
 }
 
 impl<S> Clone for Wal<S> {
@@ -142,10 +142,10 @@ impl<S> Wal<S> {
 
                 match Arc::try_unwrap(self.w) {
                     Ok(w) => Ok(Some(err_at!(IPCFail, w.into_inner())?.close()?)),
-                    Err(_) => Ok(None), // there are active clones
+                    Err(_) => Ok(None),
                 }
             }
-            Err(_) => Ok(None), // there are active clones
+            Err(_) => Ok(None),
         }
     }
 
@@ -155,13 +155,13 @@ impl<S> Wal<S> {
             Ok(th) => {
                 mem::drop(self.tx);
                 th.join()??;
-
+                println!("jon ok");
                 match Arc::try_unwrap(self.w) {
                     Ok(w) => Ok(Some(err_at!(IPCFail, w.into_inner())?.purge()?)),
-                    Err(_) => Ok(None), // there are active clones
+                    Err(_) => Ok(None),
                 }
             }
-            Err(_) => Ok(None), // there are active clones
+            Err(_) => Ok(None),
         }
     }
 }
@@ -171,6 +171,13 @@ impl<S> Wal<S> {
     /// Wal instances. Return the sequence-number for this operation.
     pub fn add_op(&self, op: &[u8]) -> Result<u64> {
         let req = Req::AddEntry { op: op.to_vec() };
+        let Res::Seqno(seqno) = self.tx.request(req)?;
+        Ok(seqno)
+    }
+
+    /// Commit outstanding operations into disc and return the latest seqno.
+    pub fn commit(&self) -> Result<u64> {
+        let req = Req::Commit;
         let Res::Seqno(seqno) = self.tx.request(req)?;
         Ok(seqno)
     }
@@ -198,9 +205,13 @@ impl<S> Wal<S> {
                 let rd = err_at!(Fatal, self.w.read())?;
                 let mut journals = vec![];
                 for jn in rd.journals.iter() {
-                    journals.push(jn.to_location());
+                    if jn.is_open() {
+                        journals.push(jn.to_location());
+                    }
                 }
-                journals.push(rd.journal.to_location());
+                if rd.journal.is_open() {
+                    journals.push(rd.journal.to_location());
+                }
                 (range, journals)
             }
             None => ((0..=0), vec![]),

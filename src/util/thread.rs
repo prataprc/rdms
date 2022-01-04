@@ -87,7 +87,7 @@ impl<Q, R, T> Thread<Q, R, T> {
         }
     }
 
-    /// Recommended way to exit/shutdown the thread. Note that all [Tx] clones of this
+    /// Must way to exit/shutdown the thread. Note that all [Tx] clones of this
     /// thread must also be dropped for this call to return.
     ///
     /// Even otherwise, when Thread value goes out of scope its drop implementation

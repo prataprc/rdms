@@ -36,7 +36,7 @@ fn test_wral_wal() {
         config, n_threads, w_ops
     );
 
-    let wal = Wal::create(config.clone(), state::NoState).unwrap();
+    let wal = Wal::create(config, state::NoState).unwrap();
 
     let mut writers = vec![];
     for id in 0..n_threads {

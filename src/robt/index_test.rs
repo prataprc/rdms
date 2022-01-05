@@ -59,8 +59,10 @@ impl Delta for dbs::Binary {}
 
 #[test]
 fn test_robt_build_read() {
-    let seed: u64 = [419111650579980006, random()][random::<usize>() % 2];
-    println!("test_robt_read {}", seed);
+    let seed: u64 =
+        [419111650579980006, 12486844421854593184, random()][random::<usize>() % 2];
+    // let seed: u64 = 12486844421854593184;
+    println!("test_robt_build_read {}", seed);
 
     do_robt_build_read::<u16, u64, _>("u16,nobitmap", seed, NoBitmap);
     do_robt_build_read::<dbs::Binary, dbs::Binary, _>("binary,nobitmap", seed, NoBitmap);
@@ -88,7 +90,7 @@ where
     let mut rng = SmallRng::seed_from_u64(seed);
 
     // initial build
-    let dir = std::env::temp_dir().join("test_robt_read");
+    let dir = std::env::temp_dir().join("test_robt_build_read");
     fs::remove_dir(&dir).ok();
     let name = "do-robt-read";
     let mut config = Config {
@@ -140,7 +142,7 @@ where
     };
     println!("do_robt_build_read-{}, compact cutoff:{:?}", prefix, cutoff);
     index = index.compact(config.clone(), bitmap, cutoff).unwrap();
-    validate_compact(&mut index, cutoff, &mdb);
+    validate_compact(&mut index, cutoff, &mdb, config.delta_ok);
     validate_bitmap(&mut index);
 
     let file = config.to_index_location();
@@ -177,7 +179,7 @@ where
         n_dels = 0;
     }
 
-    let appmd = "test_robt_read-metadata".as_bytes().to_vec();
+    let appmd = "test_robt_build_read-metadata".as_bytes().to_vec();
     let mdb = llrb::load_index(seed, n_sets, n_inserts, n_rems, n_dels, seqno);
     let seqno = Some(mdb.to_seqno());
 
@@ -234,7 +236,7 @@ where
         n_dels = 0;
     }
 
-    let appmd = "test_robt_read-metadata-snap".as_bytes().to_vec();
+    let appmd = "test_robt_build_read-metadata-snap".as_bytes().to_vec();
     let snap = {
         let seqno = Some(mdb.to_seqno());
         llrb::load_index::<K, V>(seed, n_sets, n_inserts, n_rems, n_dels, seqno)
@@ -565,6 +567,7 @@ fn validate_compact<K, V, B>(
     index: &mut Index<K, V, B>,
     cutoff: dbs::Cutoff,
     mdb: &llrb::Index<K, V>,
+    delta_ok: bool,
 ) where
     for<'a> K: 'static + Key + Arbitrary<'a>,
     V: 'static + Value,
@@ -576,7 +579,10 @@ fn validate_compact<K, V, B>(
     let ref_entries: Vec<dbs::Entry<K, V>> = mdb
         .iter_versions()
         .unwrap()
-        .filter_map(|e| e.compact(cutoff))
+        .filter_map(|e| match e.compact(cutoff) {
+            Some(e) if !delta_ok => Some(e.drain_deltas()),
+            e => e,
+        })
         .collect();
     let entries: Vec<dbs::Entry<K, V>> = index
         .iter_versions(..)

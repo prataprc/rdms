@@ -90,18 +90,24 @@ pub fn sync_write(file: &mut fs::File, data: &[u8]) -> Result<usize> {
     Ok(n)
 }
 
+pub enum WalkRes {
+    Ok,
+    SkipDir,
+}
+
 /// Breadth first directory walking.
 ///
 /// `callb` arguments:
 ///
 /// * _state_, as mutable reference, user supplied and exist for the duration of walk.
+/// * _parent_, path to parent under which this entry is found.
 /// * _dir_entry_, for each entry in a sub-directory.
-/// * _depth_, depth level at which _dir-entry_ is located, starts with ZERO.
-/// * _breath_, index of _dir-entry_ as stored in its parent directory.
+/// * _depth_, depth level at which _dir-entry_ is located, start with ZERO.
+/// * _breath_, index of _dir-entry_ as stored in its parent directory, start with ZERO.
 pub fn walk<P, S, F>(root: P, state: S, mut callb: F) -> Result<S>
 where
     P: AsRef<path::Path>,
-    F: FnMut(&mut S, &fs::DirEntry, usize, usize) -> Result<()>,
+    F: FnMut(&mut S, &path::Path, &fs::DirEntry, usize, usize) -> Result<WalkRes>,
 {
     let depth = 0;
     do_walk(root, state, &mut callb, depth)
@@ -110,15 +116,21 @@ where
 fn do_walk<P, S, F>(root: P, mut state: S, callb: &mut F, depth: usize) -> Result<S>
 where
     P: AsRef<path::Path>,
-    F: FnMut(&mut S, &fs::DirEntry, usize, usize) -> Result<()>,
+    F: FnMut(&mut S, &path::Path, &fs::DirEntry, usize, usize) -> Result<WalkRes>,
 {
     let mut subdirs = vec![];
 
+    let parent = {
+        let parent: &path::Path = root.as_ref();
+        parent.to_path_buf()
+    };
     for (breath, entry) in err_at!(IOError, fs::read_dir(root))?.enumerate() {
         let entry = err_at!(IOError, entry)?;
-        callb(&mut state, &entry, depth, breath)?;
-        if err_at!(IOError, entry.file_type())?.is_dir() {
-            subdirs.push(entry)
+        match callb(&mut state, &parent, &entry, depth, breath)? {
+            WalkRes::Ok if err_at!(IOError, entry.file_type())?.is_dir() => {
+                subdirs.push(entry)
+            }
+            WalkRes::Ok | WalkRes::SkipDir => (),
         }
     }
 

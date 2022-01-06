@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-use rdms::{dba, err_at, Error, Result};
+use rdms::{
+    dba::{self, AsKey},
+    err_at, Error, Result,
+};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Crate {
@@ -21,22 +24,14 @@ pub struct Crate {
 
 pub const CRATE_RECORD_EXT: &str = ".json";
 pub const CRATE_TABLE: &str = "table:crates";
-pub const CRATE_KEY_LEVELS: usize = 3;
 impl Crate {
     pub fn to_key(&self) -> Option<String> {
         assert!(!self.name.contains('/'));
 
-        let mut full_key = CRATE_TABLE.to_string();
-
-        match dba::to_content_key(&self.name, CRATE_KEY_LEVELS) {
-            Some(key) => {
-                full_key.push('/');
-                full_key.push_str(&key);
-                full_key.push_str(CRATE_RECORD_EXT);
-                Some(full_key)
-            }
-            None => None,
-        }
+        let mut parts = vec![CRATE_TABLE.to_string()];
+        let key: dba::Str = self.name.clone().into();
+        parts.extend_from_slice(&key.to_key_path().ok()?);
+        Some(parts.join("/") + CRATE_RECORD_EXT)
     }
 }
 
@@ -77,22 +72,14 @@ pub struct Keyword {
 
 pub const KEYWORDS_RECORD_EXT: &str = ".json";
 pub const KEYWORDS_TABLE: &str = "table:keywords";
-pub const KEYWORDS_KEY_LEVELS: usize = 3;
 impl Keyword {
     pub fn to_key(&self) -> Option<String> {
         assert!(!self.keyword.contains('/'));
 
-        let mut full_key = KEYWORDS_TABLE.to_string();
-
-        match dba::to_content_key(&self.keyword, KEYWORDS_KEY_LEVELS) {
-            Some(key) => {
-                full_key.push('/');
-                full_key.push_str(&key);
-                full_key.push_str(KEYWORDS_RECORD_EXT);
-                Some(full_key)
-            }
-            None => None,
-        }
+        let mut parts = vec![KEYWORDS_TABLE.to_string()];
+        let key: dba::Str = self.keyword.clone().into();
+        parts.extend_from_slice(&key.to_key_path().ok()?);
+        Some(parts.join("/") + KEYWORDS_RECORD_EXT)
     }
 }
 
@@ -107,7 +94,6 @@ pub struct User {
 
 pub const USER_RECORD_EXT: &str = ".json";
 pub const USER_TABLE: &str = "table:users";
-pub const USER_KEY_LEVELS: usize = 3;
 impl User {
     pub fn to_key(&self) -> Option<String> {
         let name = if self.gh_login.is_empty() {
@@ -115,19 +101,13 @@ impl User {
         } else {
             self.gh_login.clone()
         };
+
         assert!(!name.contains('/'));
 
-        let mut full_key = USER_TABLE.to_string();
-
-        match dba::to_content_key(&name, USER_KEY_LEVELS) {
-            Some(key) => {
-                full_key.push('/');
-                full_key.push_str(&key);
-                full_key.push_str(USER_RECORD_EXT);
-                Some(full_key)
-            }
-            None => None,
-        }
+        let mut parts = vec![USER_TABLE.to_string()];
+        let key: dba::Str = name.into();
+        parts.extend_from_slice(&key.to_key_path().ok()?);
+        Some(parts.join("/") + USER_RECORD_EXT)
     }
 }
 

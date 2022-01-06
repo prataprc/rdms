@@ -108,6 +108,7 @@ mod index;
 pub mod parsec;
 // pub mod web; TODO: incomplete
 pub mod mq;
+pub mod trie;
 pub mod wral;
 pub mod zimf;
 

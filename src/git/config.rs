@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Permission to use while creating repository
+/// Type define permissions to create/access git-repository. Maps to git permissions.
 #[derive(Clone, Serialize, Deserialize)]
 pub enum Permissions {
     #[serde(rename = "shared_umask")]
@@ -13,15 +13,16 @@ pub enum Permissions {
     SharedAll,
 }
 
-/// Configuration describing the index backed by a _git-repository_.
+/// Type to configure _git-repository_ while creating them and opening them.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Config {
     /// location of repository root.
     pub loc_repo: String,
     /// location of database keys, aka file-names, relative to root.
     pub loc_db: String,
-    /// user information
+    /// user information to be used in git-commits.
     pub user_name: String,
+    /// user information to be used in git-commits.
     pub user_email: String,
     /// Refer to [InitConfig]
     pub init: InitConfig,
@@ -29,7 +30,7 @@ pub struct Config {
     pub open: OpenConfig,
 }
 
-/// Configurable options for initializing a fresh git datastore.
+/// Type to configure _git-repository_ while creating them.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct InitConfig {
     /// Create a bare repository with no working directory,
@@ -44,7 +45,7 @@ pub struct InitConfig {
     pub description: String,
 }
 
-/// Configurable options for opening an existing git datastore.
+/// Type to configure _git-repository_ while opening them.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct OpenConfig {
     /// Only open the specified path; don’t walk upward searching,

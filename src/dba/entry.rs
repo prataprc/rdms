@@ -2,7 +2,7 @@ use std::{fmt, result};
 
 use crate::dba;
 
-/// Oid is object id, which is a hash digest of object's content.
+/// Type is object id, which is a hash digest of object's content.
 #[derive(Clone)]
 pub enum Oid {
     Sha1 { hash: [u8; 20] },
@@ -17,7 +17,7 @@ impl Oid {
     }
 
     /// Return the raw-bytes of sha1 hash.
-    pub fn to_sha1(&self) -> Option<&[u8]> {
+    pub fn as_sha1(&self) -> Option<&[u8]> {
         match self {
             Oid::Sha1 { hash } => Some(hash),
         }
@@ -35,7 +35,7 @@ pub enum Type {
     Commit,
 }
 
-/// Object type forms the core of `dba` design.
+/// Type forms the core of DBA storage design.
 #[derive(Clone)]
 pub enum Object {
     /// A leaf object is called `blob`, it just a binary-blob of data.
@@ -54,8 +54,8 @@ pub enum Object {
     Oid { hash: Oid },
 }
 
-/// Edge represents a connection between parent node and one of its child node in
-/// the merkel-tree
+/// Type represents a connection between parent node and one of its child node in
+/// the merkel-tree.
 #[derive(Clone)]
 pub struct Edge {
     pub file_mode: i32,
@@ -66,12 +66,12 @@ pub struct Edge {
 
 impl Object {
     /// Return object's Oid, its hash-digest.
-    pub fn to_oid(&self) -> Oid {
+    pub fn as_oid(&self) -> &Oid {
         match self {
-            Object::Oid { hash } => hash.clone(),
-            Object::Blob { hash, .. } => hash.clone(),
-            Object::Tree { hash, .. } => hash.clone(),
-            Object::Commit { hash, .. } => hash.clone(),
+            Object::Oid { hash } => hash,
+            Object::Blob { hash, .. } => hash,
+            Object::Tree { hash, .. } => hash,
+            Object::Commit { hash, .. } => hash,
         }
     }
 
@@ -119,7 +119,7 @@ impl Object {
     }
 }
 
-/// User detail to create a commit object.
+/// Type define user-detail needed to create a commit object.
 #[derive(Clone)]
 pub struct User {
     pub name: String,
@@ -127,6 +127,7 @@ pub struct User {
     pub timestamp: u64, // utc timestamp from epoch.
 }
 
+/// Type define a single entry in a DBA storage.
 #[derive(Clone)]
 pub struct Entry<K>
 where
@@ -155,6 +156,10 @@ where
 
     pub fn as_obj(&self) -> &dba::Object {
         &self.obj
+    }
+
+    pub fn as_oid(&self) -> &dba::Oid {
+        &self.obj.as_oid()
     }
 }
 

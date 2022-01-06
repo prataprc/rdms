@@ -1,8 +1,9 @@
-//! Git repository as key-value index.
+//! Git repository as DBA storate. Refer [dba] for details.
 //!
 //! Each file (aka blob in git parlance) is considered as a {key,value} entry, where
 //! value is the content of the file and key is path starting from repository root
-//! to the actual file location when it is checked out.
+//! to the actual file location when it is checked out. It is also possible to access
+//! files using content addressing, refer to [dba] for details.
 //!
 //! There are few criterias in supplying the key:
 //!
@@ -109,7 +110,7 @@ impl Index {
     /// Return number of items in the repository. Note that this is costly call, it
     /// iterates over every entry in the repository.
     pub fn len(&self) -> Result<usize> {
-        let count: usize = self.iter()?.map(|_| 1).sum();
+        let count: usize = self.iter_keys()?.map(|_| 1).sum();
         Ok(count)
     }
 
@@ -136,7 +137,7 @@ impl Index {
 
 impl Index {
     /// Get the git blob corresponding to the specified key.
-    pub fn get<K>(&self, key: K) -> Result<Option<dba::Object>>
+    pub fn get_by_key<K>(&self, key: K) -> Result<Option<dba::Object>>
     where
         K: Clone + dba::AsKey,
     {
@@ -153,8 +154,8 @@ impl Index {
         Ok(Some(obj))
     }
 
-    /// Iter over each entry in repository in string sort order.
-    pub fn iter(&self) -> Result<IterLevel> {
+    /// Iter over every blob-objects in repository, sorted by its key.
+    pub fn iter_keys(&self) -> Result<IterLevel> {
         let val = {
             let tree = self.get_db_root()?;
             let comps = vec![];
@@ -163,9 +164,9 @@ impl Index {
         Ok(val)
     }
 
-    /// Iter over each entry in repository, such that each entry's key falls within
-    /// the supplied range.
-    pub fn range<R, K>(&self, range: R) -> Result<Range>
+    /// Iter over blob-objects in repository within the specified `range`, sorted by its
+    /// key.
+    pub fn range_keys<R, K>(&self, range: R) -> Result<Range>
     where
         R: RangeBounds<K>,
         K: Clone + dba::AsKey,
@@ -186,8 +187,8 @@ impl Index {
         Ok(Range { iter, high })
     }
 
-    /// Same as [Index::range] method except in reverse order.
-    pub fn reverse<R, K>(&self, range: R) -> Result<Reverse>
+    /// Same as [Index::range_keys] method except in reverse order.
+    pub fn reverse_keys<R, K>(&self, range: R) -> Result<Reverse>
     where
         R: RangeBounds<K>,
         K: Clone + dba::AsKey,
@@ -534,6 +535,7 @@ impl<'a> IterEntry<'a> {
     }
 }
 
+/// Type to iterate over all blob-objects in a git repository.
 pub struct IterLevel<'a> {
     repo: &'a git2::Repository,
     rloc: path::PathBuf,

@@ -86,6 +86,7 @@ jemallocator = "0.3.2"
 
 [dev-dependencies]
 crc = "2.1.0"
+ppom = { path = "../ppom", version = "0.7.0" }
 
 [features]
 rdms = ["structopt", "lmdb", "sha-1", "dirs"]

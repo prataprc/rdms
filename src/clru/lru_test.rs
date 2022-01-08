@@ -1,5 +1,5 @@
 use arbitrary::{self, unstructured::Unstructured, Arbitrary};
-use rand::{self, prelude::random, rngs::SmallRng, Rng, SeedableRng};
+use rand::{self, prelude::random, rngs::StdRng, Rng, SeedableRng};
 
 use std::{fmt, hash::Hash, thread};
 
@@ -7,7 +7,7 @@ use crate::{clru, dbs, llrb};
 
 macro_rules! test_code {
     ($seed:expr, $keytype:ty) => {{
-        let mut rng = SmallRng::seed_from_u64($seed);
+        let mut rng = StdRng::seed_from_u64($seed);
 
         let n_threads = [1, 2, 4, 8, 16, 32, 64][rng.gen::<usize>() % 7];
         let m = match <$keytype>::MAX as usize {
@@ -128,7 +128,7 @@ fn with_lru<K>(
 where
     K: Copy + Clone + PartialEq + Ord + Hash + fmt::Display + fmt::Debug,
 {
-    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut rng = StdRng::seed_from_u64(seed);
     let mut stats = CacheStat::default();
 
     for _i in 0..n_ops {
@@ -158,7 +158,7 @@ where
     K: Clone + Ord + dbs::Footprint,
     rand::distributions::Standard: rand::distributions::Distribution<K>,
 {
-    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut rng = StdRng::seed_from_u64(seed);
     let index: llrb::Index<K, u128> = llrb::Index::new("primary_index", true);
     for _ in 0..n {
         loop {
@@ -187,7 +187,7 @@ fn access_keys<K>(
 where
     K: Copy + Clone + Default + PartialEq,
 {
-    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut rng = StdRng::seed_from_u64(seed);
 
     let iter = index.iter().unwrap();
     match access_type {

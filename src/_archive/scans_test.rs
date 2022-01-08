@@ -1,4 +1,4 @@
-use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
+use rand::{prelude::random, rngs::StdRng, Rng, SeedableRng};
 
 use super::*;
 use crate::{
@@ -143,7 +143,7 @@ fn test_skip_scan() {
     use std::ops::Bound;
 
     let seed: u64 = random();
-    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut rng = StdRng::seed_from_u64(seed);
 
     let (n_ops, key_max) = (6_000_i64, 2_000);
     let mut llrb: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
@@ -298,7 +298,7 @@ fn test_filter_scan() {
     use std::ops::Bound;
 
     let seed: u64 = random();
-    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut rng = StdRng::seed_from_u64(seed);
 
     let (n_ops, key_max) = (6_000_i64, 2_000);
     let mut llrb: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
@@ -414,7 +414,7 @@ fn test_filter_scan() {
 #[test]
 fn test_bitmapped_scan() {
     let seed: u64 = random();
-    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut rng = StdRng::seed_from_u64(seed);
 
     for i in 0..100 {
         let (n_ops, key_max) = (6_000_i64, 2_000);
@@ -456,7 +456,7 @@ fn test_compact_scan() {
     use std::ops::Bound::{Included, Unbounded};
 
     let seed: u64 = random();
-    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut rng = StdRng::seed_from_u64(seed);
 
     let (n_ops, key_max) = (6_000_i64, 2_000);
     let mut llrb: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
@@ -563,7 +563,7 @@ fn check_node(entry: &Entry<i64, i64>, ref_entry: &Entry<i64, i64>) {
 }
 
 fn random_llrb(n_ops: i64, key_max: i64, seed: u64, llrb: &mut Llrb<i64, i64>) {
-    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut rng = StdRng::seed_from_u64(seed);
 
     for _i in 0..n_ops {
         let key = (rng.gen::<i64>() % key_max).abs();

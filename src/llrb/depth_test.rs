@@ -1,4 +1,4 @@
-use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
+use rand::{prelude::random, rngs::StdRng, Rng, SeedableRng};
 
 use super::*;
 
@@ -6,7 +6,7 @@ use super::*;
 fn test_llrb_depth() {
     let seed: u64 = random();
     println!("test_llrb_depth seed:{}", seed);
-    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut rng = StdRng::seed_from_u64(seed);
 
     let mut depths = [0_usize; 256];
     let (mut val, n_samples) = (Depth::default(), rng.gen::<usize>() % 1_000_000);

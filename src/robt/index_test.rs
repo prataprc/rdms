@@ -1,5 +1,5 @@
 use arbitrary::{self, unstructured::Unstructured, Arbitrary};
-use rand::{self, prelude::random, rngs::SmallRng, Rng, SeedableRng};
+use rand::{self, prelude::random, rngs::StdRng, Rng, SeedableRng};
 use xorfilter::{BuildHasherDefault, Xor8};
 
 use std::{fs, mem, thread};
@@ -87,7 +87,7 @@ where
     rand::distributions::Standard: rand::distributions::Distribution<K>,
     rand::distributions::Standard: rand::distributions::Distribution<V>,
 {
-    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut rng = StdRng::seed_from_u64(seed);
 
     // initial build
     let dir = std::env::temp_dir().join("test_robt_build_read");
@@ -301,7 +301,7 @@ fn read_thread<K, V, B>(
 {
     use Error::NotFound;
 
-    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut rng = StdRng::seed_from_u64(seed);
 
     let mut index = {
         let dir = config.dir.as_os_str();
@@ -549,7 +549,7 @@ where
     <V as dbs::Diff>::Delta: FromCbor,
     B: dbs::Bloom,
 {
-    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut rng = StdRng::seed_from_u64(seed);
 
     let index = match rng.gen::<u8>() % 2 {
         0 => Index::open(dir, name).unwrap(),

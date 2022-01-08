@@ -1,4 +1,4 @@
-use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
+use rand::{prelude::random, rngs::StdRng, Rng, SeedableRng};
 
 use super::*;
 use crate::{
@@ -11,7 +11,7 @@ fn test_robt_build_scan() {
     use std::time::Duration;
 
     let seed: u64 = random();
-    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut rng = StdRng::seed_from_u64(seed);
     println!("test_build_scan {}", seed);
 
     let inserts = 1_000_000;
@@ -41,7 +41,7 @@ fn test_robt_nobitmap_scan() {
     use crate::bitmaps::NoBitmap;
 
     let seed: u64 = random();
-    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut rng = StdRng::seed_from_u64(seed);
     println!("test_nobitmap_scan {}", seed);
 
     let inserts = 1_000_000;
@@ -68,7 +68,7 @@ fn test_robt_xorfilter_scan() {
     use xorfilter::Xor8;
 
     let seed: u64 = random();
-    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut rng = StdRng::seed_from_u64(seed);
     println!("test_xorfilter_scan {}", seed);
 
     let inserts = 1_000_000;

@@ -1,5 +1,5 @@
 use fs2::FileExt;
-use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
+use rand::{prelude::random, rngs::StdRng, Rng, SeedableRng};
 
 use super::*;
 use crate::{
@@ -374,7 +374,7 @@ fn test_robt_shards() {
 
     for i in 0..50 {
         let seed = seed + (i as u128);
-        let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+        let mut rng = StdRng::from_seed(seed.to_le_bytes());
 
         // populate llrb
         let (n_ops, key_max) = random_ops_keys(seed, 100_000, 300_000);
@@ -466,7 +466,7 @@ fn test_robt_partitions() {
 
     for i in 0..50 {
         let seed = seed + (i as u128);
-        let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+        let mut rng = StdRng::from_seed(seed.to_le_bytes());
 
         // populate llrb
         let (n_ops, key_max) = random_ops_keys(seed, 100_000, 300_000);
@@ -701,7 +701,7 @@ fn test_compact_mono_cutoff() {
 fn test_compact_tombstone_cutoff() {
     let seed: u128 = random();
     // let seed: u128 = 329574334243588244341656545742438834233;
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRng::from_seed(seed.to_le_bytes());
 
     for _i in 0..10 {
         println!("seed:{}", seed);
@@ -776,7 +776,7 @@ fn test_compact_tombstone_cutoff() {
 fn test_compact_lsm_cutoff() {
     let seed: u128 = random();
     // let seed: u128 = 329574334243588244341656545742438834233;
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRng::from_seed(seed.to_le_bytes());
 
     for _i in 0..10 {
         println!("seed:{}", seed);
@@ -994,7 +994,7 @@ fn test_commit_iterator_scan() {
     let seed: u128 = random();
     // let seed: u128 = 329574334243588244341656545742438834233;
     println!("seed:{}", seed);
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRng::from_seed(seed.to_le_bytes());
 
     let dir = {
         let mut dir = std::env::temp_dir();
@@ -1063,7 +1063,7 @@ fn test_commit_iterator_scans1() {
     let seed: u128 = random();
     // let seed: u128 = 133914504903399191543328322236344342635;
     println!("seed:{}", seed);
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRng::from_seed(seed.to_le_bytes());
 
     let dir = {
         let mut dir = std::env::temp_dir();
@@ -1132,7 +1132,7 @@ fn test_commit_iterator_scans2() {
     let seed: u128 = random();
     // let seed: u128 = 35667521011555069800221219023406283992;
     println!("seed:{}", seed);
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRng::from_seed(seed.to_le_bytes());
 
     let dir = {
         let mut dir = std::env::temp_dir();
@@ -1207,7 +1207,7 @@ fn test_commit_iterator_range_scans() {
     let seed: u128 = random();
     // let seed: u128 = 329574334243588244341656545742438834233;
     println!("seed:{}", seed);
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRng::from_seed(seed.to_le_bytes());
 
     let dir = {
         let mut dir = std::env::temp_dir();
@@ -1299,7 +1299,7 @@ fn run_robt_llrb(name: &str, n_ops: u64, key_max: i64, repeat: usize, seed: u128
     for i in 0..repeat {
         let mut n_ops = n_ops;
         let seed = seed + (i as u128);
-        let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+        let mut rng = StdRng::from_seed(seed.to_le_bytes());
         // populate llrb
         let lsm: bool = rng.gen();
         let sticky: bool = rng.gen();
@@ -1551,7 +1551,7 @@ where
 }
 
 fn random_llrb(n_ops: i64, key_max: i64, seed: u128, llrb: &mut Llrb<i64, i64>) {
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRng::from_seed(seed.to_le_bytes());
     for _i in 0..n_ops {
         let key = (rng.gen::<i64>() % key_max).abs();
         let op = rng.gen::<usize>() % 3;
@@ -1583,7 +1583,7 @@ fn random_llrb(n_ops: i64, key_max: i64, seed: u128, llrb: &mut Llrb<i64, i64>) 
 }
 
 fn random_low_high(key_max: i64, seed: u128) -> (Bound<i64>, Bound<i64>) {
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRng::from_seed(seed.to_le_bytes());
     let (low, high): (i64, i64) = (rng.gen(), rng.gen());
     let low = match rng.gen::<u8>() % 3 {
         0 => Bound::Included(low % key_max),
@@ -1626,7 +1626,7 @@ fn check_entry2(e1: &Entry<i64, i64>, e2: &Entry<i64, i64>) {
 }
 
 fn random_ops_keys(seed: u128, ops_limit: i64, key_limit: i64) -> (i64, i64) {
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRng::from_seed(seed.to_le_bytes());
 
     let n_ops_set: Vec<i64> = vec![
         0,

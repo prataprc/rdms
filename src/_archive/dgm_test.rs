@@ -1,4 +1,4 @@
-use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
+use rand::{prelude::random, rngs::StdRng, Rng, SeedableRng};
 
 use crate::nobitmap::NoBitmap;
 use crate::{
@@ -13,7 +13,7 @@ use super::*;
 #[test]
 fn test_config_root() {
     let seed: u128 = random();
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRng::from_seed(seed.to_le_bytes());
 
     let m0_limit = if rng.gen::<bool>() { Some(1000) } else { None };
 
@@ -49,7 +49,7 @@ fn test_config_root() {
 #[test]
 fn test_root1() {
     let seed: u128 = random();
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRng::from_seed(seed.to_le_bytes());
 
     let cutoffs = vec![
         None,
@@ -259,7 +259,7 @@ fn test_level_file_name() {
 fn test_dgm_crud() {
     let seed: u128 = random();
     // let seed: u128 = 244047294379045884577463665526896848685;
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRng::from_seed(seed.to_le_bytes());
 
     let config = Config {
         lsm: true,
@@ -444,7 +444,7 @@ fn test_dgm_non_lsm() {
         ss[random::<usize>() % 2]
     };
     // let seed: u128 = 10975319741753784730289078611426332775;
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRng::from_seed(seed.to_le_bytes());
 
     let config = Config {
         lsm: false, // non-lsm
@@ -537,7 +537,7 @@ fn test_dgm_cutoffs() {
         ss[random::<usize>() % 2]
     };
     // let seed: u128 = 28033407443451930364604529838062294466;
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRng::from_seed(seed.to_le_bytes());
 
     let config = Config {
         lsm: false, // non-lsm
@@ -632,7 +632,7 @@ fn verify_read(
     key_max: i64,
     ref_index: &mut mvcc::Mvcc<i64, i64>,
     index: &mut Dgm<i64, i64, MvccFactory, RobtFactory<i64, i64, NoBitmap>>,
-    rng: &mut SmallRng,
+    rng: &mut StdRng,
 ) {
     let mut index_r = index.to_reader().unwrap();
 
@@ -776,7 +776,7 @@ fn check_entry2(e1: &Entry<i64, i64>, e2: &Entry<i64, i64>) {
     }
 }
 
-fn random_low_high(rng: &mut SmallRng) -> (Bound<i64>, Bound<i64>) {
+fn random_low_high(rng: &mut StdRng) -> (Bound<i64>, Bound<i64>) {
     let low: i64 = rng.gen();
     let high: i64 = rng.gen();
     let low = match rng.gen::<u8>() % 3 {

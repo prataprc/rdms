@@ -1,4 +1,4 @@
-use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
+use rand::{prelude::random, rngs::StdRng, Rng, SeedableRng};
 
 use std::ops::Bound;
 
@@ -173,7 +173,7 @@ fn test_n_deleted() {
 #[test]
 fn test_empty_set_cas() {
     let seed: u128 = random();
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRng::from_seed(seed.to_le_bytes());
 
     let lsm: bool = rng.gen();
     let mut index: Box<Mvcc<i64, i64>> = if lsm {
@@ -852,7 +852,7 @@ fn test_commit2() {
 fn test_commit3() {
     let seed: u128 = random();
     // let seed: u128 = 137122643011174645787755929141427491522;
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRng::from_seed(seed.to_le_bytes());
     println!("seed {}", seed);
 
     for _i in 0..100 {
@@ -980,7 +980,7 @@ fn check_commit_nodes(index: &mut Mvcc<i64, i64>, rindex: &mut Mvcc<i64, i64>) {
 fn test_compact() {
     let seed: u128 = random();
     // let seed: u128 = 145293886525188743719829540001177083863;
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRng::from_seed(seed.to_le_bytes());
     println!("seed {}", seed);
 
     for _i in 0..50 {
@@ -1107,7 +1107,7 @@ fn check_compact_nodes(
 #[test]
 fn test_commit_iterator_scan() {
     let seed: u128 = random();
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRng::from_seed(seed.to_le_bytes());
 
     let (n_ops, key_max) = (60_000_i64, 20_000);
     let mut mvcc: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc");
@@ -1155,7 +1155,7 @@ fn test_commit_iterator_scans1() {
     let seed: u128 = random();
     // let seed: u128 = 81230627573609454272905178397264218863;
     println!("seed: {}", seed);
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRng::from_seed(seed.to_le_bytes());
 
     let (n_ops, key_max) = (60_000_i64, 20_000);
     let mut index: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc");
@@ -1190,7 +1190,7 @@ fn test_commit_iterator_scans2() {
     let seed: u128 = random();
     // let seed: u128 = 81230627573609454272905178397264218863;
     println!("seed: {}", seed);
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRng::from_seed(seed.to_le_bytes());
 
     let (n_ops, key_max) = (60_000_i64, 20_000);
     let mut mvcc: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc");
@@ -1247,7 +1247,7 @@ fn test_commit_iterator_range_scans() {
     use std::ops::Bound;
 
     let seed: u128 = random();
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRng::from_seed(seed.to_le_bytes());
 
     let (n_ops, key_max) = (128_000_i64, 20_000);
     let mut mvcc: Box<Mvcc<i64, i64>> = Mvcc::new_lsm("test-mvcc");
@@ -1303,7 +1303,7 @@ fn test_commit_iterator_range_scans() {
 }
 
 fn random_mvcc(n_ops: i64, key_max: i64, seed: u128, mvcc: &mut Mvcc<i64, i64>) {
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRng::from_seed(seed.to_le_bytes());
     for _i in 0..n_ops {
         let key = (rng.gen::<i64>() % key_max).abs();
         let op = rng.gen::<usize>() % 3;

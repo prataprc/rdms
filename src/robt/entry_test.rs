@@ -1,11 +1,11 @@
 use super::*;
-use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
+use rand::{prelude::random, rngs::StdRng, Rng, SeedableRng};
 
 #[test]
 fn test_robt_entry() {
     let seed: u64 = random();
     println!("test_entry {}", seed);
-    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut rng = StdRng::seed_from_u64(seed);
     let key = 10;
 
     let dbnt = match rng.gen::<u8>() % 2 {

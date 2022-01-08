@@ -1711,7 +1711,7 @@ fn find_end<K, V, Q>(
 }
 
 #[cfg(any(test, feature = "rdms"))]
-use rand::{self, rngs::SmallRng, Rng, SeedableRng};
+use rand::{self, rngs::StdRng, Rng, SeedableRng};
 
 #[cfg(any(test, feature = "rdms"))]
 pub fn load_index<K, V>(
@@ -1729,7 +1729,7 @@ where
     rand::distributions::Standard: rand::distributions::Distribution<K>,
     rand::distributions::Standard: rand::distributions::Distribution<V>,
 {
-    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut rng = StdRng::seed_from_u64(seed);
 
     let index = Index::new("testing", false /*spin*/);
     seqno.map(|seqno| index.set_seqno(seqno));

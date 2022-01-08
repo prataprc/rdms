@@ -1,5 +1,5 @@
 use arbitrary::Unstructured;
-use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
+use rand::{prelude::random, rngs::StdRng, Rng, SeedableRng};
 
 use super::*;
 
@@ -8,7 +8,7 @@ fn test_wral_entry() {
     use cbordata::{Cbor, FromCbor, IntoCbor};
 
     let seed: u64 = random();
-    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut rng = StdRng::seed_from_u64(seed);
     println!("test_wral_entry {}", seed);
 
     let mut entries: Vec<Entry> = (0..1000)

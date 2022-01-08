@@ -1,4 +1,4 @@
-use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
+use rand::{prelude::random, rngs::StdRng, Rng, SeedableRng};
 
 use super::*;
 
@@ -122,7 +122,7 @@ fn test_entry_compact_mono() {
     let seed: u64 = random();
     // let seed: u128 = 55460639888202704213451510247183500784;
     println!("test_entry_compact_mono {}", seed);
-    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut rng = StdRng::seed_from_u64(seed);
 
     for _ in 0..100 {
         let (value, seqno) = (100_u64, 1);
@@ -161,7 +161,7 @@ fn test_entry_compact_lsm() {
     let seed: u64 = random();
     // let seed: u128 = 97177838929013801741121704795542894024;
     println!("test_entry_compact_lsm {}", seed);
-    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut rng = StdRng::seed_from_u64(seed);
 
     for _ in 0..100 {
         let (value, seqno) = (100_u64, 1);
@@ -233,7 +233,7 @@ fn test_entry_compact_tombstone() {
     let seed: u64 = random();
     // let seed: u128 = 97177838929013801741121704795542894024;
     println!("test_entry_compact_tombstone {}", seed);
-    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut rng = StdRng::seed_from_u64(seed);
 
     for _ in 0..100 {
         let (value, seqno) = (100_u64, 1);

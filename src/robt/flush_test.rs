@@ -1,5 +1,5 @@
 use arbitrary::{self, Unstructured};
-use rand::{prelude::random, rngs::SmallRng, seq::SliceRandom, Rng, SeedableRng};
+use rand::{prelude::random, rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
 
 use std::{cmp, fs, io::Read};
 
@@ -9,7 +9,7 @@ use super::*;
 fn test_robt_flush() {
     let seed: u64 = random();
     println!("test_flush {}", seed);
-    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut rng = StdRng::seed_from_u64(seed);
 
     let dir = std::env::temp_dir().join("test_flush");
     fs::create_dir_all(&dir).unwrap();

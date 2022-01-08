@@ -1,4 +1,4 @@
-use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
+use rand::{prelude::random, rngs::StdRng, Rng, SeedableRng};
 
 use std::{collections::hash_map::RandomState, ffi, mem, path, sync::mpsc, thread};
 
@@ -82,7 +82,7 @@ fn test_wal() {
 
     for i in 0..10 {
         let seed = seed + (i * 100);
-        let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+        let mut rng = StdRng::from_seed(seed.to_le_bytes());
         let dir = {
             let mut dir_path = path::PathBuf::new();
             dir_path.push(std::env::temp_dir().into_os_string());
@@ -213,7 +213,7 @@ fn test_wal_replay() {
 
     for i in 0..10 {
         let seed = seed + (i * 100);
-        let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+        let mut rng = StdRng::from_seed(seed.to_le_bytes());
         let dir = {
             let mut dir_path = path::PathBuf::new();
             dir_path.push(std::env::temp_dir().into_os_string());
@@ -312,7 +312,7 @@ fn create_wal(
         let thread = thread::spawn(move || {
             let mut rng = {
                 let seed = seed + (i as u128);
-                SmallRng::from_seed(seed.to_le_bytes())
+                StdRng::from_seed(seed.to_le_bytes())
             };
             for _ in 0..100 {
                 let op: u8 = rng.gen();
@@ -381,7 +381,7 @@ fn load_wal(
         let thread = thread::spawn(move || {
             let mut rng = {
                 let seed = seed + (i as u128);
-                SmallRng::from_seed(seed.to_le_bytes())
+                StdRng::from_seed(seed.to_le_bytes())
             };
             for _ in 0..100 {
                 let op: u8 = rng.gen();

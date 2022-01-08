@@ -1,5 +1,5 @@
 use arbitrary::Unstructured;
-use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
+use rand::{prelude::random, rngs::StdRng, Rng, SeedableRng};
 
 use super::*;
 
@@ -12,7 +12,7 @@ fn test_wral_wal() {
         [4285628235488288451, 4686907263384396610, random()][random::<usize>() % 3];
     // let seed: u64 = 4686907263384396610;
 
-    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut rng = StdRng::seed_from_u64(seed);
     println!("test_wral_wal {}", seed);
 
     let mut config: Config = {
@@ -77,7 +77,7 @@ fn test_wral_wal() {
 }
 
 fn writer(_id: usize, wal: Wal, ops: usize, seed: u64) -> Vec<wral::Entry> {
-    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut rng = StdRng::seed_from_u64(seed);
 
     let mut entries = vec![];
     for _i in 0..ops {
@@ -96,7 +96,7 @@ fn writer(_id: usize, wal: Wal, ops: usize, seed: u64) -> Vec<wral::Entry> {
 }
 
 fn reader(_id: usize, wal: Wal, ops: usize, seed: u64, entries: Vec<wral::Entry>) {
-    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut rng = StdRng::seed_from_u64(seed);
 
     for _i in 0..ops {
         match rng.gen::<u8>() % 2 {

@@ -1,13 +1,13 @@
-use rand::{prelude::random, rngs::SmallRng};
+use rand::{prelude::random, rngs::StdRng};
 
 use rdms::Result;
 
 use crate::SubCommand;
 
 pub trait Generate<T> {
-    fn gen_key(&self, rng: &mut SmallRng) -> T;
+    fn gen_key(&self, rng: &mut StdRng) -> T;
 
-    fn gen_value(&self, rng: &mut SmallRng) -> T;
+    fn gen_value(&self, rng: &mut StdRng) -> T;
 }
 
 pub struct Opt {

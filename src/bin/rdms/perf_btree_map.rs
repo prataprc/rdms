@@ -1,4 +1,4 @@
-use rand::{rngs::SmallRng, Rng, SeedableRng};
+use rand::{rngs::StdRng, Rng, SeedableRng};
 use serde::Deserialize;
 
 use std::{
@@ -26,23 +26,23 @@ pub struct Profile {
 }
 
 impl Generate<u64> for Profile {
-    fn gen_key(&self, rng: &mut SmallRng) -> u64 {
+    fn gen_key(&self, rng: &mut StdRng) -> u64 {
         rng.gen::<u64>()
     }
 
-    fn gen_value(&self, rng: &mut SmallRng) -> u64 {
+    fn gen_value(&self, rng: &mut StdRng) -> u64 {
         rng.gen::<u64>()
     }
 }
 
 impl Generate<dbs::Binary> for Profile {
-    fn gen_key(&self, rng: &mut SmallRng) -> dbs::Binary {
+    fn gen_key(&self, rng: &mut StdRng) -> dbs::Binary {
         let (key, size) = (rng.gen::<u64>(), self.key_size);
         let val = format!("{:0width$}", key, width = size).as_bytes().to_vec();
         dbs::Binary { val }
     }
 
-    fn gen_value(&self, rng: &mut SmallRng) -> dbs::Binary {
+    fn gen_value(&self, rng: &mut StdRng) -> dbs::Binary {
         let (val, size) = (rng.gen::<u64>(), self.value_size);
         let val = format!("{:0width$}", val, width = size).as_bytes().to_vec();
         dbs::Binary { val }
@@ -84,7 +84,7 @@ where
     <V as dbs::Diff>::Delta: Send + Sync + dbs::Footprint,
     Profile: Generate<K> + Generate<V>,
 {
-    let mut rng = SmallRng::seed_from_u64(opts.seed);
+    let mut rng = StdRng::seed_from_u64(opts.seed);
 
     let mut index: BTreeMap<K, V> = BTreeMap::new();
     initial_load(&mut rng, p.clone(), &mut index)?;
@@ -121,7 +121,7 @@ where
 }
 
 fn initial_load<K, V>(
-    rng: &mut SmallRng,
+    rng: &mut StdRng,
     p: Profile,
     index: &mut BTreeMap<K, V>,
 ) -> Result<()>
@@ -149,7 +149,7 @@ where
     <V as dbs::Diff>::Delta: Send + Sync + dbs::Footprint,
     Profile: Generate<K> + Generate<V>,
 {
-    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut rng = StdRng::seed_from_u64(seed);
 
     let start = time::Instant::now();
     let (mut sets, mut rems, mut gets) = (p.sets, p.rems, p.gets);

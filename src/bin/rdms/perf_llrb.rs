@@ -1,4 +1,4 @@
-use rand::{rngs::SmallRng, Rng, SeedableRng};
+use rand::{rngs::StdRng, Rng, SeedableRng};
 use serde::Deserialize;
 
 use std::{fmt, thread, time};
@@ -34,24 +34,24 @@ pub struct Profile {
 }
 
 impl Generate<u64> for Profile {
-    fn gen_key(&self, rng: &mut SmallRng) -> u64 {
+    fn gen_key(&self, rng: &mut StdRng) -> u64 {
         rng.gen::<u64>()
     }
 
-    fn gen_value(&self, rng: &mut SmallRng) -> u64 {
+    fn gen_value(&self, rng: &mut StdRng) -> u64 {
         rng.gen::<u64>()
     }
 }
 
 impl Generate<dbs::Binary> for Profile {
-    fn gen_key(&self, rng: &mut SmallRng) -> dbs::Binary {
+    fn gen_key(&self, rng: &mut StdRng) -> dbs::Binary {
         let key = rng.gen::<u64>();
         let size = self.key_size;
         let val = format!("{:0width$}", key, width = size).as_bytes().to_vec();
         dbs::Binary { val }
     }
 
-    fn gen_value(&self, rng: &mut SmallRng) -> dbs::Binary {
+    fn gen_value(&self, rng: &mut StdRng) -> dbs::Binary {
         let val = rng.gen::<u64>();
         let size = self.value_size;
         let val = format!("{:0width$}", val, width = size).as_bytes().to_vec();
@@ -114,7 +114,7 @@ where
     <V as dbs::Diff>::Delta: Send + Sync + dbs::Footprint,
     Profile: Generate<K> + Generate<V>,
 {
-    let mut rng = SmallRng::seed_from_u64(opts.seed);
+    let mut rng = StdRng::seed_from_u64(opts.seed);
 
     let index = Index::<K, V>::new("rdms-llrb-perf", p.spin);
 
@@ -183,7 +183,7 @@ where
     Ok(())
 }
 
-fn initial_load<K, V>(rng: &mut SmallRng, p: Profile, index: Index<K, V>) -> Result<()>
+fn initial_load<K, V>(rng: &mut StdRng, p: Profile, index: Index<K, V>) -> Result<()>
 where
     K: 'static + Send + Sync + Clone + Ord + dbs::Footprint,
     V: 'static + Send + Sync + dbs::Diff + dbs::Footprint,
@@ -207,7 +207,7 @@ where
     <V as dbs::Diff>::Delta: Send + Sync + dbs::Footprint,
     Profile: Generate<K> + Generate<V>,
 {
-    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut rng = StdRng::seed_from_u64(seed);
 
     let start = time::Instant::now();
     let total = p.sets + p.ins + p.rems + p.dels + p.gets;

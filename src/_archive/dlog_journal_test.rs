@@ -1,4 +1,4 @@
-use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
+use rand::{prelude::random, rngs::StdRng, Rng, SeedableRng};
 
 use std::sync::atomic::{AtomicU64, Ordering::SeqCst};
 
@@ -33,7 +33,7 @@ fn test_journal_file() {
 #[test]
 fn test_journal() {
     let seed: u128 = random();
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRng::from_seed(seed.to_le_bytes());
 
     let dir = {
         let mut dir = path::PathBuf::new();
@@ -90,7 +90,7 @@ fn test_journal() {
 #[test]
 fn test_shard() {
     let seed: u128 = random();
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRng::from_seed(seed.to_le_bytes());
     println!("seed:{}", seed);
 
     let dir = {

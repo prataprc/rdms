@@ -1,6 +1,6 @@
 // TODO: write test case for iter_within for Llrb and Mvcc index.
 
-use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
+use rand::{prelude::random, rngs::StdRng, Rng, SeedableRng};
 
 use std::{convert::TryFrom, mem, ops::Bound};
 
@@ -184,7 +184,7 @@ fn test_first_last() {
     let seed: u128 = random();
     for i in 0..500 {
         let seed = seed + (i * 10);
-        let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+        let mut rng = StdRng::from_seed(seed.to_le_bytes());
         let mut index: Box<Llrb<i64, i64>> = Llrb::new("test-llrb");
 
         let mut min_key = std::i64::MAX;
@@ -356,7 +356,7 @@ fn test_n_deleted() {
 #[test]
 fn test_empty_set_cas() {
     let seed: u128 = random();
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRng::from_seed(seed.to_le_bytes());
 
     let lsm: bool = rng.gen();
     let mut index: Box<Llrb<i64, i64>> = if lsm {
@@ -1081,7 +1081,7 @@ fn test_mvcc_conversion() {
     let seed: u128 = random();
     for i in 0..50 {
         let seed = seed + (i * 10);
-        let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+        let mut rng = StdRng::from_seed(seed.to_le_bytes());
 
         let lsm: bool = rng.gen();
         let sticky: bool = rng.gen();
@@ -1168,7 +1168,7 @@ fn test_split() {
     println!("seed:{}", seed,);
     for i in 0..50 {
         let seed = seed + (i * 10);
-        let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+        let mut rng = StdRng::from_seed(seed.to_le_bytes());
 
         let lsm: bool = rng.gen();
         let sticky: bool = rng.gen();
@@ -1257,7 +1257,7 @@ fn test_commit2() {
 fn test_commit3() {
     let seed: u128 = random();
     // let seed: u128 = 137122643011174645787755929141427491522;
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRng::from_seed(seed.to_le_bytes());
     println!("seed {}", seed);
 
     for _i in 0..100 {
@@ -1390,7 +1390,7 @@ fn check_commit_nodes(index: &mut Llrb<i64, i64>, rindex: &mut Llrb<i64, i64>) {
 fn test_compact() {
     let seed: u128 = random();
     // let seed: u128 = 2726664888361513285714080784886255657;
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRng::from_seed(seed.to_le_bytes());
     println!("seed {}", seed);
 
     for _i in 0..50 {
@@ -1517,7 +1517,7 @@ fn check_compact_nodes(
 #[test]
 fn test_commit_iterator_scan() {
     let seed: u128 = random();
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRng::from_seed(seed.to_le_bytes());
 
     let (n_ops, key_max) = (60_000_i64, 20_000);
     let mut llrb: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
@@ -1563,7 +1563,7 @@ fn test_commit_iterator_scan() {
 #[test]
 fn test_commit_iterator_scans1() {
     let seed: u128 = random();
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRng::from_seed(seed.to_le_bytes());
 
     let (n_ops, key_max) = (60_000_i64, 20_000);
     let mut llrb: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
@@ -1596,7 +1596,7 @@ fn test_commit_iterator_scans1() {
 #[test]
 fn test_commit_iterator_scans2() {
     let seed: u128 = random();
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRng::from_seed(seed.to_le_bytes());
 
     let (n_ops, key_max) = (60_000_i64, 20_000);
     let mut llrb: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
@@ -1650,7 +1650,7 @@ fn test_commit_iterator_range_scans() {
     use std::ops::Bound;
 
     let seed: u128 = random();
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRng::from_seed(seed.to_le_bytes());
 
     let (n_ops, key_max) = (128_000_i64, 20_000);
     let mut llrb: Box<Llrb<i64, i64>> = Llrb::new_lsm("test-llrb");
@@ -1706,7 +1706,7 @@ fn test_commit_iterator_range_scans() {
 }
 
 fn random_llrb(n_ops: i64, key_max: i64, seed: u128, llrb: &mut Llrb<i64, i64>) {
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRng::from_seed(seed.to_le_bytes());
     for _i in 0..n_ops {
         let key = (rng.gen::<i64>() % key_max).abs();
         let op = rng.gen::<usize>() % 3;

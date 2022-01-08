@@ -1,12 +1,12 @@
 use arbitrary::Unstructured;
-use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
+use rand::{prelude::random, rngs::StdRng, Rng, SeedableRng};
 
 use super::*;
 
 #[test]
 fn test_wral_index() {
     let seed: u64 = random();
-    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut rng = StdRng::seed_from_u64(seed);
     println!("test_wral_index {}", seed);
 
     let index: Index = {
@@ -31,7 +31,7 @@ fn test_wral_batch() {
     use cbordata::{Cbor, FromCbor, IntoCbor};
 
     let seed: u64 = random();
-    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut rng = StdRng::seed_from_u64(seed);
     println!("test_wral_batch {}", seed);
 
     let mut batches = vec![];
@@ -91,7 +91,7 @@ fn test_wral_worker() {
     use std::env;
 
     let seed: u64 = random();
-    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut rng = StdRng::seed_from_u64(seed);
     println!("test_wral_worker {}", seed);
 
     let mut file = {

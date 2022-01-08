@@ -1,4 +1,4 @@
-use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
+use rand::{prelude::random, rngs::StdRng, Rng, SeedableRng};
 
 use std::{convert::TryInto, ops::Bound, thread};
 
@@ -1543,7 +1543,7 @@ fn random_llrb(
     llrb: &mut Box<Llrb<i64, i64>>,
     refi: &mut Box<Llrb<i64, i64>>, // reference index
 ) {
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRng::from_seed(seed.to_le_bytes());
     for _i in 0..n_ops {
         let key = (rng.gen::<i64>() % key_max).abs();
         let op = rng.gen::<usize>() % 3;
@@ -1596,7 +1596,7 @@ fn random_mvcc(
     mvcc: &mut Mvcc<i64, i64>,
     refi: &mut Llrb<i64, i64>, // reference index
 ) {
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRng::from_seed(seed.to_le_bytes());
     for _i in 0..n_ops {
         let key = (rng.gen::<i64>() % key_max).abs();
         let op = rng.gen::<usize>() % 3;
@@ -1647,7 +1647,7 @@ fn random_robt(
     delta_ok: bool,
     iter: IndexIter<i64, i64>,
 ) -> robt::Snapshot<i64, i64, CRoaring> {
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRng::from_seed(seed.to_le_bytes());
     let dir = {
         let mut dir = std::env::temp_dir();
         dir.push(name);
@@ -1672,7 +1672,7 @@ fn concurrent_write(
     mut r: MvccReader<i64, i64>,
     mut w: MvccWriter<i64, i64>,
 ) {
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRng::from_seed(seed.to_le_bytes());
     let _start = std::time::SystemTime::now();
     for _i in 0..n_ops {
         let key = (rng.gen::<i64>() % key_max).abs();
@@ -1711,7 +1711,7 @@ fn concurrent_write(
 }
 
 fn random_ops_keys(seed: u128, ops_limit: i64, key_limit: i64) -> (i64, i64) {
-    let mut rng = SmallRng::from_seed(seed.to_le_bytes());
+    let mut rng = StdRng::from_seed(seed.to_le_bytes());
 
     let n_ops_set: Vec<i64> = vec![
         0,

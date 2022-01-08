@@ -1,4 +1,4 @@
-use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
+use rand::{prelude::random, rngs::StdRng, Rng, SeedableRng};
 
 use crate::dbs::Bloom;
 
@@ -7,7 +7,7 @@ use super::*;
 #[test]
 fn test_croaring_bitmap() {
     let seed: u64 = random();
-    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut rng = StdRng::seed_from_u64(seed);
     println!("test_croaring seed:{}", seed);
 
     let keys: Vec<u64> = (0..100_000).map(|_| rng.gen::<u64>()).collect();

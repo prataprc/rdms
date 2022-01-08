@@ -1,5 +1,5 @@
 use cbordata::{FromCbor, IntoCbor};
-use rand::{rngs::SmallRng, Rng, SeedableRng};
+use rand::{rngs::StdRng, Rng, SeedableRng};
 use serde::Deserialize;
 use xorfilter::{BuildHasherDefault, Xor8};
 
@@ -181,23 +181,23 @@ impl Default for Load {
 }
 
 impl Generate<u64> for Profile {
-    fn gen_key(&self, rng: &mut SmallRng) -> u64 {
+    fn gen_key(&self, rng: &mut StdRng) -> u64 {
         rng.gen::<u64>()
     }
 
-    fn gen_value(&self, rng: &mut SmallRng) -> u64 {
+    fn gen_value(&self, rng: &mut StdRng) -> u64 {
         rng.gen::<u64>()
     }
 }
 
 impl Generate<dbs::Binary> for Profile {
-    fn gen_key(&self, rng: &mut SmallRng) -> dbs::Binary {
+    fn gen_key(&self, rng: &mut StdRng) -> dbs::Binary {
         let (key, size) = (rng.gen::<u64>(), self.key_size);
         let val = format!("{:0width$}", key, width = size).as_bytes().to_vec();
         dbs::Binary { val }
     }
 
-    fn gen_value(&self, rng: &mut SmallRng) -> dbs::Binary {
+    fn gen_value(&self, rng: &mut StdRng) -> dbs::Binary {
         let (val, size) = (rng.gen::<u64>(), self.value_size);
         let val = format!("{:0width$}", val, width = size).as_bytes().to_vec();
         dbs::Binary { val }
@@ -493,7 +493,7 @@ where
     rand::distributions::Standard: rand::distributions::Distribution<V>,
     Profile: Generate<K>,
 {
-    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut rng = StdRng::seed_from_u64(seed);
 
     let start = time::Instant::now();
     let (mut gets, mut getvers) = (p.load.gets, p.load.get_versions);

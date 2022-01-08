@@ -1,5 +1,5 @@
 use lmdb::{self, Cursor, Transaction};
-use rand::{rngs::SmallRng, Rng, SeedableRng};
+use rand::{rngs::StdRng, Rng, SeedableRng};
 use serde::Deserialize;
 
 use std::{io, sync::Arc, thread, time};
@@ -123,7 +123,7 @@ fn initial_load(
 ) -> Result<()> {
     print!("rdms: initial-load ...");
 
-    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut rng = StdRng::seed_from_u64(seed);
 
     let mut txn = env.begin_rw_txn().unwrap();
     let write_flags: lmdb::WriteFlags = Default::default();
@@ -162,7 +162,7 @@ fn incr_load(
     env: Arc<lmdb::Environment>,
     db: lmdb::Database, // index
 ) -> Result<()> {
-    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut rng = StdRng::seed_from_u64(seed);
 
     let write_flags: lmdb::WriteFlags = Default::default();
     let start = time::Instant::now();

@@ -1,5 +1,5 @@
 use arbitrary::{self, unstructured::Unstructured, Arbitrary};
-use rand::{prelude::random, rngs::SmallRng, Rng, SeedableRng};
+use rand::{prelude::random, rngs::StdRng, Rng, SeedableRng};
 
 use std::{
     collections::BTreeMap,
@@ -20,7 +20,7 @@ use super::*;
 #[test]
 fn test_llrb() {
     let seed: u64 = random();
-    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut rng = StdRng::seed_from_u64(seed);
     println!("test_llrb seed:{}", seed);
 
     let n_init = 100_000;
@@ -147,7 +147,7 @@ where
 fn test_with_key<K>(
     prefix: &'static str,
     seed: u64,
-    rng: &mut SmallRng,
+    rng: &mut StdRng,
     n_init: usize,
     n_incr: usize,
     n_threads: usize,
@@ -236,7 +236,7 @@ where
         + dbs::Footprint,
     <K as TryFrom<usize>>::Error: fmt::Debug,
 {
-    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut rng = StdRng::seed_from_u64(seed);
 
     let mut counts = [0_usize; 13];
     let mut cas_fails = [0_usize; 4];
@@ -573,7 +573,7 @@ where
     K: Copy + Clone + Ord + Rem<Output = K> + dbs::Footprint + fmt::Display,
     rand::distributions::Standard: rand::distributions::Distribution<K>,
 {
-    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut rng = StdRng::seed_from_u64(seed);
 
     let spin = rng.gen::<bool>();
     let index = Index::new("testing", spin);

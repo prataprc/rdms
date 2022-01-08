@@ -1,5 +1,7 @@
 use crate::Result;
 
+// TODO: remove fmt::Debug
+
 pub struct Trie<P, V> {
     root: Node<P, V>,
     n_count: usize,
@@ -39,15 +41,18 @@ impl<P, V> Trie<P, V> {
 
     pub fn remove(&mut self, comps: &[P]) -> Option<V>
     where
-        P: Ord,
+        P: Ord + std::fmt::Debug,
         V: Clone,
     {
-        match self.root.remove(comps) {
-            (Some(value), _) => {
-                self.n_count -= 1;
-                Some(value)
-            }
-            (None, _) => None,
+        match comps {
+            [] => None,
+            comps => match self.root.remove(comps) {
+                (Some(value), _) => {
+                    self.n_count -= 1;
+                    Some(value)
+                }
+                (None, _) => None,
+            },
         }
     }
 
@@ -66,18 +71,26 @@ impl<P, V> Trie<P, V> {
         self.root.get(comps)
     }
 
-    pub fn walk<S, F>(&self, mut state: S, callb: &mut F) -> Result<S>
+    pub fn walk<S, F>(&self, mut state: S, callb: F) -> Result<S>
     where
         P: Clone,
         V: Clone,
-        F: FnMut(&mut S, &[P], &P, Option<&V>, usize, usize) -> Result<WalkRes>,
+        F: Fn(&mut S, &[P], &P, Option<&V>, usize, usize) -> Result<WalkRes>,
     {
-        let state = match &self.root {
+        state = match &self.root {
             Node::Root { children } => {
-                for (breath, child) in children.iter().enumerate() {
-                    state = child.do_walk(vec![], state, callb, 0, breath)?;
+                let mut iter = children.iter().enumerate();
+                loop {
+                    state = match iter.next() {
+                        Some((breath, child)) => {
+                            match child.do_walk(vec![], state, &callb, 0, breath)? {
+                                (state, true) => break state,
+                                (state, false) => state,
+                            }
+                        }
+                        None => break state,
+                    }
                 }
-                state
             }
             _ => unreachable!(),
         };
@@ -141,7 +154,7 @@ impl<P, V> Node<P, V> {
         match self {
             Node::Root { .. } => unreachable!(),
             Node::Comp { value, .. } => {
-                let oldv = value.clone();
+                let oldv = value.take();
                 *value = val;
                 oldv
             }
@@ -181,56 +194,43 @@ impl<P, V> Node<P, V> {
 
     fn remove(&mut self, comps: &[P]) -> (Option<V>, bool)
     where
-        P: Ord,
+        P: Ord + std::fmt::Debug,
         V: Clone,
     {
         match comps {
+            [] => match self {
+                Node::Comp {
+                    children, value, ..
+                } => {
+                    let oldv = value.take();
+                    *value = None;
+                    (oldv, children.is_empty())
+                }
+                _ => unreachable!(),
+            },
             [comp] | [comp, ..] => {
                 let res = self.as_children().binary_search_by_key(&comp, |n| match n {
                     Node::Comp { comp, .. } => comp,
                     _ => unreachable!(),
                 });
-                let value = match res {
-                    Ok(off) if comps.len() == 1 => {
-                        match self.as_mut_children().remove(off) {
-                            Node::Comp {
-                                comp,
-                                value,
-                                children,
-                            } if children.is_empty() => {
-                                self.as_mut_children().insert(
-                                    off,
-                                    Node::Comp {
-                                        comp,
-                                        value: None,
-                                        children,
-                                    },
-                                );
-                                value
-                            }
-                            Node::Comp { value, .. } => value,
-                            _ => unreachable!(),
-                        }
-                    }
-                    Ok(off) => match self.as_mut_children()[off].remove(&comps[1..]) {
-                        (value, true) => {
+                match res {
+                    Ok(off) => {
+                        let (value, rm) = self.as_mut_children()[off].remove(&comps[1..]);
+                        if rm {
                             self.as_mut_children().remove(off);
-                            value
                         }
-                        (value, _) => value,
-                    },
-                    Err(_off) => None,
-                };
-
-                match value {
-                    None => (None, false),
-                    val if self.as_value().is_none() && self.as_children().is_empty() => {
-                        (val, true)
+                        match self {
+                            Node::Comp {
+                                children,
+                                value: None,
+                                ..
+                            } if children.is_empty() => (value, true),
+                            _ => (value, false),
+                        }
                     }
-                    val => (val, false),
+                    Err(_off) => (None, false),
                 }
             }
-            [] => unreachable!(),
         }
     }
 
@@ -250,22 +250,23 @@ impl<P, V> Node<P, V> {
                     Err(_off) => None,
                 }
             }
-            [] => unreachable!(),
+            [] => None,
         }
     }
 
+    // Result (state, skip_breath)
     fn do_walk<S, F>(
         &self,
         mut parent: Vec<P>,
         mut state: S,
-        callb: &mut F,
+        callb: &F,
         depth: usize,
         breath: usize,
-    ) -> Result<S>
+    ) -> Result<(S, bool)>
     where
         P: Clone,
         V: Clone,
-        F: FnMut(&mut S, &[P], &P, Option<&V>, usize, usize) -> Result<WalkRes>,
+        F: Fn(&mut S, &[P], &P, Option<&V>, usize, usize) -> Result<WalkRes>,
     {
         let (comp, value, children) = match self {
             Node::Comp {
@@ -276,26 +277,48 @@ impl<P, V> Node<P, V> {
             _ => unreachable!(),
         };
 
-        let state = match callb(&mut state, &parent, comp, value, depth, breath)? {
-            WalkRes::Ok => {
+        let res = callb(&mut state, &parent, comp, value, depth, breath)?;
+
+        let state = match res {
+            WalkRes::Ok | WalkRes::SkipBreath => {
                 parent.push(comp.clone());
 
-                for (breath, child) in children.iter().enumerate() {
-                    let parent = parent.clone();
-                    state = child.do_walk(parent, state, callb, depth + 1, breath)?;
+                let mut iter = children.iter().enumerate();
+                loop {
+                    state = match iter.next() {
+                        Some((breath, child)) => {
+                            let parent = parent.clone();
+                            match child.do_walk(
+                                parent,
+                                state,
+                                callb,
+                                depth + 1,
+                                breath,
+                            )? {
+                                (state, true) => break state,
+                                (state, false) => state,
+                            }
+                        }
+                        None => break state,
+                    };
                 }
-                state
             }
-            WalkRes::Skip => state,
+            WalkRes::SkipDepth | WalkRes::SkipBoth => state,
         };
 
-        Ok(state)
+        Ok((
+            state,
+            matches!(res, WalkRes::SkipBreath | WalkRes::SkipBoth),
+        ))
     }
 }
 
+#[derive(Copy, Clone)]
 pub enum WalkRes {
     Ok,
-    Skip,
+    SkipDepth,
+    SkipBreath,
+    SkipBoth,
 }
 
 #[cfg(test)]

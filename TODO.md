@@ -1,3 +1,21 @@
+* cargo stuff
+  * spell checker rust documentation and other md files.
+  * md-book
+  * release management
+    * configuration via features
+    * platform binary generation
+    * publishing onto crates.io
+  * package dependencies
+    * declared but unused dependencies
+    * outdated dependencies, upgrades
+  * licensing analysis
+  * source code analysis
+    * modulewise, imports.
+    * list of types (type, struct, enum, const, static)
+    * list of functions, traits, trait implementation
+    * type methods, public and private.
+    * featured gated source code items.
+
 * README: create document links in a separate section, linking to docs/ directory.
 * implement logging using log facade.
 * benches: Fix benches/ and add it as part of perf.sh

@@ -1,4 +1,4 @@
-use crate::Result;
+use crate::{trie::WalkRes, Result};
 
 // TODO: remove fmt::Debug
 
@@ -311,14 +311,6 @@ impl<P, V> Node<P, V> {
             matches!(res, WalkRes::SkipBreath | WalkRes::SkipBoth),
         ))
     }
-}
-
-#[derive(Copy, Clone)]
-pub enum WalkRes {
-    Ok,
-    SkipDepth,
-    SkipBreath,
-    SkipBoth,
 }
 
 #[cfg(test)]

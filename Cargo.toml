@@ -43,7 +43,7 @@ travis-ci = { repository = "bnclabs/rdms" }
 
 [dependencies]
 xorfilter-rs = { path = "../xorfilter", features = ["cbordata"] }
-cbordata = { path = "../cbordata", version = "0.5.4" }
+cbordata = { version = "0.5.4" }
 cmap = { path = "../cmap", version = "0.3.0" }
 arbitrary = { version = "1", features = ["derive"] }
 toml = "0.5.8"
@@ -75,6 +75,7 @@ prettytable-rs = { version="0.8.0", optional = true }
 serde_json = { version = "1.0.70", optional = true }
 scraper = { version = "0.12.0", optional = true }
 dirs = { version = "4.0.0", optional = true }
+colored = { version = "2.0.0", optional = true }
 # jsondata = { path = "../jsondata", optional = true }
 
 # log = "0.4.8"
@@ -89,7 +90,7 @@ crc = "2.1.0"
 ppom = { path = "../ppom", version = "0.7.0" }
 
 [features]
-rdms = ["structopt", "lmdb", "sha-1", "dirs"]
+rdms = ["structopt", "lmdb", "sha-1", "dirs", "prettytable-rs", "colored"]
 crio = ["structopt", "csv", "url", "ureq", "tar", "flate2", "serde_json"]
 zimf = ["structopt", "prettytable-rs"]
 html = ["structopt", "prettytable-rs"]

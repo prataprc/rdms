@@ -66,6 +66,12 @@ pub enum SubCommand {
             help = "follow symbolic links, by default sym-links are skipped "
         )]
         sym_link: bool,
+
+        #[structopt(
+            long = "toml",
+            help = "Configuration file for processing git repositories"
+        )]
+        toml: Option<String>,
     },
 }
 

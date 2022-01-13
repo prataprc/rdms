@@ -11,6 +11,7 @@ use crate::{dbs, Error, Result};
 
 mod cmdline;
 pub mod files;
+pub mod print;
 pub mod spinlock;
 pub mod thread;
 

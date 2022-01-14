@@ -113,7 +113,7 @@ where
     do_walk(root, state, &mut callb, depth)
 }
 
-fn do_walk<P, S, F>(root: P, mut state: S, callb: &mut F, depth: usize) -> Result<S>
+fn do_walk<P, S, F>(parent: P, mut state: S, callb: &mut F, depth: usize) -> Result<S>
 where
     P: AsRef<path::Path>,
     F: FnMut(&mut S, &path::Path, &fs::DirEntry, usize, usize) -> Result<WalkRes>,
@@ -121,10 +121,11 @@ where
     let mut subdirs = vec![];
 
     let parent = {
-        let parent: &path::Path = root.as_ref();
+        let parent: &path::Path = parent.as_ref();
         parent.to_path_buf()
     };
-    for (breath, entry) in err_at!(IOError, fs::read_dir(root))?.enumerate() {
+    let dirs = err_at!(IOError, fs::read_dir(&parent), "read_dir({:?})", parent)?;
+    for (breath, entry) in dirs.enumerate() {
         let entry = err_at!(IOError, entry)?;
         match callb(&mut state, &parent, &entry, depth, breath)? {
             WalkRes::Ok if err_at!(IOError, entry.file_type())?.is_dir() => {

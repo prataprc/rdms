@@ -1,3 +1,4 @@
+use colored::Colorize;
 use prettytable::{cell, row};
 use serde::Deserialize;
 
@@ -12,8 +13,6 @@ use rdms::{
     },
     Error, Result,
 };
-
-const NOT_A_BRANCH: &'static str = "XXX";
 
 #[derive(Clone)]
 pub struct Opt {
@@ -43,7 +42,8 @@ struct Repo {
     branches: Vec<Branch>,
     branch: Option<Branch>,
     tags: Vec<String>,
-    stashs: Vec<String>,
+    stashs: usize,
+    last_commit_date: i64, // seconds since epoch
 }
 
 #[derive(Clone)]
@@ -57,8 +57,11 @@ struct Branch {
     resolved_shorthand: String,
     target: String, // git2::Oid,
 
+    last_commit_date: i64, // seconds since epoch.
     is_head: bool,
+    is_remote: bool,
     upstream: Option<Box<Branch>>,
+    upstream_synced: bool,
 }
 
 #[derive(Clone)]
@@ -79,24 +82,24 @@ impl PrettyRow for Repo {
     }
 
     fn to_head() -> prettytable::Row {
-        row![Fy => "Path", "Dir", "State", "Branch"]
+        row![Fy => "Path", "Dir", "Commit", "State", "Branches"]
     }
 
     fn to_row(&self) -> prettytable::Row {
-        match (&self.branch, is_modified(&self.deltas)) {
-            (None, _) => row![ Fc =>
-                self.parent, self.path, repository_state(self.state), NOT_A_BRANCH,
+        let (state, attention) = repository_state(self);
+        let brs = branches(self);
+        let commit_date = chrono::NaiveDateTime::from_timestamp(self.last_commit_date, 0)
+            .format("%Y %b %d");
+
+        match attention {
+            true => row![
+                self.parent.to_string().red(),
+                self.path.to_string().red(),
+                commit_date,
+                state,
+                brs
             ],
-            (Some(br), Some(modf)) => row![ Fr =>
-                self.parent, self.path, repository_state(self.state),
-                format!("{} {}", br.name, modf)
-            ],
-            (Some(br), None) => row![
-                self.parent,
-                self.path,
-                repository_state(self.state),
-                format!("{}", br.name)
-            ],
+            false => row![self.parent, self.path, commit_date, state, brs],
         }
     }
 }
@@ -168,6 +171,7 @@ pub fn handle(mut opts: Opt) -> Result<()> {
             acc.extend_from_slice(&rl.repos);
             acc
         });
+    repos.sort_unstable_by_key(|r| r.last_commit_date);
 
     repos
         .iter_mut()
@@ -215,13 +219,27 @@ fn check_dir_entry(
         },
     };
 
-    if let Some(repo) = repo {
+    if let Some(mut repo) = repo {
         let (branches, branch) = get_repo_branches(&repo)?;
         let tags: Vec<String> =
             err_at!(Fatal, repo.tag_names(None), "Branch::tag_names {:?}", path)?
                 .iter()
                 .filter_map(|o| o.map(|s| s.to_string()))
                 .collect();
+        let stashs: usize = {
+            let mut n = 0;
+            repo.stash_foreach(|_, _, _| {
+                n += 1;
+                true
+            })
+            .unwrap();
+            n
+        };
+        let last_commit_date = branches
+            .iter()
+            .map(|br| br.last_commit_date)
+            .max()
+            .unwrap_or(0);
 
         let deltas: Vec<git2::Delta> = if repo.is_bare() {
             vec![]
@@ -244,7 +262,8 @@ fn check_dir_entry(
             branches,
             branch,
             tags,
-            stashs: vec![],
+            stashs,
+            last_commit_date,
         };
         state.repos.push(repo);
     }
@@ -260,25 +279,12 @@ fn get_repo_branches(repo: &git2::Repository) -> Result<(Vec<Branch>, Option<Bra
         let (br, branch_type) = err_at!(Fatal, res, "branch iter for {:?}", path)?;
         let br = get_repo_branch(&path, br, branch_type)?;
 
-        let is_head = {
-            let br = err_at!(
-                Fatal,
-                repo.find_branch(&br.name, branch_type.clone()),
-                "branch iter for {:?}",
-                path
-            )?;
-            repo.head()
-                .ok()
-                .as_ref()
-                .map(|h| h.is_branch())
-                .unwrap_or(false)
-                && br.into_reference() == repo.head().ok().unwrap()
-        };
-
-        if is_head {
-            branch = Some(br.clone())
+        if !br.is_remote {
+            if br.is_head {
+                branch = Some(br.clone())
+            }
+            branches.push(br)
         }
-        branches.push(br)
     }
 
     Ok((branches, branch))
@@ -293,11 +299,18 @@ fn get_repo_branch(
         .unwrap_or("")
         .to_string();
     let is_head = branch.is_head();
-    let upstream = branch
-        .upstream()
-        .ok()
-        .map(|upstream| get_repo_branch(path, upstream, branch_type).ok())
-        .flatten();
+    let is_remote = branch.get().is_remote();
+    let (upstream, upstream_synced) = match branch.upstream().ok() {
+        Some(upstream) => {
+            let upstream_synced = upstream.get() == branch.get();
+            (
+                Some(get_repo_branch(path, upstream, branch_type)?),
+                upstream_synced,
+            )
+        }
+        None => (None, false),
+    };
+    let last_commit_date = branch.get().peel_to_commit().unwrap().time().seconds();
 
     let refrn = branch.into_reference();
 
@@ -328,8 +341,11 @@ fn get_repo_branch(
         resolved_shorthand,
         target,
 
+        last_commit_date,
         is_head,
+        is_remote,
         upstream: upstream.map(Box::new),
+        upstream_synced,
     };
 
     Ok(branch)
@@ -449,28 +465,26 @@ fn make_diff_options(opts: &Opt) -> git2::DiffOptions {
     dopts
 }
 
-fn is_modified(deltas: &[git2::Delta]) -> Option<String> {
-    let mut status = "".to_string();
-    if deltas.iter().any(|d| matches!(d, git2::Delta::Added)) {
-        status.push('A')
+fn is_modified(deltas: &[git2::Delta]) -> Vec<colored::ColoredString> {
+    let mut mods = vec![];
+    if deltas.iter().any(|d| {
+        matches!(
+            d,
+            git2::Delta::Added | git2::Delta::Deleted | git2::Delta::Modified
+        )
+    }) {
+        mods.push("✎".red())
     }
-    if deltas.iter().any(|d| matches!(d, git2::Delta::Deleted)) {
-        status.push('D')
-    }
-    if deltas.iter().any(|d| matches!(d, git2::Delta::Modified)) {
-        status.push('M')
-    }
-    if deltas.iter().any(|d| matches!(d, git2::Delta::Renamed)) {
-        status.push('R')
-    }
-    if deltas.iter().any(|d| matches!(d, git2::Delta::Copied)) {
-        status.push('C')
-    }
-    if deltas.iter().any(|d| matches!(d, git2::Delta::Ignored)) {
-        status.push('I')
-    }
-    if deltas.iter().any(|d| matches!(d, git2::Delta::Untracked)) {
-        status.push('U')
+    if deltas.iter().any(|d| {
+        matches!(
+            d,
+            git2::Delta::Renamed
+                | git2::Delta::Copied
+                | git2::Delta::Ignored
+                | git2::Delta::Untracked
+        )
+    }) {
+        mods.push("☕".red())
     }
     if deltas.iter().any(|d| {
         matches!(
@@ -478,29 +492,92 @@ fn is_modified(deltas: &[git2::Delta]) -> Option<String> {
             git2::Delta::Typechange | git2::Delta::Unreadable | git2::Delta::Conflicted
         )
     }) {
-        status.push('X')
+        mods.push("☒".red())
     }
 
-    match status.as_str() {
-        "" => None,
-        status => Some(status.to_string()),
+    mods
+}
+
+fn repository_state(repo: &Repo) -> (String, bool) {
+    let mut states = vec![];
+    let mut attention = false;
+
+    {
+        if repo.bare {
+            states.push("⛼".to_string().yellow());
+        }
+    }
+
+    {
+        let s: colored::ColoredString = match &repo.state {
+            git2::RepositoryState::Clean => "".into(),
+            git2::RepositoryState::Merge => "merge".red(),
+            git2::RepositoryState::Revert => "revert".red(),
+            git2::RepositoryState::RevertSequence => "revert-seq".red(),
+            git2::RepositoryState::CherryPick => "cherry-pick".red(),
+            git2::RepositoryState::CherryPickSequence => "cherry-pick-seq".red(),
+            git2::RepositoryState::Bisect => "bisect".red(),
+            git2::RepositoryState::Rebase => "rebase".red(),
+            git2::RepositoryState::RebaseInteractive => "rebase-interactive".red(),
+            git2::RepositoryState::RebaseMerge => "rebase-merge".red(),
+            git2::RepositoryState::ApplyMailbox => "apply-mailbox".red(),
+            git2::RepositoryState::ApplyMailboxOrRebase => "apply-mailbox/rebase".red(),
+        };
+        attention = attention || !s.is_empty();
+        states.push(s);
+    }
+
+    {
+        let mods = is_modified(&repo.deltas);
+        attention = attention || mods.iter().any(|s| !s.is_plain());
+        states.extend_from_slice(&mods)
+    }
+
+    {
+        if !repo.tags.is_empty() {
+            states.push("🏷".magenta());
+        }
+    }
+
+    {
+        if repo.stashs > 0 {
+            states.push("🛍".blue());
+        }
+    }
+
+    states = states.into_iter().filter(|s| !s.is_empty()).collect();
+    match states.is_empty() {
+        true => ("👍".green().to_string(), attention),
+        false => (
+            states
+                .into_iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<String>>()
+                .join(" "),
+            attention,
+        ),
     }
 }
 
-fn repository_state(state: git2::RepositoryState) -> String {
-    match state {
-        git2::RepositoryState::Clean => "clean",
-        git2::RepositoryState::Merge => "merge",
-        git2::RepositoryState::Revert => "revert",
-        git2::RepositoryState::RevertSequence => "revert-seq",
-        git2::RepositoryState::CherryPick => "cherry-pick",
-        git2::RepositoryState::CherryPickSequence => "cherry-pick-seq",
-        git2::RepositoryState::Bisect => "bisect",
-        git2::RepositoryState::Rebase => "rebase",
-        git2::RepositoryState::RebaseInteractive => "rebase-interactive",
-        git2::RepositoryState::RebaseMerge => "rebase-merge",
-        git2::RepositoryState::ApplyMailbox => "apply-mailbox",
-        git2::RepositoryState::ApplyMailboxOrRebase => "apply-mailbox/rebase",
-    }
-    .to_string()
+fn branches(repo: &Repo) -> String {
+    let brs: Vec<colored::ColoredString> = repo
+        .branches
+        .iter()
+        .filter_map(|br| match (&repo.branch, &br.upstream) {
+            (Some(hbr), Some(ups)) if hbr.name == br.name && br.upstream_synced => {
+                Some(format!("{} <-> {}", br.name, ups.name).yellow())
+            }
+            (Some(hbr), Some(ups)) if hbr.name == br.name && br.upstream_synced => {
+                Some(format!("{} <-> {}", br.name, ups.name).cyan())
+            }
+            (Some(_), Some(_)) if br.upstream_synced => None,
+            (Some(_), Some(ups)) => Some(format!("{} <->{}", br.name, ups.name).cyan()),
+            _ => Some(br.name.as_str().into()),
+        })
+        .collect();
+
+    brs.into_iter()
+        .map(|s| s.to_string())
+        .collect::<Vec<String>>()
+        .join("\n")
 }

@@ -144,10 +144,12 @@ pub fn handle(mut opts: Opt) -> Result<()> {
     };
 
     let state = {
-        let state = WalkState {
+        let mut state = WalkState {
             opts: opts.clone(),
             repos: vec![],
         };
+        let parent = path::Path::new(&opts.path).parent().unwrap();
+        make_repo(&mut state, &parent, &files::dir_entry(&opts.path)?)?;
         files::walk(&opts.path, state, check_dir_entry)?
     };
 
@@ -175,9 +177,13 @@ pub fn handle(mut opts: Opt) -> Result<()> {
         });
     repos.sort_unstable_by_key(|r| r.last_commit_date);
 
-    repos
-        .iter_mut()
-        .for_each(|r| r.parent = r.parent.strip_prefix(&opts.path).unwrap().to_string());
+    repos.iter_mut().for_each(|r| {
+        r.parent = r
+            .parent
+            .strip_prefix(&opts.path)
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "".to_string())
+    });
     print::make_table(&repos).print_tty(opts.force_color);
 
     Ok(())
@@ -190,11 +196,20 @@ fn check_dir_entry(
     _depth: usize,
     _breath: usize,
 ) -> Result<files::WalkRes> {
-    use git2::RepositoryOpenFlags;
-
     if let Some(".git") = entry.file_name().to_str() {
-        return Ok(files::WalkRes::SkipDir);
+        Ok(files::WalkRes::SkipDir)
+    } else {
+        make_repo(state, parent, entry)?;
+        Ok(files::WalkRes::Ok)
     }
+}
+
+fn make_repo(
+    state: &mut WalkState,
+    parent: &path::Path,
+    entry: &fs::DirEntry,
+) -> Result<()> {
+    use git2::RepositoryOpenFlags;
 
     let work_flags = RepositoryOpenFlags::NO_SEARCH | RepositoryOpenFlags::CROSS_FS;
     let bare_flags = RepositoryOpenFlags::NO_SEARCH
@@ -270,7 +285,7 @@ fn check_dir_entry(
         state.repos.push(repo);
     }
 
-    Ok(files::WalkRes::Ok)
+    Ok(())
 }
 
 fn get_repo_branches(repo: &git2::Repository) -> Result<(Vec<Branch>, Option<Branch>)> {

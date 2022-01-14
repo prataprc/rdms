@@ -142,6 +142,27 @@ where
     Ok(state)
 }
 
+pub fn dir_entry<P>(loc: P) -> Result<fs::DirEntry>
+where
+    P: AsRef<path::Path>,
+{
+    let loc: &path::Path = loc.as_ref();
+    let file_name = loc.file_name().unwrap();
+    match loc.parent() {
+        Some(parent) => {
+            let dirs = err_at!(IOError, fs::read_dir(&parent), "read_dir({:?})", parent)?;
+            for entry in dirs {
+                let entry = err_at!(IOError, entry)?;
+                if file_name == entry.file_name() {
+                    return Ok(entry);
+                }
+            }
+            err_at!(Fatal, msg: "{:?} not found", loc)
+        }
+        None => err_at!(IOError, msg: "invalid dir {:?}", loc),
+    }
+}
+
 /// Load toml file and parse it into type `T`.
 pub fn load_toml<P, T>(loc: P) -> Result<T>
 where

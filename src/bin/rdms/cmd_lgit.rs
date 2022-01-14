@@ -116,7 +116,9 @@ impl TryFrom<crate::SubCommand> for Opt {
             } => Opt {
                 path: path
                     .map(|path| Some(path.to_str().unwrap().to_string()))
-                    .unwrap_or(dirs::home_dir().map(|d| d.to_str().unwrap().to_string()))
+                    .unwrap_or_else(|| {
+                        dirs::home_dir().map(|d| d.to_str().unwrap().to_string())
+                    })
                     .ok_or_else(|| {
                         let e: Result<()> =
                             err_at!(Fatal, msg: "missing home directory, supply path");
@@ -149,18 +151,18 @@ pub fn handle(mut opts: Opt) -> Result<()> {
         files::walk(&opts.path, state, check_dir_entry)?
     };
 
-    let repos: Vec<Repo> = state.repos.into_iter().filter(|r| !r.sym_link).collect();
-
-    let mut index = trie::Trie::new();
-    index = repos.into_iter().fold(index, |mut index, repo| {
-        let comps: Vec<Component> = path::PathBuf::from(&repo.path)
-            .components()
-            .into_iter()
-            .map(Component::from)
-            .collect();
-        index.set(&comps, repo);
-        index
-    });
+    let index = state.repos.into_iter().filter(|r| !r.sym_link).fold(
+        trie::Trie::new(),
+        |mut index, repo| {
+            let comps: Vec<Component> = path::PathBuf::from(&repo.path)
+                .components()
+                .into_iter()
+                .map(Component::from)
+                .collect();
+            index.set(&comps, repo);
+            index
+        },
+    );
 
     let repo_list = index.walk(Vec::<RepoList>::default(), build_repo_list)?;
 
@@ -277,7 +279,7 @@ fn get_repo_branches(repo: &git2::Repository) -> Result<(Vec<Branch>, Option<Bra
     let (mut branches, mut branch) = (vec![], None);
     for res in err_at!(Fatal, repo.branches(None), "Repository::branches")?.into_iter() {
         let (br, branch_type) = err_at!(Fatal, res, "branch iter for {:?}", path)?;
-        let br = get_repo_branch(&path, br, branch_type)?;
+        let br = get_repo_branch(path, br, branch_type)?;
 
         if !br.is_remote {
             if br.is_head {
@@ -320,16 +322,16 @@ fn get_repo_branch(
         .resolve()
         .ok()
         .map(|r| get_reference_kind(&r))
-        .unwrap_or("".to_string());
+        .unwrap_or_else(|| "".to_string());
     let resolved_shorthand = refrn
         .resolve()
         .ok()
         .map(|r| get_reference_shorthand(&r))
-        .unwrap_or("".to_string());
+        .unwrap_or_else(|| "".to_string());
     let target = refrn
         .target()
         .map(|o| o.to_string())
-        .unwrap_or("".to_string());
+        .unwrap_or_else(|| "".to_string());
 
     let branch = Branch {
         name,
@@ -355,14 +357,14 @@ fn get_reference_kind(refrn: &git2::Reference) -> String {
     refrn
         .kind()
         .map(|k| k.to_string())
-        .unwrap_or("".to_string())
+        .unwrap_or_else(|| "".to_string())
 }
 
 fn get_reference_shorthand(refrn: &git2::Reference) -> String {
     refrn
         .shorthand()
         .map(|s| s.to_string())
-        .unwrap_or("".to_string())
+        .unwrap_or_else(|| "".to_string())
 }
 
 fn branch_type_to_string(bt: &git2::BranchType) -> String {
@@ -390,13 +392,13 @@ fn build_repo_list(
     let parent = parent.as_os_str().to_str().unwrap().to_string();
 
     let value = value.cloned().map(|mut repo| {
-        repo.path = comp.to_string().into();
+        repo.path = comp.to_string();
         repo.parent = parent.clone();
         repo
     });
 
-    match value {
-        Some(repo) => match rl.binary_search_by(|val| parent.cmp(&val.parent)) {
+    if let Some(repo) = value {
+        match rl.binary_search_by(|val| parent.cmp(&val.parent)) {
             Ok(off) => {
                 rl[off].repos.push(repo);
                 rl[off].repos.sort_unstable_by(|a, b| a.path.cmp(&b.path));
@@ -408,8 +410,7 @@ fn build_repo_list(
                     repos: vec![repo],
                 },
             ),
-        },
-        None => (),
+        }
     }
 
     Ok(trie::WalkRes::Ok)
@@ -560,8 +561,7 @@ fn repository_state(repo: &Repo) -> (String, bool) {
 }
 
 fn branches(repo: &Repo) -> String {
-    let brs: Vec<colored::ColoredString> = repo
-        .branches
+    repo.branches
         .iter()
         .filter_map(|br| match (&repo.branch, &br.upstream) {
             (Some(hbr), Some(ups)) if hbr.name == br.name && br.upstream_synced => {
@@ -574,9 +574,6 @@ fn branches(repo: &Repo) -> String {
             (Some(_), Some(ups)) => Some(format!("{} <->{}", br.name, ups.name).cyan()),
             _ => Some(br.name.as_str().into()),
         })
-        .collect();
-
-    brs.into_iter()
         .map(|s| s.to_string())
         .collect::<Vec<String>>()
         .join("\n")

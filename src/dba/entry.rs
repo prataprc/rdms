@@ -159,7 +159,7 @@ where
     }
 
     pub fn as_oid(&self) -> &dba::Oid {
-        &self.obj.as_oid()
+        self.obj.as_oid()
     }
 }
 

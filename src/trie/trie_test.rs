@@ -37,24 +37,23 @@ fn test_trie() {
                 for (key, value) in ops.iter() {
                     if !key.is_empty() {
                         op_counts[0] += 1;
-                        let refv = index.set(key.clone(), value.clone());
+                        let refv = index.set(key.clone(), *value);
                         let parts = key.chars().collect::<Vec<char>>();
-                        let resv = trie.set(&parts, value.clone());
+                        let resv = trie.set(&parts, *value);
                         assert_eq!(refv, resv);
                     }
                 }
             }
-            Op::RandomSet(value) => match index.random(&mut rng) {
-                Some((key, _)) => {
+            Op::RandomSet(value) => {
+                if let Some((key, _)) = index.random(&mut rng) {
                     // println!("random-set key:{:?}", key);
                     op_counts[1] += 1;
-                    let refv = index.set(key.clone(), value.clone());
+                    let refv = index.set(key.clone(), value);
                     let parts = key.chars().collect::<Vec<char>>();
                     let resv = trie.set(&parts, value);
                     assert_eq!(refv, resv);
                 }
-                None => (),
-            },
+            }
             Op::Remove(key) => {
                 op_counts[2] += 1;
                 let refv = index.remove(&key);
@@ -62,8 +61,8 @@ fn test_trie() {
                 let resv = trie.remove(&parts);
                 assert_eq!(refv, resv);
             }
-            Op::RandomRemove => match index.random(&mut rng) {
-                Some((key, _)) => {
+            Op::RandomRemove => {
+                if let Some((key, _)) = index.random(&mut rng) {
                     // println!("random-remove key:{:?}", key);
                     op_counts[3] += 1;
                     let refv = index.remove(&key);
@@ -71,8 +70,7 @@ fn test_trie() {
                     let resv = trie.remove(&parts);
                     assert_eq!(refv, resv);
                 }
-                None => (),
-            },
+            }
             Op::Len => {
                 op_counts[4] += 1;
                 assert_eq!(index.len(), trie.len())
@@ -129,12 +127,12 @@ fn walk_callb(
     _depth: usize,
     _breath: usize,
 ) -> Result<WalkRes> {
-    match value.clone() {
+    match value {
         Some(value) => {
             let mut comps = parent.to_vec();
-            comps.push(comp.clone());
+            comps.push(*comp);
             let key = String::from_iter(comps.into_iter());
-            ws.entries.push((key, value.clone()));
+            ws.entries.push((key, *value));
             Ok(WalkRes::Ok)
         }
         None => Ok(WalkRes::Ok),

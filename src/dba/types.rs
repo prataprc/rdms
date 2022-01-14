@@ -42,7 +42,7 @@ impl<'a> From<&'a str> for Str {
 impl<'a> From<String> for Str {
     fn from(key: String) -> Str {
         Str {
-            key: key,
+            key,
             depth: Str::DEFAULT_DEPTH,
         }
     }

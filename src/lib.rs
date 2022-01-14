@@ -99,6 +99,7 @@ pub mod dba;
 pub mod dbs;
 pub mod llrb;
 pub mod robt;
+pub mod sys;
 #[macro_use]
 pub mod util;
 pub mod bitmaps;

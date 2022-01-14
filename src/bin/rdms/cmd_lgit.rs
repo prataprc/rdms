@@ -2,7 +2,7 @@ use colored::Colorize;
 use prettytable::{cell, row};
 use serde::Deserialize;
 
-use std::{convert::TryFrom, fmt, fs, path, result};
+use std::{convert::TryFrom, env, fmt, fs, path, result};
 
 use crate::SubCommand;
 use rdms::{
@@ -20,7 +20,7 @@ pub struct Opt {
     pub sym_link: bool,
     pub ignored: bool,
     pub force_color: bool,
-    pub toml: Option<String>,
+    pub toml: Option<path::PathBuf>,
     pub profile: Profile, // toml options
 }
 
@@ -115,19 +115,17 @@ impl TryFrom<crate::SubCommand> for Opt {
                 toml,
             } => Opt {
                 path: path
-                    .map(|path| Some(path.to_str().unwrap().to_string()))
+                    .map(|path| path.to_str().unwrap().to_string())
                     .unwrap_or_else(|| {
-                        dirs::home_dir().map(|d| d.to_str().unwrap().to_string())
-                    })
-                    .ok_or_else(|| {
-                        let e: Result<()> =
-                            err_at!(Fatal, msg: "missing home directory, supply path");
-                        e.unwrap_err()
-                    })?,
+                        env::current_dir().unwrap().to_str().unwrap().to_string()
+                    }),
                 sym_link,
                 ignored: false,
                 force_color: false,
-                toml,
+                toml: match toml {
+                    toml @ Some(_) => toml.map(path::PathBuf::from),
+                    None => files::find_config(&["lgit.toml", ".lgit.toml"]),
+                },
                 profile: Profile::default(),
             },
             _ => unreachable!(),

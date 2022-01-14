@@ -1,6 +1,6 @@
 use serde::de::DeserializeOwned;
 
-use std::{ffi, fs, path};
+use std::{env, ffi, fs, path};
 
 use crate::{err_at, Error, Result};
 
@@ -175,6 +175,34 @@ where
     let data = err_at!(IOError, fs::read(ploc))?;
     let s = err_at!(FailConvert, from_utf8(&data), "not utf8 for {:?}", ploc)?;
     err_at!(FailConvert, toml::from_str(s), "file:{:?}", ploc)
+}
+
+pub fn find_config<P>(file_names: &[P]) -> Option<path::PathBuf>
+where
+    P: AsRef<path::Path>,
+{
+    let file_names: Vec<path::PathBuf> = file_names
+        .iter()
+        .map(|a| {
+            let a: &path::Path = a.as_ref();
+            a.into()
+        })
+        .collect();
+
+    let mut parent = match dirs::home_dir() {
+        Some(loc) => loc,
+        None => env::current_dir().ok()?,
+    };
+
+    for file_name in file_names.iter() {
+        parent.push(file_name);
+        if fs::read(&parent).is_ok() {
+            return Some(parent.into());
+        }
+        parent.pop();
+    }
+
+    None
 }
 
 #[cfg(test)]

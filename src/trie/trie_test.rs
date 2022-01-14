@@ -15,7 +15,6 @@ fn test_trie() {
     let mut rng = StdRng::seed_from_u64(seed);
 
     let n_ops = [0, 1, 2, 3, 5, 7, 10, 100, 10000, 100000][rng.gen::<usize>() % 10];
-    let n_ops = 100000;
 
     let mut trie = Trie::<char, u64>::new();
     let mut index = ppom::OMap::<String, u64>::new();

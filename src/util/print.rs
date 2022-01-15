@@ -3,10 +3,10 @@ pub trait PrettyRow {
 
     fn to_head() -> prettytable::Row;
 
-    fn to_row(&self) -> prettytable::Row;
+    fn to_row(&mut self) -> prettytable::Row;
 }
 
-pub fn make_table<R>(rows: &[R]) -> prettytable::Table
+pub fn make_table<R>(rows: &mut [R]) -> prettytable::Table
 where
     R: PrettyRow,
 {
@@ -16,7 +16,7 @@ where
         0 => table,
         _ => {
             table.set_titles(R::to_head());
-            rows.iter().for_each(|r| {
+            rows.iter_mut().for_each(|r| {
                 table.add_row(r.to_row());
             });
             table.set_format(R::to_format());

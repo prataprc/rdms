@@ -4,7 +4,8 @@ use serde::Deserialize;
 
 use std::{convert::TryFrom, ffi, fs, path};
 
-use crate::SubCommand;
+use crate::{repo, SubCommand};
+
 use rdms::{
     err_at, trie,
     util::{
@@ -94,16 +95,10 @@ enum Age {
 pub struct Repo {
     loc: path::PathBuf,
     repo: git2::Repository,
-    age: Age,
-    is_bare: bool,
-    state: git2::RepositoryState,
-    deltas: Vec<git2::Delta>,
-    is_staged: bool,
-    is_sync_remote: bool,
+    opts: Opt,
+
     branches: Vec<Branch>,
     branch: Option<Branch>,
-    tags: Vec<String>,
-    stashs: usize,
     last_commit_date: i64, // seconds since epoch
 }
 
@@ -112,34 +107,28 @@ impl Clone for Repo {
         Repo {
             loc: self.loc.clone(),
             repo: Repo::open(self.loc.clone()).unwrap().unwrap(),
-            age: self.age.clone(),
-            is_bare: self.is_bare,
-            state: self.state.clone(),
-            deltas: self.deltas.clone(),
-            is_staged: self.is_staged,
-            is_sync_remote: self.is_sync_remote,
+            opts: self.opts.clone(),
+
             branches: self.branches.clone(),
             branch: self.branch.clone(),
-            tags: self.tags.clone(),
-            stashs: self.stashs.clone(),
             last_commit_date: self.last_commit_date, // seconds since epoch
         }
     }
 }
 
 impl Repo {
-    pub fn work_flags() -> git2::RepositoryOpenFlags {
+    fn work_flags() -> git2::RepositoryOpenFlags {
         git2::RepositoryOpenFlags::NO_SEARCH | git2::RepositoryOpenFlags::CROSS_FS
     }
 
-    pub fn bare_flags() -> git2::RepositoryOpenFlags {
+    fn bare_flags() -> git2::RepositoryOpenFlags {
         git2::RepositoryOpenFlags::NO_SEARCH
             | git2::RepositoryOpenFlags::CROSS_FS
             | git2::RepositoryOpenFlags::NO_DOTGIT
             | git2::RepositoryOpenFlags::BARE
     }
 
-    pub fn open(loc: path::PathBuf) -> Result<Option<git2::Repository>> {
+    fn open(loc: path::PathBuf) -> Result<Option<git2::Repository>> {
         let ceildrs = Vec::<String>::default().into_iter();
         let repo1 = git2::Repository::open_ext(&loc, Self::work_flags(), ceildrs.clone());
         let repo2 = git2::Repository::open_ext(&loc, Self::bare_flags(), ceildrs);
@@ -159,18 +148,53 @@ impl Repo {
 
 impl Repo {
     #[allow(dead_code)]
-    pub fn is_symlink(&self) -> Result<bool> {
+    fn is_symlink(&self) -> Result<bool> {
         Ok(err_at!(IOError, fs::metadata(&self.loc))?.is_symlink())
     }
 
-    fn set_age(&mut self, hot: Option<usize>, cold: Option<usize>) {
+    fn to_deltas(&self) -> Result<Vec<git2::Delta>> {
+        if self.repo.is_bare() {
+            Ok(vec![])
+        } else {
+            let mut dopts = repo::make_diff_options(self.opts.ignored);
+            let diff = err_at!(
+                Fatal,
+                self.repo.diff_index_to_workdir(None, Some(&mut dopts))
+            )?;
+            Ok(diff.deltas().map(|d| d.status()).collect())
+        }
+    }
+
+    fn to_tags(&self) -> Result<Vec<String>> {
+        Ok(err_at!(
+            Fatal,
+            self.repo.tag_names(None),
+            "Branch::tag_names {:?}",
+            self.loc
+        )?
+        .iter()
+        .filter_map(|o| o.map(|s| s.to_string()))
+        .collect())
+    }
+
+    fn to_stash_count(&mut self) -> Result<usize> {
+        let mut n = 0;
+        let res = self.repo.stash_foreach(|_, _, _| {
+            n += 1;
+            true
+        });
+        err_at!(Fatal, res)?;
+        Ok(n)
+    }
+
+    fn to_age(&self, hot: Option<usize>, cold: Option<usize>) -> Result<Age> {
         let hot = hot.map(|hot| 3600 * 24 * 30 * hot as i64); // in seconds;
         let cold = cold.map(|cold| 3600 * 24 * 30 * cold as i64); // in seconds;
 
         let now = chrono::offset::Local::now().naive_local();
         let dt = chrono::NaiveDateTime::from_timestamp(self.last_commit_date, 0);
 
-        self.age = match hot {
+        let age = match hot {
             Some(secs) if dt < (now - chrono::Duration::seconds(secs)) => match cold {
                 Some(secs) if dt < (now - chrono::Duration::seconds(secs)) => Age::Frozen,
                 Some(_) | None => Age::Cold,
@@ -181,14 +205,9 @@ impl Repo {
                 Some(_) | None => Age::Hot,
             },
         };
-    }
-}
 
-#[derive(Clone)]
-struct WalkState {
-    scan_dir: path::PathBuf,
-    opts: Opt,
-    repos: Vec<Repo>,
+        Ok(age)
+    }
 }
 
 impl PrettyRow for Repo {
@@ -200,8 +219,8 @@ impl PrettyRow for Repo {
         row![Fy => "Dir", "Commit", "State", "Branches"]
     }
 
-    fn to_row(&self) -> prettytable::Row {
-        let (state, attention) = display_repository_state(self);
+    fn to_row(&mut self) -> prettytable::Row {
+        let (display_state, attention) = display_repository_state(self);
         let brs = display_branches(self);
         let commit_date = chrono::NaiveDateTime::from_timestamp(self.last_commit_date, 0)
             .format("%Y-%b-%d")
@@ -215,7 +234,10 @@ impl PrettyRow for Repo {
                 .unwrap_or("--".to_string())
         };
 
-        let color = match (attention, self.age) {
+        let age = self
+            .to_age(self.opts.profile.hot, self.opts.profile.cold)
+            .unwrap();
+        let color = match (attention, age) {
             (true, _) => colored::Color::Red,
             (false, Age::Hot) => colored::Color::TrueColor {
                 r: 255,
@@ -234,22 +256,29 @@ impl PrettyRow for Repo {
             },
         };
 
-        row![dir.color(color), commit_date.color(color), state, brs,]
+        row![
+            dir.color(color),
+            commit_date.color(color),
+            display_state,
+            brs,
+        ]
     }
 }
 
-fn display_repository_state(repo: &Repo) -> (String, bool) {
+fn display_repository_state(repo: &mut Repo) -> (String, bool) {
+    // TODO: figure out whether there are any staged changes.
+
     let mut states = vec![];
     let mut attention = false;
 
     {
-        if repo.is_bare {
+        if repo.repo.is_bare() {
             states.push("⛼".to_string().yellow());
         }
     }
 
     {
-        let s: colored::ColoredString = match &repo.state {
+        let s: colored::ColoredString = match &repo.repo.state() {
             git2::RepositoryState::Clean => "".into(),
             git2::RepositoryState::Merge => "merge".red(),
             git2::RepositoryState::Revert => "revert".red(),
@@ -268,19 +297,20 @@ fn display_repository_state(repo: &Repo) -> (String, bool) {
     }
 
     {
-        let mods = display_modifed(&repo.deltas);
+        let mods = display_modifed(repo);
         attention = attention || mods.iter().any(|s| !s.is_plain());
         states.extend_from_slice(&mods)
     }
 
     {
-        if !repo.tags.is_empty() {
+        let tags = repo.to_tags().unwrap();
+        if !tags.is_empty() {
             states.push("🏷".magenta());
         }
     }
 
     {
-        if repo.stashs > 0 {
+        if repo.to_stash_count().unwrap() > 0 {
             states.push("🛍".blue());
         }
     }
@@ -299,8 +329,10 @@ fn display_repository_state(repo: &Repo) -> (String, bool) {
     }
 }
 
-fn display_modifed(deltas: &[git2::Delta]) -> Vec<colored::ColoredString> {
+fn display_modifed(repo: &Repo) -> Vec<colored::ColoredString> {
     let mut mods = vec![];
+    let deltas = repo.to_deltas().unwrap();
+
     if deltas.iter().any(|d| {
         matches!(
             d,
@@ -351,33 +383,41 @@ fn display_branches(repo: &Repo) -> String {
         .join("\n")
 }
 
+#[derive(Clone)]
+struct WalkState {
+    scan_dir: path::PathBuf,
+    opts: Opt,
+    repos: Vec<Repo>,
+}
+
 pub fn handle(opts: Opt) -> Result<()> {
-    let state = {
-        let mut state = WalkState {
+    let walk_state = {
+        let mut walk_state = WalkState {
             scan_dir: path::PathBuf::default(),
             opts: opts.clone(),
             repos: vec![],
         };
         for scan_dir in opts.profile.scan_dirs.iter() {
-            state.scan_dir = scan_dir.clone();
+            walk_state.scan_dir = scan_dir.clone();
             let parent = path::Path::new(scan_dir).parent().unwrap();
-            make_repo(&mut state, &parent, &files::dir_entry(scan_dir)?)?;
-            state = files::walk(scan_dir, state, check_dir_entry)?;
+            make_repo(&mut walk_state, &parent, &files::dir_entry(scan_dir)?)?;
+            walk_state = files::walk(scan_dir, walk_state, check_dir_entry)?;
         }
-        state
+        walk_state
     };
 
-    let index = state
-        .repos
-        .into_iter()
-        .fold(trie::Trie::new(), |mut index, repo| {
-            let comps: Vec<ffi::OsString> = path::PathBuf::from(&repo.loc)
-                .components()
-                .map(|c| c.as_os_str().to_os_string())
-                .collect();
-            index.set(&comps, repo);
-            index
-        });
+    let index =
+        walk_state
+            .repos
+            .into_iter()
+            .fold(trie::Trie::new(), |mut index, repo| {
+                let comps: Vec<ffi::OsString> = path::PathBuf::from(&repo.loc)
+                    .components()
+                    .map(|c| c.as_os_str().to_os_string())
+                    .collect();
+                index.set(&comps, repo);
+                index
+            });
 
     let mut repos: Vec<Repo> = index
         .walk(Vec::<Repo>::default(), |repos, _, _, value, _, _| {
@@ -389,17 +429,14 @@ pub fn handle(opts: Opt) -> Result<()> {
         .collect();
 
     repos.sort_unstable_by_key(|r| r.last_commit_date);
-    repos
-        .iter_mut()
-        .for_each(|r| r.set_age(opts.profile.hot, opts.profile.cold));
 
-    print::make_table(&repos).print_tty(opts.force_color);
+    print::make_table(&mut repos).print_tty(opts.force_color);
 
     Ok(())
 }
 
 fn check_dir_entry(
-    state: &mut WalkState,
+    walk_state: &mut WalkState,
     parent: &path::Path,
     entry: &fs::DirEntry,
     _depth: usize,
@@ -408,13 +445,13 @@ fn check_dir_entry(
     if let Some(".git") = entry.file_name().to_str() {
         Ok(files::WalkRes::SkipDir)
     } else {
-        make_repo(state, parent, entry)?;
+        make_repo(walk_state, parent, entry)?;
         Ok(files::WalkRes::Ok)
     }
 }
 
 fn make_repo(
-    state: &mut WalkState,
+    walk_state: &mut WalkState,
     parent: &path::Path,
     entry: &fs::DirEntry,
 ) -> Result<()> {
@@ -422,55 +459,24 @@ fn make_repo(
         .into_iter()
         .collect();
 
-    if let Some(mut repo) = Repo::open(loc.clone())? {
+    if let Some(repo) = Repo::open(loc.clone())? {
         let (branches, branch) = get_repo_branches(&repo)?;
-        let tags: Vec<String> =
-            err_at!(Fatal, repo.tag_names(None), "Branch::tag_names {:?}", loc)?
-                .iter()
-                .filter_map(|o| o.map(|s| s.to_string()))
-                .collect();
-        let stashs: usize = {
-            let mut n = 0;
-            repo.stash_foreach(|_, _, _| {
-                n += 1;
-                true
-            })
-            .unwrap();
-            n
-        };
         let last_commit_date = branches
             .iter()
             .map(|br| br.last_commit_date)
             .max()
             .unwrap_or(0);
 
-        let deltas: Vec<git2::Delta> = if repo.is_bare() {
-            vec![]
-        } else {
-            let mut dopts = crate::repo::make_diff_options(state.opts.ignored);
-            let diff =
-                err_at!(Fatal, repo.diff_index_to_workdir(None, Some(&mut dopts)))?;
-            diff.deltas().map(|d| d.status()).collect()
-        };
-
-        let is_bare = repo.is_bare();
-        let repo_state = repo.state();
         let repo = Repo {
             loc,
             repo,
-            age: Age::Hot,
-            is_bare,
-            state: repo_state,
-            deltas,
-            is_staged: true,
-            is_sync_remote: true,
+            opts: walk_state.opts.clone(),
+
             branches,
             branch,
-            tags,
-            stashs,
             last_commit_date,
         };
-        state.repos.push(repo);
+        walk_state.repos.push(repo);
     }
 
     Ok(())
@@ -519,17 +525,17 @@ fn get_repo_branch(
 
     let refrn = branch.into_reference();
 
-    let kind = get_reference_kind(&refrn);
-    let shorthand = get_reference_shorthand(&refrn);
+    let kind = repo::get_reference_kind(&refrn);
+    let shorthand = repo::get_reference_shorthand(&refrn);
     let resolved_kind = refrn
         .resolve()
         .ok()
-        .map(|r| get_reference_kind(&r))
+        .map(|r| repo::get_reference_kind(&r))
         .unwrap_or_else(|| "".to_string());
     let resolved_shorthand = refrn
         .resolve()
         .ok()
-        .map(|r| get_reference_shorthand(&r))
+        .map(|r| repo::get_reference_shorthand(&r))
         .unwrap_or_else(|| "".to_string());
     let target = refrn
         .target()
@@ -554,20 +560,6 @@ fn get_repo_branch(
     };
 
     Ok(branch)
-}
-
-fn get_reference_kind(refrn: &git2::Reference) -> String {
-    refrn
-        .kind()
-        .map(|k| k.to_string())
-        .unwrap_or_else(|| "".to_string())
-}
-
-fn get_reference_shorthand(refrn: &git2::Reference) -> String {
-    refrn
-        .shorthand()
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| "".to_string())
 }
 
 #[derive(Clone)]

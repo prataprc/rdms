@@ -10,3 +10,17 @@ pub fn make_diff_options(ignored: bool) -> git2::DiffOptions {
         .include_unreadable(true);
     dopts
 }
+
+pub fn get_reference_kind(refrn: &git2::Reference) -> String {
+    refrn
+        .kind()
+        .map(|k| k.to_string())
+        .unwrap_or_else(|| "".to_string())
+}
+
+pub fn get_reference_shorthand(refrn: &git2::Reference) -> String {
+    refrn
+        .shorthand()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "".to_string())
+}

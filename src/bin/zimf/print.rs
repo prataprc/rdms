@@ -7,7 +7,7 @@ pub trait PrettyRow {
 
     fn to_head() -> prettytable::Row;
 
-    fn to_row(&self) -> prettytable::Row;
+    fn to_row(&mut self) -> prettytable::Row;
 }
 
 pub fn make_info_table(z: &Zimf) -> prettytable::Table {
@@ -127,27 +127,7 @@ impl PrettyRow for Mime {
         row![Fy => "Type", "Entries-of-this-type"]
     }
 
-    fn to_row(&self) -> prettytable::Row {
+    fn to_row(&mut self) -> prettytable::Row {
         row![self.typ, self.entries_count]
-    }
-}
-
-#[allow(dead_code)]
-pub fn make_table<R>(rows: &[R]) -> prettytable::Table
-where
-    R: PrettyRow,
-{
-    let mut table = prettytable::Table::new();
-
-    match rows.len() {
-        0 => table,
-        _ => {
-            table.set_titles(R::to_head());
-            rows.iter().for_each(|r| {
-                table.add_row(r.to_row());
-            });
-            table.set_format(R::to_format());
-            table
-        }
     }
 }

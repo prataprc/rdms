@@ -19,8 +19,8 @@ build:
 	# ... bins ...
 	# cargo +stable build --release --bin rdms --features=rdms
 	cargo +nightly build --release --bin rdms --features=rdms
-	# cargo +stable build --release --bin lgit --features=lgit
-	cargo +nightly build --release --bin lgit --features=lgit
+	# cargo +stable build --release --bin pms --features=pms
+	cargo +nightly build --release --bin pms --features=pms
 	# cargo +stable build --release --bin crio --features=crio
 	cargo +nightly build --release --bin crio --features=crio
 	# cargo +stable build --release --bin zimf --features=zimf

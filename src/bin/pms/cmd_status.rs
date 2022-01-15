@@ -60,7 +60,7 @@ impl TryFrom<crate::SubCommand> for Opt {
                 force_color,
                 toml,
             } => {
-                let loc_toml = files::find_config(toml, &["lgit.toml", ".lgit.toml"]);
+                let loc_toml = files::find_config(toml, &["pms.toml", ".pms.toml"]);
                 let mut profile = match loc_toml.as_ref() {
                     Some(loc_toml) => {
                         files::load_toml::<_, TomlProfile>(loc_toml)?.into()

@@ -22,8 +22,8 @@ name = "rdms"
 required-features = ["rdms"]
 
 [[bin]]
-name = "lgit"
-required-features = ["lgit"]
+name = "pms"
+required-features = ["pms"]
 
 [[bin]]
 name = "crio"
@@ -95,7 +95,7 @@ ppom = { path = "../ppom", version = "0.7.0" }
 
 [features]
 rdms = ["structopt", "prettytable-rs", "lmdb", "sha-1"]
-lgit = ["structopt", "prettytable-rs", "colored"]
+pms = ["structopt", "prettytable-rs", "colored"]
 crio = ["structopt", "prettytable-rs", "csv", "url", "ureq", "tar", "flate2", "serde_json"]
 zimf = ["structopt", "prettytable-rs"]
 html = ["structopt", "prettytable-rs"]

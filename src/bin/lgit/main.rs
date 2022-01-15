@@ -7,6 +7,7 @@ use std::{convert::TryFrom, ffi};
 use rdms::Result;
 
 mod cmd_status;
+mod repo;
 
 /// Options for cmd
 #[derive(Clone, StructOpt)]
@@ -33,12 +34,6 @@ pub enum SubCommand {
 
         #[structopt(long = "force_color", help = "force color for non-terminal devices")]
         force_color: bool,
-
-        #[structopt(
-            long = "follow-link",
-            help = "follow symbolic links, by default sym-links are skipped "
-        )]
-        sym_link: bool,
 
         #[structopt(
             long = "toml",

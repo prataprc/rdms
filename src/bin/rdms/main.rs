@@ -7,7 +7,6 @@ use std::{convert::TryFrom, ffi};
 use rdms::Result;
 
 mod cmd_git;
-mod cmd_lgit;
 mod cmd_perf;
 
 mod perf_btree_map;
@@ -53,26 +52,6 @@ pub enum SubCommand {
         #[structopt(long = "sha1", help = "generate SHA1 hash for text")]
         sha1_text: Option<String>,
     },
-    /// lgit subcommand, to find local git repositories under home directory.
-    Lgit {
-        #[structopt(
-            long = "path",
-            help = "root path to start looking for git repositories"
-        )]
-        path: Option<ffi::OsString>,
-
-        #[structopt(
-            long = "follow-link",
-            help = "follow symbolic links, by default sym-links are skipped "
-        )]
-        sym_link: bool,
-
-        #[structopt(
-            long = "toml",
-            help = "Configuration file for processing git repositories"
-        )]
-        toml: Option<String>,
-    },
 }
 
 fn main() {
@@ -86,6 +65,5 @@ fn handle_subcmd(opts: Opt) -> Result<()> {
     match opts.subcmd {
         c @ SubCommand::Perf { .. } => cmd_perf::perf(cmd_perf::Opt::from(c)),
         c @ SubCommand::Git { .. } => cmd_git::handle(cmd_git::Opt::from(c)),
-        c @ SubCommand::Lgit { .. } => cmd_lgit::handle(cmd_lgit::Opt::try_from(c)?),
     }
 }

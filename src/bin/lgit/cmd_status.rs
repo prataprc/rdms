@@ -16,7 +16,6 @@ use rdms::{
 
 #[derive(Clone)]
 pub struct Opt {
-    pub sym_link: bool,
     pub ignored: bool,
     pub force_color: bool,
     pub loc_toml: Option<path::PathBuf>,
@@ -57,7 +56,6 @@ impl TryFrom<crate::SubCommand> for Opt {
         let opt = match subcmd {
             SubCommand::Status {
                 loc,
-                sym_link,
                 ignored,
                 force_color,
                 toml,
@@ -73,7 +71,6 @@ impl TryFrom<crate::SubCommand> for Opt {
                 loc.map(|loc| profile.scan_dirs.push(loc.into()));
 
                 Opt {
-                    sym_link,
                     ignored,
                     force_color,
                     loc_toml,
@@ -93,19 +90,12 @@ enum Age {
     Frozen,
 }
 
-enum OpenArgs {
-    Git {
-        loc: path::PathBuf,
-        flags: git2::RepositoryOpenFlags,
-    },
-}
-
-#[derive(Clone)]
-struct Repo {
+#[allow(dead_code)]
+pub struct Repo {
     loc: path::PathBuf,
+    repo: git2::Repository,
     age: Age,
     is_bare: bool,
-    sym_link: bool,
     state: git2::RepositoryState,
     deltas: Vec<git2::Delta>,
     is_staged: bool,
@@ -117,7 +107,62 @@ struct Repo {
     last_commit_date: i64, // seconds since epoch
 }
 
+impl Clone for Repo {
+    fn clone(&self) -> Self {
+        Repo {
+            loc: self.loc.clone(),
+            repo: Repo::open(self.loc.clone()).unwrap().unwrap(),
+            age: self.age.clone(),
+            is_bare: self.is_bare,
+            state: self.state.clone(),
+            deltas: self.deltas.clone(),
+            is_staged: self.is_staged,
+            is_sync_remote: self.is_sync_remote,
+            branches: self.branches.clone(),
+            branch: self.branch.clone(),
+            tags: self.tags.clone(),
+            stashs: self.stashs.clone(),
+            last_commit_date: self.last_commit_date, // seconds since epoch
+        }
+    }
+}
+
 impl Repo {
+    pub fn work_flags() -> git2::RepositoryOpenFlags {
+        git2::RepositoryOpenFlags::NO_SEARCH | git2::RepositoryOpenFlags::CROSS_FS
+    }
+
+    pub fn bare_flags() -> git2::RepositoryOpenFlags {
+        git2::RepositoryOpenFlags::NO_SEARCH
+            | git2::RepositoryOpenFlags::CROSS_FS
+            | git2::RepositoryOpenFlags::NO_DOTGIT
+            | git2::RepositoryOpenFlags::BARE
+    }
+
+    pub fn open(loc: path::PathBuf) -> Result<Option<git2::Repository>> {
+        let ceildrs = Vec::<String>::default().into_iter();
+        let repo1 = git2::Repository::open_ext(&loc, Self::work_flags(), ceildrs.clone());
+        let repo2 = git2::Repository::open_ext(&loc, Self::bare_flags(), ceildrs);
+
+        let res = match repo1 {
+            Ok(repo) => Some(repo),
+            Err(_) => match repo2 {
+                Ok(repo) => Some(repo),
+                Err(err) if err.code() == git2::ErrorCode::NotFound => None,
+                Err(err) => err_at!(Fatal, Err(err))?,
+            },
+        };
+
+        Ok(res)
+    }
+}
+
+impl Repo {
+    #[allow(dead_code)]
+    pub fn is_symlink(&self) -> Result<bool> {
+        Ok(err_at!(IOError, fs::metadata(&self.loc))?.is_symlink())
+    }
+
     fn set_age(&mut self, hot: Option<usize>, cold: Option<usize>) {
         let hot = hot.map(|hot| 3600 * 24 * 30 * hot as i64); // in seconds;
         let cold = cold.map(|cold| 3600 * 24 * 30 * cold as i64); // in seconds;
@@ -140,24 +185,6 @@ impl Repo {
 }
 
 #[derive(Clone)]
-struct Branch {
-    name: String,
-    branch_type: String, // git2::BranchType,
-
-    kind: String, // git2::ReferenceType,
-    shorthand: String,
-    resolved_kind: String, // git2::ReferenceType
-    resolved_shorthand: String,
-    target: String, // git2::Oid,
-
-    last_commit_date: i64, // seconds since epoch.
-    is_head: bool,
-    is_remote: bool,
-    upstream: Option<Box<Branch>>,
-    upstream_synced: bool,
-}
-
-#[derive(Clone)]
 struct WalkState {
     scan_dir: path::PathBuf,
     opts: Opt,
@@ -174,8 +201,8 @@ impl PrettyRow for Repo {
     }
 
     fn to_row(&self) -> prettytable::Row {
-        let (state, attention) = repository_state(self);
-        let brs = branches(self);
+        let (state, attention) = display_repository_state(self);
+        let brs = display_branches(self);
         let commit_date = chrono::NaiveDateTime::from_timestamp(self.last_commit_date, 0)
             .format("%Y-%b-%d")
             .to_string();
@@ -211,6 +238,119 @@ impl PrettyRow for Repo {
     }
 }
 
+fn display_repository_state(repo: &Repo) -> (String, bool) {
+    let mut states = vec![];
+    let mut attention = false;
+
+    {
+        if repo.is_bare {
+            states.push("⛼".to_string().yellow());
+        }
+    }
+
+    {
+        let s: colored::ColoredString = match &repo.state {
+            git2::RepositoryState::Clean => "".into(),
+            git2::RepositoryState::Merge => "merge".red(),
+            git2::RepositoryState::Revert => "revert".red(),
+            git2::RepositoryState::RevertSequence => "revert-seq".red(),
+            git2::RepositoryState::CherryPick => "cherry-pick".red(),
+            git2::RepositoryState::CherryPickSequence => "cherry-pick-seq".red(),
+            git2::RepositoryState::Bisect => "bisect".red(),
+            git2::RepositoryState::Rebase => "rebase".red(),
+            git2::RepositoryState::RebaseInteractive => "rebase-interactive".red(),
+            git2::RepositoryState::RebaseMerge => "rebase-merge".red(),
+            git2::RepositoryState::ApplyMailbox => "apply-mailbox".red(),
+            git2::RepositoryState::ApplyMailboxOrRebase => "apply-mailbox/rebase".red(),
+        };
+        attention = attention || !s.is_empty();
+        states.push(s);
+    }
+
+    {
+        let mods = display_modifed(&repo.deltas);
+        attention = attention || mods.iter().any(|s| !s.is_plain());
+        states.extend_from_slice(&mods)
+    }
+
+    {
+        if !repo.tags.is_empty() {
+            states.push("🏷".magenta());
+        }
+    }
+
+    {
+        if repo.stashs > 0 {
+            states.push("🛍".blue());
+        }
+    }
+
+    states = states.into_iter().filter(|s| !s.is_empty()).collect();
+    match states.is_empty() {
+        true => ("👍".green().to_string(), attention),
+        false => (
+            states
+                .into_iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<String>>()
+                .join(" "),
+            attention,
+        ),
+    }
+}
+
+fn display_modifed(deltas: &[git2::Delta]) -> Vec<colored::ColoredString> {
+    let mut mods = vec![];
+    if deltas.iter().any(|d| {
+        matches!(
+            d,
+            git2::Delta::Added | git2::Delta::Deleted | git2::Delta::Modified
+        )
+    }) {
+        mods.push("✎".red())
+    }
+    if deltas.iter().any(|d| {
+        matches!(
+            d,
+            git2::Delta::Renamed
+                | git2::Delta::Copied
+                | git2::Delta::Ignored
+                | git2::Delta::Untracked
+        )
+    }) {
+        mods.push("☕".red())
+    }
+    if deltas.iter().any(|d| {
+        matches!(
+            d,
+            git2::Delta::Typechange | git2::Delta::Unreadable | git2::Delta::Conflicted
+        )
+    }) {
+        mods.push("☒".red())
+    }
+
+    mods
+}
+
+fn display_branches(repo: &Repo) -> String {
+    repo.branches
+        .iter()
+        .filter_map(|br| match (&repo.branch, &br.upstream) {
+            (Some(hbr), Some(ups)) if hbr.name == br.name && br.upstream_synced => {
+                Some(format!("{} <-> {}", br.name, ups.name).yellow())
+            }
+            (Some(hbr), Some(ups)) if hbr.name == br.name && br.upstream_synced => {
+                Some(format!("{} <-> {}", br.name, ups.name).cyan())
+            }
+            (Some(_), Some(_)) if br.upstream_synced => None,
+            (Some(_), Some(ups)) => Some(format!("{} <->{}", br.name, ups.name).cyan()),
+            _ => Some(br.name.as_str().into()),
+        })
+        .map(|s| s.to_string())
+        .collect::<Vec<String>>()
+        .join("\n")
+}
+
 pub fn handle(opts: Opt) -> Result<()> {
     let state = {
         let mut state = WalkState {
@@ -227,20 +367,23 @@ pub fn handle(opts: Opt) -> Result<()> {
         state
     };
 
-    let index = state.repos.into_iter().filter(|r| !r.sym_link).fold(
-        trie::Trie::new(),
-        |mut index, repo| {
+    let index = state
+        .repos
+        .into_iter()
+        .fold(trie::Trie::new(), |mut index, repo| {
             let comps: Vec<ffi::OsString> = path::PathBuf::from(&repo.loc)
                 .components()
                 .map(|c| c.as_os_str().to_os_string())
                 .collect();
             index.set(&comps, repo);
             index
-        },
-    );
+        });
 
     let mut repos: Vec<Repo> = index
-        .walk(Vec::<Repo>::default(), build_repo_list)?
+        .walk(Vec::<Repo>::default(), |repos, _, _, value, _, _| {
+            value.map(|repo| repos.push(repo.clone()));
+            Ok(trie::WalkRes::Ok)
+        })?
         .into_iter()
         .filter(|r| !files::is_excluded(&r.loc, &opts.profile.exclude_dirs))
         .collect();
@@ -275,34 +418,11 @@ fn make_repo(
     parent: &path::Path,
     entry: &fs::DirEntry,
 ) -> Result<()> {
-    use git2::RepositoryOpenFlags;
-
-    let work_flags = RepositoryOpenFlags::NO_SEARCH | RepositoryOpenFlags::CROSS_FS;
-    let bare_flags = RepositoryOpenFlags::NO_SEARCH
-        | RepositoryOpenFlags::CROSS_FS
-        | RepositoryOpenFlags::NO_DOTGIT
-        | RepositoryOpenFlags::BARE;
-    let ceiling_dirs = Vec::<String>::default().into_iter();
-
     let loc: path::PathBuf = vec![parent.to_path_buf(), entry.file_name().into()]
         .into_iter()
         .collect();
 
-    let sym_link = err_at!(IOError, entry.metadata())?.is_symlink();
-
-    let repo1 = git2::Repository::open_ext(&loc, work_flags, ceiling_dirs.clone());
-    let repo2 = git2::Repository::open_ext(&loc, bare_flags, ceiling_dirs);
-
-    let (is_bare, repo) = match repo1 {
-        Ok(repo) => (false, Some(repo)),
-        Err(_) => match repo2 {
-            Ok(repo) => (true, Some(repo)),
-            Err(err) if err.code() == git2::ErrorCode::NotFound => (false, None),
-            Err(err) => err_at!(Fatal, Err(err))?,
-        },
-    };
-
-    if let Some(mut repo) = repo {
+    if let Some(mut repo) = Repo::open(loc.clone())? {
         let (branches, branch) = get_repo_branches(&repo)?;
         let tags: Vec<String> =
             err_at!(Fatal, repo.tag_names(None), "Branch::tag_names {:?}", loc)?
@@ -327,18 +447,20 @@ fn make_repo(
         let deltas: Vec<git2::Delta> = if repo.is_bare() {
             vec![]
         } else {
-            let mut dopts = make_diff_options(&state.opts);
+            let mut dopts = crate::repo::make_diff_options(state.opts.ignored);
             let diff =
                 err_at!(Fatal, repo.diff_index_to_workdir(None, Some(&mut dopts)))?;
             diff.deltas().map(|d| d.status()).collect()
         };
 
+        let is_bare = repo.is_bare();
+        let repo_state = repo.state();
         let repo = Repo {
             loc,
+            repo,
             age: Age::Hot,
             is_bare,
-            sym_link,
-            state: repo.state(),
+            state: repo_state,
             deltas,
             is_staged: true,
             is_sync_remote: true,
@@ -416,7 +538,7 @@ fn get_repo_branch(
 
     let branch = Branch {
         name,
-        branch_type: branch_type_to_string(&branch_type),
+        branch_type,
 
         kind,
         shorthand,
@@ -448,150 +570,30 @@ fn get_reference_shorthand(refrn: &git2::Reference) -> String {
         .unwrap_or_else(|| "".to_string())
 }
 
-fn branch_type_to_string(bt: &git2::BranchType) -> String {
-    match bt {
-        git2::BranchType::Local => "local".to_string(),
-        git2::BranchType::Remote => "remote".to_string(),
-    }
+#[derive(Clone)]
+pub struct Branch {
+    name: String,
+    branch_type: git2::BranchType, // git2::BranchType,
+
+    kind: String, // git2::ReferenceType,
+    shorthand: String,
+    resolved_kind: String, // git2::ReferenceType
+    resolved_shorthand: String,
+    target: String, // git2::Oid,
+
+    last_commit_date: i64, // seconds since epoch.
+    is_head: bool,
+    is_remote: bool,
+    upstream: Option<Box<Branch>>,
+    upstream_synced: bool,
 }
 
-fn build_repo_list(
-    repos: &mut Vec<Repo>,
-    _comps: &[ffi::OsString],
-    _comp: &ffi::OsString,
-    value: Option<&Repo>,
-    _depth: usize,
-    _breath: usize,
-) -> Result<trie::WalkRes> {
-    if let Some(repo) = value {
-        repos.push(repo.clone());
-    }
-
-    Ok(trie::WalkRes::Ok)
-}
-
-fn make_diff_options(opts: &Opt) -> git2::DiffOptions {
-    let mut dopts = git2::DiffOptions::new();
-    dopts
-        .include_untracked(true)
-        .recurse_untracked_dirs(true)
-        .include_ignored(opts.ignored)
-        .recurse_ignored_dirs(opts.ignored)
-        .ignore_filemode(false)
-        .ignore_submodules(false)
-        .include_unreadable(true);
-    dopts
-}
-
-fn is_modified(deltas: &[git2::Delta]) -> Vec<colored::ColoredString> {
-    let mut mods = vec![];
-    if deltas.iter().any(|d| {
-        matches!(
-            d,
-            git2::Delta::Added | git2::Delta::Deleted | git2::Delta::Modified
-        )
-    }) {
-        mods.push("✎".red())
-    }
-    if deltas.iter().any(|d| {
-        matches!(
-            d,
-            git2::Delta::Renamed
-                | git2::Delta::Copied
-                | git2::Delta::Ignored
-                | git2::Delta::Untracked
-        )
-    }) {
-        mods.push("☕".red())
-    }
-    if deltas.iter().any(|d| {
-        matches!(
-            d,
-            git2::Delta::Typechange | git2::Delta::Unreadable | git2::Delta::Conflicted
-        )
-    }) {
-        mods.push("☒".red())
-    }
-
-    mods
-}
-
-fn repository_state(repo: &Repo) -> (String, bool) {
-    let mut states = vec![];
-    let mut attention = false;
-
-    {
-        if repo.is_bare {
-            states.push("⛼".to_string().yellow());
+impl Branch {
+    #[allow(dead_code)]
+    pub fn display_branch_type(&self) -> String {
+        match self.branch_type {
+            git2::BranchType::Local => "local".to_string(),
+            git2::BranchType::Remote => "remote".to_string(),
         }
     }
-
-    {
-        let s: colored::ColoredString = match &repo.state {
-            git2::RepositoryState::Clean => "".into(),
-            git2::RepositoryState::Merge => "merge".red(),
-            git2::RepositoryState::Revert => "revert".red(),
-            git2::RepositoryState::RevertSequence => "revert-seq".red(),
-            git2::RepositoryState::CherryPick => "cherry-pick".red(),
-            git2::RepositoryState::CherryPickSequence => "cherry-pick-seq".red(),
-            git2::RepositoryState::Bisect => "bisect".red(),
-            git2::RepositoryState::Rebase => "rebase".red(),
-            git2::RepositoryState::RebaseInteractive => "rebase-interactive".red(),
-            git2::RepositoryState::RebaseMerge => "rebase-merge".red(),
-            git2::RepositoryState::ApplyMailbox => "apply-mailbox".red(),
-            git2::RepositoryState::ApplyMailboxOrRebase => "apply-mailbox/rebase".red(),
-        };
-        attention = attention || !s.is_empty();
-        states.push(s);
-    }
-
-    {
-        let mods = is_modified(&repo.deltas);
-        attention = attention || mods.iter().any(|s| !s.is_plain());
-        states.extend_from_slice(&mods)
-    }
-
-    {
-        if !repo.tags.is_empty() {
-            states.push("🏷".magenta());
-        }
-    }
-
-    {
-        if repo.stashs > 0 {
-            states.push("🛍".blue());
-        }
-    }
-
-    states = states.into_iter().filter(|s| !s.is_empty()).collect();
-    match states.is_empty() {
-        true => ("👍".green().to_string(), attention),
-        false => (
-            states
-                .into_iter()
-                .map(|s| s.to_string())
-                .collect::<Vec<String>>()
-                .join(" "),
-            attention,
-        ),
-    }
-}
-
-fn branches(repo: &Repo) -> String {
-    repo.branches
-        .iter()
-        .filter_map(|br| match (&repo.branch, &br.upstream) {
-            (Some(hbr), Some(ups)) if hbr.name == br.name && br.upstream_synced => {
-                Some(format!("{} <-> {}", br.name, ups.name).yellow())
-            }
-            (Some(hbr), Some(ups)) if hbr.name == br.name && br.upstream_synced => {
-                Some(format!("{} <-> {}", br.name, ups.name).cyan())
-            }
-            (Some(_), Some(_)) if br.upstream_synced => None,
-            (Some(_), Some(ups)) => Some(format!("{} <->{}", br.name, ups.name).cyan()),
-            _ => Some(br.name.as_str().into()),
-        })
-        .map(|s| s.to_string())
-        .collect::<Vec<String>>()
-        .join("\n")
 }

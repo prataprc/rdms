@@ -177,32 +177,52 @@ where
     err_at!(FailConvert, toml::from_str(s), "file:{:?}", ploc)
 }
 
-pub fn find_config<P>(file_names: &[P]) -> Option<path::PathBuf>
+/// Return the configuration file pointed by `loc` or, if it is None, search of
+/// file_names under current/directory or home/directory.
+pub fn find_config<P>(
+    loc: Option<ffi::OsString>,
+    file_names: &[P],
+) -> Option<path::PathBuf>
 where
     P: AsRef<path::Path>,
 {
-    let file_names: Vec<path::PathBuf> = file_names
-        .iter()
-        .map(|a| {
-            let a: &path::Path = a.as_ref();
-            a.into()
-        })
-        .collect();
+    match loc {
+        Some(loc) => Some(loc.into()),
+        None => {
+            let parents: Vec<path::PathBuf> =
+                vec![env::current_dir().ok(), dirs::home_dir()]
+                    .into_iter()
+                    .filter_map(std::convert::identity)
+                    .collect();
 
-    let mut parent = match dirs::home_dir() {
-        Some(loc) => loc,
-        None => env::current_dir().ok()?,
-    };
-
-    for file_name in file_names.iter() {
-        parent.push(file_name);
-        if fs::read(&parent).is_ok() {
-            return Some(parent.into());
+            parents
+                .into_iter()
+                .map(|parent| {
+                    std::iter::repeat(parent)
+                        .take(file_names.len())
+                        .zip(file_names.iter().map(|f| f.as_ref()))
+                        .map(|(p, f)| {
+                            [p, f.to_path_buf()].iter().collect::<path::PathBuf>()
+                        })
+                        .filter(|loc| fs::read(&loc).is_ok())
+                        .collect::<Vec<path::PathBuf>>()
+                })
+                .flatten()
+                .next()
         }
-        parent.pop();
     }
+}
 
-    None
+pub fn is_excluded<P, Q>(loc: P, dirs: &[Q]) -> bool
+where
+    P: AsRef<path::Path>,
+    Q: AsRef<path::Path>,
+{
+    let loc: &path::Path = loc.as_ref();
+    dirs.iter().any(|dir| {
+        let dir: &path::Path = dir.as_ref();
+        loc.starts_with(dir)
+    })
 }
 
 #[cfg(test)]

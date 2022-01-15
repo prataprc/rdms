@@ -2,7 +2,7 @@ use colored::Colorize;
 use prettytable::{cell, row};
 use serde::Deserialize;
 
-use std::{convert::TryFrom, env, fmt, fs, path, result};
+use std::{convert::TryFrom, ffi, fs, path};
 
 use crate::SubCommand;
 use rdms::{
@@ -16,24 +16,74 @@ use rdms::{
 
 #[derive(Clone)]
 pub struct Opt {
-    pub path: String,
     pub sym_link: bool,
     pub ignored: bool,
     pub force_color: bool,
-    pub toml: Option<path::PathBuf>,
+    pub loc_toml: Option<path::PathBuf>,
     pub profile: Profile, // toml options
 }
 
-#[derive(Clone, Default, Deserialize)]
+#[derive(Clone, Default)]
 pub struct Profile {
-    exclude_dirs: Vec<String>,
+    scan_dirs: Vec<path::PathBuf>,
+    exclude_dirs: Vec<path::PathBuf>,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct TomlProfile {
+    scan_dirs: Option<Vec<path::PathBuf>>,
+    exclude_dirs: Option<Vec<path::PathBuf>>,
+}
+
+impl From<TomlProfile> for Profile {
+    fn from(p: TomlProfile) -> Profile {
+        Profile {
+            scan_dirs: p.scan_dirs.unwrap_or_else(|| vec![]),
+            exclude_dirs: p.exclude_dirs.unwrap_or_else(|| vec![]),
+        }
+    }
+}
+
+impl TryFrom<crate::SubCommand> for Opt {
+    type Error = Error;
+
+    fn try_from(subcmd: crate::SubCommand) -> Result<Opt> {
+        let opt = match subcmd {
+            SubCommand::Status {
+                loc,
+                sym_link,
+                ignored,
+                force_color,
+                toml,
+            } => {
+                let loc_toml = files::find_config(toml, &["lgit.toml", ".lgit.toml"]);
+                let mut profile = match loc_toml.as_ref() {
+                    Some(loc_toml) => {
+                        files::load_toml::<_, TomlProfile>(loc_toml)?.into()
+                    }
+                    None => Profile::default(),
+                };
+
+                loc.map(|loc| profile.scan_dirs.push(loc.into()));
+
+                Opt {
+                    sym_link,
+                    ignored,
+                    force_color,
+                    loc_toml,
+                    profile,
+                }
+            }
+        };
+
+        Ok(opt)
+    }
 }
 
 #[derive(Clone)]
 struct Repo {
-    parent: String,
-    path: String,
-    bare: bool,
+    loc: path::PathBuf,
+    is_bare: bool,
     sym_link: bool,
     state: git2::RepositoryState,
     deltas: Vec<git2::Delta>,
@@ -66,12 +116,13 @@ struct Branch {
 
 #[derive(Clone)]
 struct RepoList {
-    parent: String,
+    loc: path::PathBuf,
     repos: Vec<Repo>,
 }
 
 #[derive(Clone)]
 struct WalkState {
+    scan_dir: path::PathBuf,
     opts: Opt,
     repos: Vec<Repo>,
 }
@@ -82,84 +133,52 @@ impl PrettyRow for Repo {
     }
 
     fn to_head() -> prettytable::Row {
-        row![Fy => "Path", "Dir", "Commit", "State", "Branches"]
+        row![Fy => "Dir", "Commit", "State", "Branches"]
     }
 
     fn to_row(&self) -> prettytable::Row {
         let (state, attention) = repository_state(self);
         let brs = branches(self);
         let commit_date = chrono::NaiveDateTime::from_timestamp(self.last_commit_date, 0)
-            .format("%Y %b %d");
+            .format("%Y-%b-%d");
+        let dir = {
+            let comps: Vec<path::Component> = self.loc.components().collect();
+            let p: path::PathBuf = comps.into_iter().rev().take(2).rev().collect();
+            p.as_os_str()
+                .to_str()
+                .map(|s| s.to_string())
+                .unwrap_or("--".to_string())
+        };
 
         match attention {
-            true => row![
-                self.parent.to_string().red(),
-                self.path.to_string().red(),
-                commit_date,
-                state,
-                brs
-            ],
-            false => row![self.parent, self.path, commit_date, state, brs],
+            true => row![dir.red(), commit_date, state, brs],
+            false => row![dir, commit_date, state, brs],
         }
     }
 }
 
-impl TryFrom<crate::SubCommand> for Opt {
-    type Error = Error;
-
-    fn try_from(subcmd: crate::SubCommand) -> Result<Opt> {
-        let opt = match subcmd {
-            SubCommand::Status {
-                path,
-                sym_link,
-                ignored,
-                force_color,
-                toml,
-            } => Opt {
-                path: path
-                    .map(|path| path.to_str().unwrap().to_string())
-                    .unwrap_or_else(|| {
-                        env::current_dir().unwrap().to_str().unwrap().to_string()
-                    }),
-                sym_link,
-                ignored,
-                force_color,
-                toml: match toml {
-                    toml @ Some(_) => toml.map(path::PathBuf::from),
-                    None => files::find_config(&["lgit.toml", ".lgit.toml"]),
-                },
-                profile: Profile::default(),
-            },
-            _ => unreachable!(),
-        };
-
-        Ok(opt)
-    }
-}
-
-pub fn handle(mut opts: Opt) -> Result<()> {
-    opts.profile = match opts.toml.as_ref() {
-        Some(p) => files::load_toml(p)?,
-        None => Profile::default(),
-    };
-
+pub fn handle(opts: Opt) -> Result<()> {
     let state = {
         let mut state = WalkState {
+            scan_dir: path::PathBuf::default(),
             opts: opts.clone(),
             repos: vec![],
         };
-        let parent = path::Path::new(&opts.path).parent().unwrap();
-        make_repo(&mut state, &parent, &files::dir_entry(&opts.path)?)?;
-        files::walk(&opts.path, state, check_dir_entry)?
+        for scan_dir in opts.profile.scan_dirs.iter() {
+            state.scan_dir = scan_dir.clone();
+            let parent = path::Path::new(scan_dir).parent().unwrap();
+            make_repo(&mut state, &parent, &files::dir_entry(scan_dir)?)?;
+            state = files::walk(scan_dir, state, check_dir_entry)?;
+        }
+        state
     };
 
     let index = state.repos.into_iter().filter(|r| !r.sym_link).fold(
         trie::Trie::new(),
         |mut index, repo| {
-            let comps: Vec<Component> = path::PathBuf::from(&repo.path)
+            let comps: Vec<ffi::OsString> = path::PathBuf::from(&repo.loc)
                 .components()
-                .into_iter()
-                .map(Component::from)
+                .map(|c| c.as_os_str().to_os_string())
                 .collect();
             index.set(&comps, repo);
             index
@@ -170,20 +189,13 @@ pub fn handle(mut opts: Opt) -> Result<()> {
 
     let mut repos = repo_list
         .iter()
-        .filter(|r| !opts.profile.exclude_dirs.contains(&r.parent))
+        .filter(|r| !files::is_excluded(&r.loc, &opts.profile.exclude_dirs))
         .fold(vec![], |mut acc, rl| {
             acc.extend_from_slice(&rl.repos);
             acc
         });
     repos.sort_unstable_by_key(|r| r.last_commit_date);
 
-    repos.iter_mut().for_each(|r| {
-        r.parent = r
-            .parent
-            .strip_prefix(&opts.path)
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "".to_string())
-    });
     print::make_table(&repos).print_tty(opts.force_color);
 
     Ok(())
@@ -218,16 +230,16 @@ fn make_repo(
         | RepositoryOpenFlags::BARE;
     let ceiling_dirs = Vec::<String>::default().into_iter();
 
-    let path: path::PathBuf = vec![parent.to_path_buf(), entry.file_name().into()]
+    let loc: path::PathBuf = vec![parent.to_path_buf(), entry.file_name().into()]
         .into_iter()
         .collect();
 
     let sym_link = err_at!(IOError, entry.metadata())?.is_symlink();
 
-    let repo1 = git2::Repository::open_ext(&path, work_flags, ceiling_dirs.clone());
-    let repo2 = git2::Repository::open_ext(&path, bare_flags, ceiling_dirs);
+    let repo1 = git2::Repository::open_ext(&loc, work_flags, ceiling_dirs.clone());
+    let repo2 = git2::Repository::open_ext(&loc, bare_flags, ceiling_dirs);
 
-    let (bare, repo) = match repo1 {
+    let (is_bare, repo) = match repo1 {
         Ok(repo) => (false, Some(repo)),
         Err(_) => match repo2 {
             Ok(repo) => (true, Some(repo)),
@@ -239,7 +251,7 @@ fn make_repo(
     if let Some(mut repo) = repo {
         let (branches, branch) = get_repo_branches(&repo)?;
         let tags: Vec<String> =
-            err_at!(Fatal, repo.tag_names(None), "Branch::tag_names {:?}", path)?
+            err_at!(Fatal, repo.tag_names(None), "Branch::tag_names {:?}", loc)?
                 .iter()
                 .filter_map(|o| o.map(|s| s.to_string()))
                 .collect();
@@ -268,9 +280,8 @@ fn make_repo(
         };
 
         let repo = Repo {
-            parent: "".to_string(),
-            path: path.as_os_str().to_str().unwrap().to_string(),
-            bare,
+            loc,
+            is_bare,
             sym_link,
             state: repo.state(),
             deltas,
@@ -391,81 +402,31 @@ fn branch_type_to_string(bt: &git2::BranchType) -> String {
 
 fn build_repo_list(
     rl: &mut Vec<RepoList>,
-    comps: &[Component],
-    comp: &Component,
+    comps: &[ffi::OsString],
+    _comp: &ffi::OsString,
     value: Option<&Repo>,
     _depth: usize,
     _breath: usize,
 ) -> Result<trie::WalkRes> {
-    let parent: path::PathBuf = comps
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<String>>()
-        .into_iter()
-        .collect();
-
-    let parent = parent.as_os_str().to_str().unwrap().to_string();
-
-    let value = value.cloned().map(|mut repo| {
-        repo.path = comp.to_string();
-        repo.parent = parent.clone();
-        repo
-    });
+    let parent: path::PathBuf = comps.iter().collect();
 
     if let Some(repo) = value {
-        match rl.binary_search_by(|val| parent.cmp(&val.parent)) {
+        match rl.binary_search_by(|val| parent.as_path().cmp(val.loc.parent().unwrap())) {
             Ok(off) => {
-                rl[off].repos.push(repo);
-                rl[off].repos.sort_unstable_by(|a, b| a.path.cmp(&b.path));
+                rl[off].repos.push(repo.clone());
+                rl[off].repos.sort_unstable_by(|a, b| a.loc.cmp(&b.loc));
             }
             Err(off) => rl.insert(
                 off,
                 RepoList {
-                    parent,
-                    repos: vec![repo],
+                    loc: parent,
+                    repos: vec![repo.clone()],
                 },
             ),
         }
     }
 
     Ok(trie::WalkRes::Ok)
-}
-
-#[derive(Clone, Ord, PartialOrd, Eq, PartialEq)]
-enum Component {
-    Prefix(String),
-    RootDir,
-    CurDir,
-    ParentDir,
-    Normal(String),
-}
-
-impl<'a> From<path::Component<'a>> for Component {
-    fn from(comp: path::Component<'a>) -> Component {
-        match comp {
-            path::Component::Prefix(val) => {
-                Component::Prefix(val.as_os_str().to_str().unwrap().to_string())
-            }
-            path::Component::RootDir => Component::RootDir,
-            path::Component::CurDir => Component::CurDir,
-            path::Component::ParentDir => Component::ParentDir,
-            path::Component::Normal(val) => {
-                Component::Normal(val.to_str().unwrap().to_string())
-            }
-        }
-    }
-}
-
-impl fmt::Display for Component {
-    fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
-        match self {
-            Component::Prefix(val) => write!(f, "{}", val),
-            Component::RootDir => write!(f, "/"),
-            Component::CurDir => write!(f, "."),
-            Component::ParentDir => write!(f, ".."),
-            Component::Normal(val) => write!(f, "{}", val),
-        }
-    }
 }
 
 fn make_diff_options(opts: &Opt) -> git2::DiffOptions {
@@ -519,7 +480,7 @@ fn repository_state(repo: &Repo) -> (String, bool) {
     let mut attention = false;
 
     {
-        if repo.bare {
+        if repo.is_bare {
             states.push("⛼".to_string().yellow());
         }
     }

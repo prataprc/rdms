@@ -23,7 +23,7 @@ pub enum SubCommand {
             long = "path",
             help = "root path to start looking for git repositories"
         )]
-        path: Option<ffi::OsString>,
+        loc: Option<ffi::OsString>,
 
         #[structopt(
             long = "ignored",
@@ -42,9 +42,9 @@ pub enum SubCommand {
 
         #[structopt(
             long = "toml",
-            help = "Configuration file for processing git repositories"
+            help = "Location to config file for processing git repositories"
         )]
-        toml: Option<String>,
+        toml: Option<ffi::OsString>,
     },
 }
 

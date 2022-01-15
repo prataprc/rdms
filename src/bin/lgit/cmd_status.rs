@@ -25,12 +25,16 @@ pub struct Opt {
 
 #[derive(Clone, Default)]
 pub struct Profile {
+    hot: Option<usize>,
+    cold: Option<usize>,
     scan_dirs: Vec<path::PathBuf>,
     exclude_dirs: Vec<path::PathBuf>,
 }
 
 #[derive(Clone, Deserialize)]
 pub struct TomlProfile {
+    hot: Option<usize>,  // in months
+    cold: Option<usize>, // in months
     scan_dirs: Option<Vec<path::PathBuf>>,
     exclude_dirs: Option<Vec<path::PathBuf>>,
 }
@@ -38,6 +42,8 @@ pub struct TomlProfile {
 impl From<TomlProfile> for Profile {
     fn from(p: TomlProfile) -> Profile {
         Profile {
+            hot: p.hot,
+            cold: p.cold,
             scan_dirs: p.scan_dirs.unwrap_or_else(|| vec![]),
             exclude_dirs: p.exclude_dirs.unwrap_or_else(|| vec![]),
         }
@@ -80,9 +86,24 @@ impl TryFrom<crate::SubCommand> for Opt {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
+enum Age {
+    Hot,
+    Cold,
+    Frozen,
+}
+
+enum OpenArgs {
+    Git {
+        loc: path::PathBuf,
+        flags: git2::RepositoryOpenFlags,
+    },
+}
+
 #[derive(Clone)]
 struct Repo {
     loc: path::PathBuf,
+    age: Age,
     is_bare: bool,
     sym_link: bool,
     state: git2::RepositoryState,
@@ -94,6 +115,28 @@ struct Repo {
     tags: Vec<String>,
     stashs: usize,
     last_commit_date: i64, // seconds since epoch
+}
+
+impl Repo {
+    fn set_age(&mut self, hot: Option<usize>, cold: Option<usize>) {
+        let hot = hot.map(|hot| 3600 * 24 * 30 * hot as i64); // in seconds;
+        let cold = cold.map(|cold| 3600 * 24 * 30 * cold as i64); // in seconds;
+
+        let now = chrono::offset::Local::now().naive_local();
+        let dt = chrono::NaiveDateTime::from_timestamp(self.last_commit_date, 0);
+
+        self.age = match hot {
+            Some(secs) if dt < (now - chrono::Duration::seconds(secs)) => match cold {
+                Some(secs) if dt < (now - chrono::Duration::seconds(secs)) => Age::Frozen,
+                Some(_) | None => Age::Cold,
+            },
+            Some(_) => Age::Hot,
+            None => match cold {
+                Some(secs) if dt < (now - chrono::Duration::seconds(secs)) => Age::Cold,
+                Some(_) | None => Age::Hot,
+            },
+        };
+    }
 }
 
 #[derive(Clone)]
@@ -112,12 +155,6 @@ struct Branch {
     is_remote: bool,
     upstream: Option<Box<Branch>>,
     upstream_synced: bool,
-}
-
-#[derive(Clone)]
-struct RepoList {
-    loc: path::PathBuf,
-    repos: Vec<Repo>,
 }
 
 #[derive(Clone)]
@@ -140,7 +177,8 @@ impl PrettyRow for Repo {
         let (state, attention) = repository_state(self);
         let brs = branches(self);
         let commit_date = chrono::NaiveDateTime::from_timestamp(self.last_commit_date, 0)
-            .format("%Y-%b-%d");
+            .format("%Y-%b-%d")
+            .to_string();
         let dir = {
             let comps: Vec<path::Component> = self.loc.components().collect();
             let p: path::PathBuf = comps.into_iter().rev().take(2).rev().collect();
@@ -150,10 +188,26 @@ impl PrettyRow for Repo {
                 .unwrap_or("--".to_string())
         };
 
-        match attention {
-            true => row![dir.red(), commit_date, state, brs],
-            false => row![dir, commit_date, state, brs],
-        }
+        let color = match (attention, self.age) {
+            (true, _) => colored::Color::Red,
+            (false, Age::Hot) => colored::Color::TrueColor {
+                r: 255,
+                g: 255,
+                b: 255,
+            },
+            (false, Age::Cold) => colored::Color::TrueColor {
+                r: 180,
+                g: 180,
+                b: 180,
+            },
+            (false, Age::Frozen) => colored::Color::TrueColor {
+                r: 100,
+                g: 100,
+                b: 100,
+            },
+        };
+
+        row![dir.color(color), commit_date.color(color), state, brs,]
     }
 }
 
@@ -185,16 +239,16 @@ pub fn handle(opts: Opt) -> Result<()> {
         },
     );
 
-    let repo_list = index.walk(Vec::<RepoList>::default(), build_repo_list)?;
-
-    let mut repos = repo_list
-        .iter()
+    let mut repos: Vec<Repo> = index
+        .walk(Vec::<Repo>::default(), build_repo_list)?
+        .into_iter()
         .filter(|r| !files::is_excluded(&r.loc, &opts.profile.exclude_dirs))
-        .fold(vec![], |mut acc, rl| {
-            acc.extend_from_slice(&rl.repos);
-            acc
-        });
+        .collect();
+
     repos.sort_unstable_by_key(|r| r.last_commit_date);
+    repos
+        .iter_mut()
+        .for_each(|r| r.set_age(opts.profile.hot, opts.profile.cold));
 
     print::make_table(&repos).print_tty(opts.force_color);
 
@@ -281,6 +335,7 @@ fn make_repo(
 
         let repo = Repo {
             loc,
+            age: Age::Hot,
             is_bare,
             sym_link,
             state: repo.state(),
@@ -401,29 +456,15 @@ fn branch_type_to_string(bt: &git2::BranchType) -> String {
 }
 
 fn build_repo_list(
-    rl: &mut Vec<RepoList>,
-    comps: &[ffi::OsString],
+    repos: &mut Vec<Repo>,
+    _comps: &[ffi::OsString],
     _comp: &ffi::OsString,
     value: Option<&Repo>,
     _depth: usize,
     _breath: usize,
 ) -> Result<trie::WalkRes> {
-    let parent: path::PathBuf = comps.iter().collect();
-
     if let Some(repo) = value {
-        match rl.binary_search_by(|val| parent.as_path().cmp(val.loc.parent().unwrap())) {
-            Ok(off) => {
-                rl[off].repos.push(repo.clone());
-                rl[off].repos.sort_unstable_by(|a, b| a.loc.cmp(&b.loc));
-            }
-            Err(off) => rl.insert(
-                off,
-                RepoList {
-                    loc: parent,
-                    repos: vec![repo.clone()],
-                },
-            ),
-        }
+        repos.push(repo.clone());
     }
 
     Ok(trie::WalkRes::Ok)

@@ -7,7 +7,7 @@ pub trait PrettyRow {
 
     fn to_head() -> prettytable::Row;
 
-    fn to_row(&mut self) -> prettytable::Row;
+    fn to_row(&self) -> prettytable::Row;
 }
 
 pub fn make_info_table(z: &Zimf) -> prettytable::Table {
@@ -127,7 +127,7 @@ impl PrettyRow for Mime {
         row![Fy => "Type", "Entries-of-this-type"]
     }
 
-    fn to_row(&mut self) -> prettytable::Row {
+    fn to_row(&self) -> prettytable::Row {
         row![self.typ, self.entries_count]
     }
 }

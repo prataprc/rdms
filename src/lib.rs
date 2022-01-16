@@ -87,6 +87,7 @@
 #![feature(drain_filter)]
 #![feature(concat_idents)]
 #![feature(deadline_api)]
+#![feature(is_symlink)]
 
 use std::result;
 

@@ -14,6 +14,7 @@ pub const GIT_DIR: &str = ".git";
 
 mod config;
 mod index;
+pub mod repo;
 mod trie;
 
 pub use config::{Config, InitConfig, OpenConfig, Permissions};

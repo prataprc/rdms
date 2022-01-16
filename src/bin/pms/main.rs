@@ -1,5 +1,3 @@
-#![feature(is_symlink)]
-
 use structopt::StructOpt;
 
 use std::{convert::TryFrom, ffi};
@@ -7,7 +5,6 @@ use std::{convert::TryFrom, ffi};
 use rdms::Result;
 
 mod cmd_status;
-mod repo;
 
 /// Options for cmd
 #[derive(Clone, StructOpt)]

@@ -3,7 +3,7 @@ pub trait PrettyRow {
 
     fn to_head() -> prettytable::Row;
 
-    fn to_row(&mut self) -> prettytable::Row;
+    fn to_row(&self) -> prettytable::Row;
 }
 
 pub fn make_table<R>(rows: &mut [R]) -> prettytable::Table

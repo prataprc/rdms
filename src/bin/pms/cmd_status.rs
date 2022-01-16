@@ -101,23 +101,27 @@ struct WalkState {
 
 pub fn handle(opts: Opt) -> Result<()> {
     let walk_state = {
-        let mut walk_state = WalkState {
+        let mut ws = WalkState {
             scan_dir: path::PathBuf::default(),
             opts: opts.clone(),
             repos: vec![],
         };
         for scan_dir in opts.profile.scan_dirs.iter() {
-            walk_state.scan_dir = scan_dir.clone();
+            ws.scan_dir = scan_dir.clone();
             {
-                let parent = path::Path::new(scan_dir).parent().unwrap();
-                let entry = files::dir_entry(scan_dir)?;
-                if let Ok(repo) = repo::Repo::from_entry(parent, &entry) {
-                    walk_state.repos.push(repo);
+                if let Ok(repo) = repo::Repo::from_loc(scan_dir) {
+                    ws.repos.push(repo);
                 }
             }
-            walk_state = files::walk(scan_dir, walk_state, check_dir_entry)?;
+            ws = match files::walk(scan_dir, ws.clone(), check_dir_entry) {
+                Ok(ws) => ws,
+                Err(err) => {
+                    println!("scan_dir {:?}, err:{} skipping ...", scan_dir, err);
+                    ws
+                }
+            };
         }
-        walk_state
+        ws
     };
 
     let index =

@@ -20,6 +20,18 @@ impl Clone for Repo {
 }
 
 impl Repo {
+    pub fn from_loc(loc: &path::Path) -> Result<Repo> {
+        let loc = loc.to_path_buf();
+
+        match Repo::open(loc.clone())? {
+            Some(repo) => {
+                let repo = Repo { loc, repo };
+                Ok(repo)
+            }
+            None => err_at!(InvalidInput, msg: "{:?} not a repo", loc),
+        }
+    }
+
     pub fn from_entry(parent: &path::Path, entry: &fs::DirEntry) -> Result<Repo> {
         let loc: path::PathBuf = vec![parent.to_path_buf(), entry.file_name().into()]
             .into_iter()

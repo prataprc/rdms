@@ -196,7 +196,7 @@ impl PrettyRow for Status {
     }
 
     fn to_head() -> prettytable::Row {
-        row![Fy => "Dir", "Commit", "State", "Branches"]
+        row![Fy => "Dir", "Commit", "State", "Branches", "Remotes"]
     }
 
     fn to_row(&self) -> prettytable::Row {
@@ -225,6 +225,8 @@ impl PrettyRow for Status {
                 .unwrap_or("--".to_string())
         };
 
+        let remotes = self.repo.to_remote_names().unwrap();
+
         let age = to_age(&self.repo, self.hot, self.cold).unwrap();
         let color = match (attention, age) {
             (true, _) => colored::Color::Red,
@@ -250,6 +252,7 @@ impl PrettyRow for Status {
             commit_date.color(color),
             display_state,
             brs,
+            remotes.join(","),
         ]
     }
 }

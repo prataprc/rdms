@@ -175,6 +175,16 @@ impl Repo {
             .collect())
     }
 
+    pub fn to_remote_names(&self) -> Result<Vec<String>> {
+        Ok(err_at!(Fatal, self.repo.remotes())?
+            .iter()
+            .map(|s| match s {
+                Some(s) => s.to_string(),
+                None => "--no-remote--name".to_string(),
+            })
+            .collect())
+    }
+
     pub fn branch_upstream<'a>(
         &'a self,
         br: git2::Branch<'a>,

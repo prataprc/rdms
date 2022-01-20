@@ -197,6 +197,10 @@ impl Repo {
             .collect())
     }
 
+    pub fn to_remote<'a>(&'a self, name: &str) -> Result<git2::Remote<'a>> {
+        err_at!(Fatal, self.repo.find_remote(name))
+    }
+
     pub fn branch_upstream<'a>(
         &'a self,
         br: git2::Branch<'a>,

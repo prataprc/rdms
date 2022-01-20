@@ -1,10 +1,9 @@
 use colored::Colorize;
 use prettytable::{cell, row};
-use serde::Deserialize;
 
 use std::{convert::TryFrom, ffi, fs, path};
 
-use crate::SubCommand;
+use crate::{Config, SubCommand};
 
 use rdms::{
     git::repo,
@@ -17,71 +16,50 @@ use rdms::{
 };
 
 #[derive(Clone)]
-pub struct Opt {
+pub struct Handle {
+    pub scan_dirs: Vec<path::PathBuf>,
+    pub exclude_dirs: Vec<path::PathBuf>,
+    pub hot: Option<usize>,
+    pub cold: Option<usize>,
     pub ignored: bool,
     pub force_color: bool,
-    pub loc_toml: Option<path::PathBuf>,
-    pub profile: Profile, // toml options
 }
 
-#[derive(Clone, Default)]
-pub struct Profile {
-    hot: Option<usize>,
-    cold: Option<usize>,
-    scan_dirs: Vec<path::PathBuf>,
-    exclude_dirs: Vec<path::PathBuf>,
-}
-
-#[derive(Clone, Deserialize)]
-pub struct TomlProfile {
-    hot: Option<usize>,  // in months
-    cold: Option<usize>, // in months
-    scan_dirs: Option<Vec<path::PathBuf>>,
-    exclude_dirs: Option<Vec<path::PathBuf>>,
-}
-
-impl From<TomlProfile> for Profile {
-    fn from(p: TomlProfile) -> Profile {
-        Profile {
-            hot: p.hot,
-            cold: p.cold,
-            scan_dirs: p.scan_dirs.unwrap_or_else(|| vec![]),
-            exclude_dirs: p.exclude_dirs.unwrap_or_else(|| vec![]),
-        }
-    }
-}
-
-impl TryFrom<crate::SubCommand> for Opt {
+impl TryFrom<crate::SubCommand> for Handle {
     type Error = Error;
 
-    fn try_from(subcmd: crate::SubCommand) -> Result<Opt> {
+    fn try_from(subcmd: crate::SubCommand) -> Result<Handle> {
         let opt = match subcmd {
             SubCommand::Status {
-                loc,
+                scan_dir,
                 ignored,
                 force_color,
-                toml,
-            } => {
-                let loc_toml = files::find_config(toml, &["pms.toml", ".pms.toml"]);
-                let mut profile = match loc_toml.as_ref() {
-                    Some(loc_toml) => {
-                        files::load_toml::<_, TomlProfile>(loc_toml)?.into()
-                    }
-                    None => Profile::default(),
-                };
-
-                loc.map(|loc| profile.scan_dirs.push(loc.into()));
-
-                Opt {
-                    ignored,
-                    force_color,
-                    loc_toml,
-                    profile,
-                }
-            }
+            } => Handle {
+                scan_dirs: scan_dir.map(|d| vec![d.into()]).unwrap_or_else(|| vec![]),
+                exclude_dirs: Vec::default(),
+                hot: None,
+                cold: None,
+                ignored,
+                force_color,
+            },
         };
 
         Ok(opt)
+    }
+}
+
+impl Handle {
+    fn update_with_cfg(mut self, cfg: &Config) -> Self {
+        if let None = self.hot {
+            self.hot = cfg.hot;
+        }
+        if let None = self.cold {
+            self.cold = cfg.cold;
+        }
+        self.scan_dirs.extend_from_slice(&cfg.scan.scan_dirs);
+        self.exclude_dirs.extend_from_slice(&cfg.scan.exclude_dirs);
+
+        self
     }
 }
 
@@ -95,18 +73,20 @@ pub enum Age {
 #[derive(Clone)]
 struct WalkState {
     scan_dir: path::PathBuf,
-    opts: Opt,
+    h: Handle,
     repos: Vec<repo::Repo>,
 }
 
-pub fn handle(opts: Opt) -> Result<()> {
+pub fn handle(mut h: Handle, cfg: Config) -> Result<()> {
+    h = h.update_with_cfg(&cfg);
+
     let walk_state = {
         let mut ws = WalkState {
             scan_dir: path::PathBuf::default(),
-            opts: opts.clone(),
+            h: h.clone(),
             repos: vec![],
         };
-        for scan_dir in opts.profile.scan_dirs.iter() {
+        for scan_dir in h.scan_dirs.iter() {
             ws.scan_dir = scan_dir.clone();
             {
                 if let Ok(repo) = repo::Repo::from_loc(scan_dir) {
@@ -143,16 +123,16 @@ pub fn handle(opts: Opt) -> Result<()> {
             Ok(trie::WalkRes::Ok)
         })?
         .into_iter()
-        .filter(|r| !files::is_excluded(&r.to_loc(), &opts.profile.exclude_dirs))
+        .filter(|r| !files::is_excluded(&r.to_loc(), &h.exclude_dirs))
         .collect();
 
     repos.sort_unstable_by_key(|r| r.to_last_commit_date(None).unwrap());
 
     let mut srepos: Vec<Status> = repos
         .into_iter()
-        .map(|r| Status::from_opts(&opts, r))
+        .map(|r| Status::from_opts(&h, r))
         .collect();
-    print::make_table(&mut srepos).print_tty(opts.force_color);
+    print::make_table(&mut srepos).print_tty(h.force_color);
 
     Ok(())
 }
@@ -183,11 +163,11 @@ struct Status {
 }
 
 impl Status {
-    fn from_opts(opts: &Opt, repo: repo::Repo) -> Status {
+    fn from_opts(h: &Handle, repo: repo::Repo) -> Status {
         Status {
-            hot: opts.profile.hot,
-            cold: opts.profile.cold,
-            ignored: opts.ignored,
+            hot: h.hot,
+            cold: h.cold,
+            ignored: h.ignored,
 
             repo,
         }

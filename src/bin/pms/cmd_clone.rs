@@ -2,12 +2,14 @@ use std::{convert::TryFrom, path};
 
 use crate::{h, Config, Handler, SubCommand};
 
-use rdms::{git::repo, trie, util::files, Error, Result};
+use rdms::{err_at, git::repo, Error, Result};
 
 #[derive(Clone)]
 pub struct Handle {
     pub scan_dirs: Vec<path::PathBuf>,
     pub exclude_dirs: Vec<path::PathBuf>,
+    pub src_dir: path::PathBuf,
+    pub dst_dir: path::PathBuf,
 }
 
 impl TryFrom<crate::SubCommand> for Handle {
@@ -15,9 +17,15 @@ impl TryFrom<crate::SubCommand> for Handle {
 
     fn try_from(subcmd: crate::SubCommand) -> Result<Handle> {
         let opt = match subcmd {
-            SubCommand::Excluded { scan_dir } => Handle {
+            SubCommand::Clone {
+                scan_dir,
+                src_dir,
+                dst_dir,
+            } => Handle {
                 scan_dirs: scan_dir.map(|d| vec![d.into()]).unwrap_or_else(|| vec![]),
                 exclude_dirs: Vec::default(),
+                src_dir: src_dir.into(),
+                dst_dir: dst_dir.into(),
             },
             _ => unreachable!(),
         };
@@ -48,21 +56,14 @@ impl Handle {
 pub fn handle(mut h: Handle, cfg: Config) -> Result<()> {
     h = h.update_with_cfg(&cfg);
 
-    let index = h::WalkState::new(h.clone()).scan()?.into_trie();
-
-    let mut repos: Vec<repo::Repo> = index
-        .walk(Vec::<repo::Repo>::default(), |repos, _, _, value, _, _| {
-            value.map(|repo| repos.push(repo.clone()));
-            Ok(trie::WalkRes::Ok)
-        })?
-        .into_iter()
-        .filter(|r| files::is_excluded(&r.to_loc(), &h.to_exclude_dirs()))
-        .collect();
-
-    repos.sort_unstable_by_key(|r| r.to_last_commit_date(None).unwrap());
+    let ws = h::WalkState::new(h.clone()).scan()?;
+    let scan_dir = ws.to_scan_dir();
+    let repos: Vec<repo::Repo> = ws.into_repositories()?;
 
     for repo in repos.into_iter() {
-        println!("excluded {:?}", repo.to_loc())
+        let rloc = err_at!(Fatal, repo.to_loc().strip_prefix(&scan_dir))?.to_path_buf();
+        let rloc: path::PathBuf = [h.dst_dir.clone(), rloc].iter().collect();
+        println!("{:?}", rloc);
     }
 
     Ok(())

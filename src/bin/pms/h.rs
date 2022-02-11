@@ -26,6 +26,10 @@ where
         }
     }
 
+    pub fn to_scan_dir(&self) -> path::PathBuf {
+        self.scan_dir.clone()
+    }
+
     pub fn scan(mut self) -> Result<Self> {
         let mut iter = self.h.to_scan_dirs().into_iter();
         loop {

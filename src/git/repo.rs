@@ -46,6 +46,22 @@ impl Repo {
         }
     }
 
+    pub fn repo_clone<P>(&self, into: P) -> Result<()>
+    where
+        P: AsRef<path::Path>,
+    {
+        let u = match url::Url::from_directory_path(&self.loc) {
+            Ok(u) => Ok(u),
+            Err(()) => err_at!(Fatal, msg: "invalid loc: {:?}", self.loc),
+        }?;
+
+        println!("{}", u);
+
+        // err_at!(Fatal, git2::Repository::clone(u.as_str(), into))?;
+
+        Ok(())
+    }
+
     fn work_flags() -> git2::RepositoryOpenFlags {
         git2::RepositoryOpenFlags::NO_SEARCH | git2::RepositoryOpenFlags::CROSS_FS
     }

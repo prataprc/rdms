@@ -3,7 +3,7 @@ use prettytable::{cell, row};
 
 use std::{convert::TryFrom, path};
 
-use crate::{util, Config, Handler, SubCommand};
+use crate::{h, Config, Handler, SubCommand};
 
 use rdms::{
     git::repo,
@@ -19,6 +19,7 @@ pub struct Handle {
     pub cold: Option<usize>,
     pub ignored: bool,
     pub force_color: bool,
+    pub states: bool,
 }
 
 impl TryFrom<crate::SubCommand> for Handle {
@@ -30,6 +31,7 @@ impl TryFrom<crate::SubCommand> for Handle {
                 scan_dir,
                 ignored,
                 force_color,
+                states,
             } => Handle {
                 scan_dirs: scan_dir.map(|d| vec![d.into()]).unwrap_or_else(|| vec![]),
                 exclude_dirs: Vec::default(),
@@ -37,6 +39,7 @@ impl TryFrom<crate::SubCommand> for Handle {
                 cold: None,
                 ignored,
                 force_color,
+                states,
             },
             _ => unreachable!(),
         };
@@ -80,14 +83,24 @@ pub enum Age {
 pub fn handle(mut h: Handle, cfg: Config) -> Result<()> {
     h = h.update_with_cfg(&cfg);
 
-    let mut statuss: Vec<Status> = util::WalkState::new(h.clone())
-        .scan()?
-        .into_repositories()?
-        .into_iter()
-        .map(|r| Status::from_opts(&h, r))
-        .collect();
+    if h.states {
+        println!("{} clean", "👍".green());
+        println!("{} bare repo", "⛼".to_string().yellow());
+        println!("{} repo with tags", "🏷".magenta());
+        println!("{} repo with stashed changes", "🛍".blue());
+        println!("{} edited repo, pending commit", "✎".red());
+        println!("{} repo not clean", "☕".red());
+        println!("{} repo index/work-tree not sync", "🗳".red());
+    } else {
+        let mut statuss: Vec<Status> = h::WalkState::new(h.clone())
+            .scan()?
+            .into_repositories()?
+            .into_iter()
+            .map(|r| Status::from_opts(&h, r))
+            .collect();
 
-    print::make_table(&mut statuss).print_tty(h.force_color);
+        print::make_table(&mut statuss).print_tty(h.force_color);
+    }
 
     Ok(())
 }

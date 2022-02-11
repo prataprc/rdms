@@ -95,7 +95,7 @@ ppom = { path = "../ppom", version = "0.7.0" }
 
 [features]
 rdms = ["structopt", "prettytable-rs", "lmdb", "sha-1"]
-pms = ["structopt", "prettytable-rs", "colored"]
+pms = ["structopt", "prettytable-rs", "colored", "url"]
 crio = ["structopt", "prettytable-rs", "csv", "url", "ureq", "tar", "flate2", "serde_json"]
 zimf = ["structopt", "prettytable-rs"]
 html = ["structopt", "prettytable-rs"]

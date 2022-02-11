@@ -225,6 +225,28 @@ where
     })
 }
 
+pub fn canonicalize<P>(loc: P) -> Option<path::PathBuf>
+where
+    P: AsRef<path::Path>,
+{
+    let loc: &path::Path = loc.as_ref();
+    let mut loc_comps = loc.components().collect::<Vec<path::Component>>();
+    match loc_comps.first() {
+        Some(path::Component::Normal(s)) if s.to_str().unwrap() == "~" => {
+            match dirs::home_dir() {
+                Some(home_dir) => {
+                    loc_comps.remove(0);
+                    let mut comps: Vec<path::Component> = home_dir.components().collect();
+                    comps.extend_from_slice(&loc_comps);
+                    Some(comps.into_iter().collect())
+                }
+                None => None,
+            }
+        }
+        _ => loc.canonicalize().ok(),
+    }
+}
+
 #[cfg(test)]
 #[path = "files_test.rs"]
 mod files_test;

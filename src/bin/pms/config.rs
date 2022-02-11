@@ -2,6 +2,8 @@ use serde::Deserialize;
 
 use std::path;
 
+use rdms::util::files;
+
 // TODO: implement glob-filtering for excluded_dirs and include_dirs
 
 #[derive(Clone, Default)]
@@ -34,7 +36,7 @@ impl From<TomlConfig> for Config {
     }
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct TomlScan {
     scan_dirs: Option<Vec<path::PathBuf>>,
     exclude_dirs: Option<Vec<path::PathBuf>>,
@@ -43,10 +45,19 @@ pub struct TomlScan {
 impl From<Option<TomlScan>> for Scan {
     fn from(toml_scan: Option<TomlScan>) -> Scan {
         match toml_scan {
-            Some(toml_scan) => Scan {
-                scan_dirs: toml_scan.scan_dirs.unwrap_or_else(|| vec![]),
-                exclude_dirs: toml_scan.exclude_dirs.unwrap_or_else(|| vec![]),
-            },
+            Some(toml_scan) => {
+                let scan_dirs = toml_scan
+                    .scan_dirs
+                    .unwrap_or_else(|| vec![])
+                    .iter()
+                    .filter_map(files::canonicalize)
+                    .collect();
+
+                Scan {
+                    scan_dirs,
+                    exclude_dirs: toml_scan.exclude_dirs.unwrap_or_else(|| vec![]),
+                }
+            }
             None => Scan {
                 scan_dirs: vec![],
                 exclude_dirs: vec![],

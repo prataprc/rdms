@@ -4,10 +4,11 @@ use std::{convert::TryFrom, ffi, path};
 
 use rdms::{util::files, Result};
 
+mod cmd_clone;
 mod cmd_excluded;
 mod cmd_status;
 mod config;
-mod util;
+mod h;
 
 use config::{Config, TomlConfig};
 
@@ -48,13 +49,32 @@ pub enum SubCommand {
 
         #[structopt(long = "force_color", help = "force color for non-terminal devices")]
         force_color: bool,
+
+        #[structopt(long = "states", help = "list states of a repository")]
+        states: bool,
     },
+    /// Excluded subcommand, to list repositories detected under <path> but excluded.
     Excluded {
         #[structopt(
             long = "path",
             help = "root path to start looking for git repositories"
         )]
         scan_dir: Option<ffi::OsString>,
+    },
+    /// Clone subcommand, to clone repositories found in <src> to <dst>. As and when
+    /// required new directories shall be created in <dst>
+    Clone {
+        #[structopt(
+            long = "path",
+            help = "root path to start looking for git repositories"
+        )]
+        scan_dir: Option<ffi::OsString>,
+
+        #[structopt(long = "src", help = "clone repositories from specified source")]
+        src_dir: ffi::OsString,
+
+        #[structopt(long = "dst", help = "clone repositories into specified destin.")]
+        dst_dir: ffi::OsString,
     },
 }
 
@@ -90,6 +110,9 @@ fn handle_subcmd(opts: Opt, cfg: Config) -> Result<()> {
         }
         c @ SubCommand::Excluded { .. } => {
             cmd_excluded::handle(cmd_excluded::Handle::try_from(c)?, cfg)
+        }
+        c @ SubCommand::Clone { .. } => {
+            cmd_clone::handle(cmd_clone::Handle::try_from(c)?, cfg)
         }
     }
 }

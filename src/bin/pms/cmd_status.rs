@@ -1,17 +1,13 @@
 use colored::Colorize;
 use prettytable::{cell, row};
 
-use std::{convert::TryFrom, ffi, fs, path};
+use std::{convert::TryFrom, path};
 
-use crate::{Config, SubCommand};
+use crate::{util, Config, Handler, SubCommand};
 
 use rdms::{
     git::repo,
-    trie,
-    util::{
-        files,
-        print::{self, PrettyRow},
-    },
+    util::print::{self, PrettyRow},
     Error, Result,
 };
 
@@ -42,9 +38,20 @@ impl TryFrom<crate::SubCommand> for Handle {
                 ignored,
                 force_color,
             },
+            _ => unreachable!(),
         };
 
         Ok(opt)
+    }
+}
+
+impl Handler for Handle {
+    fn to_scan_dirs(&self) -> Vec<path::PathBuf> {
+        self.scan_dirs.to_vec()
+    }
+
+    fn to_exclude_dirs(&self) -> Vec<path::PathBuf> {
+        self.exclude_dirs.to_vec()
     }
 }
 
@@ -70,88 +77,19 @@ pub enum Age {
     Frozen,
 }
 
-#[derive(Clone)]
-struct WalkState {
-    scan_dir: path::PathBuf,
-    h: Handle,
-    repos: Vec<repo::Repo>,
-}
-
 pub fn handle(mut h: Handle, cfg: Config) -> Result<()> {
     h = h.update_with_cfg(&cfg);
 
-    let walk_state = {
-        let mut ws = WalkState {
-            scan_dir: path::PathBuf::default(),
-            h: h.clone(),
-            repos: vec![],
-        };
-        for scan_dir in h.scan_dirs.iter() {
-            ws.scan_dir = scan_dir.clone();
-            {
-                if let Ok(repo) = repo::Repo::from_loc(scan_dir) {
-                    ws.repos.push(repo);
-                }
-            }
-            ws = match files::walk(scan_dir, ws.clone(), check_dir_entry) {
-                Ok(ws) => ws,
-                Err(err) => {
-                    println!("scan_dir {:?}, err:{} skipping ...", scan_dir, err);
-                    ws
-                }
-            };
-        }
-        ws
-    };
-
-    let index =
-        walk_state
-            .repos
-            .into_iter()
-            .fold(trie::Trie::new(), |mut index, repo| {
-                let comps: Vec<ffi::OsString> = path::PathBuf::from(&repo.to_loc())
-                    .components()
-                    .map(|c| c.as_os_str().to_os_string())
-                    .collect();
-                index.set(&comps, repo);
-                index
-            });
-
-    let mut repos: Vec<repo::Repo> = index
-        .walk(Vec::<repo::Repo>::default(), |repos, _, _, value, _, _| {
-            value.map(|repo| repos.push(repo.clone()));
-            Ok(trie::WalkRes::Ok)
-        })?
-        .into_iter()
-        .filter(|r| !files::is_excluded(&r.to_loc(), &h.exclude_dirs))
-        .collect();
-
-    repos.sort_unstable_by_key(|r| r.to_last_commit_date(None).unwrap());
-
-    let mut srepos: Vec<Status> = repos
+    let mut statuss: Vec<Status> = util::WalkState::new(h.clone())
+        .scan()?
+        .into_repositories()?
         .into_iter()
         .map(|r| Status::from_opts(&h, r))
         .collect();
-    print::make_table(&mut srepos).print_tty(h.force_color);
+
+    print::make_table(&mut statuss).print_tty(h.force_color);
 
     Ok(())
-}
-
-fn check_dir_entry(
-    walk_state: &mut WalkState,
-    parent: &path::Path,
-    entry: &fs::DirEntry,
-    _depth: usize,
-    _breath: usize,
-) -> Result<files::WalkRes> {
-    if let Some(".git") = entry.file_name().to_str() {
-        Ok(files::WalkRes::SkipDir)
-    } else {
-        if let Ok(repo) = repo::Repo::from_entry(parent, entry) {
-            walk_state.repos.push(repo);
-        }
-        Ok(files::WalkRes::Ok)
-    }
 }
 
 struct Status {

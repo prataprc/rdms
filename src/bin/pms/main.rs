@@ -1,11 +1,13 @@
 use structopt::StructOpt;
 
-use std::{convert::TryFrom, ffi};
+use std::{convert::TryFrom, ffi, path};
 
 use rdms::{util::files, Result};
 
+mod cmd_excluded;
 mod cmd_status;
 mod config;
+mod util;
 
 use config::{Config, TomlConfig};
 
@@ -47,6 +49,19 @@ pub enum SubCommand {
         #[structopt(long = "force_color", help = "force color for non-terminal devices")]
         force_color: bool,
     },
+    Excluded {
+        #[structopt(
+            long = "path",
+            help = "root path to start looking for git repositories"
+        )]
+        scan_dir: Option<ffi::OsString>,
+    },
+}
+
+pub trait Handler {
+    fn to_scan_dirs(&self) -> Vec<path::PathBuf>;
+
+    fn to_exclude_dirs(&self) -> Vec<path::PathBuf>;
 }
 
 fn main() {
@@ -72,6 +87,9 @@ fn handle_subcmd(opts: Opt, cfg: Config) -> Result<()> {
     match opts.subcmd {
         c @ SubCommand::Status { .. } => {
             cmd_status::handle(cmd_status::Handle::try_from(c)?, cfg)
+        }
+        c @ SubCommand::Excluded { .. } => {
+            cmd_excluded::handle(cmd_excluded::Handle::try_from(c)?, cfg)
         }
     }
 }

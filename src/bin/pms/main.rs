@@ -64,12 +64,6 @@ pub enum SubCommand {
     /// Clone subcommand, to clone repositories found in <src> to <dst>. As and when
     /// required new directories shall be created in <dst>
     Clone {
-        #[structopt(
-            long = "path",
-            help = "root path to start looking for git repositories"
-        )]
-        scan_dir: Option<ffi::OsString>,
-
         #[structopt(long = "src", help = "clone repositories from specified source")]
         src_dir: ffi::OsString,
 

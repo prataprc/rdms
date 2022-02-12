@@ -46,22 +46,6 @@ impl Repo {
         }
     }
 
-    pub fn repo_clone<P>(&self, into: P) -> Result<()>
-    where
-        P: AsRef<path::Path>,
-    {
-        let u = match url::Url::from_directory_path(&self.loc) {
-            Ok(u) => Ok(u),
-            Err(()) => err_at!(Fatal, msg: "invalid loc: {:?}", self.loc),
-        }?;
-
-        println!("{}", u);
-
-        // err_at!(Fatal, git2::Repository::clone(u.as_str(), into))?;
-
-        Ok(())
-    }
-
     fn work_flags() -> git2::RepositoryOpenFlags {
         git2::RepositoryOpenFlags::NO_SEARCH | git2::RepositoryOpenFlags::CROSS_FS
     }
@@ -252,4 +236,19 @@ fn make_diff_options(ignored: bool) -> git2::DiffOptions {
         .ignore_submodules(false)
         .include_unreadable(true);
     dopts
+}
+
+pub fn clone(src: path::PathBuf, dst: path::PathBuf) -> Result<()> {
+    let u = match url::Url::from_directory_path(src.clone()) {
+        Ok(u) => Ok(u),
+        Err(()) => err_at!(Fatal, msg: "invalid loc: {:?}", src),
+    }?;
+
+    err_at!(IOError, fs::create_dir_all(&dst))?;
+
+    println!("Cloning into {:?}", dst);
+
+    err_at!(Fatal, git2::Repository::clone(u.as_str(), dst))?;
+
+    Ok(())
 }

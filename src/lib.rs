@@ -87,7 +87,6 @@
 #![feature(drain_filter)]
 #![feature(concat_idents)]
 #![feature(deadline_api)]
-#![feature(is_symlink)]
 
 use std::result;
 
@@ -106,6 +105,7 @@ pub mod util;
 pub mod bitmaps;
 pub mod clru;
 pub mod git;
+pub mod hash;
 mod index;
 pub mod parsec;
 // pub mod web; TODO: incomplete

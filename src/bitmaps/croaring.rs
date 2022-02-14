@@ -4,19 +4,17 @@
 //! [roaring-bitmap]: https://roaringbitmap.org
 
 use croaring::bitmap::Bitmap;
-use fasthash::city::crc::Hash128;
 
 use std::{
     convert::TryInto,
-    hash::{BuildHasher, Hash, Hasher},
+    hash::{Hash, Hasher},
 };
 
-use crate::{dbs::Bloom, Error, Result};
+use crate::{dbs::Bloom, hash::CityHasher, Error, Result};
 
-// TODO: right now we are using crc32, make hasher generic.
+// TODO: right now we are using cityhash-rs, make hasher generic.
 
 pub struct CRoaring {
-    hasher: Hash128,
     bitmap: Bitmap,
 }
 
@@ -29,7 +27,6 @@ impl Default for CRoaring {
 impl CRoaring {
     pub fn new() -> CRoaring {
         CRoaring {
-            hasher: Hash128,
             bitmap: Bitmap::create(),
         }
     }
@@ -43,8 +40,7 @@ impl Bloom for CRoaring {
 
     #[inline]
     fn add_key<Q: ?Sized + Hash>(&mut self, element: &Q) {
-        let mut hasher = self.hasher.build_hasher();
-
+        let mut hasher = CityHasher::default();
         element.hash(&mut hasher);
         let code: u64 = hasher.finish();
         let digest = (((code >> 32) ^ code) & 0xFFFFFFFF) as u32;
@@ -89,7 +85,7 @@ impl Bloom for CRoaring {
 
     #[inline]
     fn contains<Q: ?Sized + Hash>(&self, element: &Q) -> bool {
-        let mut hasher = self.hasher.build_hasher();
+        let mut hasher = CityHasher::default();
 
         element.hash(&mut hasher);
         let code: u64 = hasher.finish();
@@ -106,7 +102,6 @@ impl Bloom for CRoaring {
     #[inline]
     fn from_bytes(buf: &[u8]) -> Result<(CRoaring, usize)> {
         let val = CRoaring {
-            hasher: Hash128,
             bitmap: Bitmap::deserialize(buf),
         };
         let n = buf.len();
@@ -116,7 +111,6 @@ impl Bloom for CRoaring {
     #[inline]
     fn or(&self, other: &CRoaring) -> Result<CRoaring> {
         Ok(CRoaring {
-            hasher: Hash128,
             bitmap: self.bitmap.or(&other.bitmap),
         })
     }

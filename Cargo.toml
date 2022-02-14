@@ -54,7 +54,7 @@ toml = "0.5.8"
 lazy_static = "1.2.0"
 fs2 = "0.4.3"
 croaring = "0.5.1"
-fasthash = "0.4.0"
+cityhash-rs = "1.0.0"
 git2 = "0.13.20"
 serde = { version = "1", features = ["derive"] }
 chrono = "0.4.19"
@@ -68,11 +68,11 @@ num_cpus = "1.13.1"
 rayon = "1.5.1"
 dirs = "4.0.0"
 sys-info = "0.9.1"
+url = { version = "2.2.2", features = ["serde"] }
 
 structopt = { version = "0.3.20", default-features = false, optional = true }
 lmdb = { version = "0.8.0", optional = true }
 csv = { version = "1.1", optional = true }
-url = { version = "2.2.2", features = ["serde"], optional = true }
 ureq = { version = "2.3", optional = true }
 tar = { version = "0.4", optional = true }
 flate2 = { version = "1.0", optional = true }
@@ -95,8 +95,8 @@ ppom = { path = "../ppom", version = "0.7.0" }
 
 [features]
 rdms = ["structopt", "prettytable-rs", "lmdb", "sha-1"]
-pms = ["structopt", "prettytable-rs", "colored", "url"]
-crio = ["structopt", "prettytable-rs", "csv", "url", "ureq", "tar", "flate2", "serde_json"]
+pms = ["structopt", "prettytable-rs", "colored"]
+crio = ["structopt", "prettytable-rs", "csv", "ureq", "tar", "flate2", "serde_json"]
 zimf = ["structopt", "prettytable-rs"]
 html = ["structopt", "prettytable-rs"]
 nltk = ["structopt", "prettytable-rs"]

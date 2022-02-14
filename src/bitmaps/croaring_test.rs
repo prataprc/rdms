@@ -17,7 +17,7 @@ fn test_croaring_bitmap() {
         let mut filter = CRoaring::new();
         for key in keys.iter() {
             let digest = {
-                let mut hasher = Hash128.build_hasher();
+                let mut hasher = CityHasher::default();
                 key.hash(&mut hasher);
                 let code: u64 = hasher.finish();
                 (((code >> 32) ^ code) & 0xFFFFFFFF) as u32

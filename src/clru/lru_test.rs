@@ -113,6 +113,7 @@ fn test_lru_u32() {
 
 #[test]
 fn test_lru_u128() {
+    let seed: u64 = [9393685787223080701, random()][random::<usize>() % 2];
     let seed: u64 = random();
     test_code!(seed, u128);
 }

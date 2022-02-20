@@ -13,7 +13,7 @@ mod h;
 use config::{Config, TomlConfig};
 
 /// Options for cmd
-#[derive(Clone, StructOpt)]
+#[derive(StructOpt)]
 pub struct Opt {
     #[structopt(
         long = "toml",
@@ -61,8 +61,9 @@ pub enum SubCommand {
         )]
         scan_dir: Option<ffi::OsString>,
     },
-    /// Clone subcommand, to clone repositories found in <src> to <dst>. As and when
-    /// required new directories shall be created in <dst>
+    /// Clone subcommand, to clone repositories found in <src> to <dst>.
+    ///
+    /// As and when required new directories shall be created in <dst>.
     Clone {
         #[structopt(long = "src", help = "clone repositories from specified source")]
         src_dir: ffi::OsString,

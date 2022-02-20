@@ -1,8 +1,6 @@
-#![feature(is_symlink)]
-
 use structopt::StructOpt;
 
-use std::{convert::TryFrom, ffi};
+use std::ffi;
 
 use rdms::Result;
 

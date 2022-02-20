@@ -2,7 +2,6 @@ name = "perf-lmdb"
 dir = "./perf-data"
 key_size = 16
 value_size = 16
-load_batch = 100_000
 loads = 10_000_000
 sets = 1_000_000
 rems = 100_000

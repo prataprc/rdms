@@ -66,12 +66,7 @@ impl<S> Journals<S> {
             wral::SYNC_BUFFER,
             move |rx: util::thread::Rx<Req, Res>| {
                 || {
-                    let l = MainLoop {
-                        config,
-                        seqno,
-                        journals: thread_w,
-                        rx,
-                    };
+                    let l = MainLoop { config, seqno, journals: thread_w, rx };
                     l.run()
                 }
             },

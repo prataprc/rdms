@@ -54,10 +54,8 @@ where
     fn footprint(&self) -> Result<isize> {
         use std::mem::size_of;
 
-        let mut size = err_at!(
-            FailConvert,
-            isize::try_from(size_of::<Vec<T>>() + self.capacity())
-        )?;
+        let mut size =
+            err_at!(FailConvert, isize::try_from(size_of::<Vec<T>>() + self.capacity()))?;
 
         for item in self.iter() {
             size += item.footprint()?
@@ -70,10 +68,7 @@ where
 impl Footprint for String {
     fn footprint(&self) -> Result<isize> {
         use std::mem::size_of;
-        Ok(err_at!(
-            FailConvert,
-            isize::try_from(size_of::<String>() + self.capacity())
-        )?)
+        Ok(err_at!(FailConvert, isize::try_from(size_of::<String>() + self.capacity()))?)
     }
 }
 

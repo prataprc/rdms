@@ -8,9 +8,7 @@ use crate::{dba, Error, Result};
 
 impl From<git2::Oid> for dba::Object {
     fn from(oid: git2::Oid) -> dba::Object {
-        dba::Object::Oid {
-            hash: dba::Oid::from_sha1(oid.as_bytes()),
-        }
+        dba::Object::Oid { hash: dba::Oid::from_sha1(oid.as_bytes()) }
     }
 }
 
@@ -142,11 +140,7 @@ impl<'a> TryFrom<git2::Signature<'a>> for dba::User {
         }?
         .to_string();
 
-        let user = dba::User {
-            name,
-            email,
-            timestamp,
-        };
+        let user = dba::User { name, email, timestamp };
 
         Ok(user)
     }

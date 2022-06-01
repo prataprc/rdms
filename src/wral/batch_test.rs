@@ -17,12 +17,7 @@ fn test_wral_index() {
     assert_eq!(index.to_first_seqno(), index.first_seqno);
     assert_eq!(index.to_first_seqno(), index.first_seqno);
 
-    let val = Index::new(
-        index.fpos,
-        index.length,
-        index.first_seqno,
-        index.last_seqno,
-    );
+    let val = Index::new(index.fpos, index.length, index.first_seqno, index.last_seqno);
     assert_eq!(index, val);
 }
 
@@ -47,10 +42,7 @@ fn test_wral_batch() {
         assert_eq!(batch.to_first_seqno(), batch.first_seqno);
         assert_eq!(batch.to_last_seqno(), batch.last_seqno);
         assert_eq!(
-            batch
-                .clone()
-                .into_iter(0..=u64::MAX)
-                .collect::<Vec<wral::Entry>>(),
+            batch.clone().into_iter(0..=u64::MAX).collect::<Vec<wral::Entry>>(),
             batch.entries
         );
 
@@ -66,21 +58,14 @@ fn test_wral_batch() {
         assert_eq!(batch, rbatch);
     }
 
-    let mut batches: Vec<Batch> = batches
-        .into_iter()
-        .filter(|b| b.entries.is_empty())
-        .collect();
+    let mut batches: Vec<Batch> =
+        batches.into_iter().filter(|b| b.entries.is_empty()).collect();
     batches.sort();
     batches.dedup_by(|a, b| a.first_seqno == b.first_seqno);
 
     let mut seqno = 0;
     for batch in batches.into_iter() {
-        assert!(
-            seqno <= batch.first_seqno,
-            "{} {}",
-            seqno,
-            batch.first_seqno
-        );
+        assert!(seqno <= batch.first_seqno, "{} {}", seqno, batch.first_seqno);
         assert!(batch.first_seqno <= batch.last_seqno, "{}", batch);
         seqno = batch.first_seqno
     }
@@ -98,11 +83,7 @@ fn test_wral_worker() {
         let ntf = env::temp_dir().join("test_wral_worker.data");
         println!("test_wral_worker temporary file created {:?}", ntf);
         let mut opts = fs::OpenOptions::new();
-        opts.create(true)
-            .append(true)
-            .read(true)
-            .open(&ntf)
-            .unwrap()
+        opts.create(true).append(true).read(true).open(&ntf).unwrap()
     };
 
     let mut worker = Worker::new(state::NoState);

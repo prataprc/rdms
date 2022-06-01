@@ -52,11 +52,8 @@ pub fn throughput(
     println!("plotting throughput graph {}", title);
 
     values.insert(0, 0);
-    let throughputs: Vec<f64> = values
-        .clone()
-        .into_iter()
-        .map(|x| (x as f64) / (1024_f64 * 1024_f64))
-        .collect();
+    let throughputs: Vec<f64> =
+        values.clone().into_iter().map(|x| (x as f64) / (1024_f64 * 1024_f64)).collect();
 
     let root = BitMapBackend::new(&path, (1024, 768)).into_drawing_area();
     root.fill(&WHITE)?;
@@ -81,10 +78,7 @@ pub fn throughput(
         .draw()?;
 
     cc.draw_series(LineSeries::new(
-        throughputs
-            .into_iter()
-            .enumerate()
-            .map(|(i, value)| (i as u64, value)),
+        throughputs.into_iter().enumerate().map(|(i, value)| (i as u64, value)),
         &RED,
     ))?;
 

@@ -27,12 +27,7 @@ impl TryFrom<crate::SubCommand> for Handle {
 
     fn try_from(subcmd: crate::SubCommand) -> Result<Handle> {
         let opt = match subcmd {
-            SubCommand::Status {
-                scan_dir,
-                ignored,
-                force_color,
-                states,
-            } => Handle {
+            SubCommand::Status { scan_dir, ignored, force_color, states } => Handle {
                 scan_dirs: scan_dir.map(|d| vec![d.into()]).unwrap_or_else(|| vec![]),
                 exclude_dirs: Vec::default(),
                 hot: None,
@@ -115,13 +110,7 @@ struct Status {
 
 impl Status {
     fn from_opts(h: &Handle, repo: repo::Repo) -> Status {
-        Status {
-            hot: h.hot,
-            cold: h.cold,
-            ignored: h.ignored,
-
-            repo,
-        }
+        Status { hot: h.hot, cold: h.cold, ignored: h.ignored, repo }
     }
 }
 
@@ -148,16 +137,8 @@ impl PrettyRow for Status {
         let dir = {
             let p = self.repo.to_loc();
             let comps = p.components().collect::<Vec<path::Component>>();
-            let p = comps
-                .into_iter()
-                .rev()
-                .take(2)
-                .rev()
-                .collect::<path::PathBuf>();
-            p.as_os_str()
-                .to_str()
-                .map(|s| s.to_string())
-                .unwrap_or("--".to_string())
+            let p = comps.into_iter().rev().take(2).rev().collect::<path::PathBuf>();
+            p.as_os_str().to_str().map(|s| s.to_string()).unwrap_or("--".to_string())
         };
 
         let remotes = self.repo.to_remote_names().unwrap();
@@ -165,21 +146,9 @@ impl PrettyRow for Status {
         let age = to_age(&self.repo, self.hot, self.cold).unwrap();
         let color = match (attention, age) {
             (true, _) => colored::Color::Red,
-            (false, Age::Hot) => colored::Color::TrueColor {
-                r: 255,
-                g: 255,
-                b: 255,
-            },
-            (false, Age::Cold) => colored::Color::TrueColor {
-                r: 180,
-                g: 180,
-                b: 180,
-            },
-            (false, Age::Frozen) => colored::Color::TrueColor {
-                r: 100,
-                g: 100,
-                b: 100,
-            },
+            (false, Age::Hot) => colored::Color::TrueColor { r: 255, g: 255, b: 255 },
+            (false, Age::Cold) => colored::Color::TrueColor { r: 180, g: 180, b: 180 },
+            (false, Age::Frozen) => colored::Color::TrueColor { r: 100, g: 100, b: 100 },
         };
 
         row![
@@ -252,11 +221,7 @@ fn display_repository_state(status: &Status) -> (String, bool) {
     match states.is_empty() {
         true => ("👍".green().to_string(), attention),
         false => (
-            states
-                .into_iter()
-                .map(|s| s.to_string())
-                .collect::<Vec<String>>()
-                .join(" "),
+            states.into_iter().map(|s| s.to_string()).collect::<Vec<String>>().join(" "),
             attention,
         ),
     }
@@ -267,10 +232,7 @@ fn display_modifed(status: &Status) -> Vec<colored::ColoredString> {
     let deltas = status.repo.to_deltas(status.ignored).unwrap();
 
     if deltas.iter().any(|d| {
-        matches!(
-            d,
-            git2::Delta::Added | git2::Delta::Deleted | git2::Delta::Modified
-        )
+        matches!(d, git2::Delta::Added | git2::Delta::Deleted | git2::Delta::Modified)
     }) {
         mods.push("✎".red())
     }
@@ -310,10 +272,7 @@ fn display_modifed(status: &Status) -> Vec<colored::ColoredString> {
 }
 
 fn display_branches(status: &Status) -> Option<String> {
-    let branches = status
-        .repo
-        .to_branches(Some(git2::BranchType::Local))
-        .ok()?;
+    let branches = status.repo.to_branches(Some(git2::BranchType::Local)).ok()?;
 
     let hname = status
         .repo

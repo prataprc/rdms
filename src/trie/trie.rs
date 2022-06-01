@@ -15,9 +15,7 @@ impl<P, V> Default for Trie<P, V> {
 
 impl<P, V> Trie<P, V> {
     pub fn new() -> Trie<P, V> {
-        let root = Node::Root {
-            children: Vec::default(),
-        };
+        let root = Node::Root { children: Vec::default() };
         Trie { root, n_count: 0 }
     }
 
@@ -127,9 +125,7 @@ impl<P, V> Node<P, V> {
         match self {
             Node::Root { .. } => None,
             Node::Comp { value: None, .. } => None,
-            Node::Comp {
-                value: Some(value), ..
-            } => Some(value),
+            Node::Comp { value: Some(value), .. } => Some(value),
         }
     }
 
@@ -178,8 +174,7 @@ impl<P, V> Node<P, V> {
                     }
                     Ok(off) => self.as_mut_children()[off].set(&comps[1..], value),
                     Err(off) if comps.len() == 1 => {
-                        self.as_mut_children()
-                            .insert(off, Node::new(comp, Some(value)));
+                        self.as_mut_children().insert(off, Node::new(comp, Some(value)));
                         None
                     }
                     Err(off) => {
@@ -199,9 +194,7 @@ impl<P, V> Node<P, V> {
     {
         match comps {
             [] => match self {
-                Node::Comp {
-                    children, value, ..
-                } => {
+                Node::Comp { children, value, .. } => {
                     let oldv = value.take();
                     *value = None;
                     (oldv, children.is_empty())
@@ -220,11 +213,11 @@ impl<P, V> Node<P, V> {
                             self.as_mut_children().remove(off);
                         }
                         match self {
-                            Node::Comp {
-                                children,
-                                value: None,
-                                ..
-                            } if children.is_empty() => (value, true),
+                            Node::Comp { children, value: None, .. }
+                                if children.is_empty() =>
+                            {
+                                (value, true)
+                            }
                             _ => (value, false),
                         }
                     }
@@ -269,11 +262,7 @@ impl<P, V> Node<P, V> {
         F: Fn(&mut S, &[P], &P, Option<&V>, usize, usize) -> Result<WalkRes>,
     {
         let (comp, value, children) = match self {
-            Node::Comp {
-                comp,
-                value,
-                children,
-            } => (comp, value.as_ref(), children),
+            Node::Comp { comp, value, children } => (comp, value.as_ref(), children),
             _ => unreachable!(),
         };
 
@@ -306,10 +295,7 @@ impl<P, V> Node<P, V> {
             WalkRes::SkipDepth | WalkRes::SkipBoth => state,
         };
 
-        Ok((
-            state,
-            matches!(res, WalkRes::SkipBreath | WalkRes::SkipBoth),
-        ))
+        Ok((state, matches!(res, WalkRes::SkipBreath | WalkRes::SkipBoth)))
     }
 }
 

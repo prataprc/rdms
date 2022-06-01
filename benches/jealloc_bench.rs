@@ -27,11 +27,7 @@ fn bench_je_alloc(b: &mut Bencher) {
     for _i in 0..n {
         unsafe { je.alloc(Layout::new::<Node>()) };
     }
-    println!(
-        "took {:?} to allocate {} blocks",
-        start.elapsed().unwrap(),
-        n
-    );
+    println!("took {:?} to allocate {} blocks", start.elapsed().unwrap(), n);
 
     b.iter(|| unsafe { je.alloc(Layout::new::<Node>()) });
 }
@@ -48,11 +44,7 @@ fn bench_je_alloc_free(b: &mut Bencher) {
             je.dealloc(ptr, lt);
         }
     }
-    println!(
-        "took {:?} to allocate/free {} blocks",
-        start.elapsed().unwrap(),
-        n
-    );
+    println!("took {:?} to allocate/free {} blocks", start.elapsed().unwrap(), n);
 
     b.iter(|| unsafe {
         let lt = Layout::new::<Node>();
@@ -85,11 +77,7 @@ fn bench_je_alloc_cc2(b: &mut Bencher) {
     }
     mem::drop(tx);
 
-    println!(
-        "took {:?} to allocate {} blocks",
-        start.elapsed().unwrap(),
-        n
-    );
+    println!("took {:?} to allocate {} blocks", start.elapsed().unwrap(), n);
     handle.join().unwrap();
     println!("took {:?} to free {} blocks", start.elapsed().unwrap(), n);
 

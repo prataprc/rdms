@@ -26,11 +26,7 @@ pub fn parse_os_args(
         match iter.next() {
             None => break (args_os, ffi::OsString::new(), vec![]),
             Some((i, arg)) if !is_cmd_option(&arg) && i < (args_os.len() - 1) => {
-                break (
-                    args_os[..i].to_vec(),
-                    args_os[i].clone(),
-                    args_os[i..].to_vec(),
-                )
+                break (args_os[..i].to_vec(), args_os[i].clone(), args_os[i..].to_vec())
             }
             Some((i, arg)) if !is_cmd_option(&arg) => {
                 break (args_os[..i].to_vec(), args_os[i].clone(), vec![])

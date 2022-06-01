@@ -275,9 +275,7 @@ impl Inner {
             let mut buf: Vec<u8> = vec![0; (header.entry_count * 8) as usize];
             err_at!(IOError, fd.seek(io::SeekFrom::Start(header.url_ptr_pos)))?;
             err_at!(IOError, fd.read(&mut buf))?;
-            buf.chunks(8)
-                .map(|bs| u64::from_le_bytes(bs.try_into().unwrap()))
-                .collect()
+            buf.chunks(8).map(|bs| u64::from_le_bytes(bs.try_into().unwrap())).collect()
         };
         {
             let mut xs = entry_offsets.clone();
@@ -318,14 +316,9 @@ impl Inner {
 
         let cluster_offsets: Vec<u64> = {
             let mut buf: Vec<u8> = vec![0; (header.cluster_count * 8) as usize];
-            err_at!(
-                IOError,
-                fd.seek(io::SeekFrom::Start(header.cluster_ptr_pos))
-            )?;
+            err_at!(IOError, fd.seek(io::SeekFrom::Start(header.cluster_ptr_pos)))?;
             err_at!(IOError, fd.read(&mut buf))?;
-            buf.chunks(8)
-                .map(|bs| u64::from_le_bytes(bs.try_into().unwrap()))
-                .collect()
+            buf.chunks(8).map(|bs| u64::from_le_bytes(bs.try_into().unwrap())).collect()
         };
         {
             let mut xs = cluster_offsets.clone();
@@ -376,9 +369,8 @@ impl Inner {
             let n = inner.entries.len();
             for index in 0..n {
                 let entry = Arc::clone(inner.get_entry(index));
-                if let Some(value) = inner
-                    .index_cluster
-                    .get_mut(&entry.to_cluster_num().unwrap())
+                if let Some(value) =
+                    inner.index_cluster.get_mut(&entry.to_cluster_num().unwrap())
                 {
                     value.push(entry)
                 }
@@ -424,10 +416,7 @@ impl Inner {
         // println!("get_entry index:{}", index);
         let entry = self.entries[index].clone();
         match entry.ee.clone() {
-            EE::D {
-                cluster_num,
-                blob_num,
-            } => {
+            EE::D { cluster_num, blob_num } => {
                 let (tx, rx) = mpsc::channel();
                 let cluster = self.clusters[cluster_num as usize].clone();
                 //println!(
@@ -590,10 +579,7 @@ pub enum EE {
 
 impl Default for EE {
     fn default() -> EE {
-        EE::D {
-            cluster_num: 0,
-            blob_num: 0,
-        }
+        EE::D { cluster_num: 0, blob_num: 0 }
     }
 }
 
@@ -614,10 +600,7 @@ impl Entry {
             _ => {
                 let cluster_num = u32::from_le_bytes(buf[8..12].try_into().unwrap());
                 let blob_num = u32::from_le_bytes(buf[12..16].try_into().unwrap());
-                let ee = EE::D {
-                    cluster_num,
-                    blob_num,
-                };
+                let ee = EE::D { cluster_num, blob_num };
                 (ee, 16)
             }
         };
@@ -674,10 +657,7 @@ impl Entry {
     /// Return the (cluster-number, blob-number) in which the entry is stored.
     pub fn to_blob_num(&self) -> Option<(u32, u32)> {
         match self.ee.clone() {
-            EE::D {
-                cluster_num,
-                blob_num,
-            } => Some((cluster_num, blob_num)),
+            EE::D { cluster_num, blob_num } => Some((cluster_num, blob_num)),
             EE::R { .. } => None,
         }
     }
@@ -720,12 +700,7 @@ impl Cluster {
         let boff_size = if buf[0] & 0x10 == 0 { 4 } else { 8 };
 
         //println!("cluster-compression:{:?}", compression);
-        let val = Cluster {
-            off,
-            size: None,
-            compression,
-            boff_size,
-        };
+        let val = Cluster { off, size: None, compression, boff_size };
         Ok(val)
     }
 

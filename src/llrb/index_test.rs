@@ -115,9 +115,7 @@ where
         btmap.insert(e.to_key(), e);
     }
     println!("{} {} {}", prefix, index1.len(), index2.len());
-    let n = index1
-        .commit(index2.iter_versions().unwrap(), true /*versions*/)
-        .unwrap();
+    let n = index1.commit(index2.iter_versions().unwrap(), true /*versions*/).unwrap();
 
     assert_eq!(n, index2.len());
     assert_eq!(index1.len(), btmap.len());
@@ -179,12 +177,7 @@ fn test_with_key<K>(
         let dbs::Wr { seqno, .. } = index.set(key.clone(), val).unwrap();
         btmap.insert(key.clone(), dbs::Entry::new(key, val, seqno));
     }
-    println!(
-        "{} initial load len:{}/{}",
-        prefix,
-        index.len(),
-        btmap.len()
-    );
+    println!("{} initial load len:{}/{}", prefix, index.len(), btmap.len());
 
     let mut handles = vec![];
     for id in 0..n_threads {

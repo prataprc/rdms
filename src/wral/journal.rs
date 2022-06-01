@@ -129,10 +129,7 @@ impl<S> Journal<S> {
             name: name.to_string(),
             num,
             location: location.to_os_string(),
-            inner: InnerJournal::Archive {
-                index,
-                state: state.clone(),
-            },
+            inner: InnerJournal::Archive { index, state: state.clone() },
         };
 
         Some((journal, state))
@@ -162,10 +159,7 @@ impl<S> Journal<S> {
         let (inner, entries, state) = match self.inner {
             InnerJournal::Working { worker, .. } => {
                 let (index, entries, state) = worker.unwrap();
-                let inner = InnerJournal::Archive {
-                    index,
-                    state: state.clone(),
-                };
+                let inner = InnerJournal::Archive { index, state: state.clone() };
                 (inner, entries, state)
             }
             _ => unreachable!(),
@@ -325,13 +319,7 @@ impl IterJournal {
             err_at!(IOError, opts.read(true).open(&journal.location))?
         };
 
-        Ok(IterJournal {
-            range,
-            batch,
-            index,
-            entries,
-            file,
-        })
+        Ok(IterJournal { range, batch, index, entries, file })
     }
 }
 

@@ -19,15 +19,7 @@ pub struct Opt {
 impl From<crate::SubCommand> for Opt {
     fn from(subcmd: crate::SubCommand) -> Opt {
         match subcmd {
-            SubCommand::Perf {
-                seed,
-                profile,
-                module,
-            } => Opt {
-                seed,
-                profile,
-                module,
-            },
+            SubCommand::Perf { seed, profile, module } => Opt { seed, profile, module },
             _ => unreachable!(),
         }
     }

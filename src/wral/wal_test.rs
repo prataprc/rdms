@@ -22,19 +22,15 @@ fn test_wral_wal() {
     };
     config.name = "test-wral-wal".to_string();
     config.dir = {
-        let dir: path::PathBuf = vec![env::temp_dir(), config.name.clone().into()]
-            .into_iter()
-            .collect();
+        let dir: path::PathBuf =
+            vec![env::temp_dir(), config.name.clone().into()].into_iter().collect();
         dir.into()
     };
 
     let n_threads = [1, 2, 4, 8][rng.gen::<usize>() % 4];
     let w_ops = [1, 10, 100, 1_000, 10_000][rng.gen::<usize>() % 5];
     config.journal_limit = std::cmp::max(1000, (n_threads * w_ops) / 1000);
-    println!(
-        "test_wral_wal config:{:?} n_threads:{} w_ops:{}",
-        config, n_threads, w_ops
-    );
+    println!("test_wral_wal config:{:?} n_threads:{} w_ops:{}", config, n_threads, w_ops);
 
     let wal = Wal::create(config, state::NoState).unwrap();
 

@@ -91,11 +91,7 @@ impl<T> Spinlock<T> {
             let old = self.latchlock.load(SeqCst);
             if (old & Self::LATCH_LOCK_FLAG) == 0 {
                 // latch is not acquired by a writer
-                if self
-                    .latchlock
-                    .compare_exchange(old, old + 1, SeqCst, SeqCst)
-                    .is_ok()
-                {
+                if self.latchlock.compare_exchange(old, old + 1, SeqCst, SeqCst).is_ok() {
                     if cfg!(feature = "debug") {
                         self.read_locks.fetch_add(1, SeqCst);
                     }
@@ -121,11 +117,7 @@ impl<T> Spinlock<T> {
                     ));
                 }
                 let new = old | Self::LATCH_FLAG;
-                if self
-                    .latchlock
-                    .compare_exchange(old, new, SeqCst, SeqCst)
-                    .is_ok()
-                {
+                if self.latchlock.compare_exchange(old, new, SeqCst, SeqCst).is_ok() {
                     break;
                 }
             }
@@ -138,11 +130,7 @@ impl<T> Spinlock<T> {
             let old = self.latchlock.load(SeqCst);
             if (old & Self::READERS_FLAG) == 0 {
                 let new = old | Self::LOCK_FLAG;
-                if self
-                    .latchlock
-                    .compare_exchange(old, new, SeqCst, SeqCst)
-                    .is_ok()
-                {
+                if self.latchlock.compare_exchange(old, new, SeqCst, SeqCst).is_ok() {
                     if cfg!(feature = "debug") {
                         self.write_locks.fetch_add(1, SeqCst);
                     }
@@ -223,12 +211,7 @@ impl<'a, T> Drop for WriteGuard<'a, T> {
                 "call the programmer"
             ));
         }
-        if self
-            .door
-            .latchlock
-            .compare_exchange(old, 0, SeqCst, SeqCst)
-            .is_err()
-        {
+        if self.door.latchlock.compare_exchange(old, 0, SeqCst, SeqCst).is_err() {
             panic!(concat!(
                 "cant' have readers/writers to modify when locked! ",
                 "call the programmer"

@@ -28,10 +28,7 @@ fn test_robt_entry() {
     let mm = Entry::<u64, u64, u64>::new_mm(key, 100);
     let mz = Entry::<u64, u64, u64>::new_mz(key, 200);
 
-    assert_eq!(
-        dbnt,
-        dbs::Entry::try_from(Entry::from(dbnt.clone())).unwrap()
-    );
+    assert_eq!(dbnt, dbs::Entry::try_from(Entry::from(dbnt.clone())).unwrap());
     assert_eq!(zz.as_key(), &key);
     assert_eq!(mz.as_key(), &key);
     assert_eq!(mm.as_key(), &key);

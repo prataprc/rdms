@@ -13,17 +13,13 @@ use crate::{
 #[macro_export]
 macro_rules! kleene {
     ($parser:expr) => {{
-        let p = crate::parsec::Parsec::Kleene {
-            name: $parser.to_name(),
-            parser: $parser,
-        };
+        let p =
+            crate::parsec::Parsec::Kleene { name: $parser.to_name(), parser: $parser };
         Rc::new(p)
     }};
     ($name:expr, $parser:expr) => {{
-        let p = crate::parsec::Parsec::Kleene {
-            name: $name.to_string(),
-            parser: $parser,
-        };
+        let p =
+            crate::parsec::Parsec::Kleene { name: $name.to_string(), parser: $parser };
         Rc::new(p)
     }};
 }
@@ -31,17 +27,11 @@ macro_rules! kleene {
 #[macro_export]
 macro_rules! many {
     ($parser:expr) => {{
-        let p = crate::parsec::Parsec::Many {
-            name: $parser.to_name(),
-            parser: $parser,
-        };
+        let p = crate::parsec::Parsec::Many { name: $parser.to_name(), parser: $parser };
         Rc::new(p)
     }};
     ($name:expr, $parser:expr) => {{
-        let p = crate::parsec::Parsec::Many {
-            name: $name.to_string(),
-            parser: $parser,
-        };
+        let p = crate::parsec::Parsec::Many { name: $name.to_string(), parser: $parser };
         Rc::new(p)
     }};
 }
@@ -79,10 +69,7 @@ macro_rules! or {
 #[macro_export]
 macro_rules! aas {
     ($name:expr, $parser:expr) => {{
-        let p = crate::parsec::Parsec::P {
-            name: $name.to_string(),
-            parser: $parser,
-        };
+        let p = crate::parsec::Parsec::P { name: $name.to_string(), parser: $parser };
         Rc::new(p)
     }};
 }
@@ -187,9 +174,7 @@ where
     }
 
     pub fn new_ref() -> Result<Rc<Self>> {
-        let p = Parsec::Ref {
-            parser: RefCell::new(Weak::new()),
-        };
+        let p = Parsec::Ref { parser: RefCell::new(Weak::new()) };
 
         Ok(Rc::new(p))
     }
@@ -252,20 +237,14 @@ where
                     println!("atom {} tok:{:?}", name, tok);
 
                     lex.move_cursor(text[..n].chars().count());
-                    Node::Token {
-                        name: name.to_string(),
-                        text: tok.to_string(),
-                    }
+                    Node::Token { name: name.to_string(), text: tok.to_string() }
                 })
             }
             Parsec::Regx { name, re } => match re.find(lex.as_str()) {
                 Some(m) => {
                     let text = m.as_str().to_string();
                     lex.move_cursor(text.chars().count());
-                    let node = Node::Token {
-                        name: name.to_string(),
-                        text,
-                    };
+                    let node = Node::Token { name: name.to_string(), text };
                     Some(node)
                 }
                 None => None,
@@ -306,10 +285,7 @@ where
                             }
                         },
                         None => {
-                            let node = Node::M {
-                                name: name.to_string(),
-                                children,
-                            };
+                            let node = Node::M { name: name.to_string(), children };
                             break Some(node);
                         }
                     }
@@ -377,10 +353,7 @@ where
                     }
                 };
 
-                Some(Node::Maybe {
-                    name: parser.to_name(),
-                    child,
-                })
+                Some(Node::Maybe { name: parser.to_name(), child })
             }
             Parsec::Kleene { name, parser } => {
                 let mut children = vec![];
@@ -400,10 +373,7 @@ where
                     }
                 }
 
-                let node = Node::M {
-                    name: name.to_string(),
-                    children,
-                };
+                let node = Node::M { name: name.to_string(), children };
                 Some(node)
             }
             Parsec::Many { name, parser } => {
@@ -443,10 +413,7 @@ where
                 match children.len() {
                     0 => err_at!(Fatal, msg: "invalid many-parsec construction")?,
                     _ => {
-                        let node = Node::M {
-                            name: name.to_string(),
-                            children,
-                        };
+                        let node = Node::M { name: name.to_string(), children };
                         Some(node)
                     }
                 }

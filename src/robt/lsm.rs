@@ -36,12 +36,7 @@ where
     pub fn new(mut snap: I, mut iter: IterLsm<'a, K, V>) -> YIter<'a, K, V, I, E> {
         let s_entry = snap.next().map(|re| re.map(|e| e.into()));
         let i_entry = iter.next();
-        YIter {
-            snap,
-            iter,
-            s_entry,
-            i_entry,
-        }
+        YIter { snap, iter, s_entry, i_entry }
     }
 }
 

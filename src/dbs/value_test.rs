@@ -18,19 +18,9 @@ fn test_value_footprint() {
     let value = Value::new_upsert(0x1234_u64, 2);
     assert_eq!(value.footprint().unwrap(), 24);
     let value = Value::new_upsert(vec![0x1234_u64], 2);
-    assert_eq!(
-        value.footprint().unwrap(),
-        49,
-        "{}",
-        value.footprint().unwrap()
-    );
+    assert_eq!(value.footprint().unwrap(), 49, "{}", value.footprint().unwrap());
     let value = Value::new_upsert(vec!["hello world".to_string()], 2);
-    assert_eq!(
-        value.footprint().unwrap(),
-        76,
-        "{}",
-        value.footprint().unwrap()
-    );
+    assert_eq!(value.footprint().unwrap(), 76, "{}", value.footprint().unwrap());
 
     let value: Value<u64> = Value::new_delete(2);
     assert_eq!(value.footprint().unwrap(), 16);

@@ -509,11 +509,7 @@ where
         stack: Vec<Vec<robt::Entry<K, V>>>,
         versions: bool,
     ) -> Self {
-        IterLsm {
-            reader: r,
-            stack,
-            versions,
-        }
+        IterLsm { reader: r, stack, versions }
     }
 
     fn fetchzz(&mut self, mut entry: robt::Entry<K, V>) -> Result<robt::Entry<K, V>>

@@ -5,9 +5,7 @@ pub struct Trie {
 
 impl Trie {
     pub fn new() -> Trie {
-        Trie {
-            root: "--root--".to_string().into(),
-        }
+        Trie { root: "--root--".to_string().into() }
     }
 
     pub fn insert(&mut self, comps: &[String], value: &[u8]) {
@@ -71,10 +69,7 @@ impl Node {
                     Ok(off) => off,
                     Err(off) => off,
                 };
-                let w = Op::Ins {
-                    comp: comp.to_string(),
-                    value: value.to_vec(),
-                };
+                let w = Op::Ins { comp: comp.to_string(), value: value.to_vec() };
                 self.leafs.insert(off, w);
             }
             [comp, ..] => {
@@ -103,9 +98,7 @@ impl Node {
                     Ok(off) => off,
                     Err(off) => off,
                 };
-                let w = Op::Rem {
-                    comp: comp.to_string(),
-                };
+                let w = Op::Rem { comp: comp.to_string() };
                 self.leafs.insert(off, w);
             }
             [comp, ..] => {

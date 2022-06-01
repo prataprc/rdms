@@ -70,10 +70,7 @@ impl Index {
     /// for details.
     pub fn open(config: git::Config) -> Result<Index> {
         let mut flags = RepositoryOpenFlags::empty();
-        flags.set(
-            RepositoryOpenFlags::NO_SEARCH,
-            config.open.no_search.unwrap_or(true),
-        );
+        flags.set(RepositoryOpenFlags::NO_SEARCH, config.open.no_search.unwrap_or(true));
 
         // initialize a new repository for key-value access.
         let repo = {
@@ -253,11 +250,7 @@ impl Index {
     }
 
     pub fn transaction(&mut self) -> Result<Txn> {
-        let txn = Txn {
-            index: self,
-            trie: git::Trie::new(),
-            n_ops: 0,
-        };
+        let txn = Txn { index: self, trie: git::Trie::new(), n_ops: 0 };
         Ok(txn)
     }
 
@@ -380,16 +373,12 @@ impl Index {
     {
         let comps = match key {
             Bound::Unbounded => vec![Bound::Unbounded],
-            Bound::Included(key) => key
-                .to_key_path()?
-                .into_iter()
-                .map(Bound::Included)
-                .collect(),
-            Bound::Excluded(key) => key
-                .to_key_path()?
-                .into_iter()
-                .map(Bound::Excluded)
-                .collect(),
+            Bound::Included(key) => {
+                key.to_key_path()?.into_iter().map(Bound::Included).collect()
+            }
+            Bound::Excluded(key) => {
+                key.to_key_path()?.into_iter().map(Bound::Excluded).collect()
+            }
         };
 
         Ok(comps)
@@ -419,11 +408,8 @@ impl Index {
 
     // Entres in tree in reverse sort order.
     fn tree_entries(tree: &git2::Tree) -> Vec<git2::TreeEntry<'static>> {
-        let mut items: Vec<git2::TreeEntry> = tree
-            .iter()
-            .filter(|e| e.name().is_some())
-            .map(|e| e.to_owned())
-            .collect();
+        let mut items: Vec<git2::TreeEntry> =
+            tree.iter().filter(|e| e.name().is_some()).map(|e| e.to_owned()).collect();
         items.sort_by(|a, b| a.name().unwrap().cmp(b.name().unwrap()));
         items
     }
@@ -546,11 +532,7 @@ pub struct IterLevel<'a> {
 impl<'a> IterLevel<'a> {
     #[allow(dead_code)]
     fn pretty_print(&self, prefix: &str) {
-        let names = self
-            .items
-            .iter()
-            .map(|e| e.to_name())
-            .collect::<Vec<&str>>();
+        let names = self.items.iter().map(|e| e.to_name()).collect::<Vec<&str>>();
         println!("{}IterLevel<{:?}> items:{:?}", prefix, self.rloc, names);
 
         let prefix = prefix.to_string() + "  ";
@@ -621,12 +603,7 @@ impl<'a> IterLevel<'a> {
             items.push(IterEntry::from(item))
         }
 
-        let val = IterLevel {
-            repo,
-            rloc,
-            items,
-            rev: false,
-        };
+        let val = IterLevel { repo, rloc, items, rev: false };
 
         Ok(val)
     }
@@ -689,12 +666,7 @@ impl<'a> IterLevel<'a> {
             items.push(IterEntry::from(item))
         };
 
-        let val = IterLevel {
-            repo,
-            rloc,
-            items,
-            rev: true,
-        };
+        let val = IterLevel { repo, rloc, items, rev: true };
 
         Ok(val)
     }

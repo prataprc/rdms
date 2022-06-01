@@ -46,9 +46,8 @@ where
 
         let (input, map) = (self.input.take().unwrap(), self.map.take().unwrap());
 
-        self.handle = Some(thread::spawn(move || {
-            action(name, chan_size, input, tx, map)
-        }));
+        self.handle =
+            Some(thread::spawn(move || action(name, chan_size, input, tx, map)));
 
         output
     }

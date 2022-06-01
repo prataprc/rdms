@@ -23,28 +23,19 @@ impl Str {
 
 impl<'a> From<(&'a str, usize)> for Str {
     fn from((key, depth): (&str, usize)) -> Str {
-        Str {
-            key: key.to_string(),
-            depth,
-        }
+        Str { key: key.to_string(), depth }
     }
 }
 
 impl<'a> From<&'a str> for Str {
     fn from(key: &str) -> Str {
-        Str {
-            key: key.to_string(),
-            depth: Str::DEFAULT_DEPTH,
-        }
+        Str { key: key.to_string(), depth: Str::DEFAULT_DEPTH }
     }
 }
 
 impl<'a> From<String> for Str {
     fn from(key: String) -> Str {
-        Str {
-            key,
-            depth: Str::DEFAULT_DEPTH,
-        }
+        Str { key, depth: Str::DEFAULT_DEPTH }
     }
 }
 
@@ -53,12 +44,8 @@ impl dba::AsKey for Str {
         let parts = match self.key.len() {
             0 => vec![],
             _ => {
-                let mut parts: Vec<String> = self
-                    .key
-                    .chars()
-                    .take(self.depth)
-                    .map(|ch| ch.to_string())
-                    .collect();
+                let mut parts: Vec<String> =
+                    self.key.chars().take(self.depth).map(|ch| ch.to_string()).collect();
 
                 parts.push(self.key.to_string());
                 parts

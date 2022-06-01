@@ -7,9 +7,8 @@ use rdms::{err_at, git, util, Error, Result};
 
 macro_rules! unpack_primary_table {
     ($profile:ident, $file:expr, $txn:ident, $tbl:expr, $type:ty) => {{
-        let file_loc: path::PathBuf = [crates_io_untar_dir($profile)?, $file.into()]
-            .iter()
-            .collect();
+        let file_loc: path::PathBuf =
+            [crates_io_untar_dir($profile)?, $file.into()].iter().collect();
 
         let mut fd = err_at!(IOError, fs::OpenOptions::new().read(true).open(&file_loc))?;
         let mut rdr = csv::Reader::from_reader(&mut fd);
@@ -75,12 +74,7 @@ macro_rules! unpack_secondary_table {
 
         $txn.insert(key.clone(), s.as_bytes())?;
 
-        println!(
-            "copied {:?} -> {:?}, took {:?}",
-            src_loc,
-            key,
-            start.elapsed()
-        );
+        println!("copied {:?} -> {:?}, took {:?}", src_loc, key, start.elapsed());
     }};
 }
 
@@ -95,19 +89,9 @@ pub struct Opt {
 impl From<crate::SubCommand> for Opt {
     fn from(sub_cmd: crate::SubCommand) -> Self {
         match sub_cmd {
-            crate::SubCommand::Fetch {
-                nohttp,
-                nountar,
-                nocopy,
-                git_root,
-                profile,
-            } => Opt {
-                nohttp,
-                nountar,
-                nocopy,
-                git_root,
-                profile,
-            },
+            crate::SubCommand::Fetch { nohttp, nountar, nocopy, git_root, profile } => {
+                Opt { nohttp, nountar, nocopy, git_root, profile }
+            }
         }
     }
 }
@@ -169,11 +153,7 @@ fn untar(loc: path::PathBuf) -> Result<()> {
         Some(_) | None => err_at!(Fatal, msg: "invalid tar dump: {:?}", loc)?,
     };
 
-    println!(
-        "untar into {:?} ... ok ({:?})",
-        loc.parent().unwrap(),
-        start.elapsed()
-    );
+    println!("untar into {:?} ... ok ({:?})", loc.parent().unwrap(), start.elapsed());
 
     Ok(())
 }
@@ -186,10 +166,7 @@ fn get_latest_db_dump(profile: &Profile) -> Result<path::PathBuf> {
     let crates_io_dump_loc = crates_io_dump_loc(profile);
     let mut fd = err_at!(
         IOError,
-        fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .open(&crates_io_dump_loc)
+        fs::OpenOptions::new().create(true).write(true).open(&crates_io_dump_loc)
     )?;
 
     let mut reader =
@@ -217,11 +194,7 @@ fn get_latest_db_dump(profile: &Profile) -> Result<path::PathBuf> {
 
 fn remove_temp_dir(profile: &Profile) -> Result<()> {
     let temp_dir: path::PathBuf = [
-        profile
-            .temp_dir
-            .as_ref()
-            .map(|x| x.into())
-            .unwrap_or_else(env::temp_dir),
+        profile.temp_dir.as_ref().map(|x| x.into()).unwrap_or_else(env::temp_dir),
         crate::TEMP_DIR_CRIO.into(),
     ]
     .iter()
@@ -233,11 +206,7 @@ fn remove_temp_dir(profile: &Profile) -> Result<()> {
 
 fn crates_io_dump_loc(profile: &Profile) -> path::PathBuf {
     let temp_dir: path::PathBuf = [
-        profile
-            .temp_dir
-            .as_ref()
-            .map(|x| x.into())
-            .unwrap_or_else(env::temp_dir),
+        profile.temp_dir.as_ref().map(|x| x.into()).unwrap_or_else(env::temp_dir),
         crate::TEMP_DIR_CRIO.into(),
     ]
     .iter()
@@ -245,9 +214,7 @@ fn crates_io_dump_loc(profile: &Profile) -> path::PathBuf {
 
     fs::create_dir_all(&temp_dir).ok();
 
-    let dump_fname = path::Path::new(profile.dump_url.path())
-        .file_name()
-        .unwrap();
+    let dump_fname = path::Path::new(profile.dump_url.path()).file_name().unwrap();
     [temp_dir, dump_fname.into()].iter().collect()
 }
 
@@ -270,12 +237,10 @@ fn crates_io_untar_dir(profile: &Profile) -> Result<path::PathBuf> {
 fn crates_io_metadata(_opts: &Opt, profile: &Profile) -> Result<Metadata> {
     use std::str::from_utf8;
 
-    let src_loc: path::PathBuf = [crates_io_untar_dir(profile)?, "metadata.json".into()]
-        .iter()
-        .collect();
-    let dst_loc: path::PathBuf = [profile.git.loc_repo.clone(), "metadata.json".into()]
-        .iter()
-        .collect();
+    let src_loc: path::PathBuf =
+        [crates_io_untar_dir(profile)?, "metadata.json".into()].iter().collect();
+    let dst_loc: path::PathBuf =
+        [profile.git.loc_repo.clone(), "metadata.json".into()].iter().collect();
 
     let data = err_at!(IOError, fs::read(&src_loc))?;
     err_at!(IOError, fs::write(&dst_loc, &data), "{:?}", dst_loc)?;

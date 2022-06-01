@@ -82,12 +82,7 @@ impl<'a> arbitrary::Arbitrary<'a> for Config {
         let journal_limit = *u.choose(&[100, 1000, 10_000, 1_000_000])?;
         let fsync: bool = u.arbitrary()?;
 
-        let config = Config {
-            name,
-            dir,
-            journal_limit,
-            fsync,
-        };
+        let config = Config { name, dir, journal_limit, fsync };
         Ok(config)
     }
 }

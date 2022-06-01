@@ -10,11 +10,7 @@ use super::*;
 #[test]
 fn test_spinlock() {
     let spin = Arc::new(Spinlock::new(0_u64));
-    let c = Context {
-        n_readers: 4,
-        n_writers: 4,
-        size: 1024,
-    };
+    let c = Context { n_readers: 4, n_writers: 4, size: 1024 };
 
     let writer =
         |spin: Arc<Spinlock<u64>>, mut data: Box<Data>, idx: usize, c: Context| {
@@ -22,9 +18,8 @@ fn test_spinlock() {
             res.resize(res.capacity(), 0);
 
             let start = time::SystemTime::now();
-            let value: Vec<u8> = ((idx * c.size)..((idx * c.size) + c.size))
-                .map(|x| x as u8)
-                .collect();
+            let value: Vec<u8> =
+                ((idx * c.size)..((idx * c.size) + c.size)).map(|x| x as u8).collect();
             while start.elapsed().unwrap().as_secs() < 10 {
                 {
                     let _w = spin.write();
@@ -44,9 +39,8 @@ fn test_spinlock() {
 
         let mut values = vec![];
         (0..res.len()).for_each(|idx| {
-            let value: Vec<u8> = ((idx * c.size)..((idx * c.size) + c.size))
-                .map(|x| x as u8)
-                .collect();
+            let value: Vec<u8> =
+                ((idx * c.size)..((idx * c.size) + c.size)).map(|x| x as u8).collect();
             values.push(value);
         });
 

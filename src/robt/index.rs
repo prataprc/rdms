@@ -172,9 +172,8 @@ where
 
         self.root = root;
         self.stats.build_time = build_time;
-        self.stats.seqno = seqno
-            .map(|seqno| cmp::max(seqno, build_seqno))
-            .unwrap_or(build_seqno);
+        self.stats.seqno =
+            seqno.map(|seqno| cmp::max(seqno, build_seqno)).unwrap_or(build_seqno);
         self.stats.n_count = n_count;
         self.stats.n_deleted = n_deleted.try_into().unwrap();
         self.stats.epoch = epoch;
@@ -417,10 +416,7 @@ where
                     _ => ffi::OsString::from(VlogFileName::from(self.name.to_string())),
                 };
                 let vp: path::PathBuf = [self.dir.to_os_string(), fnm].iter().collect();
-                Some(err_at!(
-                    IOError,
-                    fs::OpenOptions::new().read(true).open(&vp)
-                )?)
+                Some(err_at!(IOError, fs::OpenOptions::new().read(true).open(&vp))?)
             }
             false => None,
         };
@@ -778,12 +774,7 @@ fn purge_file(file: ffi::OsString) -> Result<()> {
     match fd.try_lock_exclusive() {
         Ok(_) => {
             err_at!(IOError, fs::remove_file(&file), "remove file {:?}", file)?;
-            err_at!(
-                PurgeFile,
-                fd.unlock(),
-                "fail unlock for exclusive lock {:?}",
-                file
-            )
+            err_at!(PurgeFile, fd.unlock(), "fail unlock for exclusive lock {:?}", file)
         }
         Err(_) => {
             err_at!(PurgeFile, msg: "file {:?} locked", file)

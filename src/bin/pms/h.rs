@@ -69,17 +69,14 @@ where
     }
 
     pub fn into_trie(self) -> trie::Trie<ffi::OsString, repo::Repo> {
-        self.repos
-            .clone()
-            .into_iter()
-            .fold(trie::Trie::new(), |mut index, repo| {
-                let comps: Vec<ffi::OsString> = path::PathBuf::from(&repo.to_loc())
-                    .components()
-                    .map(|c| c.as_os_str().to_os_string())
-                    .collect();
-                index.set(&comps, repo);
-                index
-            })
+        self.repos.clone().into_iter().fold(trie::Trie::new(), |mut index, repo| {
+            let comps: Vec<ffi::OsString> = path::PathBuf::from(&repo.to_loc())
+                .components()
+                .map(|c| c.as_os_str().to_os_string())
+                .collect();
+            index.set(&comps, repo);
+            index
+        })
     }
 }
 

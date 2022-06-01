@@ -55,9 +55,7 @@ macro_rules! compute_n_count {
 macro_rules! compute_n_deleted {
     ($old:expr, $olde:expr) => {
         $old.saturating_sub(
-            $olde
-                .map(|e| if e.is_deleted() { 1 } else { 0 })
-                .unwrap_or(0),
+            $olde.map(|e| if e.is_deleted() { 1 } else { 0 }).unwrap_or(0),
         )
     };
 }
@@ -336,18 +334,12 @@ where
 
         let inner = Arc::clone(&self.inner.read());
         let (inner, old_entry) = match op {
-            dbs::Write::Set {
-                key,
-                value,
-                cas,
-                seqno,
-            } => inner.set((key, value, cas, seqno))?.into_root(),
-            dbs::Write::Ins {
-                key,
-                value,
-                cas,
-                seqno,
-            } => inner.insert((key, value, cas, seqno))?.into_root(),
+            dbs::Write::Set { key, value, cas, seqno } => {
+                inner.set((key, value, cas, seqno))?.into_root()
+            }
+            dbs::Write::Ins { key, value, cas, seqno } => {
+                inner.insert((key, value, cas, seqno))?.into_root()
+            }
             dbs::Write::Rem { key, cas, seqno } => {
                 inner.remove((&key, cas, seqno))?.into_root()
             }
@@ -529,19 +521,9 @@ where
     }
 
     #[allow(clippy::type_complexity)]
-    fn into_res(
-        self,
-    ) -> (
-        Option<Arc<Node<K, V>>>,
-        Option<Arc<dbs::Entry<K, V>>>,
-        isize,
-    ) {
+    fn into_res(self) -> (Option<Arc<Node<K, V>>>, Option<Arc<dbs::Entry<K, V>>>, isize) {
         match self {
-            Ir::Res {
-                root,
-                old,
-                footprint,
-            } => (root, old, footprint),
+            Ir::Res { root, old, footprint } => (root, old, footprint),
             _ => unreachable!(),
         }
     }
@@ -561,8 +543,7 @@ where
         let op = (key, value, cas, seqno);
         let (mut root, old, footprint) = self.do_set(root, op)?.into_res();
 
-        root.as_mut()
-            .map(|root| Arc::get_mut(root).map(Node::set_black));
+        root.as_mut().map(|root| Arc::get_mut(root).map(Node::set_black));
 
         let n_count = compute_n_count!(self.n_count, old.as_ref());
         let n_deleted = compute_n_deleted!(self.n_deleted, old.as_ref());
@@ -590,8 +571,7 @@ where
         let op = (key, value, cas, seqno);
         let (mut root, old, footprint) = self.do_insert(root, op)?.into_res();
 
-        root.as_mut()
-            .map(|root| Arc::get_mut(root).map(Node::set_black));
+        root.as_mut().map(|root| Arc::get_mut(root).map(Node::set_black));
 
         let n_count = compute_n_count!(self.n_count, old.as_ref());
         let n_deleted = compute_n_deleted!(self.n_deleted, old.as_ref());
@@ -623,8 +603,7 @@ where
         let (mut root, old, footprint) =
             self.do_remove(root, (key, cas, seqno))?.into_res();
 
-        root.as_mut()
-            .map(|root| Arc::get_mut(root).map(Node::set_black));
+        root.as_mut().map(|root| Arc::get_mut(root).map(Node::set_black));
 
         let (seqno, n_count, n_deleted) = if old.is_some() {
             let n_deleted = if old.as_ref().unwrap().is_deleted() {
@@ -664,8 +643,7 @@ where
         let (mut root, old, footprint) =
             self.do_delete(root, (key, cas, seqno))?.into_res();
 
-        root.as_mut()
-            .map(|root| Arc::get_mut(root).map(Node::set_black));
+        root.as_mut().map(|root| Arc::get_mut(root).map(Node::set_black));
 
         let (n_count, n_deleted) = match old.as_ref() {
             Some(old) if !old.is_deleted() => (self.n_count, self.n_deleted + 1),
@@ -762,11 +740,7 @@ where
                 let node: Node<K, V> = dbs::Entry::new(key, value, seqno).into();
                 let footprint = node.footprint()?;
                 let (root, old) = (Some(Arc::new(node)), None);
-                return Ok(Ir::Res {
-                    root,
-                    old,
-                    footprint,
-                });
+                return Ok(Ir::Res { root, old, footprint });
             }
             (None, Some(_)) => err_at!(InvalidCAS, msg: "invalid cas for missing set")?,
         };
@@ -798,11 +772,7 @@ where
         };
         let root = Some(Arc::new(node));
 
-        Ok(Ir::Res {
-            root,
-            old,
-            footprint,
-        })
+        Ok(Ir::Res { root, old, footprint })
     }
 
     fn do_insert(
@@ -817,11 +787,7 @@ where
                 let node: Node<K, V> = dbs::Entry::new(key, value, seqno).into();
                 let footprint = node.footprint()?;
                 let (root, old) = (Some(Arc::new(node)), None);
-                return Ok(Ir::Res {
-                    root,
-                    old,
-                    footprint,
-                });
+                return Ok(Ir::Res { root, old, footprint });
             }
             (None, Some(_)) => err_at!(InvalidCAS, msg: "invalid cas for missing set")?,
         };
@@ -853,11 +819,7 @@ where
         };
         let root = Some(Arc::new(node));
 
-        Ok(Ir::Res {
-            root,
-            old,
-            footprint,
-        })
+        Ok(Ir::Res { root, old, footprint })
     }
 
     fn do_remove<Q>(
@@ -875,11 +837,7 @@ where
             (Some(node), _) => node.clone(),
             (None, Some(0)) | (None, None) => {
                 let (root, old, footprint) = (None, None, 0);
-                return Ok(Ir::Res {
-                    root,
-                    old,
-                    footprint,
-                });
+                return Ok(Ir::Res { root, old, footprint });
             }
             (None, Some(_)) => err_at!(InvalidCAS, msg: "invalid cas for missing set")?,
         };
@@ -944,11 +902,7 @@ where
         };
         let root = root.map(Arc::new);
 
-        Ok(Ir::Res {
-            root,
-            old,
-            footprint,
-        })
+        Ok(Ir::Res { root, old, footprint })
     }
 
     fn do_delete<Q>(
@@ -969,11 +923,7 @@ where
                 let node: Node<K, V> = dbs::Entry::new_delete(key, seqno).into();
                 let footprint = node.footprint()?;
                 let (root, old) = (Some(Arc::new(node)), None);
-                return Ok(Ir::Res {
-                    root,
-                    old,
-                    footprint,
-                });
+                return Ok(Ir::Res { root, old, footprint });
             }
             (None, Some(_)) => err_at!(InvalidCAS, msg: "invalid cas for missing set")?,
         };
@@ -1005,11 +955,7 @@ where
         };
         let root = Some(Arc::new(root));
 
-        Ok(Ir::Res {
-            root,
-            old,
-            footprint,
-        })
+        Ok(Ir::Res { root, old, footprint })
     }
 
     fn do_remove_min(&self, node: Option<&Node<K, V>>) -> [Option<Node<K, V>>; 2] {
@@ -1047,11 +993,7 @@ where
                 let node: Node<K, V> = entry.into();
                 let footprint = node.footprint()?;
                 let (root, old) = (Some(Arc::new(node)), None);
-                return Ok(Ir::Res {
-                    root,
-                    old,
-                    footprint,
-                });
+                return Ok(Ir::Res { root, old, footprint });
             }
         };
 
@@ -1088,11 +1030,7 @@ where
         };
         let root = Some(Arc::new(node));
 
-        Ok(Ir::Res {
-            root,
-            old,
-            footprint,
-        })
+        Ok(Ir::Res { root, old, footprint })
     }
 }
 
@@ -1114,11 +1052,7 @@ where
         let mut paths = Vec::default();
         build_iter(IFlag::Left, root, &mut paths);
 
-        Iter {
-            paths,
-            frwrd: true,
-            versions,
-        }
+        Iter { paths, frwrd: true, versions }
     }
 
     fn range<R, Q>(&self, range: R, versions: bool) -> Range<K, V, R, Q>
@@ -1135,18 +1069,9 @@ where
             Bound::Included(low) => find_start(root, low, true, &mut paths),
             Bound::Excluded(low) => find_start(root, low, false, &mut paths),
         };
-        let iter = Iter {
-            paths,
-            frwrd: true,
-            versions,
-        };
+        let iter = Iter { paths, frwrd: true, versions };
 
-        Range {
-            range,
-            iter,
-            fin: false,
-            high: marker::PhantomData,
-        }
+        Range { range, iter, fin: false, high: marker::PhantomData }
     }
 
     fn reverse<R, Q>(&self, range: R, versions: bool) -> Reverse<K, V, R, Q>
@@ -1163,18 +1088,9 @@ where
             Bound::Included(high) => find_end(root, high, true, &mut paths),
             Bound::Excluded(high) => find_end(root, high, false, &mut paths),
         };
-        let iter = Iter {
-            paths,
-            frwrd: false,
-            versions,
-        };
+        let iter = Iter { paths, frwrd: false, versions };
 
-        Reverse {
-            range,
-            iter,
-            fin: false,
-            low: marker::PhantomData,
-        }
+        Reverse { range, iter, fin: false, low: marker::PhantomData }
     }
 
     fn validate(&self) -> Result<()>
@@ -1632,10 +1548,7 @@ fn build_iter<K, V>(
     V: dbs::Diff,
 {
     if let Some(node) = node {
-        let item = Fragment {
-            flag,
-            node: Arc::clone(&node),
-        };
+        let item = Fragment { flag, node: Arc::clone(&node) };
         let node = match flag {
             IFlag::Left => node.left.as_ref().map(Arc::clone),
             IFlag::Right => node.right.as_ref().map(Arc::clone),

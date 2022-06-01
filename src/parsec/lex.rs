@@ -11,12 +11,7 @@ pub struct Lex {
 
 impl Lex {
     pub fn new(text: String) -> Lex {
-        Lex {
-            text,
-            row_no: 0,
-            col_no: 0,
-            cursor: 0,
-        }
+        Lex { text, row_no: 0, col_no: 0, cursor: 0 }
     }
 }
 

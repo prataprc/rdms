@@ -58,10 +58,7 @@ impl From<Option<TomlScan>> for Scan {
                     exclude_dirs: toml_scan.exclude_dirs.unwrap_or_else(|| vec![]),
                 }
             }
-            None => Scan {
-                scan_dirs: vec![],
-                exclude_dirs: vec![],
-            },
+            None => Scan { scan_dirs: vec![], exclude_dirs: vec![] },
         }
     }
 }

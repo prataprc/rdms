@@ -58,14 +58,8 @@ where
             err_at!(FailConvert, u64::try_from(elapsed.as_nanos()))?
         };
 
-        let rets = (
-            build_time,
-            self.seqno,
-            self.n_count,
-            self.n_deleted,
-            epoch,
-            self.iter,
-        );
+        let rets =
+            (build_time, self.seqno, self.n_count, self.n_deleted, epoch, self.iter);
 
         Ok(rets)
     }

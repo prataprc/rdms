@@ -33,13 +33,7 @@ fn test_croaring_bitmap() {
     digests.dedup();
     println!("digests {}", digests.len());
 
-    assert_eq!(
-        filter.len(),
-        Ok(digests.len()),
-        "{:?} {}",
-        filter.len(),
-        keys.len()
-    );
+    assert_eq!(filter.len(), Ok(digests.len()), "{:?} {}", filter.len(), keys.len());
 
     for key in keys.iter() {
         assert!(filter.contains(key), "key {} not present", key);

@@ -15,29 +15,14 @@ fn test_entry_values() {
 
     let values = entry.to_values();
     let mut refvs = vec![
-        Value::U {
-            value: 200,
-            seqno: 1,
-        },
-        Value::U {
-            value: 300,
-            seqno: 2,
-        },
-        Value::U {
-            value: 400,
-            seqno: 3,
-        },
+        Value::U { value: 200, seqno: 1 },
+        Value::U { value: 300, seqno: 2 },
+        Value::U { value: 400, seqno: 3 },
         Value::D { seqno: 4 },
-        Value::U {
-            value: 500,
-            seqno: 5,
-        },
+        Value::U { value: 500, seqno: 5 },
         Value::D { seqno: 6 },
         Value::D { seqno: 7 },
-        Value::U {
-            value: 600,
-            seqno: 8,
-        },
+        Value::U { value: 600, seqno: 8 },
     ];
     assert_eq!(values, refvs);
     assert_eq!(Entry::from_values(entry.key, values), Ok(entry.clone()));
@@ -198,10 +183,7 @@ fn test_entry_compact_lsm() {
         let range = (start, Bound::Excluded(curr_seqno + 1));
         match entry.clone().compact(Cutoff::Lsm(cutoff)) {
             None => {
-                let b = entry
-                    .to_values()
-                    .iter()
-                    .any(|v| range.contains(&v.to_seqno()));
+                let b = entry.to_values().iter().any(|v| range.contains(&v.to_seqno()));
                 assert!(
                     !b,
                     "None ... \n{:?}\n{:?}\n {:?}",
@@ -211,10 +193,8 @@ fn test_entry_compact_lsm() {
                 );
             }
             Some(compacted) => {
-                let b = compacted
-                    .to_values()
-                    .iter()
-                    .all(|v| range.contains(&v.to_seqno()));
+                let b =
+                    compacted.to_values().iter().all(|v| range.contains(&v.to_seqno()));
                 assert!(
                     b,
                     "Some ...\n{:?}\n{:?}\n{:?}\n{:?}",
@@ -255,15 +235,11 @@ fn test_entry_compact_tombstone() {
 
         if entry.is_deleted() {
             assert_eq!(
-                entry
-                    .clone()
-                    .compact(Cutoff::Tombstone(Bound::Included(curr_seqno))),
+                entry.clone().compact(Cutoff::Tombstone(Bound::Included(curr_seqno))),
                 None
             );
             assert_eq!(
-                entry
-                    .clone()
-                    .compact(Cutoff::Tombstone(Bound::Excluded(curr_seqno + 1))),
+                entry.clone().compact(Cutoff::Tombstone(Bound::Excluded(curr_seqno + 1))),
                 None
             );
             assert_eq!(
@@ -273,10 +249,7 @@ fn test_entry_compact_tombstone() {
                     .unwrap(),
                 entry
             );
-            assert_eq!(
-                entry.clone().compact(Cutoff::Tombstone(Bound::Unbounded)),
-                None
-            );
+            assert_eq!(entry.clone().compact(Cutoff::Tombstone(Bound::Unbounded)), None);
 
             assert_eq!(
                 entry
@@ -308,10 +281,7 @@ fn test_entry_compact_tombstone() {
                 entry
             );
             assert_eq!(
-                entry
-                    .clone()
-                    .compact(Cutoff::Tombstone(Bound::Unbounded))
-                    .unwrap(),
+                entry.clone().compact(Cutoff::Tombstone(Bound::Unbounded)).unwrap(),
                 entry,
                 ""
             );

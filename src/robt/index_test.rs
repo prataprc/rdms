@@ -104,11 +104,7 @@ where
         flush_queue_size: [32, 64, 1024][rng.gen::<usize>() % 3],
         vlog_location: None,
     };
-    println!(
-        "do_robt_build_read-{} index file {:?}",
-        prefix,
-        config.to_index_location()
-    );
+    println!("do_robt_build_read-{} index file {:?}", prefix, config.to_index_location());
     println!("do_robt_build_read-{} config:{:?}", prefix, config);
 
     let mut mdb = do_initial::<K, V, B>(prefix, seed, bitmap.clone(), &config, None);
@@ -184,9 +180,7 @@ where
     let seqno = Some(mdb.to_seqno());
 
     let mut build = Builder::initial(config.clone(), appmd.to_vec()).unwrap();
-    build
-        .build_index(mdb.iter_versions().unwrap().map(Ok), bitmap, seqno)
-        .unwrap();
+    build.build_index(mdb.iter_versions().unwrap().map(Ok), bitmap, seqno).unwrap();
     mem::drop(build);
 
     let mut handles = vec![];
@@ -250,10 +244,7 @@ where
     build
         .build_index(
             index
-                .lsm_merge(
-                    snap.iter_versions().unwrap().map(Ok),
-                    true, /*versions*/
-                )
+                .lsm_merge(snap.iter_versions().unwrap().map(Ok), true /*versions*/)
                 .unwrap(),
             bitmap,
             Some(snap.to_seqno()),
@@ -584,11 +575,8 @@ fn validate_compact<K, V, B>(
             e => e,
         })
         .collect();
-    let entries: Vec<dbs::Entry<K, V>> = index
-        .iter_versions(..)
-        .unwrap()
-        .map(|e| e.unwrap())
-        .collect();
+    let entries: Vec<dbs::Entry<K, V>> =
+        index.iter_versions(..).unwrap().map(|e| e.unwrap()).collect();
     assert_eq!(
         ref_entries.len(),
         entries.len(),

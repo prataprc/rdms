@@ -47,9 +47,8 @@ where
         let input = self.input.take().unwrap();
         let filter_map = self.filter_map.take().unwrap();
 
-        self.handle = Some(thread::spawn(move || {
-            action(name, chan_size, input, tx, filter_map)
-        }));
+        self.handle =
+            Some(thread::spawn(move || action(name, chan_size, input, tx, filter_map)));
 
         output
     }
@@ -82,10 +81,8 @@ where
     loop {
         match mq::get_messages(&input, chan_size) {
             Ok(qmsgs) => {
-                for rmsg in qmsgs
-                    .into_par_iter()
-                    .filter_map(&filter_map)
-                    .collect::<Vec<R>>()
+                for rmsg in
+                    qmsgs.into_par_iter().filter_map(&filter_map).collect::<Vec<R>>()
                 {
                     err_at!(IPCFail, tx.send(rmsg), "thread FilterMap<{:?}", name)?
                 }

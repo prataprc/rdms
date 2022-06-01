@@ -19,23 +19,19 @@ const STATS_VER: u32 = 0x000b0001;
 
 /// Compose a path to index file identified by unique `name` under `dir`.
 pub fn to_index_location(dir: &ffi::OsStr, name: &str) -> ffi::OsString {
-    let loc: path::PathBuf = [
-        dir.to_os_string(),
-        IndexFileName::from(name.to_string()).into(),
-    ]
-    .iter()
-    .collect();
+    let loc: path::PathBuf =
+        [dir.to_os_string(), IndexFileName::from(name.to_string()).into()]
+            .iter()
+            .collect();
     loc.into_os_string()
 }
 
 /// Compose a path to value-log location identified by unique `name` under `dir`.
 pub fn to_vlog_location(dir: &ffi::OsStr, name: &str) -> ffi::OsString {
-    let loc: path::PathBuf = [
-        dir.to_os_string(),
-        VlogFileName::from(name.to_string()).into(),
-    ]
-    .iter()
-    .collect();
+    let loc: path::PathBuf =
+        [dir.to_os_string(), VlogFileName::from(name.to_string()).into()]
+            .iter()
+            .collect();
     loc.into_os_string()
 }
 

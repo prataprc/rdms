@@ -69,9 +69,7 @@ impl dbs::ToJson for Stats {
             self.tree_footprint,
             self.node_size,
             spin_stats,
-            self.blacks
-                .as_ref()
-                .map_or(null.clone(), |x| format!("{}", x)),
+            self.blacks.as_ref().map_or(null.clone(), |x| format!("{}", x)),
             self.depths.as_ref().map_or(null, |x| x.to_json()),
         )
     }

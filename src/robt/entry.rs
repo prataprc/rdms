@@ -62,11 +62,7 @@ where
                 for delta in deltas.into_iter() {
                     ds.push(dbs::Delta::try_from(delta)?);
                 }
-                dbs::Entry {
-                    key,
-                    value,
-                    deltas: ds,
-                }
+                dbs::Entry { key, value, deltas: ds }
             }
             Entry::MZ { .. } => err_at!(Fatal, msg: "robt-mz node not a leaf-node")?,
             Entry::MM { .. } => err_at!(Fatal, msg: "robt-mm node not a leaf-node")?,
@@ -114,11 +110,8 @@ where
             Entry::MM { .. } => (self, vec![]),
             Entry::MZ { .. } => (self, vec![]),
             Entry::ZZ { key, value, deltas } => {
-                let (value, mut vblock) = if vlog {
-                    value.into_reference(vfpos)?
-                } else {
-                    (value, vec![])
-                };
+                let (value, mut vblock) =
+                    if vlog { value.into_reference(vfpos)? } else { (value, vec![]) };
 
                 err_at!(
                     FailCbor,
@@ -138,11 +131,7 @@ where
                 vblock
                     .extend_from_slice(&util::into_cbor_bytes(cbor::SimpleValue::Break)?);
 
-                let entry = Entry::ZZ {
-                    key,
-                    value,
-                    deltas: drefs,
-                };
+                let entry = Entry::ZZ { key, value, deltas: drefs };
 
                 (entry, vblock)
             }
@@ -167,19 +156,11 @@ where
                     native_deltas.push(delta.into_native(f)?);
                 }
 
-                Entry::ZZ {
-                    key,
-                    value: native_value,
-                    deltas: native_deltas,
-                }
+                Entry::ZZ { key, value: native_value, deltas: native_deltas }
             }
             Entry::ZZ { key, value, .. } => {
                 let native_value = value.into_native(f)?;
-                Entry::ZZ {
-                    key,
-                    value: native_value,
-                    deltas: Vec::default(),
-                }
+                Entry::ZZ { key, value: native_value, deltas: Vec::default() }
             }
         };
 

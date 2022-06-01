@@ -35,10 +35,7 @@ fn test_open_file_rw() {
     fs::remove_file(file).ok();
 
     let mut fd = create_file_a(file.as_os_str()).expect("open-write");
-    assert_eq!(
-        fd.write("hello world".as_bytes()).expect("write failed"),
-        11
-    );
+    assert_eq!(fd.write("hello world".as_bytes()).expect("write failed"), 11);
     fd.seek(io::SeekFrom::Start(1)).expect("seek failed");
     assert_eq!(fd.write("i world".as_bytes()).expect("write failed"), 7);
 
@@ -51,10 +48,7 @@ fn test_open_file_rw() {
     let file = dir.as_path();
 
     let mut fd = create_file_a(file.as_os_str()).expect("open-write");
-    assert_eq!(
-        fd.write("hello world".as_bytes()).expect("write failed"),
-        11
-    );
+    assert_eq!(fd.write("hello world".as_bytes()).expect("write failed"), 11);
     fd.seek(io::SeekFrom::Start(1)).expect("seek failed");
     assert_eq!(fd.write("i world".as_bytes()).expect("write failed"), 7);
 
@@ -67,10 +61,7 @@ fn test_open_file_rw() {
     let file = dir.as_path();
 
     let mut fd = open_file_a(file.as_os_str()).expect("open-write");
-    assert_eq!(
-        fd.write("hello world".as_bytes()).expect("write failed"),
-        11
-    );
+    assert_eq!(fd.write("hello world".as_bytes()).expect("write failed"), 11);
     fd.seek(io::SeekFrom::Start(1)).expect("seek failed");
     assert_eq!(fd.write("i world".as_bytes()).expect("write failed"), 7);
 
@@ -96,6 +87,5 @@ fn test_open_file_rw() {
         "ello worldi worldhello worldi worldd"
     );
 
-    fd.write("hello world".as_bytes())
-        .expect_err("expected write error");
+    fd.write("hello world".as_bytes()).expect_err("expected write error");
 }

@@ -14,17 +14,9 @@ pub struct Opt {
 impl From<crate::SubCommand> for Opt {
     fn from(subcmd: crate::SubCommand) -> Opt {
         match subcmd {
-            SubCommand::Git {
-                loc_repo,
-                loc_db,
-                sha1_file,
-                sha1_text,
-            } => Opt {
-                loc_repo,
-                loc_db,
-                sha1_file,
-                sha1_text,
-            },
+            SubCommand::Git { loc_repo, loc_db, sha1_file, sha1_text } => {
+                Opt { loc_repo, loc_db, sha1_file, sha1_text }
+            }
             _ => unreachable!(),
         }
     }
@@ -44,10 +36,8 @@ fn handle_sha1_file(sha1_file: ffi::OsString) -> Result<()> {
     use sha1::{Digest, Sha1};
     use std::fs;
 
-    let git_oid = err_at!(
-        FailGitapi,
-        git2::Oid::hash_file(git2::ObjectType::Blob, &sha1_file)
-    )?;
+    let git_oid =
+        err_at!(FailGitapi, git2::Oid::hash_file(git2::ObjectType::Blob, &sha1_file))?;
 
     let mut hasher = Sha1::new();
     let data = {

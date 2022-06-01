@@ -44,12 +44,8 @@ where
         K: Clone,
     {
         let val = match self {
-            Index::Llrb { store } => Index::Llrb {
-                store: store.clone(),
-            },
-            Index::Robt { store } => Index::Robt {
-                store: store.try_clone()?,
-            },
+            Index::Llrb { store } => Index::Llrb { store: store.clone() },
+            Index::Robt { store } => Index::Robt { store: store.try_clone()? },
         };
 
         Ok(val)
@@ -157,12 +153,8 @@ where
 
     pub fn to_stats(&mut self) -> Result<Stats> {
         let stats = match self {
-            Index::Llrb { store } => Stats::Llrb {
-                stats: store.to_stats()?,
-            },
-            Index::Robt { store } => Stats::Robt {
-                stats: store.to_stats(),
-            },
+            Index::Llrb { store } => Stats::Llrb { stats: store.to_stats()? },
+            Index::Robt { store } => Stats::Robt { stats: store.to_stats() },
         };
         Ok(stats)
     }
@@ -344,12 +336,8 @@ where
         K: Ord,
     {
         let iter = match self {
-            Index::Llrb { store } => Iter::Llrb {
-                iter: store.iter()?,
-            },
-            Index::Robt { store } => Iter::Robt {
-                iter: store.iter(..)?,
-            },
+            Index::Llrb { store } => Iter::Llrb { iter: store.iter()? },
+            Index::Robt { store } => Iter::Robt { iter: store.iter(..)? },
         };
 
         Ok(iter)
@@ -360,12 +348,8 @@ where
         K: Ord,
     {
         let iter = match self {
-            Index::Llrb { store } => Iter::Llrb {
-                iter: store.iter_versions()?,
-            },
-            Index::Robt { store } => Iter::Robt {
-                iter: store.iter_versions(..)?,
-            },
+            Index::Llrb { store } => Iter::Llrb { iter: store.iter_versions()? },
+            Index::Robt { store } => Iter::Robt { iter: store.iter_versions(..)? },
         };
 
         Ok(iter)
@@ -378,12 +362,8 @@ where
         Q: ?Sized + Ord + ToOwned<Owned = K>,
     {
         let iter = match self {
-            Index::Llrb { store } => Range::Llrb {
-                iter: store.range(range)?,
-            },
-            Index::Robt { store } => Range::Robt {
-                iter: store.iter(range)?,
-            },
+            Index::Llrb { store } => Range::Llrb { iter: store.range(range)? },
+            Index::Robt { store } => Range::Robt { iter: store.iter(range)? },
         };
 
         Ok(iter)
@@ -396,12 +376,8 @@ where
         Q: ?Sized + Ord + ToOwned<Owned = K>,
     {
         let iter = match self {
-            Index::Llrb { store } => Range::Llrb {
-                iter: store.range_versions(range)?,
-            },
-            Index::Robt { store } => Range::Robt {
-                iter: store.iter_versions(range)?,
-            },
+            Index::Llrb { store } => Range::Llrb { iter: store.range_versions(range)? },
+            Index::Robt { store } => Range::Robt { iter: store.iter_versions(range)? },
         };
 
         Ok(iter)
@@ -414,12 +390,8 @@ where
         Q: ?Sized + Ord + ToOwned<Owned = K>,
     {
         let iter = match self {
-            Index::Llrb { store } => Reverse::Llrb {
-                iter: store.reverse(range)?,
-            },
-            Index::Robt { store } => Reverse::Robt {
-                iter: store.reverse(range)?,
-            },
+            Index::Llrb { store } => Reverse::Llrb { iter: store.reverse(range)? },
+            Index::Robt { store } => Reverse::Robt { iter: store.reverse(range)? },
         };
 
         Ok(iter)
@@ -432,12 +404,12 @@ where
         Q: ?Sized + Ord + ToOwned<Owned = K>,
     {
         let iter = match self {
-            Index::Llrb { store } => Reverse::Llrb {
-                iter: store.reverse_versions(range)?,
-            },
-            Index::Robt { store } => Reverse::Robt {
-                iter: store.reverse_versions(range)?,
-            },
+            Index::Llrb { store } => {
+                Reverse::Llrb { iter: store.reverse_versions(range)? }
+            }
+            Index::Robt { store } => {
+                Reverse::Robt { iter: store.reverse_versions(range)? }
+            }
         };
 
         Ok(iter)

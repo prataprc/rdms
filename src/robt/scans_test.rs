@@ -26,10 +26,7 @@ fn test_robt_build_scan() {
     assert_eq!(count, mdb.len() as u64, "{} {}", count, mdb.len());
 
     let (build_time, seqno, count, _deleted, epoch, mut iter) = iter.unwrap().unwrap();
-    println!(
-        "BuildScan build_time {:?}",
-        Duration::from_nanos(build_time)
-    );
+    println!("BuildScan build_time {:?}", Duration::from_nanos(build_time));
     println!("BuildScan epoch {:?}", Duration::from_nanos(epoch));
     assert_eq!(seqno, cmp::max(start_seqno, mdb.to_seqno()));
     assert_eq!(count, mdb.len() as u64, "{} {}", count, mdb.len());

@@ -74,10 +74,9 @@ pub enum Node {
 impl ToString for Node {
     fn to_string(&self) -> String {
         match self {
-            Node::Maybe { child, .. } => child
-                .as_ref()
-                .map(|n| n.to_string())
-                .unwrap_or_else(|| "".to_string()),
+            Node::Maybe { child, .. } => {
+                child.as_ref().map(|n| n.to_string()).unwrap_or_else(|| "".to_string())
+            }
             Node::Token { text, .. } => text.to_string(),
             Node::Ws { text, .. } => text.to_string(),
             Node::M { children, .. } => {

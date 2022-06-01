@@ -40,10 +40,7 @@ where
     T: IntoCbor,
 {
     let mut data: Vec<u8> = vec![];
-    let n = err_at!(
-        FailCbor,
-        err_at!(FailCbor, val.into_cbor())?.encode(&mut data)
-    )?;
+    let n = err_at!(FailCbor, err_at!(FailCbor, val.into_cbor())?.encode(&mut data))?;
     if n != data.len() {
         err_at!(Fatal, msg: "cbor encoding len mistmatch {} {}", n, data.len())
     } else {

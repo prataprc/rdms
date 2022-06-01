@@ -24,10 +24,7 @@ fn test_llrb_node() {
 
     node.insert(400, 3);
     let mut entry = dbs::Entry::new(10, 400, 3);
-    entry.deltas = vec![crate::dbs::Delta::U {
-        delta: 300,
-        seqno: 2,
-    }];
+    entry.deltas = vec![crate::dbs::Delta::U { delta: 300, seqno: 2 }];
     assert_eq!(entry, node.entry.as_ref().clone());
 
     node.delete(4);

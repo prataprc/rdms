@@ -117,10 +117,7 @@ impl Context {
 
     fn new_write(i: isize, bsize: isize, opt: Opt) -> Context {
         let filename = Context::open_data_file(i, &opt).unwrap();
-        let fd = fs::OpenOptions::new()
-            .write(true)
-            .open(filename.clone())
-            .unwrap();
+        let fd = fs::OpenOptions::new().write(true).open(filename.clone()).unwrap();
         let duration = time::Duration::from_nanos(opt.duration * 1_000_000_000);
 
         Context {
@@ -138,10 +135,7 @@ impl Context {
 
     fn new_read(i: isize, bsize: isize, opt: Opt) -> Context {
         let filename = Context::open_data_file(i, &opt).unwrap();
-        let fd = fs::OpenOptions::new()
-            .read(true)
-            .open(filename.clone())
-            .unwrap();
+        let fd = fs::OpenOptions::new().read(true).open(filename.clone()).unwrap();
         let duration = time::Duration::from_nanos(opt.duration * 1_000_000_000);
 
         Context {

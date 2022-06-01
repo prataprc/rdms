@@ -44,9 +44,8 @@ where
 
         let (input, filter) = (self.input.take().unwrap(), self.filter.take().unwrap());
 
-        self.handle = Some(thread::spawn(move || {
-            action(name, chan_size, input, tx, filter)
-        }));
+        self.handle =
+            Some(thread::spawn(move || action(name, chan_size, input, tx, filter)));
 
         output
     }

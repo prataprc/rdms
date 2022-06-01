@@ -104,10 +104,7 @@ impl<K> Access<K> {
             _ => unreachable!(),
         };
         let node = unsafe { Box::from_raw(next.load(SeqCst)) };
-        next.store(
-            node.get_next() as *const Access<K> as *mut Access<K>,
-            SeqCst,
-        );
+        next.store(node.get_next() as *const Access<K> as *mut Access<K>, SeqCst);
 
         node
     }

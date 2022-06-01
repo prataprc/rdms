@@ -81,11 +81,7 @@ fn main() {
             };
 
         for entry in entries {
-            let title = if entry.title.is_empty() {
-                "-"
-            } else {
-                &entry.title
-            };
+            let title = if entry.title.is_empty() { "-" } else { &entry.title };
             println!("{}/{:-30} ({})", entry.namespace as char, entry.url, title);
         }
     }
@@ -150,11 +146,6 @@ fn load_clusters(z: &Zimf) {
     for cnum in 0..z.as_clusters().len() {
         let start = time::Instant::now();
         let blobs = z.get_blobs(cnum).unwrap();
-        println!(
-            "cnum:{} blobs:{} elapsed:{:?}",
-            cnum,
-            blobs.len(),
-            start.elapsed()
-        );
+        println!("cnum:{} blobs:{} elapsed:{:?}", cnum, blobs.len(), start.elapsed());
     }
 }

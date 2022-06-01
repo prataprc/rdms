@@ -91,9 +91,7 @@ where
                     qmsgs.insert(0, qmsg)
                 }
                 qmsg = Some(
-                    qmsgs
-                        .into_par_iter()
-                        .reduce(identity.clone(), |a, b| reduce(a, b)),
+                    qmsgs.into_par_iter().reduce(identity.clone(), |a, b| reduce(a, b)),
                 );
             }
             Err(mpsc::TryRecvError::Disconnected) => break,

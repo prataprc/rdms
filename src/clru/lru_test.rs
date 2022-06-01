@@ -89,12 +89,9 @@ macro_rules! test_code {
 
 #[test]
 fn test_lru_u8() {
-    let seed: u64 = [
-        17107959159771477669,
-        14991693275449717884,
-        14750078202842248867,
-        random(),
-    ][random::<usize>() % 4];
+    let seed: u64 =
+        [17107959159771477669, 14991693275449717884, 14750078202842248867, random()]
+            [random::<usize>() % 4];
     test_code!(seed, u8);
 }
 
@@ -165,10 +162,7 @@ where
         loop {
             let key: K = rng.gen();
             let value: u128 = rng.gen::<u128>();
-            if let dbs::Wr {
-                old_entry: None, ..
-            } = index.insert(key, value).unwrap()
-            {
+            if let dbs::Wr { old_entry: None, .. } = index.insert(key, value).unwrap() {
                 break;
             }
         }
@@ -192,17 +186,12 @@ where
 
     let iter = index.iter().unwrap();
     match access_type {
-        AccessType::Inclusive => iter
-            .step_by(n_threads)
-            .take(m)
-            .map(|e| e.to_key())
-            .collect(),
-        AccessType::Exclusive => iter
-            .skip(thread_id)
-            .step_by(n_threads)
-            .take(m)
-            .map(|e| e.to_key())
-            .collect(),
+        AccessType::Inclusive => {
+            iter.step_by(n_threads).take(m).map(|e| e.to_key()).collect()
+        }
+        AccessType::Exclusive => {
+            iter.skip(thread_id).step_by(n_threads).take(m).map(|e| e.to_key()).collect()
+        }
         AccessType::Overlap => {
             let keys_set: Vec<K> = iter.take(m * n_threads).map(|e| e.to_key()).collect();
             let mut keys = vec![];
@@ -257,8 +246,5 @@ fn validate(
     assert_eq!(n_ops * n_threads, stats.n_gets);
     assert_eq!(n_misses, stats.n_sets);
 
-    assert_eq!(
-        n_ops * n_threads,
-        stats.n_evicted + stats.n_deleted + stats.n_access_gc
-    )
+    assert_eq!(n_ops * n_threads, stats.n_evicted + stats.n_deleted + stats.n_access_gc)
 }

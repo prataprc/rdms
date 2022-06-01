@@ -57,10 +57,7 @@ pub fn create_file_a(file: &ffi::OsStr) -> Result<fs::File> {
     };
 
     let mut opts = fs::OpenOptions::new();
-    Ok(err_at!(
-        IOError,
-        opts.append(true).create_new(true).open(os_file)
-    )?)
+    Ok(err_at!(IOError, opts.append(true).create_new(true).open(os_file))?)
 }
 
 /// open existing file in append mode for writing.
@@ -73,10 +70,7 @@ pub fn open_file_a(file: &ffi::OsStr) -> Result<fs::File> {
 /// open file for reading.
 pub fn open_file_r(file: &ffi::OsStr) -> Result<fs::File> {
     let os_file = path::Path::new(file);
-    Ok(err_at!(
-        IOError,
-        fs::OpenOptions::new().read(true).open(os_file)
-    )?)
+    Ok(err_at!(IOError, fs::OpenOptions::new().read(true).open(os_file))?)
 }
 
 pub fn sync_write(file: &mut fs::File, data: &[u8]) -> Result<usize> {

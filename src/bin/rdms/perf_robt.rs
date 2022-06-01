@@ -307,11 +307,8 @@ where
     if p.load.iter {
         let (elapsed, n) = {
             let start = time::Instant::now();
-            let n: usize = index
-                .iter(..)
-                .unwrap()
-                .map(|_: Result<dbs::Entry<K, V>>| 1_usize)
-                .sum();
+            let n: usize =
+                index.iter(..).unwrap().map(|_: Result<dbs::Entry<K, V>>| 1_usize).sum();
             assert!(n == index.len(), "{} != {}", n, index.len());
             (start.elapsed(), n)
         };
@@ -324,10 +321,7 @@ where
             assert!(n == index.len(), "{} != {}", n, index.len());
             (start.elapsed(), n)
         };
-        println!(
-            "rdms: load-spawn iter_versions took {:?} for {} items",
-            elapsed, n
-        );
+        println!("rdms: load-spawn iter_versions took {:?} for {} items", elapsed, n);
     }
     if p.load.reverse {
         let (elapsed, n) = {
@@ -336,10 +330,7 @@ where
             assert!(n == index.len(), "{} != {}", n, index.len());
             (start.elapsed(), n)
         };
-        println!(
-            "rdms: load-spawn reverse took {:?} for {} items",
-            elapsed, n
-        );
+        println!("rdms: load-spawn reverse took {:?} for {} items", elapsed, n);
     }
     if p.load.reverse_versions {
         let (elapsed, n) = {
@@ -348,10 +339,7 @@ where
             assert!(n == index.len(), "{} != {}", n, index.len());
             (start.elapsed(), n)
         };
-        println!(
-            "rdms: load-spawn reverse_versions took {:?} for {} items",
-            elapsed, n
-        );
+        println!("rdms: load-spawn reverse_versions took {:?} for {} items", elapsed, n);
     }
 
     println!("rdms: index latest-seqno:{}", index.to_seqno());
@@ -379,14 +367,8 @@ where
 {
     let appmd = "rdms-robt-perf-initial".as_bytes().to_vec();
     let p_init = p.initial.clone();
-    let mdb = llrb::load_index(
-        seed,
-        p_init.sets,
-        p_init.ins,
-        p_init.rems,
-        p_init.dels,
-        None,
-    );
+    let mdb =
+        llrb::load_index(seed, p_init.sets, p_init.ins, p_init.rems, p_init.dels, None);
     let seqno = Some(mdb.to_seqno());
 
     let elapsed = {
@@ -395,9 +377,7 @@ where
 
         let mut build: robt::Builder<K, V> =
             robt::Builder::initial(config, appmd.to_vec()).unwrap();
-        build
-            .build_index(mdb.iter().unwrap().map(Ok), bitmap, seqno)
-            .unwrap();
+        build.build_index(mdb.iter().unwrap().map(Ok), bitmap, seqno).unwrap();
         start.elapsed()
     };
 
@@ -429,9 +409,7 @@ where
         let mut config = config.clone();
         config.name = p_incr.name.clone();
 
-        let appmd = format!("rdms-robt-perf-incremental-{}", i)
-            .as_bytes()
-            .to_vec();
+        let appmd = format!("rdms-robt-perf-incremental-{}", i).as_bytes().to_vec();
         let seqno = Some(index.to_seqno());
 
         let mdb = llrb::load_index(
@@ -451,24 +429,15 @@ where
                 .unwrap();
             start.elapsed()
         };
-        println!(
-            "Took {:?} for incremental build {} items",
-            elapsed,
-            index.len()
-        );
+        println!("Took {:?} for incremental build {} items", elapsed, index.len());
 
         index = if p_incr.compact {
             config.name = p_incr.compact_name.clone();
             let start = time::Instant::now();
-            let cindex = index
-                .compact(config, bitmap.clone(), dbs::Cutoff::Mono)
-                .unwrap();
+            let cindex =
+                index.compact(config, bitmap.clone(), dbs::Cutoff::Mono).unwrap();
             let elapsed = start.elapsed();
-            println!(
-                "Took {:?} for compact build {} items",
-                elapsed,
-                cindex.len()
-            );
+            println!("Took {:?} for compact build {} items", elapsed, cindex.len());
             cindex
         } else {
             index

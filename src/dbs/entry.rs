@@ -52,11 +52,7 @@ where
         self.key.eq(&other.key)
             && self.value.eq(&other.value)
             && self.deltas.len() == other.deltas.len()
-            && self
-                .deltas
-                .iter()
-                .zip(other.deltas.iter())
-                .all(|(a, b)| a.eq(b))
+            && self.deltas.iter().zip(other.deltas.iter()).all(|(a, b)| a.eq(b))
     }
 }
 
@@ -150,10 +146,7 @@ where
         D: Clone,
     {
         let delta = match self.value.clone() {
-            Value::U {
-                value: oval,
-                seqno: oseq,
-            } => {
+            Value::U { value: oval, seqno: oseq } => {
                 let delta: D = value.diff(&oval);
                 Delta::new_upsert(delta, oseq)
             }
@@ -176,10 +169,7 @@ where
         D: Clone + From<V>,
     {
         let delta = match self.value.clone() {
-            Value::U {
-                value: oldv,
-                seqno: oseq,
-            } => {
+            Value::U { value: oldv, seqno: oseq } => {
                 let delta: D = oldv.into();
                 Delta::new_upsert(delta, oseq)
             }

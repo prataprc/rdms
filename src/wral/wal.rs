@@ -74,13 +74,7 @@ impl<S> Wal<S> {
         let seqno = 1;
         let (w, th, tx) = Journals::start(config.clone(), seqno, vec![], journal);
 
-        let val = Wal {
-            config,
-
-            w,
-            th: Arc::new(th),
-            tx,
-        };
+        let val = Wal { config, w, th: Arc::new(th), tx };
 
         Ok(val)
     }
@@ -122,13 +116,7 @@ impl<S> Wal<S> {
         let journals: Vec<Journal<S>> = journals.into_iter().map(|(j, _, _)| j).collect();
         let (w, th, tx) = Journals::start(config.clone(), seqno, journals, journal);
 
-        let val = Wal {
-            config,
-
-            w,
-            th: Arc::new(th),
-            tx,
-        };
+        let val = Wal { config, w, th: Arc::new(th), tx };
 
         Ok(val)
     }

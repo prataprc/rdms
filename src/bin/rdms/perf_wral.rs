@@ -111,12 +111,7 @@ fn writer(id: usize, wal: wral::Wal, p: Profile, _seed: u64) -> Result<Vec<wral:
 
     wal.close()?;
 
-    println!(
-        "w-{:02} took {:?} to write {} ops",
-        id,
-        start.elapsed(),
-        p.ops
-    );
+    println!("w-{:02} took {:?} to write {} ops", id, start.elapsed(), p.ops);
 
     Ok(entries)
 }
@@ -155,12 +150,7 @@ fn reader(id: usize, wal: wral::Wal) -> Result<()> {
 
     wal.close()?;
 
-    println!(
-        "r-{:02} took {:?} to iter {} ops",
-        id,
-        start.elapsed(),
-        items.len()
-    );
+    println!("r-{:02} took {:?} to iter {} ops", id, start.elapsed(), items.len());
 
     Ok(())
 }

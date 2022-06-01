@@ -25,15 +25,11 @@ impl dbs::Diff for Binary {
     type Delta = Self;
 
     fn diff(&self, old: &Self) -> Self::Delta {
-        Binary {
-            val: old.val.to_vec(),
-        }
+        Binary { val: old.val.to_vec() }
     }
 
     fn merge(&self, delta: &Self::Delta) -> Self {
-        Binary {
-            val: delta.val.to_vec(),
-        }
+        Binary { val: delta.val.to_vec() }
     }
 }
 

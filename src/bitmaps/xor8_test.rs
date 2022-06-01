@@ -36,11 +36,5 @@ fn test_xor8_bitmap() {
     for key in keys.iter() {
         assert!(filter.contains(key), "key {} not present", key);
     }
-    assert_eq!(
-        filter.len(),
-        Some(keys.len()),
-        "{:?} {}",
-        filter.len(),
-        keys.len()
-    );
+    assert_eq!(filter.len(), Some(keys.len()), "{:?} {}", filter.len(), keys.len());
 }

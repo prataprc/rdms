@@ -12,10 +12,7 @@ pub struct Repo {
 impl Clone for Repo {
     fn clone(&self) -> Self {
         let repo = Repo::open(self.loc.clone()).unwrap().unwrap();
-        Repo {
-            loc: self.loc.clone(),
-            repo,
-        }
+        Repo { loc: self.loc.clone(), repo }
     }
 }
 
@@ -33,9 +30,8 @@ impl Repo {
     }
 
     pub fn from_entry(parent: &path::Path, entry: &fs::DirEntry) -> Result<Repo> {
-        let loc: path::PathBuf = vec![parent.to_path_buf(), entry.file_name().into()]
-            .into_iter()
-            .collect();
+        let loc: path::PathBuf =
+            vec![parent.to_path_buf(), entry.file_name().into()].into_iter().collect();
 
         match Repo::open(loc.clone())? {
             Some(repo) => {
@@ -149,24 +145,17 @@ impl Repo {
             Ok(vec![])
         } else {
             let mut dopts = make_diff_options(ignored);
-            let diff = err_at!(
-                Fatal,
-                self.repo.diff_index_to_workdir(None, Some(&mut dopts))
-            )?;
+            let diff =
+                err_at!(Fatal, self.repo.diff_index_to_workdir(None, Some(&mut dopts)))?;
             Ok(diff.deltas().map(|d| d.status()).collect())
         }
     }
 
     pub fn to_tags(&self) -> Result<Vec<String>> {
-        Ok(err_at!(
-            Fatal,
-            self.repo.tag_names(None),
-            "Branch::tag_names {:?}",
-            self.loc
-        )?
-        .iter()
-        .filter_map(|o| o.map(|s| s.to_string()))
-        .collect())
+        Ok(err_at!(Fatal, self.repo.tag_names(None), "Branch::tag_names {:?}", self.loc)?
+            .iter()
+            .filter_map(|o| o.map(|s| s.to_string()))
+            .collect())
     }
 
     pub fn to_references(&self) -> Result<Vec<git2::Reference>> {

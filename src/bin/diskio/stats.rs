@@ -30,12 +30,8 @@ impl Stats {
         } else {
             self.tp_current += size;
         }
-        self.sync_latencies.push(
-            err_at!(Fatal, start.elapsed())?
-                .as_micros()
-                .try_into()
-                .unwrap(),
-        );
+        self.sync_latencies
+            .push(err_at!(Fatal, start.elapsed())?.as_micros().try_into().unwrap());
 
         Ok(())
     }

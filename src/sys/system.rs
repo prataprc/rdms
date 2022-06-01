@@ -23,11 +23,7 @@ impl Uname {
         let os_type = err_at!(IOError, sys_info::os_type())?;
         let os_release = err_at!(IOError, sys_info::os_release())?;
 
-        let val = Uname {
-            host_name,
-            os_type,
-            os_release,
-        };
+        let val = Uname { host_name, os_type, os_release };
 
         Ok(val)
     }

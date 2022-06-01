@@ -230,10 +230,7 @@ where
 
         let new_ptr = Box::leak(self.access_head.new(&key));
 
-        let value = Arc::new(clru::Value {
-            value,
-            access: AtomicPtr::new(new_ptr),
-        });
+        let value = Arc::new(clru::Value { value, access: AtomicPtr::new(new_ptr) });
 
         let res = match self.map.set(key, value).as_ref().map(|x| x.as_ref()) {
             Some(clru::Value { access, value }) => {

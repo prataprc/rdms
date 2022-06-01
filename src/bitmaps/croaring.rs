@@ -26,9 +26,7 @@ impl Default for CRoaring {
 
 impl CRoaring {
     pub fn new() -> CRoaring {
-        CRoaring {
-            bitmap: Bitmap::create(),
-        }
+        CRoaring { bitmap: Bitmap::create() }
     }
 }
 
@@ -101,18 +99,14 @@ impl Bloom for CRoaring {
 
     #[inline]
     fn from_bytes(buf: &[u8]) -> Result<(CRoaring, usize)> {
-        let val = CRoaring {
-            bitmap: Bitmap::deserialize(buf),
-        };
+        let val = CRoaring { bitmap: Bitmap::deserialize(buf) };
         let n = buf.len();
         Ok((val, n))
     }
 
     #[inline]
     fn or(&self, other: &CRoaring) -> Result<CRoaring> {
-        Ok(CRoaring {
-            bitmap: self.bitmap.or(&other.bitmap),
-        })
+        Ok(CRoaring { bitmap: self.bitmap.or(&other.bitmap) })
     }
 }
 

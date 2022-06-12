@@ -79,7 +79,7 @@ where
             cur_count: Arc::clone(&self.cur_count),
             max_old: self.max_old,
 
-            map: self.map.clone(),
+            map: self.map.cloned(),
             access_head: Arc::clone(&self.access_head),
             access_tail: Arc::clone(&self.access_tail),
             evictor: None,
@@ -122,7 +122,7 @@ where
                 &config,
                 Arc::clone(&close),
                 Arc::clone(&access_tail),
-                map.clone(),
+                map.cloned(),
             );
             Some(thread::spawn(move || evictor.run()))
         };

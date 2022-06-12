@@ -51,7 +51,7 @@ travis-ci = { repository = "bnclabs/rdms" }
 
 [dependencies]
 xorfilter-rs = { path = "../xorfilter", features = ["cbordata"] }
-cbordata = { version = "0.5.4" }
+cbordata = { version = "0.6.0" }
 cmap = { path = "../cmap", version = "0.3.0" }
 arbitrary = { version = "1", features = ["derive"] }
 toml = "0.5.8"

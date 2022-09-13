@@ -9,6 +9,12 @@ https://www.usenix.org/conference/osdi14/technical-sessions/presentation/zheng_m
 Left-Leaning Red-Black Trees Considered Harmful ?
 http://read.seas.harvard.edu/~kohler/notes/llrb.html
 
+Log structured file system.
+https://people.eecs.berkeley.edu/~brewer/cs262/LFS.pdf
+
+LSM tree
+https://www.cs.umb.edu/~poneil/lsmtree.pdf
+
 data-structures/algorithm
 =========================
 
